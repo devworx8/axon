@@ -14,6 +14,9 @@
 OLLAMA_PID="$HOME/.devbrain/.ollama.pid"
 OLLAMA_LOG="$HOME/.devbrain/ollama.log"
 OLLAMA_PORT=11434
+OLLAMA_CPU_PID="$HOME/.devbrain/.ollama-cpu.pid"
+OLLAMA_CPU_LOG="$HOME/.devbrain/ollama-cpu.log"
+OLLAMA_CPU_PORT=11435
 
 # --- helpers ---
 
@@ -22,16 +25,19 @@ _systemd_active() {
 }
 
 _port_listening() {
-  ss -tlnp 2>/dev/null | grep -q ":${OLLAMA_PORT}" || \
-  curl -sf "http://127.0.0.1:${OLLAMA_PORT}/api/version" >/dev/null 2>&1
+  local port="${1:-$OLLAMA_PORT}"
+  ss -tlnp 2>/dev/null | grep -q ":${port}" || \
+  curl -sf "http://127.0.0.1:${port}/api/version" >/dev/null 2>&1
 }
 
 _pid_running() {
-  [[ -f "$OLLAMA_PID" ]] && kill -0 "$(cat "$OLLAMA_PID")" 2>/dev/null
+  local pidfile="${1:-$OLLAMA_PID}"
+  [[ -f "$pidfile" ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null
 }
 
 _clear_pidfile() {
-  rm -f "$OLLAMA_PID"
+  local pidfile="${1:-$OLLAMA_PID}"
+  rm -f "$pidfile"
 }
 
 _gpu_status() {
@@ -91,6 +97,36 @@ case "${1:-start}" in
     fi
     ;;
 
+  cpu)
+    if _port_listening "$OLLAMA_CPU_PORT"; then
+      if ! _pid_running "$OLLAMA_CPU_PID"; then
+        _clear_pidfile "$OLLAMA_CPU_PID"
+      fi
+      echo "✓ Ollama CPU mode already running on port ${OLLAMA_CPU_PORT}"
+      exit 0
+    fi
+    if _pid_running "$OLLAMA_CPU_PID"; then
+      echo "Ollama CPU mode already running (PID $(cat "$OLLAMA_CPU_PID"))"
+      exit 0
+    fi
+    pkill -f "OLLAMA_HOST=http://127.0.0.1:${OLLAMA_CPU_PORT}" 2>/dev/null
+    sleep 0.5
+    echo "Starting Ollama CPU-safe mode on port ${OLLAMA_CPU_PORT}..."
+    setsid env \
+      OLLAMA_HOST="127.0.0.1:${OLLAMA_CPU_PORT}" \
+      OLLAMA_LLM_LIBRARY="cpu" \
+      OLLAMA_MODELS="$HOME/.ollama/models" \
+      ollama serve >> "$OLLAMA_CPU_LOG" 2>&1 < /dev/null &
+    echo $! > "$OLLAMA_CPU_PID"
+    sleep 2
+    if _pid_running "$OLLAMA_CPU_PID" && _port_listening "$OLLAMA_CPU_PORT"; then
+      echo "✓ Ollama CPU-safe mode started on http://127.0.0.1:${OLLAMA_CPU_PORT} — PID $(cat "$OLLAMA_CPU_PID")"
+    else
+      echo "ERROR: Ollama CPU-safe mode failed to start. Check: $OLLAMA_CPU_LOG"
+      tail -5 "$OLLAMA_CPU_LOG"
+    fi
+    ;;
+
   stop)
     if _systemd_active; then
       _clear_pidfile
@@ -103,6 +139,10 @@ case "${1:-start}" in
     else
       pkill -f "ollama serve" 2>/dev/null && echo "Ollama stopped" || echo "Ollama not running"
     fi
+    if _pid_running "$OLLAMA_CPU_PID"; then
+      kill "$(cat "$OLLAMA_CPU_PID")" 2>/dev/null && echo "Ollama CPU-safe mode stopped"
+      rm -f "$OLLAMA_CPU_PID"
+    fi
     ;;
 
   restart)
@@ -114,7 +154,11 @@ case "${1:-start}" in
     ;;
 
   status)
-    if _systemd_active; then
+    if _pid_running "$OLLAMA_CPU_PID" || _port_listening "$OLLAMA_CPU_PORT"; then
+      echo "cpu-safe: running (port ${OLLAMA_CPU_PORT})"
+      grep -E "library=(CUDA|cuda|cpu)|inference compute" "$OLLAMA_CPU_LOG" 2>/dev/null | tail -1
+      OLLAMA_HOST="127.0.0.1:${OLLAMA_CPU_PORT}" ollama ps 2>/dev/null
+    elif _systemd_active; then
       _clear_pidfile
       echo "systemd: active"
       journalctl -u ollama --no-pager -n 3 2>/dev/null | grep -E "library=|inference compute" | tail -1
@@ -132,6 +176,6 @@ case "${1:-start}" in
     fi
     ;;
   *)
-    echo "Usage: $0 {start|stop|restart|status}"
+    echo "Usage: $0 {start|cpu|stop|restart|status}"
     ;;
 esac

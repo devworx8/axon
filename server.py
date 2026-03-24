@@ -9,14 +9,15 @@ import sys
 import os
 import platform as _platform
 import shlex as _shlex
+import shutil
 import subprocess
 import time as _time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -36,6 +37,7 @@ import integrations as integ
 import runtime_manager
 import gpu_guard
 import provider_registry
+import resource_bank
 
 PORT = 7734
 DEVBRAIN_DIR = Path.home() / ".devbrain"
@@ -506,12 +508,336 @@ def _ai_params(settings: dict) -> dict:
     }
 
 
+# ─── Resource bank helpers ───────────────────────────────────────────────────
+
+def _clean_resource_ids(resource_ids: Optional[list[int]]) -> list[int]:
+    seen: list[int] = []
+    for resource_id in resource_ids or []:
+        try:
+            value = int(resource_id)
+        except Exception:
+            continue
+        if value > 0 and value not in seen:
+            seen.append(value)
+    return seen
+
+
+def _stored_message_with_resources(message: str, resources: list[dict]) -> str:
+    if not resources:
+        return message
+    labels = ", ".join(resource.get("title", "resource") for resource in resources[:6])
+    suffix = "…" if len(resources) > 6 else ""
+    return f"{message}\n\n[Attached resources: {labels}{suffix}]"
+
+
+async def _resource_bundle(
+    conn,
+    *,
+    resource_ids: list[int],
+    user_message: str,
+    settings: dict,
+) -> dict:
+    ids = _clean_resource_ids(resource_ids)
+    if not ids:
+        return {
+            "resources": [],
+            "context_block": "",
+            "image_paths": [],
+            "vision_model": "",
+            "warnings": [],
+        }
+
+    rows = await devdb.get_resources_by_ids(conn, ids)
+    resources = [resource_bank.serialize_resource(row) for row in rows]
+    warnings: list[str] = []
+    context_parts = ["## Attached Resources"]
+    image_paths: list[str] = []
+    vision_model = (settings.get("vision_model") or "").strip()
+
+    for resource in resources:
+        await devdb.touch_resource_used(conn, resource["id"])
+        await devdb.log_event(conn, "resource_used", f"Used resource: {resource['title']}")
+
+        if resource.get("kind") == "image":
+            image_paths.append(resource.get("local_path", ""))
+            meta = resource.get("meta") or {}
+            dimensions = ""
+            if meta.get("width") and meta.get("height"):
+                dimensions = f" ({meta['width']}×{meta['height']})"
+            context_parts.append(
+                f"- Image: {resource['title']}{dimensions}. Summary: {resource.get('summary') or 'Image attached.'}"
+            )
+            continue
+
+        chunk_rows = await devdb.get_resource_chunks(conn, resource["id"])
+        chunks = []
+        for row in chunk_rows:
+            try:
+                embedding = _json.loads(row["embedding_json"]) if row["embedding_json"] else None
+            except Exception:
+                embedding = None
+            chunks.append({"text": row["text"], "embedding": embedding})
+
+        selected = await resource_bank.select_relevant_chunks(
+            query=user_message,
+            chunks=chunks,
+            settings=settings,
+            limit=4,
+        )
+        context_parts.append(f"- {resource['title']}: {resource.get('summary') or resource.get('preview_text') or 'Attached document.'}")
+        for idx, chunk in enumerate(selected, start=1):
+            context_parts.append(f"  Excerpt {idx}: {chunk}")
+
+    if image_paths and not vision_model:
+        warnings.append("Image resources are attached, but no vision model is configured. Axon will use metadata only.")
+
+    return {
+        "resources": resources,
+        "context_block": "\n".join(context_parts),
+        "image_paths": [path for path in image_paths if path],
+        "vision_model": vision_model,
+        "warnings": warnings,
+    }
+
+
+async def _ingest_resource_bytes(
+    conn,
+    *,
+    title: str,
+    filename: str,
+    content: bytes,
+    mime_type: str,
+    source_type: str,
+    source_url: str,
+    settings: dict,
+) -> dict:
+    if len(content) > resource_bank.upload_limit_bytes(settings):
+        raise HTTPException(413, "Resource exceeds the configured upload size limit.")
+    if not resource_bank.is_supported(filename, mime_type, source_type=source_type):
+        raise HTTPException(415, f"Unsupported resource type: {mime_type or filename}")
+
+    resource_id = await devdb.add_resource(
+        conn,
+        title=title,
+        kind=resource_bank.classify_kind(filename, mime_type),
+        source_type=source_type,
+        source_url=source_url,
+        local_path="",
+        mime_type=mime_type,
+        size_bytes=len(content),
+        sha256=resource_bank.sha256_bytes(content),
+        status="pending",
+    )
+    await devdb.log_event(conn, "resource_added", f"Resource added: {title}")
+
+    local_path = resource_bank.save_resource_file(
+        resource_id=resource_id,
+        filename=filename,
+        content=content,
+        settings=settings,
+    )
+    await devdb.update_resource(conn, resource_id, local_path=str(local_path))
+
+    try:
+        analysis = await resource_bank.analyze_resource_file(
+            path=local_path,
+            title=title,
+            mime_type=mime_type,
+            settings=settings,
+        )
+        await devdb.update_resource(
+            conn,
+            resource_id,
+            kind=analysis["kind"],
+            status=analysis["status"],
+            summary=analysis["summary"],
+            preview_text=analysis["preview_text"],
+            meta_json=analysis["meta_json"],
+        )
+        await devdb.replace_resource_chunks(conn, resource_id, analysis["chunks"])
+        await devdb.log_event(conn, "resource_processed", f"Resource processed: {title}")
+    except Exception as exc:
+        await devdb.update_resource(
+            conn,
+            resource_id,
+            status="failed",
+            summary=f"Processing failed: {exc}",
+            preview_text="",
+        )
+        await devdb.log_event(conn, "resource_failed", f"Resource failed: {title}")
+        raise HTTPException(500, f"Resource processing failed: {exc}")
+
+    row = await devdb.get_resource(conn, resource_id)
+    return resource_bank.serialize_resource(row)
+
+
+class ResourceImportRequest(BaseModel):
+    url: str
+    title: Optional[str] = None
+
+
+@app.get("/api/resources")
+async def list_resources(
+    search: str = "",
+    kind: str = "",
+    source_type: str = "",
+    status: str = "",
+    limit: int = Query(200, ge=1, le=500),
+):
+    async with devdb.get_db() as conn:
+        rows = await devdb.list_resources(
+            conn,
+            search=search,
+            kind=kind,
+            source_type=source_type,
+            status=status,
+            limit=limit,
+        )
+    return {"items": [resource_bank.serialize_resource(row) for row in rows]}
+
+
+@app.post("/api/resources/upload")
+async def upload_resources(files: list[UploadFile] = File(...)):
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+        created = []
+        for upload in files:
+            raw = await upload.read()
+            filename = upload.filename or "resource"
+            mime_type = (upload.content_type or resource_bank.detect_mime_type(filename)).strip().lower()
+            title = Path(filename).stem or filename
+            created.append(
+                await _ingest_resource_bytes(
+                    conn,
+                    title=title,
+                    filename=filename,
+                    content=raw,
+                    mime_type=mime_type,
+                    source_type="upload",
+                    source_url="",
+                    settings=settings,
+                )
+            )
+    return {"items": created}
+
+
+@app.post("/api/resources/import-url")
+async def import_resource_url(body: ResourceImportRequest):
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+        fetched = await resource_bank.fetch_url_resource(body.url, settings)
+        title = (body.title or Path(fetched["filename"]).stem or fetched["filename"]).strip()
+        created = await _ingest_resource_bytes(
+            conn,
+            title=title,
+            filename=fetched["filename"],
+            content=fetched["content"],
+            mime_type=fetched["mime_type"],
+            source_type="url",
+            source_url=fetched["final_url"],
+            settings=settings,
+        )
+    return created
+
+
+@app.get("/api/resources/{resource_id}")
+async def get_resource(resource_id: int):
+    async with devdb.get_db() as conn:
+        row = await devdb.get_resource(conn, resource_id)
+        if not row:
+            raise HTTPException(404, "Resource not found")
+        chunks = await devdb.get_resource_chunks(conn, resource_id)
+    data = resource_bank.serialize_resource(row)
+    data["chunk_count"] = len(chunks)
+    return data
+
+
+@app.get("/api/resources/{resource_id}/content")
+async def get_resource_content(resource_id: int):
+    async with devdb.get_db() as conn:
+        row = await devdb.get_resource(conn, resource_id)
+        if not row:
+            raise HTTPException(404, "Resource not found")
+        chunks = await devdb.get_resource_chunks(conn, resource_id)
+
+    resource = resource_bank.serialize_resource(row)
+    path = Path(resource["local_path"])
+    if resource.get("kind") == "image":
+        if not path.exists():
+            raise HTTPException(404, "Image file not found")
+        return FileResponse(str(path), media_type=resource.get("mime_type") or "image/png")
+
+    content = "\n\n".join(chunk["text"] for chunk in [dict(r) for r in chunks])[:50000]
+    return {
+        "id": resource["id"],
+        "title": resource["title"],
+        "kind": resource["kind"],
+        "mime_type": resource.get("mime_type", ""),
+        "summary": resource.get("summary", ""),
+        "preview_text": resource.get("preview_text", ""),
+        "content": content,
+    }
+
+
+@app.post("/api/resources/{resource_id}/reprocess")
+async def reprocess_resource(resource_id: int):
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+        row = await devdb.get_resource(conn, resource_id)
+        if not row:
+            raise HTTPException(404, "Resource not found")
+        resource = resource_bank.serialize_resource(row)
+        path = Path(resource["local_path"])
+        if not path.exists():
+            raise HTTPException(404, "Resource file not found")
+        analysis = await resource_bank.analyze_resource_file(
+            path=path,
+            title=resource["title"],
+            mime_type=resource.get("mime_type") or resource_bank.detect_mime_type(path.name),
+            settings=settings,
+        )
+        await devdb.update_resource(
+            conn,
+            resource_id,
+            kind=analysis["kind"],
+            status=analysis["status"],
+            summary=analysis["summary"],
+            preview_text=analysis["preview_text"],
+            meta_json=analysis["meta_json"],
+        )
+        await devdb.replace_resource_chunks(conn, resource_id, analysis["chunks"])
+        await devdb.log_event(conn, "resource_processed", f"Resource reprocessed: {resource['title']}")
+        updated = await devdb.get_resource(conn, resource_id)
+    return resource_bank.serialize_resource(updated)
+
+
+@app.delete("/api/resources/{resource_id}")
+async def delete_resource(resource_id: int):
+    async with devdb.get_db() as conn:
+        row = await devdb.get_resource(conn, resource_id)
+        if not row:
+            raise HTTPException(404, "Resource not found")
+        path = Path(dict(row).get("local_path") or "")
+        await devdb.delete_resource(conn, resource_id)
+        await devdb.log_event(conn, "resource_removed", f"Resource deleted: {dict(row).get('title', 'resource')}")
+
+    try:
+        if path.exists():
+            folder = path.parent
+            if folder.is_dir():
+                shutil.rmtree(folder, ignore_errors=True)
+    except Exception:
+        pass
+    return {"deleted": True}
+
+
 # ─── Chat ─────────────────────────────────────────────────────────────────────
 
 class ChatMessage(BaseModel):
     message: str
     project_id: Optional[int] = None
     model: Optional[str] = None
+    resource_ids: Optional[list[int]] = None
 
 
 @app.post("/api/chat")
@@ -539,18 +865,35 @@ async def chat(body: ChatMessage):
             if proj:
                 project_name = proj["name"]
 
+        resource_bundle = await _resource_bundle(
+            conn,
+            resource_ids=body.resource_ids or [],
+            user_message=body.message,
+            settings=settings,
+        )
+
         # Call AI with timeout handling
         try:
             import asyncio as _aio
             result = await _aio.wait_for(
-                brain.chat(body.message, history, context_block, project_name, **ai),
+                brain.chat(
+                    body.message,
+                    history,
+                    context_block,
+                    project_name,
+                    resource_context=resource_bundle["context_block"],
+                    resource_image_paths=resource_bundle["image_paths"],
+                    vision_model=resource_bundle["vision_model"],
+                    **ai,
+                ),
                 timeout=90.0,
             )
         except (_aio.TimeoutError, TimeoutError, RuntimeError) as exc:
             raise HTTPException(504, f"AI backend timed out — try a shorter message or check Ollama. ({exc})")
 
         # Persist messages
-        await devdb.save_message(conn, "user", body.message, project_id=body.project_id)
+        stored_user_message = _stored_message_with_resources(body.message, resource_bundle["resources"])
+        await devdb.save_message(conn, "user", stored_user_message, project_id=body.project_id)
         await devdb.save_message(
             conn, "assistant", result["content"],
             project_id=body.project_id, tokens=result["tokens"]
@@ -598,14 +941,30 @@ async def chat_stream(body: ChatMessage, request: Request):
             proj = await devdb.get_project(conn, body.project_id)
             if proj:
                 project_name = proj["name"]
+        resource_bundle = await _resource_bundle(
+            conn,
+            resource_ids=body.resource_ids or [],
+            user_message=body.message,
+            settings=settings,
+        )
 
     if backend != "ollama":
         # Fall back to non-streaming for API/CLI — emit single SSE event
         try:
             ai = _ai_params(settings)
-            result = await brain.chat(body.message, history, context_block,
-                                       project_name, **ai)
+            result = await brain.chat(
+                body.message,
+                history,
+                context_block,
+                project_name,
+                resource_context=resource_bundle["context_block"],
+                resource_image_paths=resource_bundle["image_paths"],
+                vision_model=resource_bundle["vision_model"],
+                **ai,
+            )
             async def _buffered():
+                for warning in resource_bundle["warnings"]:
+                    yield {"data": _json.dumps({"chunk": f"⚠️ {warning}\n\n"})}
                 yield {"data": _json.dumps({"chunk": result["content"]})}
                 yield {"data": _json.dumps({"done": True, "tokens": result["tokens"]})}
             return EventSourceResponse(_buffered())
@@ -621,8 +980,14 @@ async def chat_stream(body: ChatMessage, request: Request):
 
     async def generate():
         try:
+            for warning in resource_bundle["warnings"]:
+                full_content.append(f"⚠️ {warning}\n\n")
+                yield {"data": _json.dumps({"chunk": f"⚠️ {warning}\n\n"})}
             async for chunk in brain.stream_chat(
                 body.message, history, context_block, project_name,
+                resource_context=resource_bundle["context_block"],
+                resource_image_paths=resource_bundle["image_paths"],
+                vision_model=resource_bundle["vision_model"],
                 ollama_url=ollama_url, ollama_model=ollama_model,
             ):
                 full_content.append(chunk)
@@ -631,7 +996,8 @@ async def chat_stream(body: ChatMessage, request: Request):
                 yield {"data": _json.dumps({"chunk": chunk})}
             # Persist after stream completes
             async with devdb.get_db() as conn:
-                await devdb.save_message(conn, "user", body.message,
+                stored_user_message = _stored_message_with_resources(body.message, resource_bundle["resources"])
+                await devdb.save_message(conn, "user", stored_user_message,
                                           project_id=body.project_id)
                 await devdb.save_message(conn, "assistant", "".join(full_content),
                                           project_id=body.project_id, tokens=0)
@@ -651,6 +1017,7 @@ class AgentRequest(BaseModel):
     project_id: Optional[int] = None
     tools: Optional[list[str]] = None    # None = all tools
     model: Optional[str] = None
+    resource_ids: Optional[list[int]] = None
 
 
 @app.post("/api/agent")
@@ -673,15 +1040,27 @@ async def agent_endpoint(body: AgentRequest, request: Request):
             proj = await devdb.get_project(conn, body.project_id)
             if proj:
                 project_name = proj["name"]
+        resource_bundle = await _resource_bundle(
+            conn,
+            resource_ids=body.resource_ids or [],
+            user_message=body.message,
+            settings=settings,
+        )
 
     ollama_url = settings.get("ollama_url", "")
-    ollama_model = body.model or settings.get("ollama_model", "")
+    ollama_model = body.model or resource_bundle["vision_model"] or settings.get("ollama_model", "")
     collected_text: list[str] = []
 
     async def generate():
         try:
+            for warning in resource_bundle["warnings"]:
+                collected_text.append(f"⚠️ {warning}\n\n")
+                yield {"data": _json.dumps({"type": "text", "chunk": f"⚠️ {warning}\n\n"})}
             async for event in brain.run_agent(
                 body.message, history, context_block, project_name,
+                resource_context=resource_bundle["context_block"],
+                resource_image_paths=resource_bundle["image_paths"],
+                vision_model=resource_bundle["vision_model"],
                 tools=body.tools,
                 ollama_url=ollama_url, ollama_model=ollama_model,
             ):
@@ -695,7 +1074,8 @@ async def agent_endpoint(body: AgentRequest, request: Request):
             final_text = "".join(collected_text)
             if final_text:
                 async with devdb.get_db() as conn:
-                    await devdb.save_message(conn, "user", body.message,
+                    stored_user_message = _stored_message_with_resources(body.message, resource_bundle["resources"])
+                    await devdb.save_message(conn, "user", stored_user_message,
                                               project_id=body.project_id)
                     await devdb.save_message(conn, "assistant", final_text,
                                               project_id=body.project_id, tokens=0)
@@ -744,11 +1124,21 @@ async def get_settings():
         s = await devdb.get_all_settings(conn)
         s["ai_backend"] = s.get("ai_backend") or "ollama"
         s["api_provider"] = provider_registry.selected_api_provider_id(s)
+        s["ollama_runtime_mode"] = _stored_ollama_runtime_mode(s)
         for key in (
             "cloud_agents_enabled",
             "openai_gpts_enabled",
             "gemini_gems_enabled",
             "generic_api_enabled",
+            "resource_url_import_enabled",
+            "alerts_enabled",
+            "alerts_desktop",
+            "alerts_mobile",
+            "alerts_missions",
+            "alerts_runtime",
+            "alerts_morning_brief",
+            "alerts_tunnel",
+            "dash_bridge_enabled",
         ):
             s[key] = str(s.get(key, "")).strip().lower() in {"1", "true", "yes", "on"}
         for key_name in (
@@ -767,6 +1157,12 @@ async def get_settings():
             s["github_token_set"] = True
         else:
             s["github_token_set"] = False
+        if s.get("dash_bridge_token"):
+            token = s["dash_bridge_token"]
+            s["dash_bridge_token"] = provider_registry.mask_secret(token)
+            s["dash_bridge_token_set"] = True
+        else:
+            s["dash_bridge_token_set"] = False
         return s
 
 
@@ -782,12 +1178,16 @@ class SettingsUpdate(BaseModel):
     api_provider: Optional[str] = None
     claude_cli_path: Optional[str] = None
     ollama_url: Optional[str] = None
+    ollama_runtime_mode: Optional[str] = None
     ollama_model: Optional[str] = None
     code_model: Optional[str] = None
     general_model: Optional[str] = None
     reasoning_model: Optional[str] = None
     embeddings_model: Optional[str] = None
     vision_model: Optional[str] = None
+    resource_storage_path: Optional[str] = None
+    resource_upload_max_mb: Optional[str] = None
+    resource_url_import_enabled: Optional[bool] = None
     cloud_agents_enabled: Optional[bool] = None
     openai_gpts_enabled: Optional[bool] = None
     gemini_gems_enabled: Optional[bool] = None
@@ -808,6 +1208,17 @@ class SettingsUpdate(BaseModel):
     azure_speech_key: Optional[str] = None
     azure_speech_region: Optional[str] = None
     azure_voice: Optional[str] = None
+    alerts_enabled: Optional[bool] = None
+    alerts_desktop: Optional[bool] = None
+    alerts_mobile: Optional[bool] = None
+    alerts_missions: Optional[bool] = None
+    alerts_runtime: Optional[bool] = None
+    alerts_morning_brief: Optional[bool] = None
+    alerts_tunnel: Optional[bool] = None
+    dash_bridge_enabled: Optional[bool] = None
+    dash_bridge_url: Optional[str] = None
+    dash_bridge_token: Optional[str] = None
+    dash_bridge_mode: Optional[str] = None
 
 
 @app.post("/api/settings")
@@ -1017,17 +1428,22 @@ async def runtime_status():
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
         projects = await devdb.get_projects(conn, status="active")
+        resources = await devdb.list_resources(conn)
 
     available_models = await brain.ollama_list_models(settings.get("ollama_url", ""))
     ollama_service = _ollama_service_status()
-    return runtime_manager.build_runtime_status(
+    status = runtime_manager.build_runtime_status(
         settings=settings,
         available_models=available_models,
         ollama_running=bool(ollama_service.get("running")),
         vault_unlocked=devvault.VaultSession.is_unlocked(),
         workspace_count=len(projects),
+        resource_count=len(resources),
         usage=brain.get_session_usage(),
     )
+    status["ollama_service"] = ollama_service
+    status["ollama_runtime_mode"] = _stored_ollama_runtime_mode(settings)
+    return status
 
 
 # ─── Mobile info ──────────────────────────────────────────────────────────────
@@ -1036,6 +1452,8 @@ async def runtime_status():
 async def mobile_info():
     """Return local IP, Tailscale IP + QR code for mobile access."""
     import socket, io, base64
+    stable_domain = "axon.edudashpro.org.za"
+    stable_domain_url = f"https://{stable_domain}"
 
     # LAN IP (default route)
     try:
@@ -1110,10 +1528,46 @@ async def mobile_info():
         "tailscale_ip": tailscale_ip,
         "tailscale_url": f"http://{tailscale_ip}:{PORT}" if tailscale_ip else "",
         "cloudflared_url": cloudflared_url,
+        "stable_domain": stable_domain,
+        "stable_domain_url": stable_domain_url,
+        "stable_domain_status": "planned",
         "qr_url": qr_url,
         "port": PORT,
         "qr_data_uri": qr_data_uri,
     }
+
+
+@app.get("/api/desktop/preview")
+async def desktop_preview(w: int = 960, h: int = 540):
+    """Return a lightweight PNG preview of the current desktop."""
+    if not shutil.which("import"):
+        raise HTTPException(503, "Desktop preview tool is not available on this host.")
+
+    width = max(320, min(int(w), 1600))
+    height = max(180, min(int(h), 900))
+    cmd = ["import", "-window", "root", "-resize", f"{width}x{height}", "png:-"]
+    env = os.environ.copy()
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=8,
+            check=False,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "Desktop preview timed out.")
+
+    if result.returncode != 0 or not result.stdout:
+        detail = (result.stderr or b"").decode("utf-8", errors="replace").strip() or "Desktop preview failed."
+        raise HTTPException(500, detail[:240])
+
+    return Response(
+        content=result.stdout,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 # ─── Tunnel management ────────────────────────────────────────────────────────
@@ -1413,7 +1867,45 @@ async def ollama_status():
         settings = await devdb.get_all_settings(conn)
     url = settings.get("ollama_url", "")
     status = await brain.ollama_status(ollama_url=url)
+    service = _ollama_service_status()
+    status["runtime_mode"] = _stored_ollama_runtime_mode(settings)
+    status["service_mode"] = service.get("mode", "")
+    status["service_detail"] = service.get("detail", "")
     return status
+
+
+class OllamaRuntimeModeBody(BaseModel):
+    mode: str
+
+
+@app.post("/api/ollama/runtime-mode")
+async def switch_ollama_runtime_mode(body: OllamaRuntimeModeBody):
+    requested = (body.mode or "").strip().lower()
+    if requested not in {"cpu_safe", "gpu_default"}:
+        raise HTTPException(400, "Unknown Ollama runtime mode.")
+
+    if not OLLAMA_SH.exists():
+        raise HTTPException(500, "Ollama launcher not found.")
+
+    launcher_command = "cpu" if requested == "cpu_safe" else "start"
+    result = _run_capture([str(OLLAMA_SH), launcher_command], timeout=25)
+    if not result["ok"]:
+        raise HTTPException(500, result["output"] or "Failed to switch Ollama runtime mode.")
+
+    ollama_url = "http://127.0.0.1:11435" if requested == "cpu_safe" else brain.OLLAMA_BASE_URL
+    status = await brain.ollama_status(ollama_url=ollama_url)
+
+    async with devdb.get_db() as conn:
+        await devdb.set_setting(conn, "ollama_runtime_mode", requested)
+        await devdb.set_setting(conn, "ollama_url", ollama_url)
+
+    return {
+        "ok": True,
+        "runtime_mode": requested,
+        "ollama_url": ollama_url,
+        "status": status,
+        "launcher_output": result["output"],
+    }
 
 
 @app.get("/api/ollama/models")
@@ -1616,7 +2108,10 @@ def _ollama_service_status() -> dict:
     running = False
     detail = output or "No status output"
 
-    if lower.startswith("systemd: active"):
+    if lower.startswith("cpu-safe: running"):
+        mode = "cpu_safe"
+        running = True
+    elif lower.startswith("systemd: active"):
         mode = "systemd"
         running = True
     elif lower.startswith("manual: running"):
@@ -1639,6 +2134,14 @@ def _ollama_service_status() -> dict:
         "command_preview": _command_preview([str(OLLAMA_SH), "restart"]),
         "output": output,
     }
+
+
+def _stored_ollama_runtime_mode(settings: dict) -> str:
+    explicit = (settings.get("ollama_runtime_mode") or "").strip().lower()
+    if explicit in {"cpu_safe", "gpu_default"}:
+        return explicit
+    url = (settings.get("ollama_url") or "").strip().rstrip("/")
+    return "cpu_safe" if url.endswith(":11435") else "gpu_default"
 
 
 def _reboot_plan(os_name: str) -> dict:

@@ -46,6 +46,7 @@ def build_runtime_status(
     ollama_running: bool,
     vault_unlocked: bool,
     workspace_count: int,
+    resource_count: int = 0,
     usage: dict | None = None,
 ) -> dict:
     usage = usage or {}
@@ -109,4 +110,15 @@ def build_runtime_status(
         "selected_api_provider": provider_registry.runtime_api_config(settings),
         "permissions": default_permission_cards(),
         "gpu_guard": gpu_profile,
+        "vision_status": {
+            "model": settings.get("vision_model", "") or "",
+            "ready": bool(settings.get("vision_model", "")),
+            "runtime_label": "Local Ollama" if settings.get("vision_model") else "Not configured",
+        },
+        "resource_bank": {
+            "count": resource_count,
+            "storage_path": settings.get("resource_storage_path", "~/.devbrain/resources") or "~/.devbrain/resources",
+            "upload_max_mb": settings.get("resource_upload_max_mb", "20") or "20",
+            "url_import_enabled": _setting_enabled(settings.get("resource_url_import_enabled", "1")),
+        },
     }

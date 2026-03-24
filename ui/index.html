@@ -78,7 +78,13 @@
     @media (max-width: 767px) {
       .composer-shell {
         box-shadow: 0 14px 36px rgba(2,6,23,0.28);
+        border-radius: 22px;
       }
+    }
+    .mobile-live-strip {
+      border: 1px solid rgba(245,158,11,0.18);
+      background: linear-gradient(180deg, rgba(15,23,42,0.94), rgba(15,23,42,0.82));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
     }
     .next-gen-icon-glow {
       box-shadow: 0 0 0 1px rgba(34,211,238,0.18), 0 12px 28px rgba(34,211,238,0.18);
@@ -332,6 +338,12 @@
 
   <!-- ── Main content ──────────────────────────────────────────────── -->
   <main class="flex-1 flex flex-col overflow-hidden pb-safe md:pb-0 pt-14 md:pt-0">
+    <input x-ref="resourceUploadInput"
+           type="file"
+           multiple
+           accept=".txt,.md,.json,.csv,.pdf,.png,.jpg,.jpeg,.webp"
+           class="hidden"
+           @change="handleResourceUpload($event)" />
 
     <!-- ════════════════════════════════════════════════════════════
          TAB: DASHBOARD
@@ -618,6 +630,14 @@
                   <span x-show="msg.streaming" class="inline-block w-2 h-4 bg-blue-400 ml-0.5 animate-pulse rounded-sm align-middle"></span>
                 </div>
                 <div x-show="msg.role === 'user'" class="whitespace-pre-wrap leading-relaxed" x-text="msg.content"></div>
+                <div x-show="msg.resources?.length" class="mt-2 flex flex-wrap gap-1.5">
+                  <template x-for="resource in (msg.resources || [])" :key="resource.id">
+                    <span class="inline-flex items-center gap-1 rounded-full border border-sky-500/20 bg-sky-500/10 px-2 py-1 text-[10px] text-sky-200">
+                      <span>📎</span>
+                      <span class="max-w-[180px] truncate" x-text="resourceChipLabel(resource)"></span>
+                    </span>
+                  </template>
+                </div>
               </div>
               <!-- Meta row -->
               <div class="flex items-center gap-2 mt-1 px-1"
@@ -670,10 +690,10 @@
       <div class="px-2.5 md:px-5 py-2.5 md:py-3 border-t border-slate-800 bg-slate-900/60 backdrop-blur shrink-0">
         <div class="composer-shell rounded-[26px] md:rounded-[30px] p-2 md:p-3 transition-all duration-200"
              :class="resolveChatMode(chatInput) === 'agent' ? 'agent' : ''">
-          <div class="flex flex-col gap-2 px-0.5 pb-2 border-b border-slate-800/70 md:flex-row md:items-center">
+          <div class="flex flex-col gap-1.5 px-0.5 pb-2 border-b border-slate-800/70 md:gap-2 md:flex-row md:items-center">
             <button @click="toggleAgentMode()"
                     :class="agentMode ? 'border-amber-400/40 bg-amber-500/12 text-amber-200' : 'border-slate-700/80 bg-slate-900/70 text-slate-300 hover:border-slate-500'"
-                    class="inline-flex min-w-0 items-center gap-2 rounded-2xl border px-2 py-2 transition press-scale md:px-2.5">
+                    class="inline-flex min-w-0 items-center gap-2 rounded-2xl border px-2 py-1.5 transition press-scale md:px-2.5 md:py-2">
               <span :class="agentMode ? 'from-amber-400 via-orange-400 to-cyan-300 text-slate-950 next-gen-icon-glow' : 'from-slate-700 to-slate-800 text-slate-200'"
                     class="w-7 h-7 md:w-8 md:h-8 rounded-2xl bg-gradient-to-br flex items-center justify-center overflow-hidden shrink-0">
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-label="#NEXT-GEN">
@@ -692,16 +712,16 @@
                     x-text="agentMode ? 'Tools' : 'Smart'"></span>
             </button>
 
-            <div class="flex min-w-0 items-center gap-2 w-full md:ml-auto md:w-auto">
+            <div class="flex min-w-0 items-center gap-1.5 w-full md:ml-auto md:w-auto md:gap-2">
               <div class="hidden md:flex items-center gap-1.5 rounded-full border border-slate-800 bg-slate-900/70 px-2.5 py-1.5 text-[10px] text-slate-400">
                 <span class="h-1.5 w-1.5 rounded-full" :class="usesOllamaBackend() ? 'bg-emerald-400' : 'bg-slate-500'"></span>
                 <span x-text="backendBadge()"></span>
               </div>
 
-              <div x-show="usesOllamaBackend()" class="flex min-w-0 flex-1 items-center gap-2 rounded-2xl border border-slate-800 bg-slate-900/70 px-2 py-1.5 md:flex-none md:min-w-[220px] md:px-2.5">
+              <div x-show="usesOllamaBackend()" class="flex min-w-0 flex-1 items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900/70 px-2 py-1.5 md:flex-none md:min-w-[220px] md:gap-2 md:rounded-2xl md:px-2.5">
                 <span class="text-[9px] md:text-[10px] uppercase tracking-[0.16em] text-slate-500">Model</span>
                 <select x-model="selectedChatModel" @focus="if (!ollamaModels.length) loadOllamaModels()"
-                        class="dark-select min-w-0 flex-1 rounded-xl border border-slate-800 px-2 py-1.5 text-[11px] focus:outline-none">
+                        class="dark-select min-w-0 flex-1 rounded-lg border border-slate-800 px-2 py-1.5 text-[11px] focus:outline-none md:rounded-xl">
                   <option value="" x-show="!ollamaModels.length">Saved default</option>
                   <template x-for="m in ollamaModels" :key="m.name">
                     <option :value="m.name" x-text="m.name"></option>
@@ -710,7 +730,7 @@
                 <button @click="loadOllamaModels()" class="shrink-0 text-[10px] text-slate-500 hover:text-slate-200">↻</button>
               </div>
 
-              <div x-show="!usesOllamaBackend()" class="flex min-w-0 flex-1 items-center gap-2 rounded-2xl border border-slate-800 bg-slate-900/70 px-2 py-1.5 md:flex-none md:min-w-[250px] md:px-2.5">
+              <div x-show="!usesOllamaBackend()" class="flex min-w-0 flex-1 items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900/70 px-2 py-1.5 md:flex-none md:min-w-[250px] md:gap-2 md:rounded-2xl md:px-2.5">
                 <span class="text-[9px] md:text-[10px] uppercase tracking-[0.16em] text-slate-500">Provider</span>
                 <div class="min-w-0 flex-1">
                   <div class="truncate text-[11px] text-slate-100" x-text="selectedApiProviderLabel()"></div>
@@ -726,7 +746,7 @@
             </div>
           </div>
 
-          <div class="flex flex-wrap items-center gap-2 px-1 pt-2" x-show="resolveChatMode(chatInput) === 'agent'">
+          <div class="hidden md:flex flex-wrap items-center gap-2 px-1 pt-2" x-show="resolveChatMode(chatInput) === 'agent'">
             <span class="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300">#NEXT-GEN</span>
             <span class="tool-chip rounded-full px-2 py-1 text-[10px] text-slate-300">Files</span>
             <span class="tool-chip rounded-full px-2 py-1 text-[10px] text-slate-300">Git</span>
@@ -736,13 +756,18 @@
             <span class="hidden md:inline text-[10px] text-slate-500">Axon will inspect and act instead of only giving shell instructions.</span>
           </div>
 
+          <div class="md:hidden flex items-center gap-2 px-1 pt-2 text-[10px]" x-show="resolveChatMode(chatInput) === 'agent'">
+            <span class="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300">#NEXT-GEN</span>
+            <span class="rounded-full border border-slate-800 bg-slate-950/60 px-2 py-0.5 text-slate-400">Files · Git · Search · Write</span>
+          </div>
+
           <div x-show="!usesOllamaBackend()" class="flex flex-wrap items-center gap-2 px-1 pt-2">
             <span class="rounded-full border border-blue-500/20 bg-blue-500/10 px-2.5 py-1 text-[10px] text-blue-200" x-text="selectedApiProviderLabel()"></span>
             <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-400" x-text="selectedApiProviderModel() || 'model pending'"></span>
             <span class="text-[10px] text-slate-500">External runtime is active for this console session.</span>
           </div>
 
-          <div class="flex flex-wrap items-center gap-2 px-1 pt-2">
+          <div class="hidden md:flex flex-wrap items-center gap-2 px-1 pt-2">
             <template x-for="phase in agentLifecycle" :key="phase">
               <span class="rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.18em]"
                     :class="phaseChipClass(phase)"
@@ -750,12 +775,129 @@
             </template>
           </div>
 
+          <div class="md:hidden mt-2" x-show="chatLoading || liveOperator.active">
+            <div class="mobile-live-strip rounded-2xl px-3 py-2">
+              <div class="flex items-center gap-2">
+                <span class="h-2 w-2 rounded-full animate-pulse" :class="liveOperator.phase === 'recover' ? 'bg-amber-400' : 'bg-emerald-400'"></span>
+                <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em]"
+                      :class="phaseChipClass(liveOperator.phase || agentProgressState)"
+                      x-text="phaseLabel(liveOperator.phase || agentProgressState)"></span>
+                <span class="min-w-0 flex-1 truncate text-[11px] font-medium text-slate-100" x-text="liveOperator.title || 'Axon is working…'"></span>
+              </div>
+              <div class="mt-1 text-[10px] text-slate-400" x-text="liveOperator.detail || 'Streaming tool activity and reply progress live.'"></div>
+            </div>
+          </div>
+
+          <div class="md:hidden mt-2" x-show="(chatLoading || liveOperator.active) && desktopPreview.enabled">
+            <div class="rounded-2xl border border-slate-800 bg-slate-950/70 p-2.5">
+              <div class="flex items-center justify-between gap-2">
+                <div>
+                  <div class="text-[11px] font-medium text-slate-100">Live desktop</div>
+                  <div class="text-[10px] text-slate-500" x-text="desktopPreview.lastUpdated ? 'Updated ' + timeAgo(desktopPreview.lastUpdated) : 'Preview refreshes while Axon is active.'"></div>
+                </div>
+                <button @click="refreshDesktopPreview(true)"
+                        class="rounded-full border border-slate-700 bg-slate-900/80 px-2 py-1 text-[10px] text-slate-300">
+                  Refresh
+                </button>
+              </div>
+              <div class="mt-2 overflow-hidden rounded-xl border border-slate-800 bg-slate-950/80 aspect-video flex items-center justify-center">
+                <img x-show="desktopPreview.url" :src="desktopPreview.url" alt="Live desktop preview" class="h-full w-full object-cover" />
+                <div x-show="!desktopPreview.url && desktopPreview.loading" class="text-[11px] text-slate-400">Pulling live desktop…</div>
+                <div x-show="desktopPreview.error" class="px-3 text-center text-[11px] text-amber-300" x-text="desktopPreview.error"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="md:hidden mt-2" x-show="lastOperatorOutcome.summary && !chatLoading">
+            <div class="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2.5">
+              <div class="flex items-center justify-between gap-2">
+                <div class="text-[11px] font-medium text-slate-100" x-text="lastOperatorOutcome.title || 'Latest result'"></div>
+                <div class="text-[10px] text-slate-500" x-text="lastOperatorOutcome.at ? timeAgo(lastOperatorOutcome.at) : ''"></div>
+              </div>
+              <div x-show="lastOperatorOutcome.tool" class="mt-1 text-[10px] text-amber-300" x-text="'Tool: ' + prettyToolName(lastOperatorOutcome.tool)"></div>
+              <div class="mt-1 text-[10px] leading-5 text-slate-400" x-text="lastOperatorOutcome.summary"></div>
+            </div>
+          </div>
+
           <div x-show="!isMobile && usesOllamaBackend() && activeChatModel()" class="px-1 pt-2 text-[11px] text-slate-500" x-text="composerModelSummary()"></div>
+
+          <div x-show="selectedResources.length" class="mt-2 flex flex-wrap gap-2">
+            <template x-for="resource in selectedResources" :key="resource.id">
+              <span class="inline-flex items-center gap-1 rounded-full border border-sky-500/20 bg-sky-500/10 px-2.5 py-1 text-[10px] text-sky-200">
+                <span>📎</span>
+                <span class="max-w-[180px] truncate" x-text="resourceChipLabel(resource)"></span>
+                <button @click="removeResourceAttachment(resource.id)" class="text-sky-100/70 hover:text-white">✕</button>
+              </span>
+            </template>
+          </div>
+
+          <div x-show="showResourcePicker" class="mt-3 rounded-2xl border border-slate-800 bg-slate-950/60 p-3 space-y-3">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <div class="text-xs font-semibold text-white">Resource Bank</div>
+                <div class="text-[10px] text-slate-500">Attach local documents, imported links, and images to this console request.</div>
+              </div>
+              <button @click="showResourcePicker = false" class="rounded-full border border-slate-800 bg-slate-900/70 px-2 py-1 text-[10px] text-slate-400 hover:text-slate-100">Close</button>
+            </div>
+            <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+              <input x-model="resourceSearch"
+                     @focus="if (!resources.length) loadResources()"
+                     placeholder="Search resources"
+                     class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-sky-500/60 transition" />
+              <input x-model="resourceImportForm.url"
+                     placeholder="Import from https://..."
+                     class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-sky-500/60 transition font-mono" />
+              <button @click="importResourceUrl()" :disabled="resourceImporting || !resourceImportForm.url.trim()"
+                      class="rounded-xl bg-slate-800 px-3 py-2 text-xs text-slate-200 transition hover:bg-slate-700 disabled:opacity-40">
+                <span x-text="resourceImporting ? 'Importing…' : 'Import URL'"></span>
+              </button>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <button @click="$refs.resourceUploadInput.click()" :disabled="resourceUploading"
+                      class="rounded-xl bg-slate-800 px-3 py-2 text-xs text-slate-200 transition hover:bg-slate-700 disabled:opacity-40">
+                <span x-text="resourceUploading ? 'Uploading…' : 'Upload files'"></span>
+              </button>
+              <button @click="switchTab('resources'); showResourcePicker = false"
+                      class="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300 transition hover:border-slate-600">
+                Open Resource Bank
+              </button>
+              <span class="text-[10px] text-slate-500" x-text="runtimeStatus.resource_bank?.count ? `${runtimeStatus.resource_bank.count} resources ready` : 'No resources stored yet'"></span>
+            </div>
+            <div x-show="resourcesLoading" class="text-[11px] text-slate-500">Loading resources…</div>
+            <div x-show="!resourcesLoading && filteredResources.length === 0" class="rounded-xl border border-dashed border-slate-800 px-3 py-4 text-[11px] text-slate-500">
+              No matching resources yet. Upload a file or import a URL to start building Axon’s local resource bank.
+            </div>
+            <div x-show="!resourcesLoading && filteredResources.length > 0" class="grid gap-2 md:grid-cols-2">
+              <template x-for="resource in filteredResources.slice(0, 6)" :key="resource.id">
+                <div class="rounded-xl border border-slate-800 bg-slate-900/50 p-3">
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0">
+                      <div class="truncate text-sm text-slate-100" x-text="resource.title"></div>
+                      <div class="mt-1 text-[10px] text-slate-500" x-text="resource.mime_type || resource.kind"></div>
+                    </div>
+                    <span class="rounded-full border px-2 py-0.5 text-[9px]" :class="resourceStatusClass(resource.status)" x-text="resource.status || 'queued'"></span>
+                  </div>
+                  <div class="mt-2 text-[11px] text-slate-400 line-clamp-3" x-text="resource.summary || resource.preview_text || 'Ready to attach to the console.'"></div>
+                  <div class="mt-3 flex items-center gap-2">
+                    <button @click="toggleResourceAttachment(resource)"
+                            class="rounded-xl px-3 py-2 text-[11px] transition"
+                            :class="isResourceAttached(resource.id) ? 'bg-sky-500/15 text-sky-200 border border-sky-500/20' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                      <span x-text="isResourceAttached(resource.id) ? 'Attached' : 'Attach'"></span>
+                    </button>
+                    <button @click="viewResource(resource); switchTab('resources'); showResourcePicker = false"
+                            class="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-[11px] text-slate-300 transition hover:border-slate-600">
+                      Inspect
+                    </button>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
 
           <div class="mt-2 flex gap-1.5 md:gap-2 items-end">
             <button x-show="speechSupported" @click="startVoice()"
                     :class="voiceActive ? 'bg-red-500 text-white shadow-lg shadow-red-500/30' : 'bg-slate-800 text-slate-400'"
-                    class="w-10 h-10 md:w-11 md:h-11 flex-none rounded-[18px] md:rounded-2xl transition flex items-center justify-center press-scale" title="Voice input">
+                    class="w-9 h-9 md:w-11 md:h-11 flex-none rounded-[16px] md:rounded-2xl transition flex items-center justify-center press-scale" title="Voice input">
               <svg class="w-4 h-4" :class="voiceActive ? 'animate-pulse' : ''" viewBox="0 0 24 24" fill="currentColor">
                 <rect x="2" y="9" width="2.5" height="6" rx="1.25"/>
                 <rect x="6" y="5" width="2.5" height="14" rx="1.25"/>
@@ -765,25 +907,33 @@
               </svg>
             </button>
 
+            <button @click="openResourcePicker()"
+                    :class="selectedResources.length ? 'bg-sky-500/15 text-sky-200 shadow-lg shadow-sky-500/10' : 'bg-slate-800 text-slate-400'"
+                    class="w-9 h-9 md:w-11 md:h-11 flex-none rounded-[16px] md:rounded-2xl transition flex items-center justify-center press-scale" title="Attach resources">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21.44 11.05l-8.49 8.49a6 6 0 0 1-8.49-8.49l8.49-8.49a4 4 0 1 1 5.66 5.66l-8.5 8.49a2 2 0 1 1-2.82-2.83l7.78-7.78"/>
+              </svg>
+            </button>
+
             <div class="flex-1 relative">
               <textarea
                 x-ref="chatComposer"
                 x-model="chatInput"
-                @keydown.enter.prevent="if(!$event.shiftKey) sendChat()"
+                @keydown.enter="handleComposerEnter($event)"
                 @focus="scrollChat()"
                 x-init="resetChatComposerHeight()"
                 :placeholder="chatComposerPlaceholder()"
                 rows="1"
-                style="min-height:48px; max-height:220px; resize:none; overflow-y:auto;"
+                style="min-height:44px; max-height:220px; resize:none; overflow-y:auto;"
                 :class="resolveChatMode(chatInput) === 'agent' ? 'border-amber-500/40 focus:border-amber-300/70' : 'border-slate-700/80 focus:border-blue-500/60'"
-                class="w-full rounded-[22px] md:rounded-[24px] border bg-slate-950/85 px-4 py-3 text-base md:text-sm leading-6 md:leading-5 text-slate-100 placeholder-slate-500 transition block"
+                class="w-full rounded-[20px] md:rounded-[24px] border bg-slate-950/85 px-3.5 py-2.5 text-[15px] md:text-sm leading-6 md:leading-5 text-slate-100 placeholder-slate-500 transition block"
                 @input="resetChatComposerHeight()"
               ></textarea>
             </div>
 
             <button @click="sendChat()" :disabled="chatLoading || !chatInput.trim()"
                     :class="resolveChatMode(chatInput) === 'agent' ? 'bg-amber-500 hover:bg-amber-400 shadow-amber-500/20 text-slate-950' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-500/20 text-white'"
-                    class="w-10 h-10 md:w-11 md:h-11 flex-none rounded-[18px] md:rounded-2xl disabled:opacity-30 disabled:bg-slate-700 disabled:text-white text-white transition flex items-center justify-center shadow-lg press-scale">
+                    class="w-9 h-9 md:w-11 md:h-11 flex-none rounded-[16px] md:rounded-2xl disabled:opacity-30 disabled:bg-slate-700 disabled:text-white text-white transition flex items-center justify-center shadow-lg press-scale">
               <svg class="w-4 h-4" :class="chatLoading ? 'hidden' : ''" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
               </svg>
@@ -1739,12 +1889,36 @@
           <div x-show="settingsForm.ai_backend === 'ollama'" x-init="$watch('settingsForm.ai_backend', v => { if(v==='ollama') loadOllamaModels(); })">
             <div class="flex items-center gap-2 mb-3">
               <div class="w-2 h-2 rounded-full" :class="ollamaStatus.running ? 'bg-green-400' : 'bg-red-400'"></div>
-              <span class="text-xs" :class="ollamaStatus.running ? 'text-green-400' : 'text-red-400'" x-text="ollamaStatus.running ? 'Ollama running (GPU)' : 'Ollama not detected'"></span>
+              <span class="text-xs" :class="ollamaStatus.running ? 'text-green-400' : 'text-red-400'" x-text="ollamaStatusLabel()"></span>
               <button @click="checkOllamaStatus(); loadOllamaModels()" class="text-[10px] text-slate-500 hover:text-slate-300 ml-auto">↻ Refresh</button>
             </div>
             <div x-show="runtimeStatus.gpu_guard?.warning" class="mb-3 rounded-xl border border-amber-500/25 bg-amber-500/8 px-3 py-2 text-[11px] text-amber-200">
               <div class="font-medium text-amber-300 mb-0.5">Display GPU safety</div>
               <div x-text="runtimeStatus.gpu_guard.warning"></div>
+            </div>
+            <div class="mb-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-xs font-semibold text-slate-300">Execution lane</div>
+                  <div class="text-[11px] text-slate-500">CPU Safe keeps Axon on the stable local runtime. GPU Default is faster, but only use it once NVIDIA is healthy again.</div>
+                </div>
+                <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-slate-300" x-text="ollamaRuntimeModeLabel()"></span>
+              </div>
+              <div class="mt-3 grid grid-cols-2 gap-2">
+                <button @click="switchOllamaRuntimeMode('cpu_safe')"
+                        :disabled="ollamaRuntimeSwitching"
+                        :class="ollamaRuntimeModeLabel() === 'CPU Safe' ? 'border-emerald-500/35 bg-emerald-500/12 text-emerald-200' : 'border-slate-700 text-slate-400 hover:border-slate-500'"
+                        class="rounded-xl border px-3 py-2 text-xs font-medium transition disabled:opacity-50">
+                  CPU Safe
+                </button>
+                <button @click="switchOllamaRuntimeMode('gpu_default')"
+                        :disabled="ollamaRuntimeSwitching"
+                        :class="ollamaRuntimeModeLabel() === 'GPU Default' ? 'border-purple-500/35 bg-purple-500/12 text-purple-200' : 'border-slate-700 text-slate-400 hover:border-slate-500'"
+                        class="rounded-xl border px-3 py-2 text-xs font-medium transition disabled:opacity-50">
+                  GPU Default
+                </button>
+              </div>
+              <div class="mt-2 text-[10px] text-slate-500" x-text="ollamaRuntimeSwitching ? 'Switching runtime lane…' : (ollamaStatus.service_detail || 'Axon will reconnect to the selected Ollama lane.')"></div>
             </div>
             <label class="block text-xs font-medium text-slate-400 mb-1.5">Ollama URL</label>
             <input x-model="settingsForm.ollama_url"
@@ -1902,6 +2076,51 @@
                   <div x-show="model.safety_warning" class="mt-2 rounded-xl border border-amber-500/25 bg-amber-500/8 px-2.5 py-2 text-[10px] text-amber-200" x-text="model.safety_warning"></div>
                 </div>
               </template>
+            </div>
+          </div>
+
+          <div class="border-t border-slate-800 pt-5 space-y-3">
+            <div class="text-xs font-semibold text-slate-300">🗃️ Resources</div>
+            <div class="text-[11px] text-slate-500">Documents, imported links, and images stay local by default. Axon only uses them when you attach them to a console request.</div>
+            <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 space-y-3">
+              <div class="grid gap-3 md:grid-cols-2">
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Storage path</label>
+                  <input x-model="settingsForm.resource_storage_path"
+                         placeholder="~/.devbrain/resources"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono" />
+                </div>
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Upload cap (MB)</label>
+                  <input x-model="settingsForm.resource_upload_max_mb" type="number" min="1" max="200"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-blue-500 transition" />
+                </div>
+              </div>
+              <label class="flex items-center gap-2 text-[11px] text-slate-300">
+                <input type="checkbox"
+                       :checked="!!settingsForm.resource_url_import_enabled"
+                       @change="settingsForm.resource_url_import_enabled = $event.target.checked"
+                       class="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500">
+                <span>Allow user-provided URL imports</span>
+              </label>
+              <div class="flex flex-wrap gap-2 text-[10px] text-slate-500">
+                <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1" x-text="`${runtimeStatus.resource_bank?.count || resources.length} resource(s)`"></span>
+                <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1" x-text="runtimeStatus.resource_bank?.url_import_enabled ? 'URL import enabled' : 'URL import disabled'"></span>
+              </div>
+            </div>
+
+            <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-sm font-medium text-white">Vision route</div>
+                  <div class="text-[11px] text-slate-500">Images can be attached today. Visual reasoning only activates when a vision model is configured.</div>
+                </div>
+                <span class="rounded-full border px-2 py-0.5 text-[10px]"
+                      :class="runtimeStatus.vision_status?.ready ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
+                      x-text="runtimeStatus.vision_status?.ready ? 'Ready' : 'Not configured'"></span>
+              </div>
+              <div class="mt-3 text-xs text-slate-300 font-mono" x-text="runtimeStatus.vision_status?.model || settingsForm.vision_model || 'No vision model selected yet'"></div>
+              <div class="mt-2 text-[10px] text-slate-500" x-text="runtimeStatus.vision_status?.runtime_label || 'Local Ollama'"></div>
             </div>
           </div>
 
@@ -2225,6 +2444,174 @@
       </div>
     </div>
 
+    <!-- ── Resources tab ─────────────────────────────────────────── -->
+    <div x-show="activeTab === 'resources'" class="flex flex-col h-full">
+      <div class="px-5 py-3 border-b border-slate-800 bg-slate-900/50">
+        <div class="font-semibold text-white">Resources</div>
+      </div>
+      <div class="flex-1 overflow-y-auto p-3 md:p-5">
+        <div class="max-w-6xl mx-auto grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+          <div class="space-y-4">
+            <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 space-y-3">
+              <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <div class="text-sm font-semibold text-white">Axon Resource Bank</div>
+                  <div class="text-[11px] text-slate-500">A curated local library for files and trusted links you want Axon to use explicitly.</div>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <button @click="$refs.resourceUploadInput.click()" :disabled="resourceUploading"
+                          class="rounded-xl bg-slate-800 px-3 py-2 text-xs text-slate-200 transition hover:bg-slate-700 disabled:opacity-40">
+                    <span x-text="resourceUploading ? 'Uploading…' : 'Upload files'"></span>
+                  </button>
+                  <button @click="loadResources(resourceDetail?.id || null)"
+                          class="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300 transition hover:border-slate-600">
+                    Refresh
+                  </button>
+                </div>
+              </div>
+              <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <input x-model="resourceSearch"
+                       placeholder="Search title, URL, summary"
+                       class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-sky-500/60 transition" />
+                <select x-model="resourceKindFilter" class="dark-select rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100">
+                  <option value="">All kinds</option>
+                  <option value="text">Documents</option>
+                  <option value="image">Images</option>
+                </select>
+                <select x-model="resourceSourceFilter" class="dark-select rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100">
+                  <option value="">All sources</option>
+                  <option value="upload">Uploads</option>
+                  <option value="url">Imported URLs</option>
+                </select>
+                <select x-model="resourceStatusFilter" class="dark-select rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100">
+                  <option value="">All states</option>
+                  <option value="ready">Ready</option>
+                  <option value="processing">Processing</option>
+                  <option value="failed">Failed</option>
+                </select>
+              </div>
+              <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_160px_auto]">
+                <input x-model="resourceImportForm.url"
+                       placeholder="Import from https://example.com/..."
+                       class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-sky-500/60 transition font-mono" />
+                <input x-model="resourceImportForm.title"
+                       placeholder="Optional title"
+                       class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-sky-500/60 transition" />
+                <button @click="importResourceUrl()" :disabled="resourceImporting || !resourceImportForm.url.trim()"
+                        class="rounded-xl bg-blue-600 px-3 py-2 text-xs text-white transition hover:bg-blue-500 disabled:opacity-40">
+                  <span x-text="resourceImporting ? 'Importing…' : 'Import URL'"></span>
+                </button>
+              </div>
+              <div class="flex flex-wrap gap-2 text-[10px] text-slate-500">
+                <span class="rounded-full border border-slate-800 bg-slate-950/60 px-2 py-1" x-text="`Stored in ${runtimeStatus.resource_bank?.storage_path || settingsForm.resource_storage_path}`"></span>
+                <span class="rounded-full border border-slate-800 bg-slate-950/60 px-2 py-1" x-text="`${runtimeStatus.resource_bank?.count || resources.length} resource(s)`"></span>
+                <span class="rounded-full border border-slate-800 bg-slate-950/60 px-2 py-1" x-text="`Upload cap ${runtimeStatus.resource_bank?.upload_max_mb || settingsForm.resource_upload_max_mb}MB`"></span>
+              </div>
+            </div>
+
+            <div x-show="resourcesLoading" class="space-y-2">
+              <template x-for="i in [1,2,3,4]" :key="i">
+                <div class="h-24 rounded-2xl bg-slate-800/60 animate-pulse"></div>
+              </template>
+            </div>
+
+            <div x-show="!resourcesLoading && filteredResources.length === 0" class="rounded-2xl border border-dashed border-slate-800 px-4 py-10 text-center">
+              <div class="text-4xl mb-3">🗃️</div>
+              <div class="text-sm text-slate-200">No resources yet</div>
+              <div class="mt-1 text-[11px] text-slate-500">Upload a document, image, or trusted URL to give Axon better context when you attach it in Console.</div>
+            </div>
+
+            <div class="grid gap-3">
+              <template x-for="resource in filteredResources" :key="resource.id">
+                <div @click="viewResource(resource)"
+                     class="w-full rounded-2xl border border-slate-800 bg-slate-900/40 p-4 text-left transition hover:border-slate-600 cursor-pointer"
+                     :class="Number(resourceDetail?.id) === Number(resource.id) ? 'border-sky-500/35 bg-sky-500/5' : ''">
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <div class="flex items-center gap-2">
+                        <div class="truncate text-sm font-medium text-white" x-text="resource.title"></div>
+                        <span class="rounded-full border px-2 py-0.5 text-[9px]" :class="resourceStatusClass(resource.status)" x-text="resource.status || 'queued'"></span>
+                      </div>
+                      <div class="mt-1 text-[11px] text-slate-500">
+                        <span x-text="resource.kind || 'resource'"></span>
+                        <span> · </span>
+                        <span x-text="resource.source_type || 'upload'"></span>
+                        <span x-show="resource.size_bytes"> · <span x-text="formatBytes(resource.size_bytes)"></span></span>
+                        <span x-show="resource.last_used_at"> · Used <span x-text="timeAgo(resource.last_used_at)"></span></span>
+                      </div>
+                    </div>
+                    <button @click.stop="toggleResourceAttachment(resource)"
+                            class="shrink-0 rounded-xl px-3 py-2 text-[11px] transition"
+                            :class="isResourceAttached(resource.id) ? 'bg-sky-500/15 text-sky-200 border border-sky-500/20' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                      <span x-text="isResourceAttached(resource.id) ? 'Attached' : 'Attach'"></span>
+                    </button>
+                  </div>
+                  <div class="mt-3 text-sm leading-6 text-slate-300" x-text="resource.summary || resource.preview_text || 'No summary available yet.'"></div>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div class="space-y-4">
+            <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 min-h-[320px]">
+              <div x-show="resourceDetailLoading" class="space-y-3">
+                <div class="h-5 w-2/3 rounded bg-slate-800 animate-pulse"></div>
+                <div class="h-4 w-1/2 rounded bg-slate-800 animate-pulse"></div>
+                <div class="h-40 rounded-2xl bg-slate-800 animate-pulse"></div>
+              </div>
+
+              <div x-show="!resourceDetailLoading && !resourceDetail" class="h-full flex flex-col items-center justify-center text-center px-4 py-10">
+                <div class="text-4xl mb-3">📎</div>
+                <div class="text-sm text-slate-200">Select a resource</div>
+                <div class="mt-1 text-[11px] text-slate-500">Inspect the resource details, preview the content, and attach it to Console from here.</div>
+              </div>
+
+              <div x-show="!resourceDetailLoading && resourceDetail" class="space-y-4">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="text-lg font-semibold text-white break-words" x-text="resourceDetail?.title"></div>
+                    <div class="mt-1 text-[11px] text-slate-500">
+                      <span x-text="resourceDetail?.mime_type || resourceDetail?.kind || 'resource'"></span>
+                      <span x-show="resourceDetail?.size_bytes"> · <span x-text="formatBytes(resourceDetail?.size_bytes || 0)"></span></span>
+                    </div>
+                  </div>
+                  <span class="rounded-full border px-2 py-0.5 text-[10px]" :class="resourceStatusClass(resourceDetail?.status)" x-text="resourceDetail?.status || 'queued'"></span>
+                </div>
+
+                <div x-show="resourceDetail?.source_url" class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Source URL</div>
+                  <a :href="resourceDetail?.source_url" target="_blank" class="break-all text-xs text-sky-300 hover:underline" x-text="resourceDetail?.source_url"></a>
+                </div>
+
+                <div class="grid gap-2 sm:grid-cols-2">
+                  <button @click="useResourceInConsole(resourceDetail)" class="rounded-xl bg-blue-600 px-3 py-2 text-xs text-white transition hover:bg-blue-500">Use in Console</button>
+                  <button @click="reprocessResource(resourceDetail)" class="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300 transition hover:border-slate-600">Reprocess</button>
+                  <button @click="switchTab('chat'); mergeSelectedResources([resourceDetail])" class="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300 transition hover:border-slate-600">Attach and return</button>
+                  <button @click="deleteResource(resourceDetail)" class="rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-300 transition hover:bg-rose-500/15">Delete</button>
+                </div>
+
+                <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-2">Summary</div>
+                  <div class="text-sm leading-6 text-slate-300" x-text="resourceDetail?.summary || 'No summary available yet.'"></div>
+                </div>
+
+                <div x-show="resourceDetail?.kind === 'image' && resourceDetailPreviewUrl" class="rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-2">Preview</div>
+                  <img :src="resourceDetailPreviewUrl" alt="Resource preview" class="w-full rounded-xl border border-slate-800 object-contain max-h-[420px]" />
+                  <div class="mt-2 text-[10px] text-slate-500" x-text="runtimeStatus.vision_status?.ready ? `Vision route ready: ${runtimeStatus.vision_status.model}` : 'Vision is not configured yet — Axon will store the image and use metadata until a vision route is available.'"></div>
+                </div>
+
+                <div x-show="resourceDetail?.kind !== 'image'" class="rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-2">Extracted text preview</div>
+                  <pre class="whitespace-pre-wrap break-words text-xs leading-6 text-slate-300 max-h-[420px] overflow-y-auto" x-text="resourceDetailContent || resourceDetail?.preview_text || 'No text extracted yet.'"></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ── Files tab ─────────────────────────────────────────────── -->
     <div x-show="activeTab === 'files'" class="flex flex-col h-full">
       <div class="px-5 py-3 border-b border-slate-800 bg-slate-900/50 flex items-center gap-3">
@@ -2371,7 +2758,7 @@
       <button
         @click="item.id === 'more' ? (showMoreMenu = !showMoreMenu) : (showMoreMenu = false, switchTab(item.id))"
         class="tab-btn flex-1 flex flex-col items-center justify-center gap-0.5 relative"
-        :class="(item.id === 'more' ? ['prompts','activity','vault','settings'].includes(activeTab) : activeTab === item.id) ? 'active' : 'text-slate-500'"
+        :class="(item.id === 'more' ? ['prompts','activity','resources','vault','settings'].includes(activeTab) : activeTab === item.id) ? 'active' : 'text-slate-500'"
       >
         <!-- Badge -->
         <span x-show="item.id === 'tasks' && urgentCount > 0"
@@ -2394,6 +2781,7 @@
       <template x-for="item in [
         {id:'prompts',  icon:'📚', label:'Playbooks'},
         {id:'activity', icon:'📊', label:'Timeline'},
+        {id:'resources', icon:'🗃️', label:'Resources'},
         {id:'vault',    icon:'🔐', label:'Secure Vault'},
         {id:'settings', icon:'⚙️', label:'Settings'},
       ]" :key="item.id">
@@ -2710,6 +3098,7 @@ function devbrain() {
       { id: 'tasks',    icon: '✅', label: 'Missions' },
       { id: 'prompts',  icon: '📚', label: 'Playbooks' },
       { id: 'activity', icon: '📊', label: 'Timeline' },
+      { id: 'resources', icon: '🗃️', label: 'Resources' },
       { id: 'vault',    icon: '🔐', label: 'Secure Vault' },
     ],
     // Mobile tab bar — 5 most used
@@ -2741,6 +3130,10 @@ function devbrain() {
       api_providers: [],
       selected_api_provider: {},
       gpu_guard: { warning: '', connected_outputs: [] },
+      ollama_service: {},
+      ollama_runtime_mode: 'gpu_default',
+      vision_status: { model: '', ready: false, runtime_label: 'Not configured' },
+      resource_bank: { count: 0, storage_path: '~/.devbrain/resources', upload_max_mb: '20', url_import_enabled: true },
     },
 
     // Chat
@@ -2751,6 +3144,8 @@ function devbrain() {
     chatProject: null,
     agentMode: false,
     selectedChatModel: '',
+    showResourcePicker: false,
+    selectedResources: [],
     chatHints: [
       'What should Axon focus on first today?',
       'Which workspaces are going stale?',
@@ -2759,6 +3154,21 @@ function devbrain() {
     ],
     agentLifecycle: ['observe', 'plan', 'execute', 'verify', 'recover'],
     agentProgressState: 'observe',
+    liveOperator: {
+      active: false,
+      mode: 'chat',
+      phase: 'observe',
+      title: '',
+      detail: '',
+      tool: '',
+    },
+    liveOperatorTimer: null,
+    lastOperatorOutcome: {
+      title: '',
+      summary: '',
+      tool: '',
+      at: '',
+    },
 
     // Model management
     ollamaModels: [],
@@ -2766,6 +3176,22 @@ function devbrain() {
     modelPullProgress: {},
     modelsLoading: false,
     customModelName: '',
+    ollamaRuntimeSwitching: false,
+
+    // Resources
+    resources: [],
+    resourcesLoading: false,
+    resourceSearch: '',
+    resourceKindFilter: '',
+    resourceSourceFilter: '',
+    resourceStatusFilter: '',
+    resourceImportForm: { url: '', title: '' },
+    resourceUploading: false,
+    resourceImporting: false,
+    resourceDetail: null,
+    resourceDetailContent: '',
+    resourceDetailPreviewUrl: '',
+    resourceDetailLoading: false,
 
     // Projects
     projects: [],
@@ -2812,6 +3238,7 @@ function devbrain() {
       anthropic_base_url: '',
       anthropic_api_model: '',
       ollama_url: '',
+      ollama_runtime_mode: 'gpu_default',
       ollama_model: '',
       code_model: '',
       general_model: '',
@@ -2822,6 +3249,9 @@ function devbrain() {
       openai_gpts_enabled: false,
       gemini_gems_enabled: false,
       generic_api_enabled: false,
+      resource_storage_path: '~/.devbrain/resources',
+      resource_upload_max_mb: '20',
+      resource_url_import_enabled: true,
       openai_api_key: '',
       openai_base_url: '',
       openai_api_model: '',
@@ -2847,7 +3277,7 @@ function devbrain() {
     cloudProviderTests: {},
     settingsSaving: false,
     settingsSaved: false,
-    ollamaStatus: { running: false, models: [], url: '' },
+    ollamaStatus: { running: false, models: [], url: '', runtime_mode: 'gpu_default', service_detail: '', service_mode: '' },
     systemActionsLoading: false,
     systemStatus: {
       host: {},
@@ -2885,10 +3315,19 @@ function devbrain() {
     voiceActive: false,
     speechSupported: false,
     _currentAudio: null,
+    _speechRecognizer: null,
 
     // Mobile + connection
     showMobileModal: false,
     mobileInfo: { local_url: '', qr_data_uri: '' },
+    desktopPreview: {
+      enabled: true,
+      url: '',
+      loading: false,
+      error: '',
+      lastUpdated: '',
+      timer: null,
+    },
     serverConnected: true,
     reconnecting: false,
 
@@ -2968,6 +3407,7 @@ function devbrain() {
       else if (id === 'tasks') this.loadTasks();
       else if (id === 'prompts') this.loadPrompts();
       else if (id === 'activity') this.loadActivity();
+      else if (id === 'resources') this.loadResources();
       else if (id === 'vault') this.loadVaultStatus();
       else if (id === 'settings') { this.loadSettings(); this.loadRuntimeStatus(); }
       else if (id === 'files' && !this.filePath) this.loadFiles('~');
@@ -3336,6 +3776,22 @@ function devbrain() {
       return this.selectedApiProviderLabel();
     },
 
+    ollamaRuntimeModeLabel(mode = '') {
+      const resolved = String(
+        mode
+        || this.ollamaStatus?.runtime_mode
+        || this.runtimeStatus?.ollama_runtime_mode
+        || this.settingsForm?.ollama_runtime_mode
+        || 'gpu_default'
+      ).toLowerCase();
+      return resolved === 'cpu_safe' ? 'CPU Safe' : 'GPU Default';
+    },
+
+    ollamaStatusLabel() {
+      if (!this.ollamaStatus?.running) return 'Ollama not detected';
+      return `Ollama running (${this.ollamaRuntimeModeLabel()})`;
+    },
+
     selectedApiProviderLabel() {
       return this.runtimeStatus?.selected_api_provider?.provider_label
         || this.activeApiProviderCard()?.label
@@ -3631,6 +4087,199 @@ function devbrain() {
       return 'border-slate-800 bg-slate-900/70 text-slate-500';
     },
 
+    phaseLabel(phase) {
+      const raw = String(phase || 'observe').trim().toLowerCase();
+      return raw ? `${raw.charAt(0).toUpperCase()}${raw.slice(1)}` : 'Observe';
+    },
+
+    prettyToolName(name) {
+      const raw = String(name || '').trim().replace(/[_-]+/g, ' ');
+      return raw ? raw.replace(/\b\w/g, ch => ch.toUpperCase()) : 'tool';
+    },
+
+    beginLiveOperator(mode, msg = '') {
+      if (this.liveOperatorTimer) clearTimeout(this.liveOperatorTimer);
+      this.liveOperator = {
+        active: true,
+        mode,
+        phase: mode === 'agent' ? 'observe' : 'plan',
+        title: mode === 'agent' ? 'Observing the task' : 'Opening the reply stream',
+        detail: mode === 'agent'
+          ? 'Axon is checking your goal and lining up the first safe step.'
+          : 'Axon is preparing a response.',
+        tool: '',
+      };
+      if (mode === 'agent') this.setAgentStage('observe');
+      if (this.isMobile) {
+        this.refreshDesktopPreview(true);
+        this.scheduleDesktopPreview();
+      }
+    },
+
+    updateLiveOperator(mode, event = {}) {
+      if (!this.liveOperator.active) this.beginLiveOperator(mode);
+      if (mode !== 'agent') {
+        if (event.error) {
+          this.liveOperator = {
+            ...this.liveOperator,
+            active: true,
+            phase: 'recover',
+            title: 'Reply interrupted',
+            detail: event.error,
+          };
+          return;
+        }
+        if (event.done) {
+          this.liveOperator = {
+            ...this.liveOperator,
+            active: true,
+            phase: 'verify',
+            title: 'Reply complete',
+            detail: 'Axon finished streaming the answer.',
+          };
+          return;
+        }
+        this.liveOperator = {
+          ...this.liveOperator,
+          active: true,
+          phase: 'execute',
+          title: 'Writing the reply',
+          detail: 'Live response is flowing into the console now.',
+        };
+        return;
+      }
+
+      if (event.type === 'tool_call') {
+        this.liveOperator = {
+          ...this.liveOperator,
+          active: true,
+          phase: 'execute',
+          title: `Running ${this.prettyToolName(event.name)}`,
+          detail: event.args ? JSON.stringify(event.args).slice(0, 96) : 'Using a local operator tool.',
+          tool: event.name || '',
+        };
+        return;
+      }
+      if (event.type === 'tool_result') {
+        this.liveOperator = {
+          ...this.liveOperator,
+          active: true,
+          phase: 'verify',
+          title: `Checking ${this.prettyToolName(event.name)}`,
+          detail: (event.result || 'Axon is reviewing the tool output.').slice(0, 120),
+          tool: event.name || this.liveOperator.tool,
+        };
+        return;
+      }
+      if (event.type === 'text') {
+        this.liveOperator = {
+          ...this.liveOperator,
+          active: true,
+          phase: this.liveOperator.tool ? 'verify' : 'plan',
+          title: this.liveOperator.tool ? 'Writing the result' : 'Planning the next step',
+          detail: this.liveOperator.tool
+            ? 'Axon is turning tool output into a final answer.'
+            : 'Axon is reasoning through the task before it acts.',
+        };
+        return;
+      }
+      if (event.type === 'done') {
+        this.liveOperator = {
+          ...this.liveOperator,
+          active: true,
+          phase: 'verify',
+          title: 'Task complete',
+          detail: 'Axon finished the operator pass.',
+        };
+        return;
+      }
+      if (event.type === 'error') {
+        this.liveOperator = {
+          ...this.liveOperator,
+          active: true,
+          phase: 'recover',
+          title: 'Needs attention',
+          detail: event.message || 'Axon hit an error and stopped safely.',
+        };
+      }
+    },
+
+    clearLiveOperator(delay = 0) {
+      if (this.liveOperatorTimer) clearTimeout(this.liveOperatorTimer);
+      const reset = () => {
+        this.liveOperator = {
+          active: false,
+          mode: 'chat',
+          phase: 'observe',
+          title: '',
+          detail: '',
+          tool: '',
+        };
+        this.stopDesktopPreview();
+      };
+      if (delay > 0) {
+        this.liveOperatorTimer = setTimeout(reset, delay);
+      } else {
+        reset();
+      }
+    },
+
+    rememberOperatorOutcome(mode, message) {
+      const content = String(message?.content || '').replace(/\s+/g, ' ').trim();
+      const latestEvent = [...(message?.agentEvents || [])].reverse()
+        .find(ev => ev.type === 'tool_result' || ev.type === 'tool_call');
+      this.lastOperatorOutcome = {
+        title: mode === 'agent' ? 'Axon finished this task' : 'Axon finished the reply',
+        summary: (content || latestEvent?.result || 'Completed.').slice(0, 180),
+        tool: latestEvent?.name || '',
+        at: new Date().toISOString(),
+      };
+    },
+
+    async refreshDesktopPreview(force = false) {
+      if (!this.isMobile) return;
+      if (!this.desktopPreview.enabled && !force) return;
+      this.desktopPreview.loading = true;
+      this.desktopPreview.error = '';
+      try {
+        const resp = await fetch('/api/desktop/preview?w=960&h=540', {
+          headers: this.authHeaders(),
+          cache: 'no-store',
+        });
+        if (resp.status === 401) {
+          this.handleAuthRequired();
+          throw new Error('Session expired');
+        }
+        if (!resp.ok) {
+          const detail = await resp.text().catch(() => '');
+          throw new Error(detail || 'Desktop preview unavailable');
+        }
+        const blob = await resp.blob();
+        if (this.desktopPreview.url && this.desktopPreview.url.startsWith('blob:')) {
+          URL.revokeObjectURL(this.desktopPreview.url);
+        }
+        this.desktopPreview.url = URL.createObjectURL(blob);
+        this.desktopPreview.lastUpdated = new Date().toISOString();
+      } catch (e) {
+        this.desktopPreview.error = e.message || 'Desktop preview unavailable';
+      }
+      this.desktopPreview.loading = false;
+    },
+
+    scheduleDesktopPreview() {
+      if (this.desktopPreview.timer) clearTimeout(this.desktopPreview.timer);
+      if (!this.isMobile || !this.desktopPreview.enabled || !(this.chatLoading || this.liveOperator.active)) return;
+      this.desktopPreview.timer = setTimeout(async () => {
+        await this.refreshDesktopPreview();
+        this.scheduleDesktopPreview();
+      }, 3000);
+    },
+
+    stopDesktopPreview() {
+      if (this.desktopPreview.timer) clearTimeout(this.desktopPreview.timer);
+      this.desktopPreview.timer = null;
+    },
+
     setAgentStage(phase) {
       if (this.agentLifecycle.includes(phase)) this.agentProgressState = phase;
     },
@@ -3647,16 +4296,230 @@ function devbrain() {
       this.resetChatComposerHeight();
     },
 
+    handleComposerEnter(event) {
+      if (!event) return;
+      if (event.isComposing || event.keyCode === 229) return;
+      if (event.shiftKey) {
+        requestAnimationFrame(() => this.resetChatComposerHeight());
+        return;
+      }
+      event.preventDefault();
+      this.sendChat();
+    },
+
     resetChatComposerHeight() {
       this.$nextTick(() => {
         const ta = this.$refs.chatComposer;
         if (!ta) return;
-        const baseHeight = this.isMobile ? 48 : 52;
+        const baseHeight = this.isMobile ? 44 : 52;
         ta.style.height = baseHeight + 'px';
         if (this.chatInput.trim()) {
           ta.style.height = Math.min(ta.scrollHeight, 220) + 'px';
         }
       });
+    },
+
+    async openResourcePicker() {
+      this.showResourcePicker = !this.showResourcePicker;
+      if (this.showResourcePicker && !this.resources.length) {
+        await this.loadResources();
+      }
+    },
+
+    isResourceAttached(resourceId) {
+      return this.selectedResources.some(resource => Number(resource.id) === Number(resourceId));
+    },
+
+    mergeSelectedResources(items = []) {
+      const next = [...this.selectedResources];
+      for (const item of items) {
+        if (!item?.id || next.some(existing => Number(existing.id) === Number(item.id))) continue;
+        next.push(item);
+      }
+      this.selectedResources = next;
+    },
+
+    toggleResourceAttachment(resource) {
+      if (!resource?.id) return;
+      if (this.isResourceAttached(resource.id)) {
+        this.removeResourceAttachment(resource.id);
+        return;
+      }
+      this.mergeSelectedResources([resource]);
+    },
+
+    removeResourceAttachment(resourceId) {
+      this.selectedResources = this.selectedResources.filter(resource => Number(resource.id) !== Number(resourceId));
+    },
+
+    resourceChipLabel(resource) {
+      return resource?.title || resource?.name || `Resource ${resource?.id || ''}`.trim();
+    },
+
+    resourceStatusClass(status) {
+      const value = String(status || '').toLowerCase();
+      if (value === 'ready') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300';
+      if (value === 'processing') return 'border-blue-500/20 bg-blue-500/10 text-blue-200';
+      if (value === 'failed') return 'border-rose-500/20 bg-rose-500/10 text-rose-300';
+      return 'border-slate-700 bg-slate-950/60 text-slate-400';
+    },
+
+    parseStoredChatMessage(content) {
+      const raw = String(content || '');
+      const match = raw.match(/\n\n\[Attached resources: ([^\]]+)\]\s*$/);
+      if (!match) return { content: raw, resources: [] };
+      const titles = match[1]
+        .split(',')
+        .map(item => item.trim())
+        .filter(Boolean)
+        .map((title, index) => ({ id: `history-${index}-${title}`, title }));
+      return {
+        content: raw.slice(0, match.index).trimEnd(),
+        resources: titles,
+      };
+    },
+
+    async loadResources(selectId = null) {
+      this.resourcesLoading = true;
+      try {
+        const data = await this.api('GET', '/api/resources');
+        this.resources = data.items || [];
+        if (selectId) {
+          const match = this.resources.find(resource => Number(resource.id) === Number(selectId));
+          if (match) await this.viewResource(match);
+        } else if (!this.resourceDetail && this.resources.length) {
+          await this.viewResource(this.resources[0]);
+        }
+      } catch (e) {
+        this.showToast(`Resources error: ${e.message}`);
+      }
+      this.resourcesLoading = false;
+    },
+
+    async handleResourceUpload(event) {
+      const files = Array.from(event?.target?.files || []);
+      if (!files.length || this.resourceUploading) return;
+      this.resourceUploading = true;
+      try {
+        const form = new FormData();
+        files.forEach(file => form.append('files', file));
+        const resp = await fetch('/api/resources/upload', {
+          method: 'POST',
+          headers: this.authHeaders(),
+          body: form,
+        });
+        if (resp.status === 401) {
+          this.handleAuthRequired();
+          throw new Error('Session expired');
+        }
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.detail || 'Upload failed');
+        const items = data.items || [];
+        await this.loadResources(items[0]?.id || null);
+        this.mergeSelectedResources(items);
+        this.showToast(items.length > 1 ? `${items.length} resources added` : 'Resource added');
+      } catch (e) {
+        this.showToast(`Upload failed: ${e.message}`);
+      }
+      this.resourceUploading = false;
+      if (event?.target) event.target.value = '';
+    },
+
+    async importResourceUrl() {
+      const url = this.resourceImportForm.url.trim();
+      if (!url || this.resourceImporting) return;
+      this.resourceImporting = true;
+      try {
+        const data = await this.api('POST', '/api/resources/import-url', {
+          url,
+          title: this.resourceImportForm.title.trim() || '',
+        });
+        if (data?.item) {
+          await this.loadResources(data.item.id);
+          this.mergeSelectedResources([data.item]);
+          this.showToast('Resource imported');
+        }
+        this.resourceImportForm = { url: '', title: '' };
+      } catch (e) {
+        this.showToast(`Import failed: ${e.message}`);
+      }
+      this.resourceImporting = false;
+    },
+
+    async viewResource(resource) {
+      if (!resource?.id) return;
+      this.resourceDetailLoading = true;
+      this.resourceDetail = null;
+      this.resourceDetailContent = '';
+      if (this.resourceDetailPreviewUrl?.startsWith('blob:')) {
+        URL.revokeObjectURL(this.resourceDetailPreviewUrl);
+      }
+      this.resourceDetailPreviewUrl = '';
+      try {
+        this.resourceDetail = await this.api('GET', `/api/resources/${resource.id}`);
+        if (String(this.resourceDetail.kind || '').toLowerCase() === 'image') {
+          const resp = await fetch(`/api/resources/${resource.id}/content`, {
+            headers: this.authHeaders(),
+            cache: 'no-store',
+          });
+          if (resp.status === 401) {
+            this.handleAuthRequired();
+            throw new Error('Session expired');
+          }
+          if (!resp.ok) {
+            const detail = await resp.text().catch(() => '');
+            throw new Error(detail || 'Preview unavailable');
+          }
+          const blob = await resp.blob();
+          this.resourceDetailPreviewUrl = URL.createObjectURL(blob);
+        } else {
+          const content = await this.api('GET', `/api/resources/${resource.id}/content`);
+          this.resourceDetailContent = content.content || content.preview_text || '';
+        }
+      } catch (e) {
+        this.showToast(`Resource preview failed: ${e.message}`);
+      }
+      this.resourceDetailLoading = false;
+    },
+
+    async useResourceInConsole(resource) {
+      if (!resource?.id) return;
+      this.mergeSelectedResources([resource]);
+      this.activeTab = 'chat';
+      this.showResourcePicker = false;
+      this.showToast('Resource attached to the console');
+    },
+
+    async reprocessResource(resource) {
+      if (!resource?.id) return;
+      try {
+        this.resourceDetail = await this.api('POST', `/api/resources/${resource.id}/reprocess`);
+        await this.loadResources(resource.id);
+        this.showToast('Resource reprocessed');
+      } catch (e) {
+        this.showToast(`Reprocess failed: ${e.message}`);
+      }
+    },
+
+    async deleteResource(resource) {
+      if (!resource?.id) return;
+      if (!confirm(`Delete resource "${this.resourceChipLabel(resource)}"?`)) return;
+      try {
+        await this.api('DELETE', `/api/resources/${resource.id}`);
+        this.removeResourceAttachment(resource.id);
+        if (Number(this.resourceDetail?.id) === Number(resource.id)) {
+          this.resourceDetail = null;
+          this.resourceDetailContent = '';
+          if (this.resourceDetailPreviewUrl?.startsWith('blob:')) {
+            URL.revokeObjectURL(this.resourceDetailPreviewUrl);
+          }
+          this.resourceDetailPreviewUrl = '';
+        }
+        await this.loadResources();
+        this.showToast('Resource deleted');
+      } catch (e) {
+        this.showToast(`Delete failed: ${e.message}`);
+      }
     },
 
     shouldAutoUseAgent(msg) {
@@ -3679,7 +4542,7 @@ function devbrain() {
       return this.agentMode || this.shouldAutoUseAgent(msg) ? 'agent' : 'chat';
     },
 
-    createAssistantPlaceholder(respId, mode) {
+    createAssistantPlaceholder(respId, mode, retryResources = []) {
       return {
         id: respId,
         role: 'assistant',
@@ -3689,14 +4552,16 @@ function devbrain() {
         mode,
         modelLabel: this.assistantRuntimeLabel(),
         agentEvents: mode === 'agent' ? [] : undefined,
+        retryResources,
       };
     },
 
-    async streamChatMessage(msg, mode, respId) {
+    async streamChatMessage(msg, mode, respId, resourceIds = []) {
       const endpoint = mode === 'agent' ? '/api/agent' : '/api/chat/stream';
       const payload = {
         message: msg,
         project_id: this.chatProjectId ? parseInt(this.chatProjectId) : null,
+        resource_ids: resourceIds,
       };
       if (this.usesOllamaBackend()) payload.model = this.activeChatModel() || '';
 
@@ -3708,17 +4573,24 @@ function devbrain() {
 
       if (resp.status === 401) {
         this.handleAuthRequired();
+        this.updateLiveOperator(mode, { type: 'error', message: 'Session expired.' });
         throw new Error('Session expired');
       }
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+        this.updateLiveOperator(mode, { type: 'error', message: err.detail || resp.statusText });
         throw new Error(err.detail || resp.statusText);
       }
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
-      if (mode === 'agent') this.setAgentStage('plan');
+      if (mode === 'agent') {
+        this.setAgentStage('plan');
+        this.updateLiveOperator(mode, { type: 'text' });
+      } else {
+        this.updateLiveOperator(mode, { chunk: 'stream-open' });
+      }
 
       while (true) {
         const { done, value } = await reader.read();
@@ -3737,34 +4609,41 @@ function devbrain() {
               if (data.type === 'text') {
                 if (this.chatMessages[idx].agentEvents?.length) this.setAgentStage('verify');
                 this.chatMessages[idx].content += data.chunk;
+                this.updateLiveOperator(mode, data);
                 this.scrollChat();
               } else if (data.type === 'tool_call' || data.type === 'tool_result') {
                 this.setAgentStage(data.type === 'tool_call' ? 'execute' : 'verify');
                 this.chatMessages[idx].agentEvents.push(data);
+                this.updateLiveOperator(mode, data);
                 this.scrollChat();
               } else if (data.type === 'done') {
                 this.setAgentStage('verify');
                 this.chatMessages[idx].streaming = false;
+                this.updateLiveOperator(mode, data);
               } else if (data.type === 'error') {
                 this.setAgentStage('recover');
                 this.chatMessages[idx].content += `\n⚠️ ${data.message}`;
                 this.chatMessages[idx].streaming = false;
                 this.chatMessages[idx].error = true;
                 this.chatMessages[idx].retryMsg = msg;
+                this.updateLiveOperator(mode, data);
               }
             } else {
               if (data.chunk) {
                 this.chatMessages[idx].content += data.chunk;
+                this.updateLiveOperator(mode, data);
                 this.scrollChat();
               }
               if (data.done) {
                 this.chatMessages[idx].streaming = false;
+                this.updateLiveOperator(mode, data);
               }
               if (data.error) {
                 this.chatMessages[idx].content += `\n⚠️ ${data.error}`;
                 this.chatMessages[idx].streaming = false;
                 this.chatMessages[idx].error = true;
                 this.chatMessages[idx].retryMsg = msg;
+                this.updateLiveOperator(mode, { error: data.error });
               }
             }
           } catch(_) {}
@@ -3772,7 +4651,11 @@ function devbrain() {
       }
 
       const idx = this.chatMessages.findIndex(m => m.id === respId);
-      if (idx >= 0) this.chatMessages[idx].streaming = false;
+      if (idx >= 0) {
+        this.chatMessages[idx].streaming = false;
+        this.rememberOperatorOutcome(mode, this.chatMessages[idx]);
+      }
+      this.clearLiveOperator(this.liveOperator.phase === 'recover' ? 4200 : 1400);
     },
 
     // ── Chat ───────────────────────────────────────────────────────
@@ -3780,13 +4663,17 @@ function devbrain() {
       try {
         const pid = this.chatProjectId ? `?project_id=${this.chatProjectId}&limit=40` : '?limit=40';
         const rows = await this.api('GET', `/api/chat/history${pid}`);
-        this.chatMessages = rows.map(r => ({
-          id: r.created_at + r.role,
-          role: r.role,
-          content: r.content,
-          created_at: r.created_at,
-          mode: 'chat',
-        }));
+        this.chatMessages = rows.map(r => {
+          const parsed = this.parseStoredChatMessage(r.content);
+          return {
+            id: r.created_at + r.role,
+            role: r.role,
+            content: parsed.content,
+            created_at: r.created_at,
+            mode: 'chat',
+            resources: parsed.resources,
+          };
+        });
         this.$nextTick(() => this.scrollChat());
       } catch(e) {
         this.chatMessages = [];
@@ -3797,6 +4684,8 @@ function devbrain() {
       const msg = this.chatInput.trim();
       if (!msg || this.chatLoading) return;
       const mode = this.resolveChatMode(msg);
+      const attachedResources = [...this.selectedResources];
+      const attachedResourceIds = attachedResources.map(resource => Number(resource.id)).filter(Boolean);
       if (mode === 'agent' && !this.usesOllamaBackend()) {
         this.showToast('Agent mode requires the Ollama backend.');
         return;
@@ -3804,16 +4693,26 @@ function devbrain() {
       this.setAgentStage(mode === 'agent' ? 'observe' : 'observe');
 
       this.chatInput = '';
+      this.selectedResources = [];
+      this.showResourcePicker = false;
       this.resetChatComposerHeight();
-      this.chatMessages.push({ id: Date.now(), role: 'user', content: msg, created_at: new Date().toISOString(), mode });
+      this.chatMessages.push({
+        id: Date.now(),
+        role: 'user',
+        content: msg,
+        created_at: new Date().toISOString(),
+        mode,
+        resources: attachedResources,
+      });
       this.chatLoading = true;
+      this.beginLiveOperator(mode, msg);
       this.scrollChat();
 
       const respId = Date.now() + 1;
-      this.chatMessages.push(this.createAssistantPlaceholder(respId, mode));
+      this.chatMessages.push(this.createAssistantPlaceholder(respId, mode, attachedResourceIds));
       this.scrollChat();
       try {
-        await this.streamChatMessage(msg, mode, respId);
+        await this.streamChatMessage(msg, mode, respId, attachedResourceIds);
       } catch(e) {
         const idx = this.chatMessages.findIndex(m => m.id === respId);
         if (idx >= 0) {
@@ -3824,8 +4723,11 @@ function devbrain() {
           this.chatMessages[idx].retryMsg = msg;
           this.chatMessages[idx].mode = mode;
           if (isFetch) this.serverConnected = false;
+          this.rememberOperatorOutcome(mode, this.chatMessages[idx]);
         }
         if (mode === 'agent') this.setAgentStage('recover');
+        this.updateLiveOperator(mode, { type: 'error', message: e.message === 'Failed to fetch' || e.message.includes('NetworkError') ? 'Connection lost.' : e.message });
+        this.clearLiveOperator(4200);
       }
 
       this.chatLoading = false;
@@ -3843,13 +4745,15 @@ function devbrain() {
       const msg = errorMsg.retryMsg;
       if (!msg) return;
       const mode = errorMsg.mode || this.resolveChatMode(msg);
+      const resourceIds = errorMsg.retryResources || [];
       this.chatMessages = this.chatMessages.filter(m => m.id !== errorMsg.id);
       this.chatLoading = true;
+      this.beginLiveOperator(mode, msg);
       this.scrollChat();
       const respId = Date.now() + 1;
-      this.chatMessages.push(this.createAssistantPlaceholder(respId, mode));
+      this.chatMessages.push(this.createAssistantPlaceholder(respId, mode, resourceIds));
       try {
-        await this.streamChatMessage(msg, mode, respId);
+        await this.streamChatMessage(msg, mode, respId, resourceIds);
       } catch(e) {
         const idx = this.chatMessages.findIndex(m => m.id === respId);
         const isFetch = e.message === 'Failed to fetch' || e.message.includes('NetworkError');
@@ -3862,8 +4766,11 @@ function devbrain() {
           this.chatMessages[idx].error = true;
           this.chatMessages[idx].retryMsg = msg;
           this.chatMessages[idx].mode = mode;
+          this.rememberOperatorOutcome(mode, this.chatMessages[idx]);
         }
         if (mode === 'agent') this.setAgentStage('recover');
+        this.updateLiveOperator(mode, { type: 'error', message: isFetch ? 'Connection lost.' : e.message });
+        this.clearLiveOperator(4200);
       }
       this.chatLoading = false;
       this.scrollChat();
@@ -4157,6 +5064,25 @@ function devbrain() {
     },
 
     // ── Prompts ────────────────────────────────────────────────────
+    get filteredResources() {
+      const search = (this.resourceSearch || '').toLowerCase().trim();
+      const kind = (this.resourceKindFilter || '').toLowerCase();
+      const source = (this.resourceSourceFilter || '').toLowerCase();
+      const status = (this.resourceStatusFilter || '').toLowerCase();
+      return (this.resources || []).filter(resource => {
+        const matchesSearch = !search || [
+          resource.title,
+          resource.source_url,
+          resource.mime_type,
+          resource.preview_text,
+        ].some(value => String(value || '').toLowerCase().includes(search));
+        const matchesKind = !kind || String(resource.kind || '').toLowerCase() === kind;
+        const matchesSource = !source || String(resource.source_type || '').toLowerCase() === source;
+        const matchesStatus = !status || String(resource.status || '').toLowerCase() === status;
+        return matchesSearch && matchesKind && matchesSource && matchesStatus;
+      });
+    },
+
     get filteredPrompts() {
       const q = (this.promptSearch || '').toLowerCase().trim();
       if (!q) return this.prompts;
@@ -4301,12 +5227,16 @@ function devbrain() {
           api_provider: s.api_provider || 'anthropic',
           claude_cli_path: s.claude_cli_path || '',
           ollama_url: s.ollama_url || '',
+          ollama_runtime_mode: s.ollama_runtime_mode || 'gpu_default',
           ollama_model: s.ollama_model || '',
           code_model: s.code_model || s.ollama_model || '',
           general_model: s.general_model || '',
           reasoning_model: s.reasoning_model || '',
           embeddings_model: s.embeddings_model || '',
           vision_model: s.vision_model || '',
+          resource_storage_path: s.resource_storage_path || '~/.devbrain/resources',
+          resource_upload_max_mb: s.resource_upload_max_mb || '20',
+          resource_url_import_enabled: this.settingEnabled(s.resource_url_import_enabled ?? true),
           cloud_agents_enabled: this.settingEnabled(s.cloud_agents_enabled),
           openai_gpts_enabled: this.settingEnabled(s.openai_gpts_enabled),
           gemini_gems_enabled: this.settingEnabled(s.gemini_gems_enabled),
@@ -4360,12 +5290,16 @@ function devbrain() {
       payload.api_provider = this.settingsForm.api_provider || 'anthropic';
       payload.claude_cli_path = this.settingsForm.claude_cli_path || '';
       payload.ollama_url = this.settingsForm.ollama_url || '';
+      payload.ollama_runtime_mode = this.settingsForm.ollama_runtime_mode || 'gpu_default';
       payload.ollama_model = this.settingsForm.ollama_model || '';
       payload.code_model = this.settingsForm.code_model || '';
       payload.general_model = this.settingsForm.general_model || '';
       payload.reasoning_model = this.settingsForm.reasoning_model || '';
       payload.embeddings_model = this.settingsForm.embeddings_model || '';
       payload.vision_model = this.settingsForm.vision_model || '';
+      payload.resource_storage_path = this.settingsForm.resource_storage_path || '~/.devbrain/resources';
+      payload.resource_upload_max_mb = String(this.settingsForm.resource_upload_max_mb || '20');
+      payload.resource_url_import_enabled = !!this.settingsForm.resource_url_import_enabled;
       payload.cloud_agents_enabled = !!this.settingsForm.cloud_agents_enabled;
       payload.openai_gpts_enabled = !!this.settingsForm.openai_gpts_enabled;
       payload.gemini_gems_enabled = !!this.settingsForm.gemini_gems_enabled;
@@ -4551,9 +5485,31 @@ function devbrain() {
     async checkOllamaStatus() {
       try {
         this.ollamaStatus = await this.api('GET', '/api/ollama/status');
+        if (this.ollamaStatus?.runtime_mode) {
+          this.settingsForm.ollama_runtime_mode = this.ollamaStatus.runtime_mode;
+        }
       } catch(e) {
-        this.ollamaStatus = { running: false, models: [], url: '' };
+        this.ollamaStatus = { running: false, models: [], url: '', runtime_mode: this.settingsForm.ollama_runtime_mode || 'gpu_default', service_detail: '', service_mode: '' };
       }
+    },
+
+    async switchOllamaRuntimeMode(mode) {
+      if (this.ollamaRuntimeSwitching) return;
+      const target = String(mode || '').toLowerCase();
+      if (!['cpu_safe', 'gpu_default'].includes(target)) return;
+      this.ollamaRuntimeSwitching = true;
+      try {
+        const res = await this.api('POST', '/api/ollama/runtime-mode', { mode: target });
+        this.settingsForm.ollama_runtime_mode = res.runtime_mode || target;
+        this.settingsForm.ollama_url = res.ollama_url || this.settingsForm.ollama_url;
+        await this.checkOllamaStatus();
+        await this.loadOllamaModels();
+        await this.loadRuntimeStatus();
+        this.showToast(target === 'cpu_safe' ? 'CPU Safe Mode enabled' : 'GPU Default selected');
+      } catch (e) {
+        this.showToast(`Runtime switch failed: ${e.message}`);
+      }
+      this.ollamaRuntimeSwitching = false;
     },
 
     // ── Connection health ───────────────────────────────────────
@@ -4595,22 +5551,86 @@ function devbrain() {
     },
 
     // ── Voice ──────────────────────────────────────────────────────
-    startVoice() {
+    async startVoice() {
+      if (this.voiceActive && this._speechRecognizer) {
+        try { this._speechRecognizer.stop(); } catch (_) {}
+        this.voiceActive = false;
+        this.showToast('Voice capture stopped');
+        return;
+      }
       const SpeechRec = window.webkitSpeechRecognition || window.SpeechRecognition;
-      if (!SpeechRec) return this.showToast('Voice not supported in this browser');
+      const isTrustedLocal = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+      if (!isTrustedLocal && !window.isSecureContext) {
+        this.showToast('Voice input needs HTTPS or localhost');
+        return;
+      }
+      if (!SpeechRec) {
+        this.showToast('This browser does not expose live speech recognition here');
+        return;
+      }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        this.showToast('Microphone capture is not available in this browser');
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(track => track.stop());
+      } catch (e) {
+        const name = String(e?.name || '').toLowerCase();
+        if (name.includes('notallowed') || name.includes('permission')) {
+          this.showToast('Microphone access was blocked');
+        } else {
+          this.showToast('Could not access the microphone');
+        }
+        return;
+      }
       const recog = new SpeechRec();
+      this._speechRecognizer = recog;
       recog.lang = 'en-ZA';
       recog.interimResults = false;
       recog.maxAlternatives = 1;
+      if ('continuous' in recog) recog.continuous = false;
       this.voiceActive = true;
       recog.onresult = (e) => {
-        this.chatInput = e.results[0][0].transcript;
+        const transcript = e?.results?.[0]?.[0]?.transcript || '';
+        if (!transcript.trim()) {
+          this.showToast('No speech was detected');
+        } else if (this.chatInput.trim()) {
+          this.chatInput = `${this.chatInput.trim()} ${transcript}`.trim();
+        } else {
+          this.chatInput = transcript;
+        }
         this.resetChatComposerHeight();
         this.voiceActive = false;
+        this._speechRecognizer = null;
       };
-      recog.onerror = () => { this.voiceActive = false; this.showToast('Voice input failed'); };
-      recog.onend = () => { this.voiceActive = false; };
-      recog.start();
+      recog.onerror = (event) => {
+        this.voiceActive = false;
+        this._speechRecognizer = null;
+        const code = String(event?.error || '').toLowerCase();
+        if (code === 'not-allowed' || code === 'service-not-allowed') {
+          this.showToast('Microphone permission was denied');
+        } else if (code === 'network') {
+          this.showToast('Speech recognition network error');
+        } else if (code === 'no-speech') {
+          this.showToast('No speech detected');
+        } else if (code === 'audio-capture') {
+          this.showToast('No microphone was found');
+        } else {
+          this.showToast(code ? `Voice input failed: ${code}` : 'Voice input failed');
+        }
+      };
+      recog.onend = () => {
+        this.voiceActive = false;
+        this._speechRecognizer = null;
+      };
+      try {
+        recog.start();
+      } catch (e) {
+        this.voiceActive = false;
+        this._speechRecognizer = null;
+        this.showToast(`Voice input could not start: ${e.message || e}`);
+      }
     },
 
     _cleanForSpeech(text) {

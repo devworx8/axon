@@ -80,7 +80,7 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS activity_log (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 project_id  INTEGER REFERENCES projects(id) ON DELETE SET NULL,
-                event_type  TEXT NOT NULL,   -- scan|chat|reminder|digest|task_added|prompt_saved
+                event_type  TEXT NOT NULL,   -- scan|chat|reminder|digest|task_added|prompt_saved|resource_added|resource_processed|resource_used|resource_failed
                 summary     TEXT,
                 created_at  TEXT DEFAULT (datetime('now'))
             );
@@ -114,6 +114,34 @@ async def init_db():
                 updated_at      TEXT DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS resources (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                title           TEXT NOT NULL,
+                kind            TEXT NOT NULL DEFAULT 'document', -- document|image
+                source_type     TEXT NOT NULL DEFAULT 'upload',   -- upload|url
+                source_url      TEXT DEFAULT '',
+                local_path      TEXT NOT NULL,
+                mime_type       TEXT DEFAULT '',
+                size_bytes      INTEGER DEFAULT 0,
+                sha256          TEXT DEFAULT '',
+                status          TEXT DEFAULT 'pending',           -- pending|ready|processed|failed
+                summary         TEXT DEFAULT '',
+                preview_text    TEXT DEFAULT '',
+                meta_json       TEXT DEFAULT '{}',
+                created_at      TEXT DEFAULT (datetime('now')),
+                updated_at      TEXT DEFAULT (datetime('now')),
+                last_used_at    TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS resource_chunks (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                resource_id     INTEGER NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+                chunk_index     INTEGER NOT NULL,
+                text            TEXT NOT NULL,
+                embedding_json  TEXT DEFAULT '',
+                created_at      TEXT DEFAULT (datetime('now'))
+            );
+
             -- Default settings
             INSERT OR IGNORE INTO settings (key, value) VALUES
                 ('anthropic_api_key', ''),
@@ -132,7 +160,10 @@ async def init_db():
                 ('webhook_urls', ''),
                 ('webhook_secret', ''),
                 ('azure_speech_key', ''),
-                ('azure_speech_region', 'eastus');
+                ('azure_speech_region', 'eastus'),
+                ('resource_storage_path', '~/.devbrain/resources'),
+                ('resource_upload_max_mb', '20'),
+                ('resource_url_import_enabled', '1');
         """)
         await db.commit()
     print(f"[Axon] Database initialised at {DB_PATH}")
@@ -352,3 +383,142 @@ async def get_all_settings(db: aiosqlite.Connection) -> dict:
     cur = await db.execute("SELECT key, value FROM settings")
     rows = await cur.fetchall()
     return {r["key"]: r["value"] for r in rows}
+
+
+# ─── Resources ───────────────────────────────────────────────────────────────
+
+async def add_resource(
+    db: aiosqlite.Connection,
+    *,
+    title: str,
+    kind: str,
+    source_type: str,
+    source_url: str,
+    local_path: str,
+    mime_type: str,
+    size_bytes: int,
+    sha256: str,
+    status: str = "pending",
+    summary: str = "",
+    preview_text: str = "",
+    meta_json: str = "{}",
+) -> int:
+    cur = await db.execute(
+        """
+        INSERT INTO resources (
+            title, kind, source_type, source_url, local_path, mime_type,
+            size_bytes, sha256, status, summary, preview_text, meta_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            title, kind, source_type, source_url, local_path, mime_type,
+            size_bytes, sha256, status, summary, preview_text, meta_json,
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def update_resource(db: aiosqlite.Connection, resource_id: int, **fields):
+    if not fields:
+        return
+    set_clauses = [f"{key} = ?" for key in fields]
+    values = list(fields.values())
+    values.append(resource_id)
+    await db.execute(
+        f"UPDATE resources SET {', '.join(set_clauses)}, updated_at = datetime('now') WHERE id = ?",
+        values,
+    )
+    await db.commit()
+
+
+async def list_resources(
+    db: aiosqlite.Connection,
+    *,
+    search: str = "",
+    kind: str = "",
+    source_type: str = "",
+    status: str = "",
+    limit: int = 200,
+):
+    clauses = []
+    params = []
+    if search.strip():
+        clauses.append("(title LIKE ? OR preview_text LIKE ? OR source_url LIKE ?)")
+        token = f"%{search.strip()}%"
+        params.extend([token, token, token])
+    if kind:
+        clauses.append("kind = ?")
+        params.append(kind)
+    if source_type:
+        clauses.append("source_type = ?")
+        params.append(source_type)
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    cur = await db.execute(
+        f"""
+        SELECT * FROM resources
+        {where}
+        ORDER BY COALESCE(last_used_at, updated_at) DESC, created_at DESC
+        LIMIT ?
+        """,
+        (*params, limit),
+    )
+    return await cur.fetchall()
+
+
+async def get_resource(db: aiosqlite.Connection, resource_id: int):
+    cur = await db.execute("SELECT * FROM resources WHERE id = ?", (resource_id,))
+    return await cur.fetchone()
+
+
+async def get_resources_by_ids(db: aiosqlite.Connection, resource_ids: list[int]):
+    if not resource_ids:
+        return []
+    placeholders = ",".join("?" for _ in resource_ids)
+    cur = await db.execute(
+        f"SELECT * FROM resources WHERE id IN ({placeholders}) ORDER BY created_at ASC",
+        resource_ids,
+    )
+    return await cur.fetchall()
+
+
+async def delete_resource(db: aiosqlite.Connection, resource_id: int):
+    await db.execute("DELETE FROM resources WHERE id = ?", (resource_id,))
+    await db.commit()
+
+
+async def replace_resource_chunks(db: aiosqlite.Connection, resource_id: int, chunks: list[dict]):
+    await db.execute("DELETE FROM resource_chunks WHERE resource_id = ?", (resource_id,))
+    for chunk in chunks:
+        await db.execute(
+            """
+            INSERT INTO resource_chunks (resource_id, chunk_index, text, embedding_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                resource_id,
+                chunk.get("chunk_index", 0),
+                chunk.get("text", ""),
+                chunk.get("embedding_json", ""),
+            ),
+        )
+    await db.commit()
+
+
+async def get_resource_chunks(db: aiosqlite.Connection, resource_id: int):
+    cur = await db.execute(
+        "SELECT * FROM resource_chunks WHERE resource_id = ? ORDER BY chunk_index ASC",
+        (resource_id,),
+    )
+    return await cur.fetchall()
+
+
+async def touch_resource_used(db: aiosqlite.Connection, resource_id: int):
+    await db.execute(
+        "UPDATE resources SET last_used_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+        (resource_id,),
+    )
+    await db.commit()

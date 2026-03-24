@@ -20,6 +20,7 @@ import re as _re
 import anthropic
 import httpx
 import gpu_guard
+import resource_bank
 
 # ─── Session usage tracker ───────────────────────────────────────────────────
 
@@ -352,10 +353,26 @@ async def _stream_ollama_chat(
         raise RuntimeError(f"Ollama not reachable at {base}: {exc}")
 
 
+def _ollama_message_with_images(content: str, image_paths: list[str] | None = None) -> dict:
+    message = {"role": "user", "content": content}
+    encoded_images: list[str] = []
+    for path in image_paths or []:
+        try:
+            encoded_images.append(resource_bank.encode_image_base64(path))
+        except Exception:
+            continue
+    if encoded_images:
+        message["images"] = encoded_images
+    return message
+
+
 async def stream_chat(
     user_message: str,
     history: list[dict],
     context_block: str = "",
+    resource_context: str = "",
+    resource_image_paths: Optional[list[str]] = None,
+    vision_model: str = "",
     project_name: Optional[str] = None,
     ollama_url: str = "",
     ollama_model: str = "",
@@ -364,17 +381,19 @@ async def stream_chat(
     system = SYSTEM_PROMPT_OLLAMA
     if context_block:
         system += f"\n\n{context_block[:2000]}"
+    if resource_context:
+        system += f"\n\n{resource_context[:5000]}"
     if project_name:
         system += f"\n\nCurrently focused on workspace: **{project_name}**"
 
     messages: list[dict] = [{"role": "system", "content": system}]
     for h in history[-6:]:
         messages.append({"role": h["role"], "content": h["content"][:600]})
-    messages.append({"role": "user", "content": user_message})
+    messages.append(_ollama_message_with_images(user_message, resource_image_paths))
 
     execution = await asyncio.to_thread(
         _ollama_execution_profile_sync,
-        ollama_model,
+        vision_model or ollama_model,
         ollama_url,
         streaming=True,
         purpose="chat",
@@ -514,6 +533,66 @@ def _tool_write_file(path: str, content: str) -> str:
         return f"ERROR: Permission denied: {p}"
 
 
+def _normalize_tool_args(name: str, args: dict) -> dict:
+    """Accept common argument aliases from weaker local models."""
+    normalized = dict(args or {})
+
+    if name == "shell_cmd":
+        if not normalized.get("cwd"):
+            for alias in ("dir", "directory", "workdir", "working_dir", "path"):
+                if normalized.get(alias):
+                    normalized["cwd"] = normalized.pop(alias)
+                    break
+        for alias in ("dir", "directory", "workdir", "working_dir", "path"):
+            normalized.pop(alias, None)
+        return {k: v for k, v in normalized.items() if k in {"cmd", "cwd", "timeout"}}
+
+    if name in {"git_status", "list_dir", "read_file"}:
+        if not normalized.get("path"):
+            for alias in ("cwd", "dir", "directory", "repo", "repository", "file"):
+                if normalized.get(alias):
+                    normalized["path"] = normalized.pop(alias)
+                    break
+        for alias in ("cwd", "dir", "directory", "repo", "repository", "file"):
+            normalized.pop(alias, None)
+        allowed = {"path"}
+        if name == "read_file":
+            allowed.add("max_kb")
+        return {k: v for k, v in normalized.items() if k in allowed}
+
+    if name == "search_code":
+        if not normalized.get("path"):
+            for alias in ("cwd", "dir", "directory", "repo", "repository"):
+                if normalized.get(alias):
+                    normalized["path"] = normalized.pop(alias)
+                    break
+        if not normalized.get("pattern"):
+            for alias in ("query", "text", "search", "term"):
+                if normalized.get(alias):
+                    normalized["pattern"] = normalized.pop(alias)
+                    break
+        for alias in ("cwd", "dir", "directory", "repo", "repository", "query", "text", "search", "term"):
+            normalized.pop(alias, None)
+        return {k: v for k, v in normalized.items() if k in {"pattern", "path", "glob"}}
+
+    if name == "write_file":
+        if not normalized.get("path"):
+            for alias in ("file", "target", "destination"):
+                if normalized.get(alias):
+                    normalized["path"] = normalized.pop(alias)
+                    break
+        if not normalized.get("content"):
+            for alias in ("text", "body"):
+                if normalized.get(alias):
+                    normalized["content"] = normalized.pop(alias)
+                    break
+        for alias in ("file", "target", "destination", "text", "body"):
+            normalized.pop(alias, None)
+        return {k: v for k, v in normalized.items() if k in {"path", "content"}}
+
+    return normalized
+
+
 _TOOL_REGISTRY = {
     "read_file": _tool_read_file,
     "list_dir": _tool_list_dir,
@@ -623,7 +702,7 @@ def _execute_tool(name: str, args: dict) -> str:
     if not fn:
         return f"ERROR: Unknown tool '{name}'"
     try:
-        return fn(**args)
+        return fn(**_normalize_tool_args(name, args))
     except TypeError as e:
         return f"ERROR: Bad arguments for {name}: {e}"
     except Exception as e:
@@ -684,6 +763,85 @@ def _extract_path_from_text(text: str) -> Optional[str]:
     return _resolve_project_path_from_text(text)
 
 
+def _recent_repo_path(history: list[dict] | None = None, project_name: Optional[str] = None) -> Optional[str]:
+    """Reuse the most recent explicit or workspace-derived path from chat history."""
+    if project_name:
+        project_path = _resolve_project_path_from_text(project_name)
+        if project_path:
+            return project_path
+
+    for item in reversed(history or []):
+        content = str(item.get("content", "") or "")
+        path = _extract_path_from_text(content)
+        if path:
+            return path
+    return None
+
+
+def _contains_phrase(text: str, phrase: str) -> bool:
+    lower = (text or "").lower()
+    token = (phrase or "").lower().strip()
+    if not token:
+        return False
+    return bool(_re.search(rf"(?<![a-z0-9]){_re.escape(token)}(?![a-z0-9])", lower))
+
+
+def _has_local_operator_markers(text: str) -> bool:
+    lower = (text or "").lower()
+    return (
+        bool(_extract_path_from_text(text or ""))
+        or "action:" in lower
+        or "args:" in lower
+        or "answer:" in lower
+        or any(_contains_phrase(lower, term) for term in (
+            "git ", "git status", "branch", "commit", "repo", "repository",
+            "workspace", "file", "folder", "directory", "path", "readme",
+            ".py", ".ts", ".tsx", ".js", ".jsx", ".md", "package.json",
+            "list_dir", "shell_cmd", "read_file", "search_code",
+        ))
+    )
+
+
+def _filtered_general_history(history: list[dict] | None = None) -> list[dict]:
+    filtered: list[dict] = []
+    for item in history or []:
+        content = str(item.get("content", "") or "")
+        if not content.strip():
+            continue
+        if _has_local_operator_markers(content):
+            continue
+        filtered.append({"role": item.get("role", "user"), "content": content[:500]})
+    return filtered[-4:]
+
+
+def _is_general_planning_request(user_message: str) -> bool:
+    lower = (user_message or "").strip().lower()
+    if not lower:
+        return False
+
+    local_action_terms = (
+        "git", "repo", "repository", "branch", "commit", "file", "files", "folder",
+        "folders", "directory", "directories", "desktop", "workspace", "scan", "inspect",
+        "search code", "read ", "open ", "run ", "execute ", "check ", "look at ",
+    )
+    if any(_contains_phrase(lower, term) for term in local_action_terms):
+        return False
+    if _extract_path_from_text(user_message):
+        return False
+
+    business_terms = (
+        "company profile", "business profile", "enterprise", "company", "business",
+        "capability statement", "proposal", "strategy", "go-to-market", "brand profile",
+        "executive summary", "corporate profile", "mission statement", "vision statement",
+        "service offering", "value proposition", "pitch deck", "brochure", "profile for me",
+    )
+    writing_terms = (
+        "plan", "draft", "write", "create", "prepare", "outline", "summarize",
+        "improve", "rewrite", "structure",
+    )
+    return any(_contains_phrase(lower, term) for term in business_terms) and any(_contains_phrase(lower, term) for term in writing_terms)
+
+
 def _parse_list_dir_entries(result: str) -> list[tuple[str, str]]:
     """Parse _tool_list_dir output into (kind, name) pairs."""
     entries: list[tuple[str, str]] = []
@@ -707,7 +865,11 @@ def _format_listing_answer(path: str, names: list[str], label: str) -> str:
     return f"Here are the {label} in `{resolved}`:\n{bullets}{more}"
 
 
-def _direct_agent_action(user_message: str) -> tuple[str, dict, str, str] | None:
+def _direct_agent_action(
+    user_message: str,
+    history: list[dict] | None = None,
+    project_name: Optional[str] = None,
+) -> tuple[str, dict, str, str] | None:
     """
     Handle obvious local actions deterministically so the agent behaves like a copilot
     even when the model does not emit a tool call.
@@ -731,8 +893,58 @@ def _direct_agent_action(user_message: str) -> tuple[str, dict, str, str] | None
         return "shell_cmd", {"cmd": "echo blocked-power-action"}, "BLOCKED: power action not allowed", answer
 
     path = _extract_path_from_text(user_message)
+    lower_has_git = any(term in lower for term in ("git", "branch", "repo", "repository", "status", "commit"))
+    if not path and lower_has_git:
+        path = _recent_repo_path(history, project_name)
+
     if not path:
         return None
+
+    branch_list_phrases = (
+        "list all branches", "list branches", "show all branches", "show branches",
+        "what branches", "which branches",
+    )
+    if any(phrase in lower for phrase in branch_list_phrases):
+        tool_name = "shell_cmd"
+        tool_args = {"cmd": "git branch --all --no-color", "cwd": path, "timeout": 15}
+        tool_result = _execute_tool(tool_name, tool_args)
+        if tool_result.startswith("ERROR:"):
+            return tool_name, tool_args, tool_result, tool_result
+        branches = [line.rstrip() for line in tool_result.splitlines() if line.strip()]
+        visible = "\n".join(f"- {line}" for line in branches[:80]) if branches else "- (no branches found)"
+        answer = f"Here are the branches in `{os.path.realpath(os.path.expanduser(path))}`:\n{visible}"
+        return tool_name, tool_args, tool_result, answer
+
+    status_phrases = (
+        "git status", "report the status", "repo status", "repository status",
+        "working tree", "uncommitted changes",
+    )
+    if any(phrase in lower for phrase in status_phrases):
+        tool_name = "git_status"
+        tool_args = {"path": path}
+        tool_result = _execute_tool(tool_name, tool_args)
+        if tool_result.startswith("ERROR:"):
+            return tool_name, tool_args, tool_result, tool_result
+        return tool_name, tool_args, tool_result, tool_result
+
+    branch_verify_match = _re.search(r'\b(?:verify|confirm|check)\b.*?\b(?:the )?([a-z0-9._/-]+)\s+branch\b', lower)
+    current_branch_phrases = ("current branch", "which branch", "what branch", "verify this is the branch")
+    if branch_verify_match or any(phrase in lower for phrase in current_branch_phrases):
+        tool_name = "shell_cmd"
+        tool_args = {"cmd": "git branch --show-current", "cwd": path, "timeout": 15}
+        tool_result = _execute_tool(tool_name, tool_args)
+        if tool_result.startswith("ERROR:"):
+            return tool_name, tool_args, tool_result, tool_result
+        current_branch = tool_result.strip().splitlines()[-1].strip()
+        target_branch = branch_verify_match.group(1).strip() if branch_verify_match else ""
+        if target_branch:
+            if current_branch == target_branch:
+                answer = f"Yes — `{os.path.realpath(os.path.expanduser(path))}` is currently on the `{current_branch}` branch."
+            else:
+                answer = f"No — `{os.path.realpath(os.path.expanduser(path))}` is on `{current_branch}`, not `{target_branch}`."
+        else:
+            answer = f"`{os.path.realpath(os.path.expanduser(path))}` is currently on the `{current_branch}` branch."
+        return tool_name, tool_args, tool_result, answer
 
     listing_phrases = (
         "list", "show", "what's in", "what is in", "contents of", "items in", "items on",
@@ -788,12 +1000,42 @@ Rules:
 - Use tools when you need real data (file contents, git status, directory listings, etc.)
 - When the user asks you to inspect, list, read, search, check, or run something you can access with tools, do it yourself first.
 - Do not give the user shell instructions for tasks you can complete with the available tools.
+- For pure planning, writing, brainstorming, or business requests that do not require local data, do not use tools. Answer directly.
 - After seeing tool results, either use another tool or give ANSWER
 - Be concise in ANSWER — use markdown
 - Never make up file contents or command output
 - All paths must start with ~ or /home/{os.getenv('USER', 'edp')}
 {('Context: ' + context_block[:800]) if context_block else ''}
 {('Project: ' + project_name) if project_name else ''}"""
+
+
+def _sanitize_agent_text(text: str) -> str:
+    """Remove leaked internal ReAct instructions before showing text to the user."""
+    skip_contains = (
+        "To use a tool, output EXACTLY in this format",
+        "When you have the final answer, output EXACTLY",
+        "EXACTLY in this format (no extra text before it)",
+        "ANSWER: your response here",
+    )
+    skip_exact = {
+        "ACTION: tool_name",
+        'ARGS: {"arg1": "value1"}',
+    }
+
+    cleaned: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            cleaned.append(line)
+            continue
+        if stripped in skip_exact:
+            continue
+        if any(marker in stripped for marker in skip_contains):
+            continue
+        cleaned.append(line)
+
+    return "\n".join(cleaned).strip()
+
 
 def _parse_react_action(text: str) -> tuple[str, dict] | None:
     """Parse ACTION/ARGS from ReAct-formatted text. Returns (tool_name, args) or None."""
@@ -802,6 +1044,8 @@ def _parse_react_action(text: str) -> tuple[str, dict] | None:
     if not action_match:
         return None
     tool_name = action_match.group(1).strip()
+    if tool_name == "tool_name":
+        return None
     args = {}
     if args_match:
         try:
@@ -817,6 +1061,9 @@ async def run_agent(
     user_message: str,
     history: list[dict],
     context_block: str = "",
+    resource_context: str = "",
+    resource_image_paths: Optional[list[str]] = None,
+    vision_model: str = "",
     project_name: Optional[str] = None,
     tools: list[str] | None = None,
     ollama_url: str = "",
@@ -836,7 +1083,40 @@ async def run_agent(
         t for t in tools if t in _TOOL_REGISTRY
     ]
 
-    direct_action = _direct_agent_action(user_message)
+    if _is_general_planning_request(user_message):
+        system = (
+            "You are Axon, a calm and practical AI operator.\n"
+            "This request is a general planning or writing task, not a local tool task.\n"
+            "Do not use tools. Do not inspect files or directories unless the user explicitly asks for local data.\n"
+            "Answer directly with a clear structure, a concise draft, and 2-4 helpful next-step options."
+        )
+        if resource_context:
+            system += f"\n\nUse these attached resources when they are relevant:\n{resource_context[:5000]}"
+        execution = await asyncio.to_thread(
+            _ollama_execution_profile_sync,
+            vision_model or ollama_model or OLLAMA_DEFAULT_MODEL,
+            ollama_url,
+            streaming=True,
+            purpose="chat",
+        )
+        messages: list[dict] = [{"role": "system", "content": system}]
+        messages.extend(_filtered_general_history(history))
+        messages.append(_ollama_message_with_images(user_message, resource_image_paths))
+
+        if execution.get("note"):
+            yield {"type": "text", "chunk": f"⚠️ {execution['note']}\n\n"}
+        async for chunk in _stream_ollama_chat(
+            messages=messages,
+            model=execution["model"],
+            max_tokens=1200,
+            ollama_url=ollama_url,
+            purpose="chat",
+        ):
+            yield {"type": "text", "chunk": chunk}
+        yield {"type": "done", "iterations": 1}
+        return
+
+    direct_action = _direct_agent_action(user_message, history=history, project_name=project_name)
     if direct_action:
         tool_name, tool_args, result, answer = direct_action
         yield {"type": "tool_call", "name": tool_name, "args": tool_args}
@@ -845,10 +1125,13 @@ async def run_agent(
         yield {"type": "done", "iterations": 1}
         return
 
-    system = _build_react_system(context_block, project_name, active_tool_names)
+    system_context = context_block
+    if resource_context:
+        system_context = f"{system_context}\n\n{resource_context}" if system_context else resource_context
+    system = _build_react_system(system_context, project_name, active_tool_names)
     execution = await asyncio.to_thread(
         _ollama_execution_profile_sync,
-        ollama_model or OLLAMA_AGENT_MODEL,
+        vision_model or ollama_model or OLLAMA_AGENT_MODEL,
         ollama_url,
         streaming=True,
         purpose="agent",
@@ -857,7 +1140,7 @@ async def run_agent(
     messages: list[dict] = [{"role": "system", "content": system}]
     for h in history[-4:]:
         messages.append({"role": h["role"], "content": h["content"][:400]})
-    messages.append({"role": "user", "content": user_message})
+    messages.append(_ollama_message_with_images(user_message, resource_image_paths))
 
     for iteration in range(max_iterations):
         # Collect streamed response
@@ -884,11 +1167,13 @@ async def run_agent(
         # Parse for ReAct patterns
         action = _parse_react_action(full_text)
         answer_match = _re.search(r'ANSWER:\s*([\s\S]+)', full_text)
+        clean_text = _sanitize_agent_text(full_text)
 
         if action:
             tool_name, tool_args = action
             # Emit the thinking text (everything before ACTION:)
             think_text = full_text[:full_text.find("ACTION:")].strip()
+            think_text = _sanitize_agent_text(think_text)
             if think_text:
                 yield {"type": "text", "chunk": f"*{think_text}*\n"}
 
@@ -900,12 +1185,18 @@ async def run_agent(
             messages.append({"role": "user", "content": f"Tool result for {tool_name}:\n{result[:2000]}\n\nContinue."})
 
         elif answer_match:
-            answer = answer_match.group(1).strip()
+            answer = _sanitize_agent_text(answer_match.group(1).strip())
+            if not answer or answer == "your response here":
+                yield {"type": "text", "chunk": "\n⚠️ Axon could not form a clean answer. Please retry the task."}
+                break
             yield {"type": "text", "chunk": answer}
             break
         else:
             # No pattern found — emit as-is (final answer without ANSWER: prefix)
-            yield {"type": "text", "chunk": full_text}
+            if clean_text:
+                yield {"type": "text", "chunk": clean_text}
+            else:
+                yield {"type": "text", "chunk": "\n⚠️ Axon produced an invalid tool response. Please retry the task."}
             break
 
     yield {"type": "done", "iterations": iteration + 1}
@@ -1126,6 +1417,9 @@ async def chat(
     user_message: str,
     history: list[dict],
     context_block: str = "",
+    resource_context: str = "",
+    resource_image_paths: Optional[list[str]] = None,
+    vision_model: str = "",
     project_name: Optional[str] = None,
     api_key: str = "",
     api_provider: str = "anthropic",
@@ -1146,23 +1440,46 @@ async def chat(
         if backend == "ollama":
             context_block = context_block[:2000]
         system += f"\n\n{context_block}"
+    if resource_context:
+        if backend == "ollama":
+            system += f"\n\n{resource_context[:5000]}"
+        else:
+            system += f"\n\n{resource_context}"
     if project_name:
         system += f"\n\nCurrently focused on workspace: **{project_name}**"
 
-    if backend in ("cli", "ollama"):
+    if backend == "ollama":
         ollama_note = ""
-        if backend == "ollama":
-            execution = await asyncio.to_thread(
-                _ollama_execution_profile_sync,
-                ollama_model,
-                ollama_url,
-                streaming=False,
-                purpose="chat",
-            )
-            ollama_model = execution["model"]
-            ollama_note = execution.get("note", "")
-        # Both CLI and Ollama take a single text prompt (stateless)
-        hist_limit = 6 if backend == "ollama" else 10
+        execution = await asyncio.to_thread(
+            _ollama_execution_profile_sync,
+            vision_model or ollama_model,
+            ollama_url,
+            streaming=False,
+            purpose="chat",
+        )
+        ollama_model = execution["model"]
+        ollama_note = execution.get("note", "")
+
+        messages = [{"role": "system", "content": system}]
+        for h in history[-6:]:
+            messages.append({"role": h["role"], "content": h["content"][:600]})
+        messages.append(_ollama_message_with_images(user_message, resource_image_paths))
+
+        parts: list[str] = []
+        async for chunk in _stream_ollama_chat(
+            messages=messages,
+            model=ollama_model,
+            max_tokens=MAX_TOKENS_CHAT,
+            ollama_url=ollama_url,
+            purpose="chat",
+        ):
+            parts.append(chunk)
+        content = "".join(parts)
+        tokens = 0
+        if ollama_note:
+            content = f"⚠️ {ollama_note}\n\n{content}"
+    elif backend == "cli":
+        hist_limit = 10
         history_text = ""
         for h in history[-hist_limit:]:
             role = "User" if h["role"] == "user" else "Assistant"
@@ -1174,10 +1491,8 @@ async def chat(
             full_prompt, system=system, backend=backend,
             cli_path=cli_path, ollama_url=ollama_url, ollama_model=ollama_model,
             api_key=api_key, api_provider=api_provider, api_base_url=api_base_url, api_model=api_model,
-            max_tokens=MAX_TOKENS_CHAT,  # same limit for all backends
+            max_tokens=MAX_TOKENS_CHAT,
         )
-        if ollama_note:
-            content = f"⚠️ {ollama_note}\n\n{content}"
     else:
         messages = []
         for h in history[-20:]:

@@ -3,381 +3,766 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Axon — Manual</title>
+  <title>Axon - Product Manual</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
-    body { font-family: 'Inter', system-ui, sans-serif; }
+    @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+    :root {
+      --bg: #020617;
+      --panel: rgba(15, 23, 42, 0.78);
+      --panel-strong: rgba(15, 23, 42, 0.92);
+      --line: rgba(148, 163, 184, 0.14);
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --blue: #60a5fa;
+      --cyan: #67e8f9;
+      --emerald: #34d399;
+      --amber: #fbbf24;
+      --rose: #fb7185;
+    }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Manrope', system-ui, sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(56, 189, 248, 0.12), transparent 28%),
+        radial-gradient(circle at 85% 0%, rgba(96, 165, 250, 0.1), transparent 24%),
+        linear-gradient(180deg, #020617 0%, #020817 100%);
+      color: var(--text);
+    }
     .mono { font-family: 'JetBrains Mono', monospace; }
-    h1, h2, h3 { scroll-margin-top: 90px; }
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: #020617; }
-    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 999px; }
-    .chip { display: inline-flex; align-items: center; border-radius: 999px; padding: 0.25rem 0.65rem; font-size: 11px; font-weight: 600; }
-    .callout { border-left: 3px solid; border-radius: 0 14px 14px 0; padding: 14px 18px; }
-    .panel { border: 1px solid #1e293b; background: rgba(15, 23, 42, 0.8); border-radius: 20px; }
-    .screen { border: 1px solid #1e293b; background: #020617; border-radius: 18px; overflow: hidden; }
-    .screen-bar { background: #0f172a; border-bottom: 1px solid #1e293b; padding: 10px 14px; display: flex; align-items: center; gap: 8px; }
+    .panel {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 26px;
+      backdrop-filter: blur(18px);
+      box-shadow: 0 18px 50px rgba(2, 6, 23, 0.28);
+    }
+    .soft-card {
+      border: 1px solid rgba(148, 163, 184, 0.12);
+      background: rgba(2, 6, 23, 0.58);
+      border-radius: 22px;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      background: rgba(2, 6, 23, 0.64);
+      padding: 0.36rem 0.8rem;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #cbd5e1;
+    }
+    .phase {
+      position: relative;
+      border: 1px solid rgba(96, 165, 250, 0.16);
+      background: rgba(15, 23, 42, 0.92);
+      border-radius: 22px;
+      padding: 18px;
+    }
+    .phase::after {
+      content: ">";
+      position: absolute;
+      right: -18px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: rgba(148, 163, 184, 0.38);
+      font-size: 18px;
+      font-weight: 700;
+    }
+    .phase:last-child::after { display: none; }
+    .screen {
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      border-radius: 24px;
+      overflow: hidden;
+      background: rgba(2, 6, 23, 0.88);
+    }
+    .screen-top {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 16px;
+      background: rgba(15, 23, 42, 0.98);
+      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    }
     .dot { width: 10px; height: 10px; border-radius: 999px; }
+    .placeholder {
+      border: 1px dashed rgba(103, 232, 249, 0.28);
+      background:
+        linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(8, 15, 30, 0.95)),
+        radial-gradient(circle at top left, rgba(96, 165, 250, 0.12), transparent 35%);
+      border-radius: 22px;
+      min-height: 240px;
+      padding: 20px;
+    }
+    .callout {
+      border-left: 3px solid rgba(96, 165, 250, 0.55);
+      background: rgba(30, 41, 59, 0.56);
+      border-radius: 0 20px 20px 0;
+      padding: 16px 18px;
+    }
+    .command-card {
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      background: rgba(2, 6, 23, 0.72);
+      border-radius: 22px;
+      padding: 18px;
+    }
+    h2, h3 { scroll-margin-top: 100px; }
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: #020617; }
+    ::-webkit-scrollbar-thumb { background: rgba(51, 65, 85, 0.9); border-radius: 999px; }
   </style>
 </head>
-<body class="bg-slate-950 text-slate-200 leading-relaxed">
-
-<header class="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/90 px-6 py-3 backdrop-blur">
-  <div class="mx-auto flex max-w-6xl items-center justify-between gap-4">
-    <div class="flex items-center gap-3">
-      <div class="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-500 via-blue-600 to-cyan-300 text-sm font-black text-slate-950">✦</div>
-      <div>
-        <div class="font-semibold text-white">Axon</div>
-        <div class="text-xs text-slate-500">Local AI Operator</div>
-      </div>
-      <span class="chip border border-blue-500/30 bg-blue-500/10 text-blue-300">Manual</span>
-    </div>
-    <a href="http://localhost:7734" target="_blank" class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-500">
-      Open Axon
-    </a>
-  </div>
-</header>
-
-<main class="mx-auto max-w-6xl px-6 py-12">
-  <section class="mb-12 text-center">
-    <div class="mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-[28px] bg-gradient-to-br from-sky-500/20 via-blue-500/15 to-cyan-300/20 text-4xl text-cyan-200 shadow-[0_0_50px_rgba(14,165,233,0.12)]">✦</div>
-    <h1 class="mb-3 text-5xl font-black tracking-tight text-white">Axon</h1>
-    <p class="mx-auto max-w-3xl text-lg text-slate-300">
-      Axon is a local AI operator that runs on your machine. It keeps your workspaces, missions, runtime, model routing, and secure tools aligned in one calm operator console.
-    </p>
-    <div class="mt-5 flex flex-wrap items-center justify-center gap-3">
-      <span class="chip border border-emerald-500/30 bg-emerald-500/10 text-emerald-300">Local-first</span>
-      <span class="chip border border-sky-500/30 bg-sky-500/10 text-sky-300">Ollama-first</span>
-      <span class="chip border border-violet-500/30 bg-violet-500/10 text-violet-300">Role-based model routing</span>
-      <span class="chip border border-amber-500/30 bg-amber-500/10 text-amber-300">Optional cloud adapters</span>
-    </div>
-  </section>
-
-  <section class="panel mb-12 p-6">
-    <h2 class="mb-4 text-lg font-bold text-white">Contents</h2>
-    <div class="grid gap-2 text-sm text-slate-400 md:grid-cols-2">
-      <a href="#what-is" class="hover:text-blue-300">1. What Axon is</a>
-      <a href="#runtime-architecture" class="hover:text-blue-300">2. Runtime architecture</a>
-      <a href="#getting-started" class="hover:text-blue-300">3. Getting started</a>
-      <a href="#console" class="hover:text-blue-300">4. Console</a>
-      <a href="#workspaces" class="hover:text-blue-300">5. Workspaces</a>
-      <a href="#missions" class="hover:text-blue-300">6. Missions</a>
-      <a href="#playbooks" class="hover:text-blue-300">7. Playbooks</a>
-      <a href="#timeline" class="hover:text-blue-300">8. Timeline</a>
-      <a href="#secure-vault" class="hover:text-blue-300">9. Secure Vault</a>
-      <a href="#mobile" class="hover:text-blue-300">10. Remote mobile use</a>
-      <a href="#external-agents" class="hover:text-blue-300">11. External specialist agents</a>
-      <a href="#troubleshooting" class="hover:text-blue-300">12. Troubleshooting</a>
-    </div>
-  </section>
-
-  <section id="what-is" class="mb-14">
-    <h2 class="mb-2 text-3xl font-bold text-white">1. What Axon is</h2>
-    <div class="mb-6 h-1 w-12 rounded bg-blue-600"></div>
-    <p class="mb-5 text-slate-300">
-      Axon is a <strong class="text-white">local AI operator</strong>. It runs a FastAPI server on your computer, keeps a local SQLite state store, scans your workspaces, tracks missions, stores reusable playbooks, and gives you an operator console for local and optional cloud-assisted workflows.
-    </p>
-    <div class="grid gap-4 md:grid-cols-3">
-      <div class="panel p-5">
-        <div class="mb-2 text-2xl">🧠</div>
-        <div class="mb-2 font-semibold text-white">Operator console</div>
-        <p class="text-sm text-slate-400">The Console is where you give Axon goals, tasks, and commands. It can observe, plan, execute, verify, and recover.</p>
-      </div>
-      <div class="panel p-5">
-        <div class="mb-2 text-2xl">🗂️</div>
-        <div class="mb-2 font-semibold text-white">Workspace awareness</div>
-        <p class="text-sm text-slate-400">Axon tracks workspace health, TODO debt, git age, notes, playbooks, and mission context so it can act with local state already loaded.</p>
-      </div>
-      <div class="panel p-5">
-        <div class="mb-2 text-2xl">🔐</div>
-        <div class="mb-2 font-semibold text-white">Privacy-first by default</div>
-        <p class="text-sm text-slate-400">Local models are the default route. External adapters are optional, clearly marked, and disabled until you enable them.</p>
-      </div>
-    </div>
-  </section>
-
-  <section id="runtime-architecture" class="mb-14">
-    <h2 class="mb-2 text-3xl font-bold text-white">2. Runtime architecture</h2>
-    <div class="mb-6 h-1 w-12 rounded bg-blue-600"></div>
-
-    <div class="screen mb-6">
-      <div class="screen-bar">
-        <div class="dot bg-rose-500"></div>
-        <div class="dot bg-amber-400"></div>
-        <div class="dot bg-emerald-500"></div>
-        <span class="ml-2 text-xs text-slate-500">Axon runtime overview</span>
-      </div>
-      <div class="overflow-x-auto p-5">
-<pre class="mono text-sm leading-7 text-slate-300">
-Browser / PWA / Mobile
-        |
-        v
-http://localhost:7734
-        |
-        v
-FastAPI server (server.py)
-        |
-        +-- Runtime manager
-        +-- Model router
-        +-- Agent registry
-        +-- Mission manager
-        +-- Permissions guard
-        +-- Scanner + scheduler
-        +-- Secure Vault + SQLite state
-        |
-        +-- Local runtime: Ollama
-        |
-        '-- Optional external adapters
-</pre>
-      </div>
-    </div>
-
-    <div class="grid gap-4 md:grid-cols-2">
-      <div class="panel p-5">
-        <h3 class="mb-3 font-semibold text-white">Core services</h3>
-        <ul class="space-y-2 text-sm text-slate-400">
-          <li><span class="text-slate-200">FastAPI server</span>: serves the UI, API routes, streaming responses, and system actions.</li>
-          <li><span class="text-slate-200">SQLite state</span>: stores workspaces, missions, playbooks, activity, and settings under the existing <span class="mono">~/.devbrain</span> path for compatibility.</li>
-          <li><span class="text-slate-200">Scanner + scheduler</span>: keep workspace health and morning brief state current.</li>
-          <li><span class="text-slate-200">Secure Vault</span>: stores secrets locally and only unlocks them into approved actions.</li>
-        </ul>
-      </div>
-      <div class="panel p-5">
-        <h3 class="mb-3 font-semibold text-white">Runtime model routing</h3>
-        <ul class="space-y-2 text-sm text-slate-400">
-          <li><span class="text-slate-200">Default runtime</span>: Ollama.</li>
-          <li><span class="text-slate-200">Role-based routes</span>: Code, General, Reasoning, Embeddings, Vision.</li>
-          <li><span class="text-slate-200">Fallback behavior</span>: Axon prefers configured local models, then auto-matches installed families.</li>
-          <li><span class="text-slate-200">Cloud adapters</span>: optional, external, and disabled by default.</li>
-        </ul>
-      </div>
-    </div>
-
-    <div class="callout mt-6 border-blue-500 bg-blue-950/30">
-      <strong class="text-blue-300">Default posture:</strong>
-      <span class="text-slate-300"> local-first, privacy-first, and role-aware. If you never enable a cloud adapter, Axon still works as a local operator.</span>
-    </div>
-  </section>
-
-  <section id="getting-started" class="mb-14">
-    <h2 class="mb-2 text-3xl font-bold text-white">3. Getting started</h2>
-    <div class="mb-6 h-1 w-12 rounded bg-blue-600"></div>
-
-    <div class="grid gap-5 md:grid-cols-3">
-      <div class="panel p-5">
-        <div class="mb-3 text-sm font-semibold uppercase tracking-[0.2em] text-blue-300">Step 1</div>
-        <div class="mb-2 font-semibold text-white">Start Axon</div>
-        <div class="rounded-2xl border border-slate-800 bg-slate-950 px-4 py-3 mono text-sm text-emerald-300">axon</div>
-        <p class="mt-3 text-sm text-slate-400">The legacy <span class="mono">devbrain</span> command still works too. Both point at the same compatible runtime path.</p>
-      </div>
-      <div class="panel p-5">
-        <div class="mb-3 text-sm font-semibold uppercase tracking-[0.2em] text-blue-300">Step 2</div>
-        <div class="mb-2 font-semibold text-white">Set your workspaces root</div>
-        <p class="text-sm text-slate-400">Go to <strong class="text-white">Settings → Runtime</strong> and set the folders Axon should scan, for example <span class="mono text-blue-300">~/Desktop</span> or a custom projects directory.</p>
-      </div>
-      <div class="panel p-5">
-        <div class="mb-3 text-sm font-semibold uppercase tracking-[0.2em] text-blue-300">Step 3</div>
-        <div class="mb-2 font-semibold text-white">Run Axon Scan</div>
-        <p class="text-sm text-slate-400">Use the sidebar action to discover workspaces, calculate health, refresh mission suggestions, and populate the Console context.</p>
-      </div>
-    </div>
-
-    <div class="mt-6 grid gap-4 md:grid-cols-2">
-      <div class="panel p-5">
-        <h3 class="mb-3 font-semibold text-white">Local runtime setup</h3>
-        <p class="mb-3 text-sm text-slate-400">Axon is happiest when Ollama is running locally. In Settings, pick your default Console model, then tune the role routes under <strong class="text-white">Local Models</strong>.</p>
-        <p class="text-sm text-slate-400">If you need cloud help, you can switch runtime paths later without changing your data store.</p>
-      </div>
-      <div class="panel p-5">
-        <h3 class="mb-3 font-semibold text-white">Compatibility note</h3>
-        <p class="text-sm text-slate-400">Axon still uses the existing <span class="mono">~/.devbrain</span> storage path and database so nothing breaks while the product language evolves.</p>
-      </div>
-    </div>
-  </section>
-
-  <section id="console" class="mb-14">
-    <h2 class="mb-2 text-3xl font-bold text-white">4. Console</h2>
-    <div class="mb-6 h-1 w-12 rounded bg-blue-600"></div>
-    <p class="mb-5 text-slate-300">The Console is Axon’s primary operator surface. You can give it a goal, task, or direct command and it will use local context, model routing, and tool access to respond.</p>
-
-    <div class="screen mb-6">
-      <div class="screen-bar">
-        <div class="dot bg-rose-500"></div>
-        <div class="dot bg-amber-400"></div>
-        <div class="dot bg-emerald-500"></div>
-        <span class="ml-2 text-xs text-slate-500">Axon Console</span>
-      </div>
-      <div class="space-y-4 bg-slate-950 p-5">
-        <div class="flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.16em]">
-          <span class="chip border border-amber-500/30 bg-amber-500/10 text-amber-200">Observe</span>
-          <span class="chip border border-slate-700 bg-slate-900 text-slate-400">Plan</span>
-          <span class="chip border border-slate-700 bg-slate-900 text-slate-400">Execute</span>
-          <span class="chip border border-slate-700 bg-slate-900 text-slate-400">Verify</span>
-          <span class="chip border border-slate-700 bg-slate-900 text-slate-400">Recover</span>
+<body class="min-h-screen">
+  <header class="sticky top-0 z-50 border-b border-slate-800/80 bg-slate-950/85 backdrop-blur">
+    <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4">
+      <div class="flex items-center gap-3">
+        <div class="flex h-11 w-11 items-center justify-center rounded-[20px] bg-gradient-to-br from-sky-500 via-blue-600 to-cyan-300 text-lg font-black text-slate-950 shadow-[0_0_50px_rgba(56,189,248,0.16)]">A</div>
+        <div>
+          <div class="text-base font-bold text-white">Axon</div>
+          <div class="text-xs text-slate-500">Local AI Operator</div>
         </div>
-        <div class="rounded-[22px] border border-slate-800 bg-slate-900 px-4 py-3 text-sm text-slate-500">
-          Give Axon a goal, task, or command...
+        <span class="chip">Manual</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <a href="http://localhost:7734/manual" class="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-slate-500 hover:text-white">Open Local Manual</a>
+        <a href="http://localhost:7734" class="rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-500">Open Axon</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto grid max-w-7xl gap-8 px-5 py-10 lg:grid-cols-[280px_minmax(0,1fr)]">
+    <aside class="lg:sticky lg:top-24 lg:self-start">
+      <div class="panel p-5">
+        <div class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Quick Map</div>
+        <div class="mt-3 space-y-2 text-sm text-slate-400">
+          <a href="#what-is" class="block rounded-xl px-3 py-2 transition hover:bg-slate-900 hover:text-white">1. What Axon is</a>
+          <a href="#how-axon-thinks" class="block rounded-xl px-3 py-2 transition hover:bg-slate-900 hover:text-white">2. How Axon thinks</a>
+          <a href="#screens" class="block rounded-xl px-3 py-2 transition hover:bg-slate-900 hover:text-white">3. What each screen means</a>
+          <a href="#use-axon" class="block rounded-xl px-3 py-2 transition hover:bg-slate-900 hover:text-white">4. How to use Axon well</a>
+          <a href="#mobile-control" class="block rounded-xl px-3 py-2 transition hover:bg-slate-900 hover:text-white">5. Mobile control</a>
+          <a href="#secure-mobile" class="block rounded-xl px-3 py-2 transition hover:bg-slate-900 hover:text-white">6. Secure mobile access</a>
+          <a href="#stable-domain" class="block rounded-xl px-3 py-2 transition hover:bg-slate-900 hover:text-white">7. Stable domain and PWA</a>
+          <a href="#alerts" class="block rounded-xl px-3 py-2 transition hover:bg-slate-900 hover:text-white">8. Axon Alerts</a>
+          <a href="#models" class="block rounded-xl px-3 py-2 transition hover:bg-slate-900 hover:text-white">9. Local and cloud models</a>
+          <a href="#external-agents" class="block rounded-xl px-3 py-2 transition hover:bg-slate-900 hover:text-white">10. External agents</a>
+          <a href="#dash-integration" class="block rounded-xl px-3 py-2 transition hover:bg-slate-900 hover:text-white">11. Dash integration</a>
+          <a href="#important-commands" class="block rounded-xl px-3 py-2 transition hover:bg-slate-900 hover:text-white">12. Important commands</a>
         </div>
       </div>
-    </div>
+    </aside>
 
-    <div class="grid gap-4 md:grid-cols-2">
-      <div class="panel p-5">
-        <h3 class="mb-3 font-semibold text-white">Agent phases</h3>
-        <ul class="space-y-2 text-sm text-slate-400">
-          <li><span class="text-slate-200">Observe</span>: inspect the request, workspace scope, and runtime state.</li>
-          <li><span class="text-slate-200">Plan</span>: decide what to inspect or execute next.</li>
-          <li><span class="text-slate-200">Execute</span>: use tools or model calls to do the work.</li>
-          <li><span class="text-slate-200">Verify</span>: confirm the result, summarize output, or sanity-check the action.</li>
-          <li><span class="text-slate-200">Recover</span>: surface errors, fall back, or suggest safe next actions.</li>
+    <div class="space-y-10">
+      <section class="panel overflow-hidden">
+        <div class="grid gap-8 px-6 py-8 lg:grid-cols-[1.15fr_0.85fr] lg:px-8 lg:py-10">
+          <div>
+            <div class="inline-flex items-center gap-2 rounded-full border border-sky-500/20 bg-sky-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-sky-200">Local-first operator</div>
+            <h1 class="mt-5 max-w-3xl text-4xl font-black tracking-tight text-white md:text-5xl">Axon is like a smart helper that lives on your computer.</h1>
+            <p class="mt-4 max-w-2xl text-lg text-slate-300">
+              Axon looks first, thinks next, acts carefully, then checks its work. It runs on your machine, keeps your work close to home, and can still ask optional outside helpers when you allow it.
+            </p>
+            <div class="mt-6 flex flex-wrap gap-2">
+              <span class="chip">Local-first</span>
+              <span class="chip">Ollama-first</span>
+              <span class="chip">Mobile remote</span>
+              <span class="chip">Secure Vault</span>
+              <span class="chip">Axon Alerts</span>
+            </div>
+          </div>
+          <div class="soft-card p-5">
+            <div class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Axon in one picture</div>
+            <div class="mt-4 grid gap-3">
+              <div class="rounded-2xl border border-slate-800 bg-slate-950/80 px-4 py-4">
+                <div class="text-sm font-semibold text-white">Phone</div>
+                <div class="mt-1 text-sm text-slate-400">Remote control</div>
+              </div>
+              <div class="text-center text-slate-600">v</div>
+              <div class="rounded-2xl border border-blue-500/20 bg-blue-500/10 px-4 py-4">
+                <div class="text-sm font-semibold text-blue-100">Axon</div>
+                <div class="mt-1 text-sm text-blue-200/80">Observe -> Plan -> Execute -> Verify -> Recover</div>
+              </div>
+              <div class="text-center text-slate-600">v</div>
+              <div class="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-4">
+                <div class="text-sm font-semibold text-emerald-100">Your computer</div>
+                <div class="mt-1 text-sm text-emerald-200/80">Files, models, missions, secure actions</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="what-is" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">1. What Axon is</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">
+            Axon is your local AI operator. That means it lives on your computer, keeps your workspaces in mind, and helps you think, plan, do, and check. It is not just a chat box. It is an operator console.
+          </p>
+        </div>
+        <div class="grid gap-4 md:grid-cols-3">
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Axon lives on your machine</div>
+            <p class="mt-2 text-sm text-slate-400">Your files, missions, and settings stay local by default. Axon uses your own computer as its main home.</p>
+          </div>
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Axon can think and act</div>
+            <p class="mt-2 text-sm text-slate-400">It can inspect files, run safe actions, show progress, and tell you what happened next.</p>
+          </div>
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Axon can still use optional outside helpers</div>
+            <p class="mt-2 text-sm text-slate-400">If you enable cloud providers, Axon can route work there too. Local comes first.</p>
+          </div>
+        </div>
+        <div class="callout">
+          <div class="text-sm font-semibold text-white">Simple version</div>
+          <div class="mt-2 text-sm text-slate-300">Axon is like a smart helper that sits on your computer. Your phone can talk to it, but your computer is the one doing the work.</div>
+        </div>
+      </section>
+
+      <section id="how-axon-thinks" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">2. How Axon thinks</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">Axon always follows the same safety-minded loop. This is the heart of the product.</p>
+        </div>
+        <div class="grid gap-4 xl:grid-cols-5">
+          <div class="phase">
+            <div class="text-xs font-semibold uppercase tracking-[0.18em] text-blue-300">Observe</div>
+            <div class="mt-2 text-lg font-semibold text-white">Look first</div>
+            <div class="mt-2 text-sm text-slate-400">Axon checks your goal, current workspace, runtime state, and what it already knows.</div>
+          </div>
+          <div class="phase">
+            <div class="text-xs font-semibold uppercase tracking-[0.18em] text-blue-300">Plan</div>
+            <div class="mt-2 text-lg font-semibold text-white">Think next</div>
+            <div class="mt-2 text-sm text-slate-400">Axon decides which steps make sense before it starts touching anything.</div>
+          </div>
+          <div class="phase">
+            <div class="text-xs font-semibold uppercase tracking-[0.18em] text-blue-300">Execute</div>
+            <div class="mt-2 text-lg font-semibold text-white">Do the work</div>
+            <div class="mt-2 text-sm text-slate-400">Axon uses local tools, models, or approved cloud helpers to carry the plan out.</div>
+          </div>
+          <div class="phase">
+            <div class="text-xs font-semibold uppercase tracking-[0.18em] text-blue-300">Verify</div>
+            <div class="mt-2 text-lg font-semibold text-white">Check the result</div>
+            <div class="mt-2 text-sm text-slate-400">Axon confirms what changed, what worked, and what still needs help.</div>
+          </div>
+          <div class="phase">
+            <div class="text-xs font-semibold uppercase tracking-[0.18em] text-blue-300">Recover</div>
+            <div class="mt-2 text-lg font-semibold text-white">Stay calm if something breaks</div>
+            <div class="mt-2 text-sm text-slate-400">Axon reports the problem, falls back safely, and shows the next safe move.</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="screens" class="space-y-6">
+        <div>
+          <h2 class="text-3xl font-black text-white">3. What each screen means</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">Each screen has one clear job. If you remember what each screen is for, Axon becomes much easier to use.</p>
+        </div>
+
+        <div class="grid gap-4 md:grid-cols-2">
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Dashboard</div>
+            <p class="mt-2 text-sm text-slate-400">Your one-glance control room. It shows connection state, runtime health, active model, missions today, alerts, and quick ways to jump into action.</p>
+            <div class="placeholder mt-4">
+              <div class="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200">Screenshot placeholder</div>
+              <div class="mt-3 text-sm text-slate-300">Drop in a real Dashboard screenshot here with callouts for connection state, runtime status, active model, and Axon Alerts.</div>
+            </div>
+          </div>
+
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Console</div>
+            <p class="mt-2 text-sm text-slate-400">The place where you give Axon goals. Use it when you want Axon to think with context, inspect a workspace, or act through tools.</p>
+            <div class="placeholder mt-4">
+              <div class="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200">Screenshot placeholder</div>
+              <div class="mt-3 text-sm text-slate-300">Drop in a real Console screenshot here showing the provider/model pill, phase chips, and the operator composer.</div>
+            </div>
+          </div>
+
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Workspaces</div>
+            <p class="mt-2 text-sm text-slate-400">Where Axon keeps track of project health, notes, TODO pressure, and focused Inspect actions.</p>
+          </div>
+
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Missions</div>
+            <p class="mt-2 text-sm text-slate-400">Small pieces of work Axon can remind you about, suggest, and help complete.</p>
+          </div>
+
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Playbooks</div>
+            <p class="mt-2 text-sm text-slate-400">Reusable instructions you want Axon to remember and reuse.</p>
+          </div>
+
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Timeline</div>
+            <p class="mt-2 text-sm text-slate-400">The live story of what happened. It shows scans, alerts, mission changes, and morning briefs.</p>
+          </div>
+
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Secure Vault</div>
+            <p class="mt-2 text-sm text-slate-400">Local-only secret storage. Axon can inject secrets into approved actions without spraying them all over the UI.</p>
+          </div>
+
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Settings</div>
+            <p class="mt-2 text-sm text-slate-400">Where you decide how Axon runs, which models it uses, what alerts it sends, and how mobile or future Dash handoffs should work.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="use-axon" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">4. How to use Axon effectively</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">The best way to use Axon is to give it goals, not tiny commands.</p>
+        </div>
+        <div class="grid gap-4 md:grid-cols-2">
+          <div class="screen">
+            <div class="screen-top">
+              <div class="dot bg-rose-500"></div>
+              <div class="dot bg-amber-400"></div>
+              <div class="dot bg-emerald-500"></div>
+              <span class="ml-2 text-xs text-slate-500">Better prompt</span>
+            </div>
+            <div class="p-5">
+              <div class="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-4 text-sm text-emerald-100">
+                "Inspect the weakest workspace, tell me the top two risks, and suggest the next mission."
+              </div>
+            </div>
+          </div>
+          <div class="screen">
+            <div class="screen-top">
+              <div class="dot bg-rose-500"></div>
+              <div class="dot bg-amber-400"></div>
+              <div class="dot bg-emerald-500"></div>
+              <span class="ml-2 text-xs text-slate-500">Tiny prompt</span>
+            </div>
+            <div class="p-5">
+              <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-4 text-sm text-slate-400">
+                "Open this. Then click that. Then tell me the next step."
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="grid gap-4 md:grid-cols-4">
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Use Workspaces</div>
+            <p class="mt-2 text-sm text-slate-400">They keep context clean.</p>
+          </div>
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Use Missions</div>
+            <p class="mt-2 text-sm text-slate-400">They turn ideas into trackable work.</p>
+          </div>
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Use Playbooks</div>
+            <p class="mt-2 text-sm text-slate-400">They keep good instructions reusable.</p>
+          </div>
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Check Timeline</div>
+            <p class="mt-2 text-sm text-slate-400">It tells you what changed and why.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="mobile-control" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">5. Mobile control of your local machine</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">Your phone becomes the remote control. Your computer does the work.</p>
+        </div>
+        <div class="grid gap-4 lg:grid-cols-[1fr_1.1fr]">
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">What your phone can do</div>
+            <ul class="mt-3 space-y-2 text-sm text-slate-400">
+              <li>See runtime state and connection status.</li>
+              <li>Read workspace health and mission status.</li>
+              <li>Browse allowed files and edit safe files.</li>
+              <li>Run Axon Scan or approve guided system actions.</li>
+              <li>Watch results stream back in real time.</li>
+            </ul>
+          </div>
+          <div class="screen">
+            <div class="screen-top">
+              <div class="dot bg-rose-500"></div>
+              <div class="dot bg-amber-400"></div>
+              <div class="dot bg-emerald-500"></div>
+              <span class="ml-2 text-xs text-slate-500">Phone -> Axon -> Computer</span>
+            </div>
+            <div class="grid gap-4 p-5 md:grid-cols-3">
+              <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-4 text-center">
+                <div class="text-lg font-semibold text-white">Phone</div>
+                <div class="mt-2 text-sm text-slate-400">Remote control</div>
+              </div>
+              <div class="rounded-2xl border border-blue-500/20 bg-blue-500/10 px-4 py-4 text-center">
+                <div class="text-lg font-semibold text-blue-100">Axon</div>
+                <div class="mt-2 text-sm text-blue-200/80">Secure bridge</div>
+              </div>
+              <div class="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-4 text-center">
+                <div class="text-lg font-semibold text-emerald-100">Computer</div>
+                <div class="mt-2 text-sm text-emerald-200/80">Local work happens here</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="grid gap-4 md:grid-cols-3">
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">LAN</div>
+            <p class="mt-2 text-sm text-slate-400">Fastest. Works when your phone and computer are on the same network.</p>
+          </div>
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Tailscale</div>
+            <p class="mt-2 text-sm text-slate-400">Best private remote path. Good for your own trusted devices.</p>
+          </div>
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">HTTPS tunnel</div>
+            <p class="mt-2 text-sm text-slate-400">Best for PWA install and easy browser access from anywhere.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="secure-mobile" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">6. Secure mobile access</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">Axon lets your phone in carefully. It does not just trust every browser automatically.</p>
+        </div>
+        <div class="grid gap-4 lg:grid-cols-[1fr_1.1fr]">
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Simple security story</div>
+            <ul class="mt-3 space-y-2 text-sm text-slate-400">
+              <li>PIN lock protects the app.</li>
+              <li>A session token is created after sign-in.</li>
+              <li>Axon accepts both <span class="mono">X-Axon-Token</span> and legacy <span class="mono">X-DevBrain-Token</span> headers.</li>
+              <li>Files are sandboxed to your home directory.</li>
+              <li>Vault secrets stay local and only enter approved actions.</li>
+              <li>Risky actions use guided confirmation.</li>
+            </ul>
+          </div>
+          <div class="screen">
+            <div class="screen-top">
+              <div class="dot bg-rose-500"></div>
+              <div class="dot bg-amber-400"></div>
+              <div class="dot bg-emerald-500"></div>
+              <span class="ml-2 text-xs text-slate-500">PIN and session flow</span>
+            </div>
+            <div class="space-y-3 p-5 text-sm text-slate-300">
+              <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">1. You open Axon on your phone.</div>
+              <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">2. You enter your PIN.</div>
+              <div class="rounded-2xl border border-blue-500/20 bg-blue-500/10 px-4 py-3">3. Axon creates a session token.</div>
+              <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">4. Your phone sends that token on future requests.</div>
+              <div class="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3">5. Axon allows the request only if the session is still valid.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="stable-domain" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">7. Stable domain and PWA reliability</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">A PWA is happiest when it keeps the same web address. That is why Axon should eventually live behind a stable HTTPS origin like <span class="mono text-blue-300">axon.edudashpro.org.za</span>.</p>
+        </div>
+        <div class="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+          <div class="screen">
+            <div class="screen-top">
+              <div class="dot bg-rose-500"></div>
+              <div class="dot bg-amber-400"></div>
+              <div class="dot bg-emerald-500"></div>
+              <span class="ml-2 text-xs text-slate-500">Stable origin plan</span>
+            </div>
+            <div class="space-y-4 p-5">
+              <div class="rounded-2xl border border-blue-500/20 bg-blue-500/10 px-4 py-4">
+                <div class="text-sm font-semibold text-blue-100">https://axon.edudashpro.org.za</div>
+                <div class="mt-1 text-sm text-blue-200/80">This should stay the same.</div>
+              </div>
+              <div class="text-center text-slate-600">v</div>
+              <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-4">
+                <div class="text-sm font-semibold text-white">Secure reverse tunnel or bridge</div>
+                <div class="mt-1 text-sm text-slate-400">This safely connects the stable web address back to your local Axon runtime.</div>
+              </div>
+              <div class="text-center text-slate-600">v</div>
+              <div class="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-4">
+                <div class="text-sm font-semibold text-emerald-100">Your local Axon</div>
+                <div class="mt-1 text-sm text-emerald-200/80">Still running on your own machine.</div>
+              </div>
+            </div>
+          </div>
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Why this matters</div>
+            <ul class="mt-3 space-y-2 text-sm text-slate-400">
+              <li>If the address keeps changing, your PWA feels confused.</li>
+              <li>If the origin stays stable, reconnect logic gets simpler.</li>
+              <li>The user understands whether they are connected, reconnecting, or offline.</li>
+              <li>Service worker caching behaves much more predictably.</li>
+            </ul>
+            <div class="callout mt-4">
+              <div class="text-sm font-semibold text-white">Desired connection states</div>
+              <div class="mt-2 text-sm text-slate-300">Connected, Reconnecting, Offline, Local-only, Tunnel active, Domain active.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="alerts" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">8. Axon Alerts</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">Axon Alerts are the product's reminder and warning layer. They help you notice important things without making the app noisy.</p>
+        </div>
+        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Mission reminders</div>
+            <p class="mt-2 text-sm text-slate-400">Tell you when important missions are waiting.</p>
+          </div>
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Runtime warnings</div>
+            <p class="mt-2 text-sm text-slate-400">Tell you when Ollama is down, the tunnel broke, or GPU safety is active.</p>
+          </div>
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Morning Brief</div>
+            <p class="mt-2 text-sm text-slate-400">A calm daily summary of what matters first.</p>
+          </div>
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Approval requests</div>
+            <p class="mt-2 text-sm text-slate-400">For guided system actions and future sensitive handoffs.</p>
+          </div>
+        </div>
+        <div class="screen">
+          <div class="screen-top">
+            <div class="dot bg-rose-500"></div>
+            <div class="dot bg-amber-400"></div>
+            <div class="dot bg-emerald-500"></div>
+            <span class="ml-2 text-xs text-slate-500">Axon Alerts flow</span>
+          </div>
+          <div class="grid gap-4 p-5 md:grid-cols-4">
+            <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-4 text-sm text-slate-300">Something changes</div>
+            <div class="rounded-2xl border border-blue-500/20 bg-blue-500/10 px-4 py-4 text-sm text-blue-100">Axon decides if it matters</div>
+            <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-4 text-sm text-slate-300">Timeline and Dashboard update</div>
+            <div class="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-4 text-sm text-emerald-100">Optional desktop, mobile, or bridge alert</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="models" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">9. Local models and cloud models</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">Think of this as two kinds of brains.</p>
+        </div>
+        <div class="grid gap-4 md:grid-cols-2">
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Local brain</div>
+            <p class="mt-2 text-sm text-slate-400">Private. Runs on your computer through Ollama. This is Axon's default path.</p>
+            <div class="mt-4 flex flex-wrap gap-2">
+              <span class="chip">Code -> qwen2.5-coder</span>
+              <span class="chip">General -> qwen3</span>
+              <span class="chip">Reasoning -> deepseek-r1</span>
+              <span class="chip">Embeddings -> nomic-embed-text</span>
+              <span class="chip">Vision -> local route when available</span>
+            </div>
+          </div>
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Cloud helper</div>
+            <p class="mt-2 text-sm text-slate-400">Optional. Outside provider. Only used when you enable it or choose it.</p>
+            <div class="mt-4 flex flex-wrap gap-2">
+              <span class="chip">Anthropic</span>
+              <span class="chip">OpenAI GPT-style</span>
+              <span class="chip">Gemini Gem-style</span>
+              <span class="chip">Generic API</span>
+            </div>
+          </div>
+        </div>
+        <div class="callout">
+          <div class="text-sm font-semibold text-white">Simple rule</div>
+          <div class="mt-2 text-sm text-slate-300">Local means private brain on your computer. Cloud means optional outside helper. Axon uses local first.</div>
+        </div>
+      </section>
+
+      <section id="external-agents" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">10. External agents</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">Axon can connect to outside specialist agents when you want them. These are optional adapters, not required parts of the product.</p>
+        </div>
+        <div class="grid gap-4 md:grid-cols-3">
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">OpenAI GPT-style agents</div>
+            <p class="mt-2 text-sm text-slate-400">Good for general external API routing and GPT-style workflows.</p>
+          </div>
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Gemini Gem-style agents</div>
+            <p class="mt-2 text-sm text-slate-400">Good for Gemini-driven specialist flows and Gemini-native tools later.</p>
+          </div>
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Generic API providers</div>
+            <p class="mt-2 text-sm text-slate-400">Good for OpenAI-compatible endpoints or future enterprise connectors.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="dash-integration" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">11. Dash integration</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">Dash and Axon play different roles. Dash talks to people. Axon gets work done.</p>
+        </div>
+        <div class="grid gap-4 lg:grid-cols-[1fr_1.1fr]">
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">How they fit together</div>
+            <ul class="mt-3 space-y-2 text-sm text-slate-400">
+              <li>Dash can collect the user's request.</li>
+              <li>Dash can hand trusted work to Axon.</li>
+              <li>Axon can run local workspaces, files, scans, and mission actions.</li>
+              <li>Axon can return summaries, files, reminders, and status back to Dash.</li>
+            </ul>
+          </div>
+          <div class="screen">
+            <div class="screen-top">
+              <div class="dot bg-rose-500"></div>
+              <div class="dot bg-amber-400"></div>
+              <div class="dot bg-emerald-500"></div>
+              <span class="ml-2 text-xs text-slate-500">Dash -> Axon future handoff</span>
+            </div>
+            <div class="grid gap-4 p-5 md:grid-cols-3">
+              <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-4 text-center">
+                <div class="text-lg font-semibold text-white">Dash</div>
+                <div class="mt-2 text-sm text-slate-400">Front-facing assistant</div>
+              </div>
+              <div class="rounded-2xl border border-blue-500/20 bg-blue-500/10 px-4 py-4 text-center">
+                <div class="text-lg font-semibold text-blue-100">Trusted bridge</div>
+                <div class="mt-2 text-sm text-blue-200/80">Token + handoff rules</div>
+              </div>
+              <div class="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-4 text-center">
+                <div class="text-lg font-semibold text-emerald-100">Axon</div>
+                <div class="mt-2 text-sm text-emerald-200/80">Local execution engine</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="important-commands" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">12. Important commands</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">These are real commands and paths Axon supports today. Use the guided Settings UI when you want safer buttons. Use the terminal when you want direct control.</p>
+        </div>
+
+        <div class="grid gap-4 xl:grid-cols-2">
+          <div class="command-card">
+            <div class="text-sm font-semibold text-white">Start, stop, open</div>
+            <div class="mt-4 space-y-4 text-sm text-slate-400">
+              <div>
+                <div class="mono text-blue-300">axon</div>
+                <div class="mt-1">Starts Axon using the local launcher. Use this for normal day-to-day startup.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">devbrain</div>
+                <div class="mt-1">Legacy compatibility launcher. Still supported while the storage path remains compatible.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">~/.devbrain/start.sh</div>
+                <div class="mt-1">Starts Axon directly from the install folder.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">~/.devbrain/stop.sh</div>
+                <div class="mt-1">Stops the local Axon server.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">http://localhost:7734</div>
+                <div class="mt-1">Opens the local app in a browser.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">http://localhost:7734/manual</div>
+                <div class="mt-1">Opens this manual in the local Axon server.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="command-card">
+            <div class="text-sm font-semibold text-white">Runtime and models</div>
+            <div class="mt-4 space-y-4 text-sm text-slate-400">
+              <div>
+                <div class="mono text-blue-300">~/.devbrain/ollama-start.sh status</div>
+                <div class="mt-1">Checks whether Ollama is running and whether it is using systemd or manual mode.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">~/.devbrain/ollama-start.sh start</div>
+                <div class="mt-1">Starts Ollama if you are managing it from the terminal.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">ollama list</div>
+                <div class="mt-1">Shows installed local models.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">ollama pull qwen2.5-coder:1.5b</div>
+                <div class="mt-1">Pulls a local model directly from Ollama. Use this when you want to preload a small coding model fast.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">curl http://localhost:11434/api/version</div>
+                <div class="mt-1">Simple runtime health check for Ollama.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="command-card">
+            <div class="text-sm font-semibold text-white">Mobile and tunnel</div>
+            <div class="mt-4 space-y-4 text-sm text-slate-400">
+              <div>
+                <div class="mono text-blue-300">~/.devbrain/tunnel.sh start</div>
+                <div class="mt-1">Starts the HTTPS tunnel. Best when you want phone access or PWA install.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">~/.devbrain/tunnel.sh status</div>
+                <div class="mt-1">Checks whether the tunnel is running.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">~/.devbrain/tunnel.sh url</div>
+                <div class="mt-1">Prints the current tunnel URL if one exists.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">~/.devbrain/tunnel.sh stop</div>
+                <div class="mt-1">Stops the tunnel.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">Settings -> Mobile</div>
+                <div class="mt-1">Best beginner-friendly way to get QR codes, LAN info, Tailscale info, and tunnel state.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="command-card">
+            <div class="text-sm font-semibold text-white">Developer and maintenance</div>
+            <div class="mt-4 space-y-4 text-sm text-slate-400">
+              <div>
+                <div class="mono text-blue-300">curl http://localhost:7734/api/health</div>
+                <div class="mt-1">Checks if the Axon server is alive.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">tail -f ~/.devbrain/devbrain.log</div>
+                <div class="mt-1">Watch the Axon server log in real time.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">tail -f ~/.devbrain/ollama.log</div>
+                <div class="mt-1">Watch the Ollama log in real time.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">ls ~/.devbrain</div>
+                <div class="mt-1">Shows the Axon install folder, logs, database, scripts, and UI files.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">Settings -> System Actions</div>
+                <div class="mt-1">Safest way to restart Axon, prepare an Ollama restart, or review machine reboot commands.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel p-6">
+        <div class="text-sm font-semibold text-white">Screenshot checklist for the next manual pass</div>
+        <ul class="mt-3 space-y-2 text-sm text-slate-400">
+          <li>Dashboard with connection state and Axon Alerts</li>
+          <li>Console with phase chips and provider/model pill</li>
+          <li>Workspaces list with Inspect and Open Console</li>
+          <li>Timeline with Morning Brief and alerts</li>
+          <li>Mobile connect modal with QR code and stable-domain card</li>
         </ul>
-      </div>
-      <div class="panel p-5">
-        <h3 class="mb-3 font-semibold text-white">Operator roles</h3>
-        <ul class="space-y-2 text-sm text-slate-400">
-          <li>Planner Agent</li>
-          <li>Coder Agent</li>
-          <li>Scanner Agent</li>
-          <li>Reviewer Agent</li>
-          <li>Repair Agent</li>
-        </ul>
-      </div>
+      </section>
     </div>
-  </section>
-
-  <section id="workspaces" class="mb-14">
-    <h2 class="mb-2 text-3xl font-bold text-white">5. Workspaces</h2>
-    <div class="mb-6 h-1 w-12 rounded bg-blue-600"></div>
-    <p class="mb-5 text-slate-300">Workspaces replace the old Projects surface. Axon scans them, scores health, tracks TODO debt, notes git age, and lets you inspect or open a focused Console from each card.</p>
-    <div class="grid gap-4 md:grid-cols-3">
-      <div class="panel p-5">
-        <div class="mb-2 font-semibold text-white">Inspect</div>
-        <p class="text-sm text-slate-400">Runs a focused workspace analysis and surfaces risks, debt, and recommended next actions.</p>
-      </div>
-      <div class="panel p-5">
-        <div class="mb-2 font-semibold text-white">Open Console</div>
-        <p class="text-sm text-slate-400">Scopes the Console to one workspace so Axon can reason with tighter context.</p>
-      </div>
-      <div class="panel p-5">
-        <div class="mb-2 font-semibold text-white">Health signals</div>
-        <p class="text-sm text-slate-400">Readiness bars, TODO count, branch age, and optional GitHub status stay visible on the card.</p>
-      </div>
-    </div>
-  </section>
-
-  <section id="missions" class="mb-14">
-    <h2 class="mb-2 text-3xl font-bold text-white">6. Missions</h2>
-    <div class="mb-6 h-1 w-12 rounded bg-blue-600"></div>
-    <p class="mb-5 text-slate-300">Missions replace the old Tasks view. They are persistent, linked to workspaces, and part of Axon’s operator state.</p>
-    <div class="panel p-6">
-      <div class="mb-2 text-lg font-semibold text-white">No active missions</div>
-      <div class="mb-4 text-sm text-slate-400">Axon can create missions from workspace health, recent activity, or your goals.</div>
-      <div class="flex flex-wrap gap-2">
-        <span class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white">Create mission</span>
-        <span class="rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-300">Suggest missions</span>
-      </div>
-    </div>
-  </section>
-
-  <section id="playbooks" class="mb-14">
-    <h2 class="mb-2 text-3xl font-bold text-white">7. Playbooks</h2>
-    <div class="mb-6 h-1 w-12 rounded bg-blue-600"></div>
-    <p class="mb-5 text-slate-300">Playbooks replace the old prompt library. Use them for reusable instructions, workspace-specific workflows, deployment steps, review checklists, or external agent handoff templates.</p>
-  </section>
-
-  <section id="timeline" class="mb-14">
-    <h2 class="mb-2 text-3xl font-bold text-white">8. Timeline</h2>
-    <div class="mb-6 h-1 w-12 rounded bg-blue-600"></div>
-    <p class="mb-5 text-slate-300">Timeline replaces the old Activity view. It groups events like <span class="mono text-blue-300">scan</span>, <span class="mono text-blue-300">agent</span>, <span class="mono text-blue-300">system</span>, <span class="mono text-blue-300">model</span>, <span class="mono text-blue-300">mission</span>, and <span class="mono text-blue-300">vault</span>.</p>
-    <div class="panel p-5">
-      <div class="mb-2 font-semibold text-white">Morning Brief</div>
-      <p class="text-sm text-slate-400">The Morning Brief is Axon’s daily operator summary. It pulls from workspace state, mission urgency, timeline events, and runtime readiness.</p>
-    </div>
-  </section>
-
-  <section id="secure-vault" class="mb-14">
-    <h2 class="mb-2 text-3xl font-bold text-white">9. Secure Vault</h2>
-    <div class="mb-6 h-1 w-12 rounded bg-blue-600"></div>
-    <p class="mb-5 text-slate-300">Secure Vault preserves the local-only security posture. Axon stores secrets locally and only injects them into approved actions.</p>
-    <div class="callout border-emerald-500 bg-emerald-950/20">
-      <strong class="text-emerald-300">Approved actions only:</strong>
-      <span class="text-slate-300"> the permission system keeps vault access, system actions, cloud adapters, and local write behavior explicit.</span>
-    </div>
-  </section>
-
-  <section id="mobile" class="mb-14">
-    <h2 class="mb-2 text-3xl font-bold text-white">10. Remote mobile use</h2>
-    <div class="mb-6 h-1 w-12 rounded bg-blue-600"></div>
-    <p class="mb-5 text-slate-300">Axon can be used from your phone through LAN, Tailscale, or an HTTPS tunnel. The phone UI is a mobile web app / PWA surface, while the real work still runs on your computer.</p>
-    <div class="grid gap-4 md:grid-cols-3">
-      <div class="panel p-5">
-        <div class="mb-2 font-semibold text-white">LAN</div>
-        <p class="text-sm text-slate-400">Best for same-Wi-Fi use. Open the local address shown in the Mobile sheet.</p>
-      </div>
-      <div class="panel p-5">
-        <div class="mb-2 font-semibold text-white">Tailscale</div>
-        <p class="text-sm text-slate-400">Best for private remote use. Works anywhere your tailnet is reachable.</p>
-      </div>
-      <div class="panel p-5">
-        <div class="mb-2 font-semibold text-white">HTTPS tunnel</div>
-        <p class="text-sm text-slate-400">Best for browser/PWA install. Use the Mobile modal to start the tunnel and open the secure URL.</p>
-      </div>
-    </div>
-  </section>
-
-  <section id="external-agents" class="mb-14">
-    <h2 class="mb-2 text-3xl font-bold text-white">11. External specialist agents</h2>
-    <div class="mb-6 h-1 w-12 rounded bg-blue-600"></div>
-    <p class="mb-5 text-slate-300">Axon is local-first, but it now has a clean place for optional cloud adapters when you need specialist help or cross-platform agent workflows.</p>
-
-    <div class="grid gap-4 md:grid-cols-2">
-      <div class="panel p-5">
-        <h3 class="mb-3 font-semibold text-white">Local model roles</h3>
-        <ul class="space-y-2 text-sm text-slate-400">
-          <li><span class="text-slate-200">Code</span> → preferred family <span class="mono text-blue-300">qwen2.5-coder</span></li>
-          <li><span class="text-slate-200">General</span> → preferred family <span class="mono text-blue-300">qwen3</span></li>
-          <li><span class="text-slate-200">Reasoning</span> → preferred family <span class="mono text-blue-300">deepseek-r1</span></li>
-          <li><span class="text-slate-200">Embeddings</span> → preferred family <span class="mono text-blue-300">nomic-embed-text</span></li>
-          <li><span class="text-slate-200">Vision</span> → preferred family <span class="mono text-blue-300">llava</span></li>
-        </ul>
-        <p class="mt-3 text-sm text-slate-500">Optional local alternates include <span class="mono">codegemma</span>, <span class="mono">starcoder2</span>, and <span class="mono">codellama</span>.</p>
-      </div>
-      <div class="panel p-5">
-        <h3 class="mb-3 font-semibold text-white">Optional external adapters</h3>
-        <ul class="space-y-2 text-sm text-slate-400">
-          <li>OpenAI GPT-style agents</li>
-          <li>Gemini Gem-style agents</li>
-          <li>Generic API providers</li>
-        </ul>
-        <p class="mt-3 text-sm text-slate-500">These adapters are disabled by default, clearly marked external, and do not affect local workflows unless you turn them on.</p>
-      </div>
-    </div>
-  </section>
-
-  <section id="troubleshooting" class="mb-6">
-    <h2 class="mb-2 text-3xl font-bold text-white">12. Troubleshooting</h2>
-    <div class="mb-6 h-1 w-12 rounded bg-blue-600"></div>
-    <div class="space-y-4">
-      <div class="panel p-5">
-        <div class="mb-2 font-semibold text-white">Axon opens but local models do not respond</div>
-        <p class="text-sm text-slate-400">Check <strong class="text-white">Settings → Runtime</strong> to confirm Ollama is reachable, then verify the saved Console model and role routes under <strong class="text-white">Local Models</strong>.</p>
-      </div>
-      <div class="panel p-5">
-        <div class="mb-2 font-semibold text-white">Cloud adapters show disabled</div>
-        <p class="text-sm text-slate-400">That is expected by design. Enable <strong class="text-white">Cloud Agents</strong> first, then toggle the specific external adapter you want to use.</p>
-      </div>
-      <div class="panel p-5">
-        <div class="mb-2 font-semibold text-white">Phone cannot install the PWA</div>
-        <p class="text-sm text-slate-400">Use the HTTPS tunnel from the Mobile modal. PWA install requires a secure origin, so LAN HTTP alone is not enough for installation.</p>
-      </div>
-      <div class="panel p-5">
-        <div class="mb-2 font-semibold text-white">Display goes blank during large Ollama runs</div>
-        <p class="text-sm text-slate-400">On display-attached low-VRAM NVIDIA cards, large 7B GPU loads can destabilize the desktop. Axon now adds a safety warning and safer fallback behavior, but smaller local models are still the safest path on those hosts.</p>
-      </div>
-    </div>
-  </section>
-</main>
-
+  </main>
 </body>
 </html>
