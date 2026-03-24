@@ -1,0 +1,1175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Axon — User Manual</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    h1, h2, h3, h4 { scroll-margin-top: 80px; }
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    .toc-link { transition: all 0.15s; }
+    .toc-link:hover { color: #60a5fa; padding-left: 4px; }
+    .badge { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 9999px; font-size: 11px; font-weight: 600; }
+    .callout { border-left: 3px solid; padding: 14px 18px; border-radius: 0 10px 10px 0; margin: 18px 0; }
+    .step-circle { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; flex-shrink: 0; }
+    .screen-box { background: #0f172a; border: 1px solid #1e293b; border-radius: 14px; overflow: hidden; }
+    .screen-bar { background: #1e293b; padding: 10px 14px; display: flex; align-items: center; gap: 7px; }
+    .screen-dot { width: 10px; height: 10px; border-radius: 50%; }
+    @media print {
+      .no-print { display: none; }
+      body { background: white; color: #0f172a; }
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-200 leading-relaxed">
+
+<!-- ── Sticky nav ──────────────────────────────────────────────── -->
+<header class="no-print sticky top-0 z-50 bg-slate-950/90 backdrop-blur border-b border-slate-800 px-6 py-3 flex items-center justify-between">
+  <div class="flex items-center gap-3">
+    <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-sky-500 via-blue-600 to-cyan-300 flex items-center justify-center text-sm font-bold text-slate-950">✦</div>
+    <span class="font-bold text-white">Axon</span>
+    <span class="badge bg-blue-900/60 text-blue-300">User Manual v1.0</span>
+  </div>
+  <a href="http://localhost:7734" target="_blank"
+     class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg transition">
+    Open Axon →
+  </a>
+</header>
+
+<div class="max-w-5xl mx-auto px-6 py-12">
+
+  <!-- ══════════════════════════════════════════════════════════════
+       HERO
+  ══════════════════════════════════════════════════════════════ -->
+  <div class="text-center mb-16">
+    <div class="text-6xl mb-6">✦</div>
+    <h1 class="text-5xl font-black text-white mb-4 tracking-tight">Axon</h1>
+    <p class="text-xl text-slate-400 max-w-2xl mx-auto mb-2">
+      Your local AI Operator console — built to keep your workspaces, missions, runtime, and secure tools aligned.
+    </p>
+    <p class="text-slate-500 text-sm">Version 1.0 · Runs at <span class="mono text-blue-400">http://localhost:7734</span> · All data stays on your machine</p>
+    <div class="flex flex-wrap justify-center gap-3 mt-6">
+      <span class="badge bg-green-900/50 text-green-300 border border-green-800">✓ 100% Local</span>
+      <span class="badge bg-blue-900/50 text-blue-300 border border-blue-800">✓ Local-first model routing</span>
+      <span class="badge bg-purple-900/50 text-purple-300 border border-purple-800">✓ No telemetry</span>
+      <span class="badge bg-amber-900/50 text-amber-300 border border-amber-800">✓ South African developer friendly</span>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       TABLE OF CONTENTS
+  ══════════════════════════════════════════════════════════════ -->
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 mb-14">
+    <h2 class="text-lg font-bold text-white mb-4">📋 Contents</h2>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-1 text-sm">
+      <a href="#what-is" class="toc-link text-slate-400">1. What is Axon?</a>
+      <a href="#how-it-works" class="toc-link text-slate-400">2. How it works (architecture)</a>
+      <a href="#getting-started" class="toc-link text-slate-400">3. Getting started in 3 steps</a>
+      <a href="#chat" class="toc-link text-slate-400">4. Console — your AI operator</a>
+      <a href="#projects" class="toc-link text-slate-400">5. Workspaces — health monitor</a>
+      <a href="#tasks" class="toc-link text-slate-400">6. Missions — stay on track</a>
+      <a href="#prompts" class="toc-link text-slate-400">7. Playbooks</a>
+      <a href="#activity" class="toc-link text-slate-400">8. Timeline & Morning Brief</a>
+      <a href="#scheduler" class="toc-link text-slate-400">9. Automatic reminders & scans</a>
+      <a href="#cli" class="toc-link text-slate-400">10. CLI commands</a>
+      <a href="#mobile" class="toc-link text-slate-400">11. Connecting to your phone</a>
+      <a href="#integrations" class="toc-link text-slate-400">12. OpenAI GPTs / Gemini Gems / Cloud Agents</a>
+      <a href="#roadmap" class="toc-link text-slate-400">13. Roadmap & future features</a>
+      <a href="#troubleshoot" class="toc-link text-slate-400">14. Troubleshooting</a>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       1. WHAT IS AXON
+  ══════════════════════════════════════════════════════════════ -->
+  <section id="what-is" class="mb-16">
+    <h2 class="text-3xl font-bold text-white mb-2">1. What is Axon?</h2>
+    <div class="w-12 h-1 bg-blue-600 rounded mb-6"></div>
+
+    <p class="text-slate-300 mb-6 text-lg">
+      Axon is a <strong class="text-white">local AI Operator that lives on your computer</strong> — calm, private, and local-first. Think of it as an operating console for your work: it watches your workspaces, tracks missions, stores reusable playbooks, and briefs you every morning on what matters most.
+    </p>
+
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+        <div class="text-3xl mb-3">😩</div>
+        <div class="font-semibold text-white mb-2">The problem</div>
+        <p class="text-slate-400 text-sm">Workspaces going stale, missions forgotten in notes apps, playbooks lost in chat history, no clear operator view of what to do today.</p>
+      </div>
+      <div class="flex items-center justify-center text-3xl text-slate-600">→</div>
+      <div class="bg-blue-950/50 border border-blue-800/50 rounded-2xl p-5">
+        <div class="text-3xl mb-3">🧠</div>
+        <div class="font-semibold text-white mb-2">The solution</div>
+        <p class="text-slate-400 text-sm">One local operator console that knows your workspaces, tracks missions by priority, stores playbooks, and tells you every morning exactly what to do.</p>
+      </div>
+    </div>
+
+    <!-- What it can do -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+      <h3 class="font-bold text-white mb-4">What Axon can do for you</h3>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+        <div class="flex items-start gap-3"><span class="text-green-400 mt-0.5">✓</span><span class="text-slate-300"><strong class="text-white">Auto-discovers</strong> all your projects from ~/Desktop and other folders</span></div>
+        <div class="flex items-start gap-3"><span class="text-green-400 mt-0.5">✓</span><span class="text-slate-300"><strong class="text-white">Scores project health</strong> — flags stale repos before they become problems</span></div>
+        <div class="flex items-start gap-3"><span class="text-green-400 mt-0.5">✓</span><span class="text-slate-300"><strong class="text-white">Tracks tasks</strong> with priority levels and due dates, reminds you of overdue work</span></div>
+        <div class="flex items-start gap-3"><span class="text-green-400 mt-0.5">✓</span><span class="text-slate-300"><strong class="text-white">Stores prompts</strong> — save your best AI prompts, sorted by project</span></div>
+        <div class="flex items-start gap-3"><span class="text-green-400 mt-0.5">✓</span><span class="text-slate-300"><strong class="text-white">Runs your console with context already loaded</strong> across local models and connected cloud agents</span></div>
+        <div class="flex items-start gap-3"><span class="text-green-400 mt-0.5">✓</span><span class="text-slate-300"><strong class="text-white">Sends a morning digest</strong> every weekday at 8am via desktop notification</span></div>
+        <div class="flex items-start gap-3"><span class="text-green-400 mt-0.5">✓</span><span class="text-slate-300"><strong class="text-white">Suggests tasks</strong> based on your project health and current workload</span></div>
+        <div class="flex items-start gap-3"><span class="text-green-400 mt-0.5">✓</span><span class="text-slate-300"><strong class="text-white">Enhances prompts</strong> with AI before you use them elsewhere</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       2. HOW IT WORKS
+  ══════════════════════════════════════════════════════════════ -->
+  <section id="how-it-works" class="mb-16">
+    <h2 class="text-3xl font-bold text-white mb-2">2. How it works</h2>
+    <div class="w-12 h-1 bg-blue-600 rounded mb-6"></div>
+
+    <!-- Architecture diagram -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 mb-6 font-mono text-sm">
+      <div class="text-slate-400 text-xs mb-4 font-sans font-semibold uppercase tracking-widest">Architecture Overview</div>
+<pre class="text-slate-300 overflow-x-auto leading-7">
+  YOUR COMPUTER
+  ┌─────────────────────────────────────────────────────────┐
+  │                                                         │
+  │   Browser ──► http://localhost:7734 ──► Axon UI         │
+  │                         │                               │
+  │              ┌───────────▼────────────┐                 │
+  │              │   FastAPI Server       │                 │
+  │              │   server.py            │                 │
+  │              └──┬──────┬──────┬──────┘                 │
+  │                 │      │      │                         │
+  │           ┌─────▼─┐ ┌──▼──┐ ┌▼──────────┐             │
+  │           │ db.py │ │scan │ │ scheduler │             │
+  │           │SQLite │ │.py  │ │ APSchedul │             │
+  │           └───────┘ └──┬──┘ └─────┬─────┘             │
+  │                        │          │                     │
+  │               Projects │     Timed jobs:                │
+  │               on disk  │     • Scan every 6h            │
+  │               (~/Desk- │     • Digest at 8am            │
+  │               top etc) │     • Reminders 9am            │
+  │                        │                                │
+  │              ┌──────────▼────────────┐                  │
+  │              │   brain.py            │                  │
+  │              │   Claude AI (Anthropic│◄── YOUR API KEY  │
+  │              └───────────────────────┘                  │
+  │                                                         │
+  │   ~/.devbrain/devbrain.db  ← all data stored here      │
+  └─────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+          ANTHROPIC CLOUD (only AI calls go out)
+          Everything else stays on your machine
+</pre>
+    </div>
+
+    <div class="callout bg-blue-950/40 border-blue-500 text-sm">
+      <strong class="text-blue-300">🔒 Privacy first:</strong>
+      <span class="text-slate-300"> Only your chat messages and project summaries are sent to Anthropic's API for AI processing. Your actual code, file contents, and database never leave your machine.</span>
+    </div>
+
+    <!-- Files explained -->
+    <div class="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <div class="mono text-blue-400 text-xs mb-1">~/.devbrain/db.py</div>
+        <div class="text-slate-300 text-sm">The memory — SQLite database storing all your projects, tasks, prompts, chat history and settings.</div>
+      </div>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <div class="mono text-blue-400 text-xs mb-1">~/.devbrain/scanner.py</div>
+        <div class="text-slate-300 text-sm">The watcher — scans project folders, detects tech stacks, counts TODOs, reads git history.</div>
+      </div>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <div class="mono text-blue-400 text-xs mb-1">~/.devbrain/brain.py</div>
+        <div class="text-slate-300 text-sm">The AI — all Claude API calls live here. Chat, digest generation, project analysis, task suggestions.</div>
+      </div>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <div class="mono text-blue-400 text-xs mb-1">~/.devbrain/scheduler.py</div>
+        <div class="text-slate-300 text-sm">The alarm clock — runs background jobs automatically: scans, morning digest, task reminders.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       3. GETTING STARTED
+  ══════════════════════════════════════════════════════════════ -->
+  <section id="getting-started" class="mb-16">
+    <h2 class="text-3xl font-bold text-white mb-2">3. Getting started in 3 steps</h2>
+    <div class="w-12 h-1 bg-blue-600 rounded mb-6"></div>
+
+    <div class="space-y-6">
+      <!-- Step 1 -->
+      <div class="flex gap-5">
+        <div class="step-circle bg-blue-600 text-white shrink-0 mt-1">1</div>
+        <div class="flex-1">
+          <div class="font-bold text-white text-lg mb-2">Start Axon</div>
+          <p class="text-slate-400 text-sm mb-3">Open a terminal and run:</p>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 mono text-sm text-green-400 mb-3">
+            devbrain
+          </div>
+          <p class="text-slate-400 text-sm">This starts the server and opens your browser automatically at <span class="mono text-blue-400">http://localhost:7734</span></p>
+          <div class="callout bg-amber-950/30 border-amber-500 text-sm mt-3">
+            <strong class="text-amber-300">First time?</strong> <span class="text-slate-300">Run <span class="mono text-amber-300">source ~/.zshrc</span> first to load the <span class="mono">devbrain</span> command into your terminal.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2 -->
+      <div class="flex gap-5">
+        <div class="step-circle bg-blue-600 text-white shrink-0 mt-1">2</div>
+        <div class="flex-1">
+          <div class="font-bold text-white text-lg mb-2">Add your Anthropic API key</div>
+          <p class="text-slate-400 text-sm mb-3">Click <strong class="text-white">Settings</strong> in the bottom-left sidebar. Paste your API key and click <strong class="text-white">Save settings</strong>.</p>
+
+          <!-- Settings screenshot mockup -->
+          <div class="screen-box mb-3">
+            <div class="screen-bar">
+              <div class="screen-dot bg-red-500"></div>
+              <div class="screen-dot bg-yellow-500"></div>
+              <div class="screen-dot bg-green-500"></div>
+              <span class="text-slate-500 text-xs ml-2">Axon — Settings</span>
+            </div>
+            <div class="p-5 bg-slate-950">
+              <div class="text-white font-semibold mb-4">Settings</div>
+              <div class="mb-4">
+                <div class="text-slate-400 text-xs mb-1 font-medium">Anthropic API Key</div>
+                <div class="bg-slate-800 border border-blue-500 rounded-xl px-3 py-2.5 mono text-sm text-slate-300">sk-ant-api03-••••••••••••••••••••••</div>
+                <div class="text-slate-500 text-xs mt-1">Get yours at console.anthropic.com</div>
+              </div>
+              <div class="mb-4">
+                <div class="text-slate-400 text-xs mb-1 font-medium">Projects Root</div>
+                <div class="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 mono text-sm text-slate-300">~/Desktop, ~/Documents/projects</div>
+              </div>
+              <div class="flex gap-3 mb-3">
+                <div class="flex-1">
+                  <div class="text-slate-400 text-xs mb-1 font-medium">Scan interval (hours)</div>
+                  <div class="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-300">6</div>
+                </div>
+                <div class="flex-1">
+                  <div class="text-slate-400 text-xs mb-1 font-medium">Morning digest hour</div>
+                  <div class="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-300">8</div>
+                </div>
+              </div>
+              <button class="px-5 py-2 bg-blue-600 text-white text-sm font-semibold rounded-xl">Save settings</button>
+            </div>
+          </div>
+
+          <p class="text-slate-500 text-xs">👉 Get your key at <a href="https://console.anthropic.com" class="text-blue-400 underline" target="_blank">console.anthropic.com</a> → API Keys. Free credits are available for new accounts.</p>
+        </div>
+      </div>
+
+      <!-- Step 3 -->
+      <div class="flex gap-5">
+        <div class="step-circle bg-blue-600 text-white shrink-0 mt-1">3</div>
+        <div class="flex-1">
+          <div class="font-bold text-white text-lg mb-2">Add your project folders and scan</div>
+          <p class="text-slate-400 text-sm mb-3">In Settings, update <strong class="text-white">Workspaces Root</strong> to include all the folders where your code lives. Then click <strong class="text-white">Axon Scan</strong> in the sidebar. Axon will auto-discover everything.</p>
+          <div class="callout bg-green-950/30 border-green-600 text-sm">
+            <strong class="text-green-300">✓ You're set!</strong> <span class="text-slate-300">Axon now knows about all your workspaces and will monitor them automatically every 6 hours.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       4. CONSOLE
+  ══════════════════════════════════════════════════════════════ -->
+  <section id="chat" class="mb-16">
+    <h2 class="text-3xl font-bold text-white mb-2">4. Console — your AI operator</h2>
+    <div class="w-12 h-1 bg-blue-600 rounded mb-6"></div>
+
+    <p class="text-slate-300 mb-6">The Console is where you talk to Axon. Unlike using a generic chat tab directly, <strong class="text-white">Axon automatically loads your full workspace context</strong> — your runtime already knows workspace names, health scores, tech stacks, active missions, and saved playbooks before you type a word.</p>
+
+    <!-- Chat UI diagram -->
+    <div class="screen-box mb-6">
+      <div class="screen-bar">
+        <div class="screen-dot bg-red-500"></div>
+        <div class="screen-dot bg-yellow-500"></div>
+        <div class="screen-dot bg-green-500"></div>
+        <span class="text-slate-500 text-xs ml-2">Axon — Console</span>
+      </div>
+      <div class="flex bg-slate-950" style="min-height:320px">
+        <!-- Sidebar -->
+        <div class="w-48 border-r border-slate-800 p-3 space-y-1 shrink-0">
+          <div class="bg-blue-600/20 text-blue-400 rounded-lg px-3 py-2 text-sm font-medium flex items-center gap-2 border-l-2 border-blue-500">💬 Console</div>
+          <div class="text-slate-500 rounded-lg px-3 py-2 text-sm flex items-center gap-2">📁 Workspaces</div>
+          <div class="text-slate-500 rounded-lg px-3 py-2 text-sm flex items-center gap-2">✅ Missions</div>
+          <div class="text-slate-500 rounded-lg px-3 py-2 text-sm flex items-center gap-2">📚 Playbooks</div>
+          <div class="text-slate-500 rounded-lg px-3 py-2 text-sm flex items-center gap-2">📊 Timeline</div>
+        </div>
+        <!-- Chat area -->
+        <div class="flex-1 flex flex-col p-4">
+          <div class="flex-1 space-y-3 mb-3">
+            <!-- User message -->
+            <div class="flex justify-end">
+              <div class="bg-blue-600 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm max-w-xs">
+                Which projects need attention today?
+              </div>
+            </div>
+            <!-- AI response -->
+            <div class="flex justify-start">
+              <div class="bg-slate-800 rounded-2xl rounded-tl-sm px-4 py-3 text-sm max-w-sm text-slate-200">
+                <p class="mb-1"><strong>🔴 dashpro-pr-integration</strong> — 97 TODOs and last commit was 12 days ago. This is getting stale.</p>
+                <p><strong>🟡 dashpro</strong> — 185 TODOs is very high. Consider a TODO cleanup sprint.</p>
+                <p class="text-slate-500 text-xs mt-2">bkkinnovationhub looks healthy — committed today ✓</p>
+              </div>
+            </div>
+          </div>
+          <div class="flex gap-2">
+            <div class="flex-1 bg-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-500 border border-slate-700">Ask anything… Shift+Enter for new line</div>
+            <button class="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-medium">Send</button>
+          </div>
+          <div class="text-slate-600 text-xs mt-1.5 text-center">✦ Axon operator loop · context-aware · your data stays local</div>
+        </div>
+      </div>
+      <!-- Annotation -->
+      <div class="bg-slate-900/80 px-5 py-3 border-t border-slate-800 text-xs text-slate-500 flex flex-wrap gap-4">
+        <span>⬆️ <strong class="text-slate-400">Workspace filter</strong> — top right, focus the console on one workspace</span>
+        <span>🗑 <strong class="text-slate-400">Clear</strong> — wipes console history</span>
+        <span>⏎ <strong class="text-slate-400">Enter</strong> to send · <strong class="text-slate-400">Shift+Enter</strong> for new line</span>
+      </div>
+    </div>
+
+    <!-- Quick questions to try -->
+    <h3 class="font-bold text-white mb-3">Great questions to ask</h3>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 mono text-slate-300">"What should I work on today?"</div>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 mono text-slate-300">"Which project is most at risk of going stale?"</div>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 mono text-slate-300">"Summarise what's been happening across my projects"</div>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 mono text-slate-300">"I have 2 hours free, what's the best use of my time?"</div>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 mono text-slate-300">"Review this code: [paste snippet]"</div>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 mono text-slate-300">"I'm stuck on [problem] in dashpro — help me think through it"</div>
+    </div>
+
+    <div class="callout bg-purple-950/30 border-purple-500 text-sm mt-5">
+      <strong class="text-purple-300">💡 Pro tip:</strong> <span class="text-slate-300">Use the <strong>workspace filter</strong> (top-right dropdown) to focus the console on a single workspace. Axon will have extra context about that workspace's missions and playbooks.</span>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       5. WORKSPACES
+  ══════════════════════════════════════════════════════════════ -->
+  <section id="projects" class="mb-16">
+    <h2 class="text-3xl font-bold text-white mb-2">5. Workspaces — health monitor</h2>
+    <div class="w-12 h-1 bg-blue-600 rounded mb-6"></div>
+
+    <p class="text-slate-300 mb-6">Axon automatically scans your workspace folders and scores each one. The health score is calculated based on how recently you committed code and how many TODO/FIXME comments are in the codebase.</p>
+
+    <!-- Health score explained -->
+    <h3 class="font-bold text-white mb-4">Understanding the Health Score</h3>
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+      <div class="bg-green-950/40 border border-green-800/50 rounded-xl p-4 text-center">
+        <div class="text-2xl font-black text-green-400 mb-1">80–100</div>
+        <div class="text-green-300 font-semibold text-sm">🟢 Healthy</div>
+        <div class="text-slate-400 text-xs mt-1">Active commits, low TODO debt</div>
+      </div>
+      <div class="bg-yellow-950/40 border border-yellow-800/50 rounded-xl p-4 text-center">
+        <div class="text-2xl font-black text-yellow-400 mb-1">60–79</div>
+        <div class="text-yellow-300 font-semibold text-sm">🟡 OK</div>
+        <div class="text-slate-400 text-xs mt-1">Minor attention needed</div>
+      </div>
+      <div class="bg-orange-950/40 border border-orange-800/50 rounded-xl p-4 text-center">
+        <div class="text-2xl font-black text-orange-400 mb-1">40–59</div>
+        <div class="text-orange-300 font-semibold text-sm">🟠 Attention</div>
+        <div class="text-slate-400 text-xs mt-1">Stale or growing TODO debt</div>
+      </div>
+      <div class="bg-red-950/40 border border-red-800/50 rounded-xl p-4 text-center">
+        <div class="text-2xl font-black text-red-400 mb-1">0–39</div>
+        <div class="text-red-300 font-semibold text-sm">🔴 Stale</div>
+        <div class="text-slate-400 text-xs mt-1">No commits in 30+ days</div>
+      </div>
+    </div>
+
+    <!-- Health score formula -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-6">
+      <div class="text-sm font-semibold text-slate-400 mb-3">How the health score is calculated</div>
+      <div class="space-y-2 text-sm">
+        <div class="flex items-center gap-3">
+          <span class="mono text-slate-500 w-32 shrink-0">Start at:</span>
+          <span class="text-white font-bold">100</span>
+        </div>
+        <div class="flex items-start gap-3">
+          <span class="mono text-slate-500 w-32 shrink-0">Git age:</span>
+          <div class="text-slate-300">
+            <span class="text-red-400">−30</span> if no commit in 30+ days &nbsp;·&nbsp;
+            <span class="text-orange-400">−15</span> if 14+ days &nbsp;·&nbsp;
+            <span class="text-yellow-400">−5</span> if 7+ days
+          </div>
+        </div>
+        <div class="flex items-start gap-3">
+          <span class="mono text-slate-500 w-32 shrink-0">TODO count:</span>
+          <div class="text-slate-300">
+            <span class="text-red-400">−20</span> if 50+ TODOs &nbsp;·&nbsp;
+            <span class="text-orange-400">−10</span> if 20+ &nbsp;·&nbsp;
+            <span class="text-yellow-400">−5</span> if 10+
+          </div>
+        </div>
+        <div class="flex items-start gap-3">
+          <span class="mono text-slate-500 w-32 shrink-0">No git repo:</span>
+          <div class="text-slate-300"><span class="text-yellow-400">−10</span> (project not version controlled)</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Project card anatomy -->
+    <h3 class="font-bold text-white mb-4">Anatomy of a project card</h3>
+    <div class="screen-box mb-4">
+      <div class="screen-bar">
+        <div class="screen-dot bg-red-500"></div><div class="screen-dot bg-yellow-500"></div><div class="screen-dot bg-green-500"></div>
+      </div>
+      <div class="p-5 bg-slate-950">
+        <div class="bg-slate-900 border border-slate-700 rounded-2xl p-4">
+          <div class="flex items-start justify-between gap-3">
+            <div class="flex-1">
+              <div class="flex items-center gap-2 mb-1">
+                <span class="font-semibold text-white">dashpro</span>
+                <span class="badge bg-slate-800 text-slate-400 text-xs">expo</span>      <!-- ① -->
+                <span class="badge bg-green-900/40 text-green-400 text-xs">active</span>  <!-- ② -->
+              </div>
+              <div class="text-xs text-slate-500 mb-2">/home/edp/Desktop/dashpro</div>  <!-- ③ -->
+              <div class="flex items-center gap-2 mb-2">
+                <div class="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                  <div class="h-full bg-green-500 rounded-full" style="width:80%"></div>  <!-- ④ -->
+                </div>
+                <span class="text-green-400 text-xs font-bold">80%</span>
+              </div>
+              <div class="flex gap-4 text-xs text-slate-500">
+                <span>🌿 development</span>   <!-- ⑤ -->
+                <span>🕐 today</span>          <!-- ⑥ -->
+                <span class="text-orange-400">📝 185 TODOs</span>  <!-- ⑦ -->
+                <span class="italic">"fix: add dev package name..."</span>  <!-- ⑧ -->
+              </div>
+            </div>
+            <div class="flex flex-col gap-1.5 text-xs shrink-0">
+              <button class="px-3 py-1.5 bg-blue-600/20 text-blue-400 rounded-lg">🔍 Analyse</button>  <!-- ⑨ -->
+              <button class="px-3 py-1.5 bg-slate-800 text-slate-300 rounded-lg">💬 Chat</button>        <!-- ⑩ -->
+              <button class="px-3 py-1.5 bg-slate-800 text-slate-300 rounded-lg">📝 Note</button>        <!-- ⑪ -->
+            </div>
+          </div>
+        </div>
+        <!-- Legend -->
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-4 text-xs text-slate-400">
+          <div>① Tech stack detected</div>
+          <div>② Project status</div>
+          <div>③ File path on disk</div>
+          <div>④ Health bar (0–100%)</div>
+          <div>⑤ Git branch</div>
+          <div>⑥ Last commit age</div>
+          <div>⑦ TODO count in codebase</div>
+          <div>⑧ Last commit message</div>
+          <div>⑨ Deep AI analysis</div>
+          <div>⑩ Open focused chat</div>
+          <div>⑪ Add a personal note</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout bg-blue-950/30 border-blue-500 text-sm">
+      <strong class="text-blue-300">💡 Analyse button:</strong> <span class="text-slate-300">Click <strong>🔍 Analyse</strong> on any project to get a full AI report: health assessment, top risks, next 3 actions, and technical debt review — tailored to that specific project.</span>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       6. MISSIONS
+  ══════════════════════════════════════════════════════════════ -->
+  <section id="tasks" class="mb-16">
+    <h2 class="text-3xl font-bold text-white mb-2">6. Missions — stay on track</h2>
+    <div class="w-12 h-1 bg-blue-600 rounded mb-6"></div>
+
+    <p class="text-slate-300 mb-6">Missions are how Axon keeps you accountable. They live in the database permanently, are linked to workspaces, and trigger reminders automatically. Unlike a notes app or Trello, missions here are always available to Axon when you open the Console — so it can factor them into any advice it gives you.</p>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
+      <!-- Add task -->
+      <div>
+        <h3 class="font-bold text-white mb-3">Creating a mission</h3>
+        <div class="screen-box">
+          <div class="screen-bar"><div class="screen-dot bg-red-500"></div><div class="screen-dot bg-yellow-500"></div><div class="screen-dot bg-green-500"></div></div>
+          <div class="p-4 bg-slate-950 space-y-2">
+            <div class="text-white text-sm font-medium">New Mission</div>
+            <div class="bg-slate-800 rounded-xl px-3 py-2 text-sm text-slate-300 border border-blue-500">Fix the TODO debt in dashpro</div>
+            <div class="bg-slate-800 rounded-xl px-3 py-2 text-sm text-slate-500 h-12">Details (optional)</div>
+            <div class="grid grid-cols-3 gap-1">
+              <div class="bg-slate-800 rounded-lg px-2 py-1.5 text-xs text-orange-400 font-medium">🟠 High</div>
+              <div class="bg-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-400">dashpro</div>
+              <div class="bg-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-500">2026-03-30</div>
+            </div>
+            <div class="flex gap-2">
+              <button class="px-3 py-1.5 bg-blue-600 text-white text-xs rounded-lg">Save</button>
+              <button class="px-3 py-1.5 bg-slate-700 text-slate-300 text-xs rounded-lg">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Priority guide -->
+      <div>
+        <h3 class="font-bold text-white mb-3">Priority levels</h3>
+        <div class="space-y-2">
+          <div class="bg-red-950/30 border border-red-800/50 rounded-xl px-4 py-3 flex items-center gap-3">
+            <span class="text-lg">🔴</span>
+            <div>
+              <div class="text-red-300 font-semibold text-sm">Urgent</div>
+              <div class="text-slate-400 text-xs">Must be done today. Gets a badge in the sidebar.</div>
+            </div>
+          </div>
+          <div class="bg-orange-950/30 border border-orange-800/50 rounded-xl px-4 py-3 flex items-center gap-3">
+            <span class="text-lg">🟠</span>
+            <div>
+              <div class="text-orange-300 font-semibold text-sm">High</div>
+              <div class="text-slate-400 text-xs">Important this week. Morning digest highlights these.</div>
+            </div>
+          </div>
+          <div class="bg-yellow-950/30 border border-yellow-800/50 rounded-xl px-4 py-3 flex items-center gap-3">
+            <span class="text-lg">🟡</span>
+            <div>
+              <div class="text-yellow-300 font-semibold text-sm">Medium</div>
+              <div class="text-slate-400 text-xs">Default. Gets done when capacity allows.</div>
+            </div>
+          </div>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 flex items-center gap-3">
+            <span class="text-lg">🟢</span>
+            <div>
+              <div class="text-slate-400 font-semibold text-sm">Low</div>
+              <div class="text-slate-500 text-xs">Nice to have. Won't trigger reminders.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AI suggestions -->
+    <h3 class="font-bold text-white mb-3">🤖 Suggested Missions</h3>
+    <p class="text-slate-400 text-sm mb-4">Click <strong class="text-white">Suggest missions</strong> in the Missions header and Axon analyses your workspace health plus existing missions to recommend what you should queue next. Each suggestion includes a rationale.</p>
+
+    <div class="screen-box mb-4">
+      <div class="screen-bar"><div class="screen-dot bg-red-500"></div><div class="screen-dot bg-yellow-500"></div><div class="screen-dot bg-green-500"></div><span class="text-slate-500 text-xs ml-2">AI Suggestions</span></div>
+      <div class="p-4 bg-slate-950 space-y-2">
+        <div class="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-2">AI Suggestions</div>
+        <div class="bg-blue-900/20 border border-blue-500/20 rounded-xl p-3 flex items-start gap-3">
+          <div class="flex-1">
+            <div class="text-sm font-medium text-white">Run a TODO audit on dashpro</div>
+            <div class="text-xs text-slate-400 mt-0.5">185 TODOs is unsustainable — prioritise and close the top 20</div>
+            <div class="text-xs text-slate-500 mt-1">dashpro · high</div>
+          </div>
+          <button class="px-2.5 py-1 text-xs bg-blue-600/40 text-blue-300 rounded-lg">+ Add</button>
+        </div>
+        <div class="bg-blue-900/20 border border-blue-500/20 rounded-xl p-3 flex items-start gap-3">
+          <div class="flex-1">
+            <div class="text-sm font-medium text-white">Merge dashpro-pr-integration back to main</div>
+            <div class="text-xs text-slate-400 mt-0.5">Branch is 12 days old and diverging — risk of conflicts increasing</div>
+            <div class="text-xs text-slate-500 mt-1">dashpro-pr-integration · urgent</div>
+          </div>
+          <button class="px-2.5 py-1 text-xs bg-blue-600/40 text-blue-300 rounded-lg">+ Add</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       7. PLAYBOOKS
+  ══════════════════════════════════════════════════════════════ -->
+  <section id="prompts" class="mb-16">
+    <h2 class="text-3xl font-bold text-white mb-2">7. Playbooks</h2>
+    <div class="w-12 h-1 bg-blue-600 rounded mb-6"></div>
+
+    <p class="text-slate-300 mb-6">If you use AI tools daily, you've probably lost great prompts in old chat windows. Playbooks solve this — save any instruction set, code snippet, or template, tag it, link it to a workspace, and retrieve it instantly.</p>
+
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 text-center">
+        <div class="text-2xl mb-2">📋</div>
+        <div class="font-semibold text-white text-sm mb-1">Copy</div>
+        <div class="text-slate-400 text-xs">Copy any prompt to clipboard with one click — paste it anywhere</div>
+      </div>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 text-center">
+        <div class="text-2xl mb-2">💬</div>
+        <div class="font-semibold text-white text-sm mb-1">Send to Console</div>
+        <div class="text-slate-400 text-xs">Load a playbook directly into the console input to use with Axon</div>
+      </div>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 text-center">
+        <div class="text-2xl mb-2">✨</div>
+        <div class="font-semibold text-white text-sm mb-1">Enhance with AI</div>
+        <div class="text-slate-400 text-xs">Claude rewrites your rough prompt to be clearer and more effective</div>
+      </div>
+    </div>
+
+    <div class="callout bg-purple-950/30 border-purple-500 text-sm">
+      <strong class="text-purple-300">What to save in Playbooks:</strong>
+      <ul class="text-slate-300 mt-2 space-y-1 list-disc pl-4">
+        <li>System prompts for ARTHALIA, ChatGPT Projects, or Gemini Gems</li>
+        <li>Code review templates ("Review this for security issues, performance, and SA coding standards")</li>
+        <li>Reusable code snippets you keep copying from old files</li>
+        <li>Client brief templates, email templates</li>
+        <li>Bug report formats, PR description templates</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       8. TIMELINE & MORNING BRIEF
+  ══════════════════════════════════════════════════════════════ -->
+  <section id="activity" class="mb-16">
+    <h2 class="text-3xl font-bold text-white mb-2">8. Timeline & Morning Brief</h2>
+    <div class="w-12 h-1 bg-blue-600 rounded mb-6"></div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-6">
+      <div>
+        <h3 class="font-bold text-white mb-3">Timeline</h3>
+        <p class="text-slate-400 text-sm mb-3">Every scan, console session, saved playbook, and completed mission is logged. The timeline is your audit trail — useful when you can't remember what you worked on or when a workspace was last touched.</p>
+        <div class="screen-box">
+          <div class="p-4 bg-slate-950 space-y-2">
+            <div class="flex items-start gap-3 border-b border-slate-800/50 pb-2">
+              <span class="text-lg">🔄</span>
+              <div>
+                <div class="text-xs text-slate-500">scan · <span class="text-blue-400">all</span> · 2h ago</div>
+                <div class="text-sm text-slate-300">Scanned 5 projects from ~/Desktop</div>
+              </div>
+            </div>
+            <div class="flex items-start gap-3 border-b border-slate-800/50 pb-2">
+              <span class="text-lg">💬</span>
+              <div>
+                <div class="text-xs text-slate-500">chat · <span class="text-blue-400">dashpro</span> · 3h ago</div>
+                <div class="text-sm text-slate-300">What should I work on today?</div>
+              </div>
+            </div>
+            <div class="flex items-start gap-3">
+              <span class="text-lg">☀️</span>
+              <div>
+                <div class="text-xs text-slate-500">digest · yesterday</div>
+                <div class="text-sm text-slate-300">Good morning! Today's priority: merge the PR branch...</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h3 class="font-bold text-white mb-3">☀️ Morning Brief</h3>
+        <p class="text-slate-400 text-sm mb-3">Every weekday at 8:00am, Axon generates a personalised morning briefing based on your actual workspace data. You get a desktop notification, and the brief appears at the top of the Timeline tab.</p>
+        <div class="bg-blue-950/40 border border-blue-500/20 rounded-2xl p-4 text-sm">
+          <div class="text-blue-400 text-xs font-semibold mb-2">☀️ Example Morning Brief</div>
+          <p class="text-slate-300 mb-2"><strong>Good morning!</strong> Big day ahead — you've got a PR branch that's been diverging for 12 days.</p>
+          <p class="text-slate-300 mb-2"><strong>Priority today:</strong><br>1. Merge dashpro-pr-integration → prevents conflicts<br>2. Review ARTHALIA console in bkkinnovationhub<br>3. Close 10 TODOs in dashpro (start with auth flow)</p>
+          <p class="text-slate-300"><strong>Quick wins:</strong> transcriber has a clean health score — mark 2 tasks done there.</p>
+        </div>
+        <div class="mt-3">
+          <button class="w-full py-2 bg-blue-600/20 text-blue-400 text-sm font-medium rounded-xl border border-blue-500/30">
+            ☀️ Generate brief now
+          </button>
+          <p class="text-slate-500 text-xs mt-1.5 text-center">Or wait for the automatic 8am brief Mon–Fri</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       9. SCHEDULER
+  ══════════════════════════════════════════════════════════════ -->
+  <section id="scheduler" class="mb-16">
+    <h2 class="text-3xl font-bold text-white mb-2">9. Automatic reminders & scans</h2>
+    <div class="w-12 h-1 bg-blue-600 rounded mb-6"></div>
+
+    <p class="text-slate-300 mb-6">Axon runs background jobs automatically when the server is running. You don't need to do anything — just make sure you start Axon each day.</p>
+
+    <!-- Schedule diagram -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 mb-6">
+      <div class="text-sm font-semibold text-slate-400 mb-5 uppercase tracking-wider">Daily Schedule (Mon–Fri)</div>
+
+      <div class="relative">
+        <!-- Timeline line -->
+        <div class="absolute left-24 top-0 bottom-0 w-px bg-slate-700"></div>
+
+        <div class="space-y-5">
+          <div class="flex items-start gap-4">
+            <div class="w-20 text-right text-sm font-bold text-blue-400 mono shrink-0 pt-0.5">08:00</div>
+            <div class="relative pl-6">
+              <div class="absolute left-0 top-1.5 w-3 h-3 rounded-full bg-blue-600 border-2 border-slate-900" style="left:-6px"></div>
+              <div class="font-semibold text-white text-sm">☀️ Morning Digest</div>
+              <div class="text-slate-400 text-xs">Claude generates your daily briefing. Desktop notification sent.</div>
+            </div>
+          </div>
+
+          <div class="flex items-start gap-4">
+            <div class="w-20 text-right text-sm font-bold text-green-400 mono shrink-0 pt-0.5">09:00</div>
+            <div class="relative pl-6">
+              <div class="absolute left-0 top-1.5 w-3 h-3 rounded-full bg-green-600 border-2 border-slate-900" style="left:-6px"></div>
+              <div class="font-semibold text-white text-sm">⏰ Task Reminder</div>
+              <div class="text-slate-400 text-xs">Checks for overdue tasks. Notifies you if critical items are past due.</div>
+            </div>
+          </div>
+
+          <div class="flex items-start gap-4">
+            <div class="w-20 text-right text-sm font-bold text-purple-400 mono shrink-0 pt-0.5">Every 6h</div>
+            <div class="relative pl-6">
+              <div class="absolute left-0 top-1.5 w-3 h-3 rounded-full bg-purple-600 border-2 border-slate-900" style="left:-6px"></div>
+              <div class="font-semibold text-white text-sm">🔄 Project Scan</div>
+              <div class="text-slate-400 text-xs">Scans all project folders, updates health scores, flags stale projects.</div>
+            </div>
+          </div>
+
+          <div class="flex items-start gap-4">
+            <div class="w-20 text-right text-sm font-bold text-orange-400 mono shrink-0 pt-0.5">14:00</div>
+            <div class="relative pl-6">
+              <div class="absolute left-0 top-1.5 w-3 h-3 rounded-full bg-orange-600 border-2 border-slate-900" style="left:-6px"></div>
+              <div class="font-semibold text-white text-sm">⏰ Afternoon Reminder</div>
+              <div class="text-slate-400 text-xs">Second task check. Pushes alerts if urgent tasks still open.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout bg-amber-950/30 border-amber-500 text-sm">
+      <strong class="text-amber-300">⚡ Important:</strong> <span class="text-slate-300">Scheduled jobs only run while Axon is running. Make Axon a startup item so you never miss a morning brief — see the CLI section for how.</span>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       10. CLI
+  ══════════════════════════════════════════════════════════════ -->
+  <section id="cli" class="mb-16">
+    <h2 class="text-3xl font-bold text-white mb-2">10. CLI commands</h2>
+    <div class="w-12 h-1 bg-blue-600 rounded mb-6"></div>
+
+    <div class="space-y-3">
+      <div class="flex items-center gap-4 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3">
+        <div class="mono text-green-400 text-sm w-44 shrink-0">devbrain</div>
+        <div class="text-slate-300 text-sm">Start the server and open the browser</div>
+      </div>
+      <div class="flex items-center gap-4 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3">
+        <div class="mono text-green-400 text-sm w-44 shrink-0">devbrain stop</div>
+        <div class="text-slate-300 text-sm">Stop the running server</div>
+      </div>
+      <div class="flex items-center gap-4 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3">
+        <div class="mono text-green-400 text-sm w-44 shrink-0">devbrain restart</div>
+        <div class="text-slate-300 text-sm">Stop then start again (use after settings change)</div>
+      </div>
+      <div class="flex items-center gap-4 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3">
+        <div class="mono text-green-400 text-sm w-44 shrink-0">devbrain status</div>
+        <div class="text-slate-300 text-sm">Check if the server is running and on which PID</div>
+      </div>
+      <div class="flex items-center gap-4 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3">
+        <div class="mono text-green-400 text-sm w-44 shrink-0">devbrain log</div>
+        <div class="text-slate-300 text-sm">Tail the live server log (useful for debugging)</div>
+      </div>
+      <div class="flex items-center gap-4 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3">
+        <div class="mono text-green-400 text-sm w-44 shrink-0">devbrain open</div>
+        <div class="text-slate-300 text-sm">Open the browser without (re)starting the server</div>
+      </div>
+    </div>
+
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 mt-5">
+      <div class="font-semibold text-white text-sm mb-3">🚀 Make Axon start automatically on login</div>
+      <p class="text-slate-400 text-sm mb-3">Add this to your <span class="mono text-blue-400">~/.zshrc</span> or <span class="mono text-blue-400">~/.bashrc</span>:</p>
+      <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 mono text-sm text-green-400">
+        # Auto-start Axon on terminal open<br>
+        devbrain status &gt;/dev/null 2&gt;&amp;1 || devbrain &amp;
+      </div>
+      <p class="text-slate-500 text-xs mt-2">This checks if Axon is running — if not, starts it silently in the background.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       11. MOBILE
+  ══════════════════════════════════════════════════════════════ -->
+  <section id="mobile" class="mb-16">
+    <h2 class="text-3xl font-bold text-white mb-2">11. Connecting to your phone</h2>
+    <div class="w-12 h-1 bg-blue-600 rounded mb-6"></div>
+
+    <p class="text-slate-300 mb-6">Axon runs on <span class="mono text-blue-400">localhost:7734</span> — your phone can access it when on the same Wi-Fi network. Here are the three ways to connect your mobile device:</p>
+
+    <!-- Option 1: Same WiFi -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 mb-4">
+      <div class="flex items-start gap-4">
+        <div class="step-circle bg-blue-600 text-white shrink-0">1</div>
+        <div>
+          <div class="font-bold text-white mb-1">Direct Wi-Fi access (easiest)</div>
+          <p class="text-slate-400 text-sm mb-3">When your phone and computer are on the same Wi-Fi, your phone can reach Axon directly.</p>
+          <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 mono text-sm text-green-400 mb-3">
+            # Find your computer's local IP<br>
+            ip addr | grep "inet " | grep -v 127<br><br>
+            # Example output: inet 192.168.1.45<br>
+            # On phone: open http://192.168.1.45:7734
+          </div>
+          <p class="text-slate-400 text-sm">Open <span class="mono text-blue-400">http://[YOUR-IP]:7734</span> in your phone's browser. Bookmark it for quick access.</p>
+          <div class="callout bg-amber-950/30 border-amber-500 text-xs mt-3">Your IP may change — assign a static local IP in your router settings for reliability.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Option 2: Tailscale -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 mb-4">
+      <div class="flex items-start gap-4">
+        <div class="step-circle bg-purple-600 text-white shrink-0">2</div>
+        <div>
+          <div class="font-bold text-white mb-1">Tailscale — access from anywhere (recommended)</div>
+          <p class="text-slate-400 text-sm mb-3">Tailscale creates a private VPN between your devices. Install it on your laptop and phone — then use the Tailscale IP to reach Axon from anywhere in the world, even on mobile data.</p>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+            <div class="bg-slate-800 rounded-xl p-3 text-center">
+              <div class="text-xl mb-1">💻</div>
+              <div class="font-medium text-white text-xs">Install on laptop</div>
+              <div class="text-slate-400 text-xs mt-1">tailscale.com → download for Linux</div>
+            </div>
+            <div class="flex items-center justify-center text-2xl text-slate-600">↔</div>
+            <div class="bg-slate-800 rounded-xl p-3 text-center">
+              <div class="text-xl mb-1">📱</div>
+              <div class="font-medium text-white text-xs">Install on phone</div>
+              <div class="text-slate-400 text-xs mt-1">Tailscale app on Play Store / App Store</div>
+            </div>
+          </div>
+          <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 mono text-sm text-green-400 mt-3">
+            # On laptop:<br>
+            sudo tailscale up<br>
+            tailscale ip   # shows your Tailscale IP e.g. 100.x.x.x<br><br>
+            # On phone browser:<br>
+            http://100.x.x.x:7734
+          </div>
+          <p class="text-slate-500 text-xs mt-2">Tailscale is free for personal use (up to 3 devices on free tier, 100 devices on Plus).</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Option 3: PWA -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 mb-6">
+      <div class="flex items-start gap-4">
+        <div class="step-circle bg-green-600 text-white shrink-0">3</div>
+        <div>
+          <div class="font-bold text-white mb-1">Add to home screen (PWA-style)</div>
+          <p class="text-slate-400 text-sm mb-3">Once you've accessed Axon on your phone via either method above, add it to your home screen for instant access — just like an app.</p>
+          <div class="flex gap-4 text-sm">
+            <div class="bg-slate-800 rounded-xl p-3 flex-1">
+              <div class="font-medium text-white text-xs mb-1">On Android (Chrome)</div>
+              <div class="text-slate-400 text-xs">Menu → Add to Home screen → Add</div>
+            </div>
+            <div class="bg-slate-800 rounded-xl p-3 flex-1">
+              <div class="font-medium text-white text-xs mb-1">On iPhone (Safari)</div>
+              <div class="text-slate-400 text-xs">Share button → Add to Home Screen → Add</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mobile flow diagram -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 font-mono text-sm">
+      <div class="text-slate-400 text-xs mb-3 font-sans font-semibold uppercase tracking-widest">Mobile connectivity options</div>
+<pre class="text-slate-300 overflow-x-auto leading-7">
+  📱 Your Phone
+       │
+       ├── Same WiFi ────────────────► 192.168.x.x:7734
+       │                                      │
+       ├── Tailscale (anywhere) ────► 100.x.x.x:7734
+       │                                      │
+       └── Cloudflare Tunnel (future)───► devbrain.yourdomain.com
+                                             │
+                                      💻 Your Laptop
+                                      localhost:7734
+                                      (Axon server)
+</pre>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       12. INTEGRATIONS
+  ══════════════════════════════════════════════════════════════ -->
+  <section id="integrations" class="mb-16">
+    <h2 class="text-3xl font-bold text-white mb-2">12. Connecting OpenAI GPTs / Gemini Gems / Cloud Agents</h2>
+    <div class="w-12 h-1 bg-blue-600 rounded mb-6"></div>
+
+    <p class="text-slate-300 mb-6">Axon is your source of truth. You can feed Axon data into other AI tools to supercharge them with your real workspace context. Here's how to connect each platform:</p>
+
+    <!-- ChatGPT Projects -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 mb-4">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-10 h-10 bg-green-900/50 border border-green-700 rounded-xl flex items-center justify-center text-xl">🤖</div>
+        <div>
+          <div class="font-bold text-white">ChatGPT Projects</div>
+          <div class="text-slate-500 text-xs">Use your Axon context as a project system prompt</div>
+        </div>
+      </div>
+      <div class="space-y-3 text-sm">
+        <div class="flex gap-3"><span class="text-blue-400 shrink-0 font-bold">①</span><span class="text-slate-300">Go to Axon → Console. Ask: <span class="mono text-yellow-300">"Generate a system prompt summarising all my workspaces and current state for use in ChatGPT"</span></span></div>
+        <div class="flex gap-3"><span class="text-blue-400 shrink-0 font-bold">②</span><span class="text-slate-300">Copy the generated text.</span></div>
+        <div class="flex gap-3"><span class="text-blue-400 shrink-0 font-bold">③</span><span class="text-slate-300">In ChatGPT → create or open a Project → paste it as the <strong class="text-white">Project Instructions</strong>.</span></div>
+        <div class="flex gap-3"><span class="text-blue-400 shrink-0 font-bold">④</span><span class="text-slate-300">Refresh weekly — re-run step ① and update the project instructions with fresh data.</span></div>
+      </div>
+    </div>
+
+    <!-- Gemini Gems -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 mb-4">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-10 h-10 bg-blue-900/50 border border-blue-700 rounded-xl flex items-center justify-center text-xl">💎</div>
+        <div>
+          <div class="font-bold text-white">Google Gemini Gems</div>
+          <div class="text-slate-500 text-xs">Create a personalised Gem with your dev context</div>
+        </div>
+      </div>
+      <div class="space-y-3 text-sm">
+        <div class="flex gap-3"><span class="text-blue-400 shrink-0 font-bold">①</span><span class="text-slate-300">Ask Axon Console: <span class="mono text-yellow-300">"Write a Gemini Gem system prompt for a developer assistant that knows my workspaces"</span></span></div>
+        <div class="flex gap-3"><span class="text-blue-400 shrink-0 font-bold">②</span><span class="text-slate-300">Go to <strong class="text-white">gemini.google.com</strong> → Gems → Create a Gem</span></div>
+        <div class="flex gap-3"><span class="text-blue-400 shrink-0 font-bold">③</span><span class="text-slate-300">Paste the prompt. Give it a name like "DevAssist - [Your Name]"</span></div>
+        <div class="flex gap-3"><span class="text-blue-400 shrink-0 font-bold">④</span><span class="text-slate-300">Now your Gem knows your project landscape. Use it for quick mobile queries.</span></div>
+      </div>
+    </div>
+
+    <!-- Claude Projects -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 mb-4">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-10 h-10 bg-orange-900/50 border border-orange-700 rounded-xl flex items-center justify-center text-xl">🟠</div>
+        <div>
+          <div class="font-bold text-white">Claude Projects (claude.ai)</div>
+          <div class="text-slate-500 text-xs">Feed Axon data into a Claude Project</div>
+        </div>
+      </div>
+      <div class="space-y-3 text-sm">
+        <div class="flex gap-3"><span class="text-blue-400 shrink-0 font-bold">①</span><span class="text-slate-300">Export a workspace snapshot: ask Axon to <span class="mono text-yellow-300">"summarise all my active workspaces with health scores and open missions in markdown"</span></span></div>
+        <div class="flex gap-3"><span class="text-blue-400 shrink-0 font-bold">②</span><span class="text-slate-300">Go to <strong class="text-white">claude.ai</strong> → Projects → create "My Dev Context"</span></div>
+        <div class="flex gap-3"><span class="text-blue-400 shrink-0 font-bold">③</span><span class="text-slate-300">Upload the markdown as a Project Knowledge file</span></div>
+        <div class="flex gap-3"><span class="text-blue-400 shrink-0 font-bold">④</span><span class="text-slate-300">Now Claude.ai has your context for mobile/browser use — refresh monthly</span></div>
+      </div>
+    </div>
+
+    <!-- API integration (future) -->
+    <div class="callout bg-purple-950/30 border-purple-500 text-sm">
+      <strong class="text-purple-300">🔮 Coming soon:</strong> <span class="text-slate-300">A <strong>/api/export</strong> endpoint that produces a formatted markdown snapshot of all your workspaces and missions — ready to paste into any AI system prompt. Also planned: a webhook endpoint so external tools can push mission updates directly to Axon.</span>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       13. ROADMAP
+  ══════════════════════════════════════════════════════════════ -->
+  <section id="roadmap" class="mb-16">
+    <h2 class="text-3xl font-bold text-white mb-2">13. Roadmap & future features</h2>
+    <div class="w-12 h-1 bg-blue-600 rounded mb-6"></div>
+
+    <p class="text-slate-300 mb-6">Axon is version 1.0 — there's a lot more we can build. Here's what's planned:</p>
+
+    <div class="space-y-4">
+
+      <!-- Phase 2 -->
+      <div>
+        <div class="flex items-center gap-2 mb-3">
+          <span class="badge bg-blue-900 text-blue-300 border border-blue-700">Phase 2 — Near term</span>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-lg mb-1">📤</div>
+            <div class="font-semibold text-white text-sm">Context Export API</div>
+            <div class="text-slate-400 text-xs mt-1">One endpoint that generates a full markdown summary — project health, tasks, recent activity — ready to paste into any AI tool as a system prompt.</div>
+          </div>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-lg mb-1">📱</div>
+            <div class="font-semibold text-white text-sm">WhatsApp / Telegram notifications</div>
+            <div class="text-slate-400 text-xs mt-1">Send your morning digest and task reminders directly to WhatsApp via Twilio or to Telegram via bot. Works while your laptop is closed.</div>
+          </div>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-lg mb-1">🔔</div>
+            <div class="font-semibold text-white text-sm">Push notifications to phone</div>
+            <div class="text-slate-400 text-xs mt-1">Via a small cloud relay (e.g. ntfy.sh or Pushover), Axon can send push notifications to your phone even when the browser isn't open.</div>
+          </div>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-lg mb-1">📊</div>
+            <div class="font-semibold text-white text-sm">Weekly productivity report</div>
+            <div class="text-slate-400 text-xs mt-1">Every Friday: how many tasks completed, which projects got commits, how your health scores changed over the week.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Phase 3 -->
+      <div>
+        <div class="flex items-center gap-2 mb-3">
+          <span class="badge bg-purple-900 text-purple-300 border border-purple-700">Phase 3 — Medium term</span>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-lg mb-1">🎙️</div>
+            <div class="font-semibold text-white text-sm">Voice input</div>
+            <div class="text-slate-400 text-xs mt-1">Talk to Axon instead of typing. "Hey Axon, add a high priority mission to fix the auth bug in dashpro."</div>
+          </div>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-lg mb-1">🔗</div>
+            <div class="font-semibold text-white text-sm">GitHub / GitLab sync</div>
+            <div class="text-slate-400 text-xs mt-1">Pull real PR status, open issues, and CI/CD results directly into project cards. No more context switching.</div>
+          </div>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-lg mb-1">📅</div>
+            <div class="font-semibold text-white text-sm">Calendar integration</div>
+            <div class="text-slate-400 text-xs mt-1">Sync missions to Google Calendar. Axon knows when you have meetings and adjusts mission priorities accordingly.</div>
+          </div>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-lg mb-1">🤝</div>
+            <div class="font-semibold text-white text-sm">Team mode</div>
+            <div class="text-slate-400 text-xs mt-1">Share Axon with a small team (2–5 devs) on a local network. Shared workspace boards, mission assignments, team brief.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Phase 4 -->
+      <div>
+        <div class="flex items-center gap-2 mb-3">
+          <span class="badge bg-amber-900 text-amber-300 border border-amber-700">Phase 4 — Vision</span>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-lg mb-1">🤖</div>
+            <div class="font-semibold text-white text-sm">Agentic mode</div>
+            <div class="text-slate-400 text-xs mt-1">Axon can autonomously run missions: create git branches, scaffold new features from a prompt, run tests, and file a summary.</div>
+          </div>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-lg mb-1">📸</div>
+            <div class="font-semibold text-white text-sm">Screenshot to task</div>
+            <div class="text-slate-400 text-xs mt-1">Take a screenshot of a bug, upload it to Axon — AI reads the error and creates a mission with context automatically.</div>
+          </div>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-lg mb-1">🌍</div>
+            <div class="font-semibold text-white text-sm">Cloud sync (optional)</div>
+            <div class="text-slate-400 text-xs mt-1">Opt-in encrypted cloud backup so your Axon data survives a laptop replacement. Stays off-by-default.</div>
+          </div>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-lg mb-1">💰</div>
+            <div class="font-semibold text-white text-sm">Invoice & billing tracker</div>
+            <div class="text-slate-400 text-xs mt-1">Track billable hours per project, generate simple R-denominated invoices. Useful for freelancers and agency owners.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- How it helps you stay on track summary -->
+    <div class="bg-gradient-to-br from-blue-950/50 to-slate-900 border border-blue-800/30 rounded-2xl p-6 mt-8">
+      <h3 class="font-bold text-white text-lg mb-4">🎯 How Axon helps you stay on track</h3>
+      <div class="space-y-3 text-sm">
+        <div class="flex items-start gap-3">
+          <span class="text-blue-400 shrink-0 font-bold text-base">→</span>
+          <div><strong class="text-white">Morning clarity.</strong> <span class="text-slate-300">The digest removes decision fatigue. You know exactly what to work on before you open your IDE.</span></div>
+        </div>
+        <div class="flex items-start gap-3">
+          <span class="text-blue-400 shrink-0 font-bold text-base">→</span>
+          <div><strong class="text-white">Passive workspace monitoring.</strong> <span class="text-slate-300">Even when you're heads-down on one thing, Axon is watching the others — flagging what's going stale before it becomes a crisis.</span></div>
+        </div>
+        <div class="flex items-start gap-3">
+          <span class="text-blue-400 shrink-0 font-bold text-base">→</span>
+          <div><strong class="text-white">Context preserved.</strong> <span class="text-slate-300">Every prompt you save, every note you write, every task you add — it's all there when you pick up a project after a week away.</span></div>
+        </div>
+        <div class="flex items-start gap-3">
+          <span class="text-blue-400 shrink-0 font-bold text-base">→</span>
+          <div><strong class="text-white">One AI that knows everything.</strong> <span class="text-slate-300">Instead of explaining your whole codebase from scratch every time, Axon pre-loads the context. You skip the setup and get to the answers faster.</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       14. TROUBLESHOOTING
+  ══════════════════════════════════════════════════════════════ -->
+  <section id="troubleshoot" class="mb-16">
+    <h2 class="text-3xl font-bold text-white mb-2">14. Troubleshooting</h2>
+    <div class="w-12 h-1 bg-blue-600 rounded mb-6"></div>
+
+    <div class="space-y-4">
+      <details class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+        <summary class="px-5 py-4 cursor-pointer font-semibold text-white hover:bg-slate-800/50 transition">
+          ❌ "devbrain" command not found
+        </summary>
+        <div class="px-5 pb-4 text-slate-300 text-sm border-t border-slate-800 pt-4">
+          <p class="mb-2">The <span class="mono text-blue-400">~/bin</span> directory isn't in your PATH yet. Run:</p>
+          <div class="bg-slate-950 rounded-xl p-3 mono text-green-400 text-sm mb-2">source ~/.zshrc</div>
+          <p>Then try <span class="mono text-blue-400">devbrain</span> again. If still not found, check that <span class="mono text-blue-400">~/bin/devbrain</span> file exists.</p>
+        </div>
+      </details>
+
+      <details class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+        <summary class="px-5 py-4 cursor-pointer font-semibold text-white hover:bg-slate-800/50 transition">
+          ❌ Server starts but AI features say "API key not set"
+        </summary>
+        <div class="px-5 pb-4 text-slate-300 text-sm border-t border-slate-800 pt-4">
+          <p class="mb-2">Go to Settings → paste your Anthropic API key → click Save. The key is stored in the SQLite database, not in any config file.</p>
+          <p>Get a key at <a href="https://console.anthropic.com" class="text-blue-400 underline" target="_blank">console.anthropic.com</a></p>
+        </div>
+      </details>
+
+      <details class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+        <summary class="px-5 py-4 cursor-pointer font-semibold text-white hover:bg-slate-800/50 transition">
+          ❌ No projects showing up
+        </summary>
+        <div class="px-5 pb-4 text-slate-300 text-sm border-t border-slate-800 pt-4">
+          <p class="mb-2">Check Settings → Workspaces Root. Make sure the path is correct (e.g. <span class="mono text-blue-400">~/Desktop</span>). Then click Axon Scan in the sidebar.</p>
+          <p class="mb-2">A project is detected if the folder contains any of: <span class="mono text-xs text-slate-400">package.json, .git, pyproject.toml, requirements.txt, Cargo.toml, go.mod, next.config.js</span></p>
+          <p>Bare folders with no code markers won't be picked up — that's by design.</p>
+        </div>
+      </details>
+
+      <details class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+        <summary class="px-5 py-4 cursor-pointer font-semibold text-white hover:bg-slate-800/50 transition">
+          ❌ Morning digest not running
+        </summary>
+        <div class="px-5 pb-4 text-slate-300 text-sm border-t border-slate-800 pt-4">
+          <p class="mb-2">The brief scheduler runs inside the Axon server process. If the server isn't running at 8am, the brief won't fire.</p>
+          <p class="mb-2">Solution: Add to <span class="mono text-blue-400">~/.zshrc</span>:</p>
+          <div class="bg-slate-950 rounded-xl p-3 mono text-green-400 text-sm">devbrain status &gt;/dev/null 2&gt;&amp;1 || devbrain &amp;</div>
+          <p class="mt-2 text-slate-400 text-xs">This auto-starts Axon whenever you open a terminal.</p>
+        </div>
+      </details>
+
+      <details class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+        <summary class="px-5 py-4 cursor-pointer font-semibold text-white hover:bg-slate-800/50 transition">
+          ❌ How do I reset everything and start fresh?
+        </summary>
+        <div class="px-5 pb-4 text-slate-300 text-sm border-t border-slate-800 pt-4">
+          <div class="bg-slate-950 rounded-xl p-3 mono text-green-400 text-sm mb-2">
+            devbrain stop<br>
+            rm ~/.devbrain/devbrain.db<br>
+            devbrain
+          </div>
+          <p>This deletes the database (all workspaces, missions, playbooks, history) but keeps all your code and scripts. Axon re-initialises with a clean DB on next start.</p>
+        </div>
+      </details>
+
+      <details class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+        <summary class="px-5 py-4 cursor-pointer font-semibold text-white hover:bg-slate-800/50 transition">
+          ❌ Port 7734 is already in use
+        </summary>
+        <div class="px-5 pb-4 text-slate-300 text-sm border-t border-slate-800 pt-4">
+          <div class="bg-slate-950 rounded-xl p-3 mono text-green-400 text-sm mb-2">
+            kill $(lsof -ti:7734) 2&gt;/dev/null<br>
+            devbrain
+          </div>
+          <p>This kills whatever is on port 7734 and starts Axon fresh.</p>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       FOOTER
+  ══════════════════════════════════════════════════════════════ -->
+  <footer class="border-t border-slate-800 pt-8 pb-12 text-center">
+    <div class="text-3xl mb-3">🧠</div>
+    <div class="font-bold text-white mb-1">Axon v1.0</div>
+    <div class="text-slate-500 text-sm mb-4">Built for developers who build things — locally, privately, autonomously.</div>
+    <div class="flex justify-center gap-4 text-sm">
+      <a href="http://localhost:7734" target="_blank" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl transition font-semibold">Open Axon</a>
+      <a href="http://localhost:7734/#settings" target="_blank" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition">Settings</a>
+    </div>
+    <div class="text-slate-600 text-xs mt-6">All data stored in ~/.devbrain/devbrain.db · No telemetry · No cloud required</div>
+  </footer>
+
+</div>
+
+<script>
+  // Smooth scroll for TOC links
+  document.querySelectorAll('a[href^="#"]').forEach(a => {
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      document.querySelector(a.getAttribute('href'))?.scrollIntoView({ behavior: 'smooth' });
+    });
+  });
+</script>
+</body>
+</html>

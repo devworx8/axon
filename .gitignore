@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.pid
+.tunnel.pid
+.ollama.pid
+devbrain.db
+*.sqlite
+*.sqlite3
+.env
+.env.*
+.venv/
+venv/
+cloudflared
