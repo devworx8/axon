@@ -1146,6 +1146,7 @@ async def get_settings():
             "openai_api_key",
             "gemini_api_key",
             "generic_api_key",
+            "azure_speech_key",
         ):
             raw = s.get(key_name, "")
             s[f"{key_name}_set"] = bool(raw)

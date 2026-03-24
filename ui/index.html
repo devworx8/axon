@@ -2291,6 +2291,9 @@
                   <input x-model="settingsForm.azure_speech_key" type="password"
                          placeholder="Leave blank for browser TTS"
                          class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono" />
+                  <p x-show="settingsForm._azureSpeechKeyHint" class="text-[10px] text-emerald-400 mt-1">
+                    Speech key saved securely as <span x-text="settingsForm._azureSpeechKeyHint"></span>.
+                  </p>
                 </div>
                 <div>
                   <label class="block text-[10px] text-slate-500 mb-1">Region</label>
@@ -2299,28 +2302,42 @@
                          class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition" />
                 </div>
               </div>
-              <label class="block text-[10px] text-slate-500 mb-1">Voice</label>
-              <select x-model="settingsForm.azure_voice"
-                      class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-blue-500 transition">
-                <optgroup label="South African English">
-                  <option value="en-ZA-LeahNeural">en-ZA-LeahNeural (Leah, female)</option>
-                  <option value="en-ZA-LukeNeural">en-ZA-LukeNeural (Luke, male)</option>
-                </optgroup>
-                <optgroup label="Afrikaans">
-                  <option value="af-ZA-AdriNeural">af-ZA-AdriNeural (Adri, female)</option>
-                  <option value="af-ZA-WillemNeural">af-ZA-WillemNeural (Willem, male)</option>
-                </optgroup>
-                <optgroup label="British English">
-                  <option value="en-GB-SoniaNeural">en-GB-SoniaNeural (Sonia, female)</option>
-                  <option value="en-GB-RyanNeural">en-GB-RyanNeural (Ryan, male)</option>
-                </optgroup>
-                <optgroup label="US English">
-                  <option value="en-US-JennyNeural">en-US-JennyNeural (Jenny, female)</option>
-                  <option value="en-US-GuyNeural">en-US-GuyNeural (Guy, male)</option>
-                </optgroup>
-              </select>
+              <div class="flex items-center justify-between gap-3 mb-1">
+                <label class="block text-[10px] text-slate-500">Voice</label>
+                <button @click="loadTtsVoices(true)"
+                        class="text-[10px] text-slate-500 hover:text-slate-300 transition">
+                  <span x-text="ttsVoicesLoading ? 'Loading voices…' : '↻ Refresh catalog'"></span>
+                </button>
+              </div>
+              <div class="space-y-2">
+                <input x-model="azureVoiceQuery"
+                       @focus="loadTtsVoices()"
+                       placeholder="Search voices, languages, or 'multilingual'"
+                       class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition" />
+                <select x-model="settingsForm.azure_voice"
+                        @focus="loadTtsVoices()"
+                        class="dark-select w-full border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-blue-500 transition">
+                  <option value="">Choose a voice</option>
+                  <template x-for="voice in filteredTtsVoices()" :key="voice.id">
+                    <option :value="voice.id" x-text="voiceOptionLabel(voice)"></option>
+                  </template>
+                </select>
+                <input x-model="settingsForm.azure_voice"
+                       placeholder="Or type any Azure voice short name, e.g. en-US-AvaMultilingualNeural"
+                       class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono" />
+              </div>
+              <div class="mt-2 flex flex-wrap gap-2 text-[10px]">
+                <span class="rounded-full border px-2 py-1"
+                      :class="ttsVoicesMeta.live ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
+                      x-text="ttsVoicesMeta.live ? `Live Azure catalog · ${ttsVoicesMeta.region}` : 'Featured fallback voices'"></span>
+                <span class="rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-1 text-blue-200" x-show="filteredTtsVoices().some(voice => voice.multilingual)">
+                  Multilingual voices available
+                </span>
+                <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1 text-slate-400" x-text="`${filteredTtsVoices().length} option(s)`"></span>
+              </div>
+              <p x-show="ttsVoicesMeta.warning" class="text-[10px] text-amber-300 mt-1" x-text="ttsVoicesMeta.warning"></p>
               <p class="text-[10px] text-slate-500 mt-1">
-                Get a free key at <a href="https://azure.microsoft.com/free" target="_blank" class="text-blue-400 hover:underline">azure.microsoft.com/free</a> (5 hours free/month). Leave blank to use browser built-in voice.
+                Get a free key at <a href="https://azure.microsoft.com/free" target="_blank" class="text-blue-400 hover:underline">azure.microsoft.com/free</a> (5 hours free/month). Save your key and region to load the live Azure catalog, including newer multilingual voices. Leave it blank to use browser built-in voice.
               </p>
             </div>
           </div>
@@ -3272,6 +3289,7 @@ function devbrain() {
       _openaiKeyHint: '',
       _geminiKeyHint: '',
       _genericKeyHint: '',
+      _azureSpeechKeyHint: '',
       _githubTokenHint: '',
     },
     cloudProviderTests: {},
@@ -4010,6 +4028,56 @@ function devbrain() {
         this.settingsForm[hintField] = value.length > 10 ? `${value.slice(0, 4)}...${value.slice(-4)}` : 'set';
         this.settingsForm[keyField] = '';
       }
+    },
+
+    async loadTtsVoices(force = false) {
+      if (this.ttsVoicesLoading) return;
+      if (!force && this.ttsVoices.length) return;
+      this.ttsVoicesLoading = true;
+      try {
+        const data = await this.api('GET', '/api/tts/voices');
+        this.ttsVoices = data.voices || [];
+        this.ttsVoicesMeta = {
+          source: data.source || 'fallback',
+          live: !!data.live,
+          region: data.region || this.settingsForm.azure_speech_region || 'eastus',
+          warning: data.warning || '',
+        };
+      } catch (e) {
+        this.ttsVoicesMeta = {
+          source: 'fallback',
+          live: false,
+          region: this.settingsForm.azure_speech_region || 'eastus',
+          warning: e.message || 'Voice catalog unavailable',
+        };
+      }
+      this.ttsVoicesLoading = false;
+    },
+
+    filteredTtsVoices() {
+      const query = (this.azureVoiceQuery || '').toLowerCase().trim();
+      const voices = this.ttsVoices || [];
+      if (!query) return voices;
+      return voices.filter(voice => [
+        voice.id,
+        voice.name,
+        voice.local_name,
+        voice.lang,
+        voice.gender,
+        voice.multilingual ? 'multilingual' : '',
+      ].some(value => String(value || '').toLowerCase().includes(query)));
+    },
+
+    voiceOptionLabel(voice) {
+      if (!voice) return '';
+      const parts = [
+        voice.id,
+        voice.local_name && voice.local_name !== voice.name ? `${voice.name} / ${voice.local_name}` : voice.name,
+        voice.lang,
+        voice.gender,
+      ].filter(Boolean);
+      if (voice.multilingual) parts.push('Multilingual');
+      return parts.join(' — ');
     },
 
     async testCloudProvider(providerId) {
@@ -5256,7 +5324,8 @@ function devbrain() {
           webhook_secret: '',  // never pre-fill
           azure_speech_key: '',  // never pre-fill secrets
           azure_speech_region: s.azure_speech_region || 'eastus',
-          azure_voice: s.azure_voice || 'en-ZA-LeahNeural'
+          azure_voice: s.azure_voice || 'en-ZA-LeahNeural',
+          _azureSpeechKeyHint: '',
         };
         this.selectedChatModel = s.code_model || s.ollama_model || this.selectedChatModel || '';
         if (s.ai_backend === 'ollama') { this.checkOllamaStatus(); this.loadOllamaModels(); }
@@ -5268,11 +5337,13 @@ function devbrain() {
         this.settingsForm._openaiKeyHint = s.openai_api_key_set ? s.openai_api_key : '';
         this.settingsForm._geminiKeyHint = s.gemini_api_key_set ? s.gemini_api_key : '';
         this.settingsForm._genericKeyHint = s.generic_api_key_set ? s.generic_api_key : '';
+        this.settingsForm._azureSpeechKeyHint = s.azure_speech_key_set ? s.azure_speech_key : '';
         if (s.github_token_set) {
           this.settingsForm._githubTokenHint = s.github_token;
         } else {
           this.settingsForm._githubTokenHint = '';
         }
+        this.loadTtsVoices(true);
       } catch(e) {}
     },
 
@@ -5326,12 +5397,18 @@ function devbrain() {
         this.updateProviderKeyHint('openai_gpts');
         this.updateProviderKeyHint('gemini_gems');
         this.updateProviderKeyHint('generic_api');
+        if (this.settingsForm.azure_speech_key) {
+          const raw = this.settingsForm.azure_speech_key;
+          this.settingsForm._azureSpeechKeyHint = raw.length > 10 ? `${raw.slice(0, 4)}...${raw.slice(-4)}` : 'set';
+          this.settingsForm.azure_speech_key = '';
+        }
         if (this.settingsForm.github_token) {
           const raw = this.settingsForm.github_token;
           this.settingsForm._githubTokenHint = raw.length > 10 ? `${raw.slice(0, 4)}...${raw.slice(-4)}` : 'set';
           this.settingsForm.github_token = '';
         }
         this.syncChatModel(this.settingsForm.code_model || this.settingsForm.ollama_model || this.selectedChatModel);
+        await this.loadTtsVoices(true);
         this.settingsSaved = true;
         this.loadRuntimeStatus();
         setTimeout(() => this.settingsSaved = false, 3000);
