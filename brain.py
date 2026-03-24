@@ -1,9 +1,9 @@
 """
 Axon — AI Brain
-Supports three backends:
-  1. Anthropic API  — requires an API key (pay-per-use)
-  2. Claude Code CLI — uses your claude.ai subscription (no extra cost)
-  3. Ollama (local) — runs on your machine, no API key or internet needed
+Supports three runtime paths:
+  1. Ollama (local)      — runs on your machine, no internet needed
+  2. CLI agent bridge    — uses a locally installed Claude-compatible CLI
+  3. External API        — current cloud adapter path, API-key backed
 
 Set ai_backend = 'api' | 'cli' | 'ollama' in Settings.
 """
@@ -58,7 +58,7 @@ MAX_TOKENS_CHAT   = 1500
 MAX_TOKENS_DIGEST = 2000
 MAX_TOKENS_TASK   = 800
 
-# Default Claude Code CLI path (auto-detected)
+# Default CLI-compatible paths (auto-detected)
 _DEFAULT_CLI_PATHS = [
     "/home/edp/.config/Claude/claude-code/2.1.63/claude",
     "/home/edp/.vscode/extensions/anthropic.claude-code-2.1.81-linux-x64/resources/native-binary/claude",
@@ -110,8 +110,138 @@ def _ollama_execution_profile_sync(
     return selection
 
 
-def _get_client(api_key: str) -> anthropic.Anthropic:
-    return anthropic.Anthropic(api_key=api_key)
+def _get_client(api_key: str, api_base_url: str = "") -> anthropic.Anthropic:
+    kwargs = {"api_key": api_key}
+    if api_base_url:
+        kwargs["base_url"] = api_base_url
+    return anthropic.Anthropic(**kwargs)
+
+
+def _coerce_text_content(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if text:
+                    parts.append(str(text))
+        return "".join(parts)
+    if isinstance(content, dict):
+        text = content.get("text")
+        if text:
+            return str(text)
+    return ""
+
+
+async def _call_api_messages(
+    messages: list[dict],
+    *,
+    system: str = "",
+    api_key: str = "",
+    api_provider: str = "anthropic",
+    api_base_url: str = "",
+    api_model: str = "",
+    max_tokens: int = MAX_TOKENS_CHAT,
+) -> tuple[str, int]:
+    if not api_key:
+        raise ValueError("External API key not set. Go to Settings → Runtime.")
+
+    provider = (api_provider or "anthropic").strip().lower()
+
+    if provider == "anthropic":
+        client = _get_client(api_key, api_base_url=api_base_url)
+
+        def _anthropic_request():
+            return client.messages.create(
+                model=api_model or BALANCED_MODEL,
+                max_tokens=max_tokens,
+                system=system or SYSTEM_PROMPT,
+                messages=messages,
+            )
+
+        resp = await asyncio.to_thread(_anthropic_request)
+        tokens = resp.usage.input_tokens + resp.usage.output_tokens
+        _track_usage(tokens, backend="api")
+        return resp.content[0].text, tokens
+
+    if provider in {"openai_gpts", "generic_api"}:
+        model_name = (api_model or "").strip()
+        if not model_name:
+            raise ValueError("API model not set. Configure it in Settings → Cloud Agents.")
+        base = (api_base_url or "").rstrip("/")
+        if not base:
+            raise ValueError("API base URL not set. Configure it in Settings → Cloud Agents.")
+        payload = {
+            "model": model_name,
+            "messages": ([{"role": "system", "content": system}] if system else []) + messages,
+            "max_tokens": max_tokens,
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(f"{base}/chat/completions", headers=headers, json=payload)
+            if resp.status_code >= 400 and "max_completion_tokens" in resp.text:
+                retry_payload = dict(payload)
+                retry_payload.pop("max_tokens", None)
+                retry_payload["max_completion_tokens"] = max_tokens
+                resp = await client.post(f"{base}/chat/completions", headers=headers, json=retry_payload)
+            resp.raise_for_status()
+            data = resp.json()
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message", {})
+        content = _coerce_text_content(message.get("content"))
+        usage = data.get("usage", {}) or {}
+        tokens = usage.get("total_tokens") or (
+            usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)
+        )
+        _track_usage(tokens, backend="api")
+        return content, int(tokens or 0)
+
+    if provider == "gemini_gems":
+        model_name = (api_model or "gemini-2.5-flash").strip()
+        base = (api_base_url or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+        target = model_name if model_name.startswith("models/") else f"models/{model_name}"
+        payload = {
+            "contents": messages,
+            "generationConfig": {"maxOutputTokens": max_tokens},
+        }
+        if system:
+            payload["systemInstruction"] = {"parts": [{"text": system}]}
+        gemini_contents = []
+        for msg in messages:
+            role = "model" if msg.get("role") == "assistant" else "user"
+            gemini_contents.append({
+                "role": role,
+                "parts": [{"text": msg.get("content", "")}],
+            })
+        payload["contents"] = gemini_contents
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(
+                f"{base}/{target}:generateContent",
+                params={"key": api_key},
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        candidates = data.get("candidates") or []
+        parts = []
+        if candidates:
+            content = (candidates[0].get("content") or {}).get("parts") or []
+            parts = [part.get("text", "") for part in content if isinstance(part, dict) and part.get("text")]
+        usage = data.get("usageMetadata", {}) or {}
+        tokens = usage.get("totalTokenCount") or (
+            usage.get("promptTokenCount", 0) + usage.get("candidatesTokenCount", 0)
+        )
+        _track_usage(tokens, backend="api")
+        return "".join(parts), int(tokens or 0)
+
+    raise ValueError(f"Unsupported API provider: {api_provider}")
 
 
 def _call_ollama_sync(
@@ -830,12 +960,12 @@ def _find_cli(override_path: str = "") -> str:
 
 async def _call_cli(prompt: str, system: str = "", cli_path: str = "") -> str:
     """
-    Call the Claude Code CLI in non-interactive (-p) mode.
-    Uses your claude.ai subscription — no API key needed.
+    Call the CLI agent bridge in non-interactive (-p) mode.
+    Uses your locally installed CLI agent — no API key needed.
     """
     binary = _find_cli(cli_path)
     if not binary:
-        raise RuntimeError("Claude Code CLI not found. Set the path in Settings or use API mode.")
+        raise RuntimeError("CLI agent not found. Set the path in Settings or switch to a different runtime.")
 
     full_prompt = prompt
     if system:
@@ -857,7 +987,7 @@ async def _call_cli(prompt: str, system: str = "", cli_path: str = "") -> str:
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
     if proc.returncode != 0:
         err = stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"Claude CLI error: {err[:300]}")
+        raise RuntimeError(f"CLI agent error: {err[:300]}")
 
     raw = stdout.decode("utf-8", errors="replace").strip()
     try:
@@ -958,6 +1088,9 @@ async def _call(
     prompt: str,
     system: str = "",
     api_key: str = "",
+    api_provider: str = "anthropic",
+    api_base_url: str = "",
+    api_model: str = "",
     backend: str = "api",
     cli_path: str = "",
     max_tokens: int = MAX_TOKENS_CHAT,
@@ -976,19 +1109,15 @@ async def _call(
         )
         return content, tokens
     else:
-        if not api_key:
-            raise ValueError("Anthropic API key not set. Go to Settings.")
-        client = _get_client(api_key)
-        msgs = [{"role": "user", "content": prompt}]
-        resp = client.messages.create(
-            model=model or BALANCED_MODEL,
-            max_tokens=max_tokens,
+        return await _call_api_messages(
+            [{"role": "user", "content": prompt}],
             system=system or SYSTEM_PROMPT,
-            messages=msgs,
+            api_key=api_key,
+            api_provider=api_provider,
+            api_base_url=api_base_url,
+            api_model=api_model or model or BALANCED_MODEL,
+            max_tokens=max_tokens,
         )
-        tokens = resp.usage.input_tokens + resp.usage.output_tokens
-        _track_usage(tokens, backend="api")
-        return resp.content[0].text, tokens
 
 
 # ─── Chat ─────────────────────────────────────────────────────────────────────
@@ -999,6 +1128,9 @@ async def chat(
     context_block: str = "",
     project_name: Optional[str] = None,
     api_key: str = "",
+    api_provider: str = "anthropic",
+    api_base_url: str = "",
+    api_model: str = "",
     backend: str = "api",
     cli_path: str = "",
     ollama_url: str = "",
@@ -1006,7 +1138,7 @@ async def chat(
 ) -> dict:
     """
     Send a chat message and return {"content": str, "tokens": int}.
-    Supports API, Claude Code CLI, and local Ollama backends.
+    Supports local Ollama, CLI agent, and external API runtimes.
     """
     system = SYSTEM_PROMPT_OLLAMA if backend == "ollama" else SYSTEM_PROMPT
     if context_block:
@@ -1041,26 +1173,25 @@ async def chat(
         content, tokens = await _call(
             full_prompt, system=system, backend=backend,
             cli_path=cli_path, ollama_url=ollama_url, ollama_model=ollama_model,
+            api_key=api_key, api_provider=api_provider, api_base_url=api_base_url, api_model=api_model,
             max_tokens=MAX_TOKENS_CHAT,  # same limit for all backends
         )
         if ollama_note:
             content = f"⚠️ {ollama_note}\n\n{content}"
     else:
-        if not api_key:
-            raise ValueError("Anthropic API key not set. Go to Settings.")
-        client = _get_client(api_key)
         messages = []
         for h in history[-20:]:
             messages.append({"role": h["role"], "content": h["content"]})
         messages.append({"role": "user", "content": user_message})
-        response = client.messages.create(
-            model=BALANCED_MODEL,
-            max_tokens=MAX_TOKENS_CHAT,
+        content, tokens = await _call_api_messages(
+            messages,
             system=system,
-            messages=messages,
+            api_key=api_key,
+            api_provider=api_provider,
+            api_base_url=api_base_url,
+            api_model=api_model or BALANCED_MODEL,
+            max_tokens=MAX_TOKENS_CHAT,
         )
-        content = response.content[0].text
-        tokens = response.usage.input_tokens + response.usage.output_tokens
 
     return {"content": content, "tokens": tokens}
 
@@ -1072,6 +1203,9 @@ async def generate_digest(
     tasks: list,
     activity: list,
     api_key: str = "",
+    api_provider: str = "anthropic",
+    api_base_url: str = "",
+    api_model: str = "",
     backend: str = "api",
     cli_path: str = "",
     ollama_url: str = "",
@@ -1099,7 +1233,8 @@ Structure your digest as:
 
 Be specific. Use actual names. Keep it under 300 words. Make it motivating."""
 
-    content, _ = await _call(prompt, api_key=api_key, backend=backend,
+    content, _ = await _call(prompt, api_key=api_key, api_provider=api_provider,
+                              api_base_url=api_base_url, api_model=api_model, backend=backend,
                               cli_path=cli_path, max_tokens=MAX_TOKENS_DIGEST,
                               ollama_url=ollama_url, ollama_model=ollama_model)
     return content
@@ -1112,6 +1247,9 @@ async def analyse_project(
     tasks: list,
     recent_prompts: list,
     api_key: str = "",
+    api_provider: str = "anthropic",
+    api_base_url: str = "",
+    api_model: str = "",
     backend: str = "api",
     cli_path: str = "",
     ollama_url: str = "",
@@ -1152,7 +1290,8 @@ Provide:
 
 Be direct and practical. Under 250 words."""
 
-    content, _ = await _call(prompt, api_key=api_key, backend=backend,
+    content, _ = await _call(prompt, api_key=api_key, api_provider=api_provider,
+                              api_base_url=api_base_url, api_model=api_model, backend=backend,
                               cli_path=cli_path, max_tokens=MAX_TOKENS_TASK,
                               ollama_url=ollama_url, ollama_model=ollama_model)
     return content
@@ -1164,6 +1303,9 @@ async def suggest_tasks(
     projects: list,
     existing_tasks: list,
     api_key: str = "",
+    api_provider: str = "anthropic",
+    api_base_url: str = "",
+    api_model: str = "",
     backend: str = "api",
     cli_path: str = "",
     ollama_url: str = "",
@@ -1189,7 +1331,8 @@ Return ONLY a JSON array with this structure:
 Focus on: stale projects needing attention, TODO debt reduction, common developer oversights.
 Return valid JSON only, no other text."""
 
-    content, _ = await _call(prompt, api_key=api_key, backend=backend,
+    content, _ = await _call(prompt, api_key=api_key, api_provider=api_provider,
+                              api_base_url=api_base_url, api_model=api_model, backend=backend,
                               cli_path=cli_path, max_tokens=600,
                               ollama_url=ollama_url, ollama_model=ollama_model)
     import json
@@ -1207,6 +1350,9 @@ async def suggest_tasks_for_project(
     project: dict,
     existing_tasks: list,
     api_key: str = "",
+    api_provider: str = "anthropic",
+    api_base_url: str = "",
+    api_model: str = "",
     backend: str = "api",
     cli_path: str = "",
     ollama_url: str = "",
@@ -1253,7 +1399,8 @@ Rules:
 - Focus on: TODO/FIXME debt, missing tests, stale dependencies, deployment risks,
   documentation gaps, security issues, performance hot-spots"""
 
-    content, _ = await _call(prompt, api_key=api_key, backend=backend,
+    content, _ = await _call(prompt, api_key=api_key, api_provider=api_provider,
+                              api_base_url=api_base_url, api_model=api_model, backend=backend,
                               cli_path=cli_path, max_tokens=700,
                               ollama_url=ollama_url, ollama_model=ollama_model)
     import json as _json
@@ -1275,6 +1422,9 @@ async def enhance_prompt(
     raw_prompt: str,
     project_context: Optional[str] = None,
     api_key: str = "",
+    api_provider: str = "anthropic",
+    api_base_url: str = "",
+    api_model: str = "",
     backend: str = "api",
     cli_path: str = "",
     ollama_url: str = "",
@@ -1287,9 +1437,10 @@ Keep the same intent. Do not add unnecessary fluff. Return only the improved pro
 
 {context_line}
 
-Original prompt:
+    Original prompt:
 {raw_prompt}"""
-    content, _ = await _call(prompt, api_key=api_key, backend=backend,
+    content, _ = await _call(prompt, api_key=api_key, api_provider=api_provider,
+                              api_base_url=api_base_url, api_model=api_model, backend=backend,
                               cli_path=cli_path, max_tokens=MAX_TOKENS_TASK,
                               ollama_url=ollama_url, ollama_model=ollama_model)
     return content

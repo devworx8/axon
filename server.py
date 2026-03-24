@@ -35,6 +35,7 @@ import scheduler as sched_module
 import integrations as integ
 import runtime_manager
 import gpu_guard
+import provider_registry
 
 PORT = 7734
 DEVBRAIN_DIR = Path.home() / ".devbrain"
@@ -106,6 +107,17 @@ from datetime import datetime, timedelta
 _auth_sessions: dict[str, datetime] = {}
 _AUTH_SESSION_HOURS = 72  # sessions last 3 days
 
+
+def _extract_session_token(request: Request) -> str:
+    return (
+        request.headers.get("X-Axon-Token")
+        or request.headers.get("X-DevBrain-Token")
+        or request.headers.get("X-Session-Token")
+        or request.query_params.get("token")
+        or ""
+    )
+
+
 def _hash_pin(pin: str) -> str:
     """SHA-256 hash a PIN with a fixed app salt."""
     return hashlib.sha256(f"devbrain-pin-{pin}".encode()).hexdigest()
@@ -154,11 +166,7 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
 
     # PIN is set — require valid session token
-    token = (
-        request.headers.get("X-DevBrain-Token")
-        or request.headers.get("X-Session-Token")
-        or request.query_params.get("token")
-    )
+    token = _extract_session_token(request)
     if not token or not _valid_session(token):
         return JSONResponse({"detail": "Authentication required"}, status_code=401)
 
@@ -176,11 +184,7 @@ async def auth_status(request: Request):
     """Check if auth is enabled and if current session is valid."""
     async with devdb.get_db() as conn:
         pin_hash = await devdb.get_setting(conn, "auth_pin_hash")
-    token = (
-        request.headers.get("X-DevBrain-Token")
-        or request.headers.get("X-Session-Token")
-        or request.query_params.get("token")
-    )
+    token = _extract_session_token(request)
     return {
         "auth_enabled": bool(pin_hash),
         "session_valid": (not pin_hash) or bool(token and _valid_session(token)),
@@ -212,7 +216,7 @@ async def auth_login(body: PinLogin):
 @app.post("/api/auth/logout")
 async def auth_logout(request: Request):
     """Invalidate current session."""
-    token = request.headers.get("X-DevBrain-Token")
+    token = _extract_session_token(request)
     if token and token in _auth_sessions:
         del _auth_sessions[token]
     return {"status": "ok"}
@@ -482,16 +486,22 @@ async def suggest_tasks():
 def _ai_params(settings: dict) -> dict:
     """Extract AI backend params from settings dict."""
     backend = settings.get("ai_backend", "ollama")
-    api_key = settings.get("anthropic_api_key", "")
+    api_runtime = provider_registry.runtime_api_config(settings)
+    api_key = api_runtime.get("api_key", "")
     cli_path = settings.get("claude_cli_path", "")
     ollama_url = settings.get("ollama_url", "")
     ollama_model = settings.get("ollama_model", "")
     if backend == "api" and not api_key:
-        raise HTTPException(400, "Anthropic API key not set. Go to Settings → Runtime.")
+        provider_label = api_runtime.get("provider_label", "External API")
+        raise HTTPException(400, f"{provider_label} key not set. Go to Settings → Runtime.")
     if backend == "cli" and not cli_path and not brain._find_cli():
-        raise HTTPException(400, "Claude Code CLI not found. Set the path in Settings.")
+        raise HTTPException(400, "CLI agent not found. Set the path in Settings.")
     return {
-        "api_key": api_key, "backend": backend, "cli_path": cli_path,
+        "api_key": api_key,
+        "api_provider": api_runtime.get("provider_id", "anthropic"),
+        "api_base_url": api_runtime.get("api_base_url", ""),
+        "api_model": api_runtime.get("api_model", ""),
+        "backend": backend, "cli_path": cli_path,
         "ollama_url": ollama_url, "ollama_model": ollama_model,
     }
 
@@ -732,13 +742,25 @@ async def get_activity(limit: int = 30):
 async def get_settings():
     async with devdb.get_db() as conn:
         s = await devdb.get_all_settings(conn)
-        # Never expose the API key value in full
-        if s.get("anthropic_api_key"):
-            key = s["anthropic_api_key"]
-            s["anthropic_api_key"] = key[:8] + "..." + key[-4:] if len(key) > 12 else "set"
-            s["api_key_set"] = True
-        else:
-            s["api_key_set"] = False
+        s["ai_backend"] = s.get("ai_backend") or "ollama"
+        s["api_provider"] = provider_registry.selected_api_provider_id(s)
+        for key in (
+            "cloud_agents_enabled",
+            "openai_gpts_enabled",
+            "gemini_gems_enabled",
+            "generic_api_enabled",
+        ):
+            s[key] = str(s.get(key, "")).strip().lower() in {"1", "true", "yes", "on"}
+        for key_name in (
+            "anthropic_api_key",
+            "openai_api_key",
+            "gemini_api_key",
+            "generic_api_key",
+        ):
+            raw = s.get(key_name, "")
+            s[f"{key_name}_set"] = bool(raw)
+            s[key_name] = provider_registry.mask_secret(raw) if raw else ""
+        s["api_key_set"] = s.get("anthropic_api_key_set", False)
         if s.get("github_token"):
             token = s["github_token"]
             s["github_token"] = token[:4] + "..." + token[-4:] if len(token) > 10 else "set"
@@ -750,20 +772,42 @@ async def get_settings():
 
 class SettingsUpdate(BaseModel):
     anthropic_api_key: Optional[str] = None
+    anthropic_base_url: Optional[str] = None
+    anthropic_api_model: Optional[str] = None
     scan_interval_hours: Optional[str] = None
     morning_digest_hour: Optional[str] = None
     projects_root: Optional[str] = None
     notify_desktop: Optional[str] = None
     ai_backend: Optional[str] = None
+    api_provider: Optional[str] = None
     claude_cli_path: Optional[str] = None
     ollama_url: Optional[str] = None
     ollama_model: Optional[str] = None
+    code_model: Optional[str] = None
+    general_model: Optional[str] = None
+    reasoning_model: Optional[str] = None
+    embeddings_model: Optional[str] = None
+    vision_model: Optional[str] = None
+    cloud_agents_enabled: Optional[bool] = None
+    openai_gpts_enabled: Optional[bool] = None
+    gemini_gems_enabled: Optional[bool] = None
+    generic_api_enabled: Optional[bool] = None
+    openai_api_key: Optional[str] = None
+    openai_base_url: Optional[str] = None
+    openai_api_model: Optional[str] = None
+    gemini_api_key: Optional[str] = None
+    gemini_base_url: Optional[str] = None
+    gemini_api_model: Optional[str] = None
+    generic_api_key: Optional[str] = None
+    generic_api_url: Optional[str] = None
+    generic_api_model: Optional[str] = None
     github_token: Optional[str] = None
     slack_webhook_url: Optional[str] = None
     webhook_urls: Optional[str] = None
     webhook_secret: Optional[str] = None
     azure_speech_key: Optional[str] = None
     azure_speech_region: Optional[str] = None
+    azure_voice: Optional[str] = None
 
 
 @app.post("/api/settings")
@@ -771,7 +815,10 @@ async def update_settings(body: SettingsUpdate):
     async with devdb.get_db() as conn:
         data = body.model_dump(exclude_none=True)
         for key, value in data.items():
-            await devdb.set_setting(conn, key, str(value))
+            if isinstance(value, bool):
+                await devdb.set_setting(conn, key, "1" if value else "0")
+            else:
+                await devdb.set_setting(conn, key, str(value))
 
         # Restart scheduler with new settings if timing changed
         if "scan_interval_hours" in data or "morning_digest_hour" in data:
@@ -783,6 +830,39 @@ async def update_settings(body: SettingsUpdate):
                 sched_module.setup_scheduler(scan_h, digest_h)
 
         return {"updated": list(data.keys())}
+
+
+class CloudProviderTestRequest(BaseModel):
+    provider_id: str
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+
+
+@app.get("/api/cloud/providers")
+async def list_cloud_providers():
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+    return {
+        "selected": provider_registry.runtime_api_config(settings),
+        "providers": provider_registry.api_provider_cards(settings),
+        "adapters": provider_registry.cloud_adapter_cards(settings),
+    }
+
+
+@app.post("/api/cloud/providers/test")
+async def test_cloud_provider(body: CloudProviderTestRequest):
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+    return await provider_registry.test_provider_connection(
+        body.provider_id,
+        settings,
+        overrides={
+            "api_key": body.api_key,
+            "base_url": body.base_url,
+            "model": body.model,
+        },
+    )
 
 
 # ─── Vault ────────────────────────────────────────────────────────────────────
@@ -1744,6 +1824,13 @@ async def system_actions():
             "python": _platform.python_version(),
         },
         "services": {
+            "axon": {
+                "running": True,
+                "pid": _read_pidfile() or os.getpid(),
+                "port": PORT,
+                "url": f"http://localhost:{PORT}",
+                "mode": "local-server",
+            },
             "devbrain": {
                 "running": True,
                 "pid": _read_pidfile() or os.getpid(),

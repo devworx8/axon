@@ -44,6 +44,7 @@ class ModelRouterConfig:
     selected_models: dict[str, str] = field(default_factory=dict)
     preferred_runtime: str = "ollama"
     allow_cloud: bool = False
+    adapter_enabled: dict[str, bool] = field(default_factory=dict)
 
 
 LOCAL_MODEL_ROUTES: tuple[ModelRoute, ...] = (
@@ -130,7 +131,7 @@ def cloud_adapter_cards(config: ModelRouterConfig | None = None) -> list[dict]:
             "id": adapter.adapter_id,
             "label": adapter.label,
             "description": adapter.description,
-            "enabled": bool(config.allow_cloud and adapter.enabled),
+            "enabled": bool(config.allow_cloud and config.adapter_enabled.get(adapter.adapter_id, adapter.enabled)),
             "external": adapter.external,
         }
         for adapter in CLOUD_ADAPTERS

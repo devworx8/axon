@@ -345,7 +345,7 @@
 
           <!-- Greeting -->
           <div class="mb-2">
-            <h2 class="text-lg font-bold text-white" x-text="'Good ' + (new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening')"></h2>
+            <h2 class="text-lg font-bold text-white">Good morning</h2>
             <p class="text-sm text-slate-400">Axon is active and monitoring your local workspace</p>
           </div>
 
@@ -498,8 +498,8 @@
                    :class="settingsForm.ai_backend === 'ollama' ? 'bg-green-400' : settingsForm.ai_backend === 'api' ? 'bg-blue-400' : 'bg-slate-500'"></div>
               <span class="text-sm font-medium text-slate-200"
                     x-text="settingsForm.ai_backend === 'ollama'
-                      ? (activeChatModel() || settingsForm.ollama_model || 'pick a model')
-                      : settingsForm.ai_backend === 'api' ? 'claude (API)' : 'CLI mode'">
+                      ? (activeChatModel() || settingsForm.code_model || settingsForm.ollama_model || 'pick a model')
+                      : settingsForm.ai_backend === 'api' ? 'API models' : 'CLI agent'">
               </span>
               <svg class="w-3.5 h-3.5 text-slate-500 group-hover:text-slate-300 transition flex-none" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
             </button>
@@ -513,7 +513,7 @@
                   <button @click.stop="loadOllamaModels()" class="text-slate-600 hover:text-slate-400 transition">↻</button>
                 </div>
                 <template x-for="m in ollamaModels" :key="m.name">
-                  <button @click="selectedChatModel = m.name; settingsForm.ollama_model = m.name; api('POST', '/api/settings', {ollama_model: m.name}).catch(()=>{}); chatModelOpen=false"
+                  <button @click="selectedChatModel = m.name; settingsForm.ollama_model = m.name; settingsForm.code_model = m.name; api('POST', '/api/settings', {ollama_model: m.name, code_model: m.name}).catch(()=>{}); chatModelOpen=false"
                           :class="activeChatModel() === m.name ? 'bg-blue-600/15 text-blue-300' : 'text-slate-300 hover:bg-slate-800/80'"
                           class="w-full text-left px-3 py-2.5 text-sm flex items-center gap-2.5 transition">
                     <div class="w-1.5 h-1.5 rounded-full shrink-0" :class="activeChatModel() === m.name ? 'bg-blue-400' : 'bg-slate-700'"></div>
@@ -1587,43 +1587,116 @@
           <div>
             <label class="block text-xs font-medium text-slate-400 mb-2">Primary Runtime</label>
             <div class="grid grid-cols-3 gap-2 mb-3">
-              <button @click="settingsForm.ai_backend = 'api'"
-                      :class="settingsForm.ai_backend === 'api' ? 'border-blue-500 bg-blue-600/10 text-blue-300' : 'border-slate-700 text-slate-400 hover:border-slate-500'"
-                      class="py-2.5 px-3 border rounded-xl text-xs font-medium transition text-center">
-                🔑 API
-                <div class="text-[10px] font-normal mt-0.5 opacity-70">Pay-per-use</div>
-              </button>
-              <button @click="settingsForm.ai_backend = 'cli'"
-                      :class="settingsForm.ai_backend === 'cli' ? 'border-green-500 bg-green-600/10 text-green-300' : 'border-slate-700 text-slate-400 hover:border-slate-500'"
-                      class="py-2.5 px-3 border rounded-xl text-xs font-medium transition text-center">
-                💻 CLI
-                <div class="text-[10px] font-normal mt-0.5 opacity-70">Subscription</div>
-              </button>
               <button @click="settingsForm.ai_backend = 'ollama'; checkOllamaStatus()"
                       :class="settingsForm.ai_backend === 'ollama' ? 'border-purple-500 bg-purple-600/10 text-purple-300' : 'border-slate-700 text-slate-400 hover:border-slate-500'"
                       class="py-2.5 px-3 border rounded-xl text-xs font-medium transition text-center">
                 🦙 Ollama
-                <div class="text-[10px] font-normal mt-0.5 opacity-70">Local / free</div>
+                <div class="text-[10px] font-normal mt-0.5 opacity-70">Local-first</div>
+              </button>
+              <button @click="settingsForm.ai_backend = 'cli'"
+                      :class="settingsForm.ai_backend === 'cli' ? 'border-green-500 bg-green-600/10 text-green-300' : 'border-slate-700 text-slate-400 hover:border-slate-500'"
+                      class="py-2.5 px-3 border rounded-xl text-xs font-medium transition text-center">
+                💻 CLI Agent
+                <div class="text-[10px] font-normal mt-0.5 opacity-70">Local bridge</div>
+              </button>
+              <button @click="settingsForm.ai_backend = 'api'"
+                      :class="settingsForm.ai_backend === 'api' ? 'border-blue-500 bg-blue-600/10 text-blue-300' : 'border-slate-700 text-slate-400 hover:border-slate-500'"
+                      class="py-2.5 px-3 border rounded-xl text-xs font-medium transition text-center">
+                ☁️ API Models
+                <div class="text-[10px] font-normal mt-0.5 opacity-70">External</div>
               </button>
             </div>
           </div>
 
-          <!-- API Key (only when api backend) -->
-          <div x-show="settingsForm.ai_backend !== 'cli'">
-            <label class="block text-xs font-medium text-slate-400 mb-1.5">Anthropic API Key</label>
-            <input x-model="settingsForm.anthropic_api_key" type="password"
-                   placeholder="sk-ant-..."
-                   class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono" />
-            <p class="text-[11px] text-slate-500 mt-1">Required for AI features. Get yours at console.anthropic.com</p>
+          <!-- API runtime provider -->
+          <div x-show="settingsForm.ai_backend === 'api' || settingsForm.cloud_agents_enabled" class="space-y-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <div class="text-xs font-semibold text-slate-300">External API Runtime</div>
+                <div class="text-[11px] text-slate-500">Local Ollama stays the default. Use this only when you intentionally want a cloud provider.</div>
+              </div>
+              <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-slate-400">External</span>
+            </div>
+
+            <div>
+              <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Runtime provider</label>
+              <select x-model="settingsForm.api_provider"
+                      class="dark-select w-full border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-blue-500 transition">
+                <template x-for="provider in (runtimeStatus.api_providers || [])" :key="provider.id">
+                  <option :value="provider.id" x-text="provider.label"></option>
+                </template>
+              </select>
+            </div>
+
+            <div x-show="activeApiProviderCard()" class="space-y-3">
+              <div class="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <div class="text-sm font-medium text-white" x-text="activeApiProviderCard()?.label || 'External API'"></div>
+                    <div class="text-[11px] text-slate-500" x-text="activeApiProviderCard()?.description || ''"></div>
+                  </div>
+                  <div class="text-right">
+                    <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Runtime</div>
+                    <div class="text-xs text-slate-300" x-text="activeApiProviderCard()?.transport || 'api'"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="grid gap-3 md:grid-cols-2">
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Base URL</label>
+                  <input
+                    :value="providerValue(settingsForm.api_provider, 'base_url')"
+                    @input="setProviderValue(settingsForm.api_provider, 'base_url', $event.target.value)"
+                    :placeholder="activeApiProviderCard()?.default_base_url || 'https://api.example.com/v1'"
+                    class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono"
+                  />
+                </div>
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Model</label>
+                  <input
+                    :value="providerValue(settingsForm.api_provider, 'model')"
+                    @input="setProviderValue(settingsForm.api_provider, 'model', $event.target.value)"
+                    :placeholder="activeApiProviderCard()?.model_placeholder || activeApiProviderCard()?.default_model || 'model-name'"
+                    class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">API Key</label>
+                <div class="flex gap-2">
+                  <input
+                    :value="providerValue(settingsForm.api_provider, 'api_key')"
+                    @input="setProviderValue(settingsForm.api_provider, 'api_key', $event.target.value)"
+                    :placeholder="providerKeyPlaceholder(settingsForm.api_provider)"
+                    type="password"
+                    class="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono"
+                  />
+                  <button @click="testCloudProvider(settingsForm.api_provider)"
+                          class="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs rounded-xl transition">
+                    Test
+                  </button>
+                </div>
+                <p x-show="providerSavedHint(settingsForm.api_provider)" class="text-[10px] text-emerald-400 mt-1">
+                  Saved securely as <span x-text="providerSavedHint(settingsForm.api_provider)"></span>.
+                </p>
+                <p class="text-[10px] text-slate-500 mt-1" x-text="providerRuntimeHint(settingsForm.api_provider)"></p>
+                <p x-show="cloudProviderTests[settingsForm.api_provider]?.message"
+                   :class="cloudProviderTests[settingsForm.api_provider]?.ok ? 'text-emerald-400' : 'text-amber-300'"
+                   class="text-[10px] mt-1"
+                   x-text="cloudProviderTests[settingsForm.api_provider]?.message"></p>
+              </div>
+            </div>
           </div>
 
           <!-- CLI path (only when cli backend) -->
           <div x-show="settingsForm.ai_backend === 'cli'">
-            <label class="block text-xs font-medium text-slate-400 mb-1.5">Claude CLI path (optional)</label>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">CLI Agent Path (optional)</label>
             <input x-model="settingsForm.claude_cli_path"
                    placeholder="Leave blank to auto-detect"
                    class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono" />
-            <p class="text-[11px] text-slate-500 mt-1">Uses your claude.ai subscription — no API costs. Auto-detects <code class="bg-slate-800 px-1 rounded">claude</code> in PATH.</p>
+            <p class="text-[11px] text-slate-500 mt-1">Uses a locally installed CLI bridge for cloud-connected agent work. Auto-detects <code class="bg-slate-800 px-1 rounded">claude</code> in PATH for backward compatibility.</p>
           </div>
 
           <!-- Ollama settings (only when ollama backend) -->
@@ -1641,10 +1714,10 @@
             <input x-model="settingsForm.ollama_url"
                    placeholder="http://localhost:11434"
                    class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-purple-500 transition font-mono" />
-            <label class="block text-xs font-medium text-slate-400 mb-1.5 mt-3">Active Model</label>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5 mt-3">Default Console Model</label>
             <select x-model="settingsForm.ollama_model"
                     class="dark-select w-full border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-purple-500 transition">
-              <option value="">Default (qwen2.5-coder:7b)</option>
+              <option value="">Auto-select from local routing</option>
               <template x-for="m in ollamaModels" :key="m.name">
                 <option :value="m.name" x-text="m.name + ' — ' + m.size_gb + 'GB'"></option>
               </template>
@@ -1741,6 +1814,7 @@
 
           <div class="border-t border-slate-800 pt-5 space-y-3">
             <div class="text-xs font-semibold text-slate-300">🧩 Local Models</div>
+            <div class="text-[11px] text-slate-500">Axon routes work by role. Leave a route blank to auto-match the best installed local model from the preferred family.</div>
             <div class="grid gap-2">
               <template x-for="model in (runtimeStatus.local_models || [])" :key="model.role">
                 <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-3">
@@ -1751,9 +1825,45 @@
                     </div>
                     <div class="text-right">
                       <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500" x-text="model.role"></div>
-                      <div class="text-xs text-slate-300 font-mono" x-text="model.selected_model || model.default_family"></div>
+                      <div class="text-xs text-slate-300 font-mono" x-text="model.resolved_model || model.default_family"></div>
                     </div>
                   </div>
+                  <div class="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,220px)]">
+                    <div>
+                      <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Preferred family</div>
+                      <div class="text-xs text-slate-300 font-mono" x-text="model.default_family"></div>
+                      <div class="mt-2 flex flex-wrap gap-1">
+                        <template x-for="fallback in (model.fallbacks || [])" :key="fallback">
+                          <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400" x-text="fallback"></span>
+                        </template>
+                      </div>
+                    </div>
+                    <div>
+                      <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Route model</label>
+                      <select
+                        :value="settingsForm[roleSettingKey(model.role)] || ''"
+                        @change="settingsForm[roleSettingKey(model.role)] = $event.target.value"
+                        class="dark-select w-full border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-purple-500 transition"
+                      >
+                        <option value="">Auto-discover</option>
+                        <template x-for="choice in modelOptionsForRole(model)" :key="choice.value">
+                          <option :value="choice.value" x-text="choice.label"></option>
+                        </template>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="mt-2 flex flex-wrap gap-1.5">
+                    <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-300" x-text="model.status_label || 'Pending'"></span>
+                    <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400" x-text="`Route: ${model.route_source || 'default'}`"></span>
+                    <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400" x-text="`${model.match_count || 0} local match${(model.match_count || 0) === 1 ? '' : 'es'}`"></span>
+                    <span x-show="model.preferred_num_ctx" class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400" x-text="`Ctx ${model.preferred_num_ctx}`"></span>
+                  </div>
+                  <div class="mt-2 text-[10px] text-slate-500" x-text="routePreviewText(model)"></div>
+                  <div x-show="model.family_matches?.length" class="mt-2 text-[10px] text-slate-500">
+                    Installed matches:
+                    <span class="font-mono text-slate-400" x-text="(model.family_matches || []).join(', ')"></span>
+                  </div>
+                  <div x-show="model.safety_warning" class="mt-2 rounded-xl border border-amber-500/25 bg-amber-500/8 px-2.5 py-2 text-[10px] text-amber-200" x-text="model.safety_warning"></div>
                 </div>
               </template>
             </div>
@@ -1761,16 +1871,103 @@
 
           <div class="border-t border-slate-800 pt-5 space-y-3">
             <div class="text-xs font-semibold text-slate-300">☁️ Cloud Agents</div>
-            <div class="text-[11px] text-slate-500">Optional adapters stay off by default and are clearly marked as external.</div>
+            <div class="text-[11px] text-slate-500">External adapters stay off by default. They never affect local-only workflows unless you explicitly enable them.</div>
+            <label class="flex items-center gap-2 rounded-2xl border border-slate-800 bg-slate-900/40 px-3 py-2 text-[11px] text-slate-300">
+              <input type="checkbox"
+                     :checked="!!settingsForm.cloud_agents_enabled"
+                     @change="settingsForm.cloud_agents_enabled = $event.target.checked"
+                     class="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500">
+              <span>Allow external cloud adapters</span>
+            </label>
             <div class="grid gap-2">
               <template x-for="adapter in (runtimeStatus.cloud_agents || [])" :key="adapter.id">
-                <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-3 flex items-center justify-between gap-3">
-                  <div>
-                    <div class="text-sm font-medium text-white" x-text="adapter.label"></div>
-                    <div class="text-[11px] text-slate-500" x-text="adapter.description"></div>
+                <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-3">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="flex items-center gap-2">
+                        <div class="text-sm font-medium text-white" x-text="adapter.label"></div>
+                        <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-slate-400">External</span>
+                      </div>
+                      <div class="text-[11px] text-slate-500" x-text="adapter.description"></div>
+                    </div>
+                    <label class="inline-flex items-center gap-2 text-[11px] text-slate-300">
+                      <input type="checkbox"
+                             :checked="!!settingsForm[cloudAdapterKey(adapter.id)]"
+                             @change="settingsForm[cloudAdapterKey(adapter.id)] = $event.target.checked"
+                             :disabled="!settingsForm.cloud_agents_enabled"
+                             class="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500 disabled:opacity-40">
+                      <span x-text="settingsForm[cloudAdapterKey(adapter.id)] ? 'On' : 'Off'"></span>
+                    </label>
                   </div>
-                  <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-1 text-[10px] uppercase tracking-[0.16em] text-slate-400"
-                        x-text="adapter.enabled ? 'Enabled' : 'Disabled'"></span>
+                  <div class="mt-3 grid gap-3 md:grid-cols-2">
+                    <div>
+                      <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Base URL</label>
+                      <input
+                        :value="providerValue(adapter.id, 'base_url')"
+                        @input="setProviderValue(adapter.id, 'base_url', $event.target.value)"
+                        :placeholder="adapter.default_base_url || 'https://api.example.com/v1'"
+                        :disabled="!settingsForm.cloud_agents_enabled"
+                        class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono disabled:opacity-50"
+                      />
+                    </div>
+                    <div>
+                      <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Model</label>
+                      <input
+                        :value="providerValue(adapter.id, 'model')"
+                        @input="setProviderValue(adapter.id, 'model', $event.target.value)"
+                        :placeholder="adapter.model_placeholder || adapter.default_model || 'model-name'"
+                        :disabled="!settingsForm.cloud_agents_enabled"
+                        class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono disabled:opacity-50"
+                      />
+                    </div>
+                  </div>
+                  <div class="mt-3">
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">API Key</label>
+                    <div class="flex gap-2">
+                      <input
+                        :value="providerValue(adapter.id, 'api_key')"
+                        @input="setProviderValue(adapter.id, 'api_key', $event.target.value)"
+                        :placeholder="providerKeyPlaceholder(adapter.id)"
+                        type="password"
+                        :disabled="!settingsForm.cloud_agents_enabled"
+                        class="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono disabled:opacity-50"
+                      />
+                      <button @click="testCloudProvider(adapter.id)"
+                              :disabled="!settingsForm.cloud_agents_enabled"
+                              class="px-3 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-slate-200 text-xs rounded-xl transition">
+                        Test
+                      </button>
+                    </div>
+                    <p x-show="providerSavedHint(adapter.id)" class="text-[10px] text-emerald-400 mt-1">
+                      Saved securely as <span x-text="providerSavedHint(adapter.id)"></span>.
+                    </p>
+                    <p class="text-[10px] text-slate-500 mt-1" x-text="providerRuntimeHint(adapter.id)"></p>
+                    <p x-show="cloudProviderTests[adapter.id]?.message"
+                       :class="cloudProviderTests[adapter.id]?.ok ? 'text-emerald-400' : 'text-amber-300'"
+                       class="text-[10px] mt-1"
+                       x-text="cloudProviderTests[adapter.id]?.message"></p>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div class="border-t border-slate-800 pt-5 space-y-3">
+            <div class="text-xs font-semibold text-slate-300">🤖 Agent Engine</div>
+            <div class="text-[11px] text-slate-500">Axon exposes the current operator roles here so planning, review, scanning, and recovery paths stay visible while the orchestration engine evolves.</div>
+            <div class="grid gap-2">
+              <template x-for="agent in (runtimeStatus.agents || [])" :key="agent.role">
+                <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-3">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-sm font-medium text-white" x-text="agent.label"></div>
+                      <div class="text-[11px] text-slate-500" x-text="agent.description"></div>
+                    </div>
+                    <div class="text-right">
+                      <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Preferred role</div>
+                      <div class="text-xs text-slate-300 font-mono" x-text="agent.preferred_model_role"></div>
+                    </div>
+                  </div>
                 </div>
               </template>
             </div>
@@ -2463,7 +2660,7 @@ function devbrain() {
     authPinLength: 4,
     authError: '',
     authLoading: false,
-    authToken: localStorage.getItem('devbrain-token') || localStorage.getItem('devbrain_token') || '',
+    authToken: localStorage.getItem('axon-token') || localStorage.getItem('devbrain-token') || localStorage.getItem('devbrain_token') || '',
     isLocalhost: ['localhost','127.0.0.1','[::1]'].includes(location.hostname),
     isMobile: window.innerWidth < 768,
     viewportSyncBound: false,
@@ -2481,7 +2678,7 @@ function devbrain() {
     ],
     // Mobile tab bar — 5 most used
     mobileNavItems: [
-      { id: 'dashboard', icon: '🏠', label: 'Home' },
+      { id: 'dashboard', icon: '🏠', label: 'Dashboard' },
       { id: 'chat',      icon: '💬', label: 'Console' },
       { id: 'projects',  icon: '📁', label: 'Workspaces' },
       { id: 'files',     icon: '🗂️', label: 'Files'    },
@@ -2505,6 +2702,8 @@ function devbrain() {
       agents: [],
       local_models: [],
       cloud_agents: [],
+      api_providers: [],
+      selected_api_provider: {},
       gpu_guard: { warning: '', connected_outputs: [] },
     },
 
@@ -2572,11 +2771,44 @@ function devbrain() {
     // Settings
     settingsForm: {
       ai_backend: 'ollama',
+      api_provider: 'anthropic',
+      anthropic_api_key: '',
+      anthropic_base_url: '',
+      anthropic_api_model: '',
       ollama_url: '',
       ollama_model: '',
+      code_model: '',
+      general_model: '',
+      reasoning_model: '',
+      embeddings_model: '',
+      vision_model: '',
+      cloud_agents_enabled: false,
+      openai_gpts_enabled: false,
+      gemini_gems_enabled: false,
+      generic_api_enabled: false,
+      openai_api_key: '',
+      openai_base_url: '',
+      openai_api_model: '',
+      gemini_api_key: '',
+      gemini_base_url: '',
+      gemini_api_model: '',
+      generic_api_key: '',
+      generic_api_url: '',
+      generic_api_model: '',
+      github_token: '',
+      slack_webhook_url: '',
+      webhook_urls: '',
+      webhook_secret: '',
+      azure_speech_key: '',
       azure_speech_region: 'eastus',
       azure_voice: 'en-ZA-LeahNeural',
+      _anthropicKeyHint: '',
+      _openaiKeyHint: '',
+      _geminiKeyHint: '',
+      _genericKeyHint: '',
+      _githubTokenHint: '',
     },
+    cloudProviderTests: {},
     settingsSaving: false,
     settingsSaved: false,
     ollamaStatus: { running: false, models: [], url: '' },
@@ -2724,7 +2956,7 @@ function devbrain() {
     async authCheck() {
       try {
         const r = await fetch('/api/auth/status', {
-          headers: this.authToken ? { 'X-DevBrain-Token': this.authToken } : {}
+          headers: this.authHeaders()
         });
         const d = await r.json();
         if (!d.auth_enabled) {
@@ -2740,6 +2972,7 @@ function devbrain() {
           return;
         }
         if (this.authToken) {
+          localStorage.removeItem('axon-token');
           localStorage.removeItem('devbrain-token');
           localStorage.removeItem('devbrain_token');
           this.authToken = '';
@@ -2797,6 +3030,7 @@ function devbrain() {
           const d = await r.json();
           if (!r.ok) throw new Error(d.detail);
           this.authToken = d.token;
+          localStorage.setItem('axon-token', d.token);
           localStorage.setItem('devbrain-token', d.token);
           localStorage.setItem('devbrain_token', d.token);
           this.authenticated = true;
@@ -2826,6 +3060,7 @@ function devbrain() {
           return;
         }
         this.authToken = d.token;
+        localStorage.setItem('axon-token', d.token);
         localStorage.setItem('devbrain-token', d.token);
         localStorage.setItem('devbrain_token', d.token);
         this.authenticated = true;
@@ -2848,9 +3083,10 @@ function devbrain() {
       try {
         await fetch('/api/auth/logout', {
           method: 'POST',
-          headers: { 'X-DevBrain-Token': this.authToken }
+          headers: this.authHeaders()
         });
       } catch(e) {}
+      localStorage.removeItem('axon-token');
       localStorage.removeItem('devbrain-token');
       localStorage.removeItem('devbrain_token');
       this.authToken = '';
@@ -2870,7 +3106,10 @@ function devbrain() {
 
     authHeaders(extra = {}) {
       const headers = { ...extra };
-      if (this.authToken) headers['X-DevBrain-Token'] = this.authToken;
+      if (this.authToken) {
+        headers['X-Axon-Token'] = this.authToken;
+        headers['X-DevBrain-Token'] = this.authToken;
+      }
       return headers;
     },
 
@@ -2945,6 +3184,8 @@ function devbrain() {
           ...status,
           local_models: status.local_models || [],
           cloud_agents: status.cloud_agents || [],
+          api_providers: status.api_providers || [],
+          selected_api_provider: status.selected_api_provider || {},
           phases: status.phases || this.agentLifecycle,
           agents: status.agents || [],
         };
@@ -3011,7 +3252,7 @@ function devbrain() {
     },
 
     activeChatModel() {
-      return this.selectedChatModel || this.settingsForm?.ollama_model || '';
+      return this.selectedChatModel || this.settingsForm?.code_model || this.settingsForm?.ollama_model || '';
     },
 
     syncChatModel(preferred = '') {
@@ -3019,6 +3260,7 @@ function devbrain() {
       const candidates = [
         preferred,
         this.selectedChatModel,
+        this.settingsForm?.code_model || '',
         this.settingsForm?.ollama_model || '',
       ].filter(Boolean);
       const installedMatch = candidates.find(name => installed.includes(name));
@@ -3054,8 +3296,174 @@ function devbrain() {
     backendBadge() {
       const backend = (this.settingsForm?.ai_backend || 'ollama').toLowerCase();
       if (backend === 'ollama') return 'Local Ollama';
-      if (backend === 'cli') return 'Claude CLI';
-      return 'Anthropic API';
+      if (backend === 'cli') return 'CLI Agent';
+      return 'External API';
+    },
+
+    settingEnabled(value) {
+      if (typeof value === 'boolean') return value;
+      return ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
+    },
+
+    roleSettingKey(role) {
+      return `${role}_model`;
+    },
+
+    cloudAdapterKey(adapterId) {
+      return `${adapterId}_enabled`;
+    },
+
+    providerKeyField(providerId) {
+      const map = {
+        anthropic: 'anthropic_api_key',
+        openai_gpts: 'openai_api_key',
+        gemini_gems: 'gemini_api_key',
+        generic_api: 'generic_api_key',
+      };
+      return map[providerId] || '';
+    },
+
+    providerBaseField(providerId) {
+      const map = {
+        anthropic: 'anthropic_base_url',
+        openai_gpts: 'openai_base_url',
+        gemini_gems: 'gemini_base_url',
+        generic_api: 'generic_api_url',
+      };
+      return map[providerId] || '';
+    },
+
+    providerModelField(providerId) {
+      const map = {
+        anthropic: 'anthropic_api_model',
+        openai_gpts: 'openai_api_model',
+        gemini_gems: 'gemini_api_model',
+        generic_api: 'generic_api_model',
+      };
+      return map[providerId] || '';
+    },
+
+    providerHintField(providerId) {
+      const map = {
+        anthropic: '_anthropicKeyHint',
+        openai_gpts: '_openaiKeyHint',
+        gemini_gems: '_geminiKeyHint',
+        generic_api: '_genericKeyHint',
+      };
+      return map[providerId] || '';
+    },
+
+    activeApiProviderCard() {
+      const id = this.settingsForm?.api_provider || 'anthropic';
+      return (this.runtimeStatus.api_providers || []).find(provider => provider.id === id) || null;
+    },
+
+    providerValue(providerId, kind) {
+      const field = kind === 'api_key'
+        ? this.providerKeyField(providerId)
+        : kind === 'base_url'
+          ? this.providerBaseField(providerId)
+          : this.providerModelField(providerId);
+      return field ? (this.settingsForm?.[field] || '') : '';
+    },
+
+    setProviderValue(providerId, kind, value) {
+      const field = kind === 'api_key'
+        ? this.providerKeyField(providerId)
+        : kind === 'base_url'
+          ? this.providerBaseField(providerId)
+          : this.providerModelField(providerId);
+      if (field) this.settingsForm[field] = value;
+    },
+
+    providerSavedHint(providerId) {
+      const field = this.providerHintField(providerId);
+      return field ? (this.settingsForm?.[field] || '') : '';
+    },
+
+    providerKeyPlaceholder(providerId) {
+      if (providerId === 'anthropic') return 'sk-ant-...';
+      if (providerId === 'gemini_gems') return 'AIza...';
+      return 'Paste provider key';
+    },
+
+    providerRuntimeHint(providerId) {
+      const card = (this.runtimeStatus.api_providers || []).find(provider => provider.id === providerId)
+        || (this.runtimeStatus.cloud_agents || []).find(provider => provider.id === providerId);
+      if (!card) return 'External adapter configuration stays isolated from local-only workflows.';
+      const base = card.base_url || card.default_base_url || 'custom endpoint';
+      const model = this.providerValue(providerId, 'model') || card.default_model || 'provider default';
+      return `${card.label} will use ${model} via ${base}.`;
+    },
+
+    updateProviderKeyHint(providerId) {
+      const value = this.providerValue(providerId, 'api_key');
+      const hintField = this.providerHintField(providerId);
+      const keyField = this.providerKeyField(providerId);
+      if (!hintField || !keyField) return;
+      if (value) {
+        this.settingsForm[hintField] = value.length > 10 ? `${value.slice(0, 4)}...${value.slice(-4)}` : 'set';
+        this.settingsForm[keyField] = '';
+      }
+    },
+
+    async testCloudProvider(providerId) {
+      const card = (this.runtimeStatus.api_providers || []).find(provider => provider.id === providerId)
+        || (this.runtimeStatus.cloud_agents || []).find(provider => provider.id === providerId);
+      if (!card) return;
+      this.cloudProviderTests[providerId] = { ok: false, message: 'Testing…' };
+      try {
+        const res = await this.api('POST', '/api/cloud/providers/test', {
+          provider_id: providerId,
+          api_key: this.providerValue(providerId, 'api_key') || undefined,
+          base_url: this.providerValue(providerId, 'base_url') || undefined,
+          model: this.providerValue(providerId, 'model') || undefined,
+        });
+        this.cloudProviderTests[providerId] = {
+          ok: !!res.ok,
+          message: res.message || (res.ok ? `${card.label} ready.` : `${card.label} test failed.`),
+        };
+        if (res.ok) {
+          this.updateProviderKeyHint(providerId);
+        }
+      } catch (e) {
+        this.cloudProviderTests[providerId] = { ok: false, message: e.message || 'Provider test failed.' };
+      }
+    },
+
+    routeMatchesFamily(name, model) {
+      const lower = String(name || '').toLowerCase();
+      const families = [model.default_family, ...(model.fallbacks || [])]
+        .filter(Boolean)
+        .map(item => String(item).toLowerCase());
+      return families.some(prefix => lower.startsWith(prefix));
+    },
+
+    modelOptionsForRole(model) {
+      const key = this.roleSettingKey(model.role);
+      const current = this.settingsForm?.[key] || '';
+      const installed = (this.ollamaModels || [])
+        .filter(item => this.routeMatchesFamily(item.name, model))
+        .map(item => ({
+          value: item.name,
+          label: item.size_gb ? `${item.name} — ${item.size_gb}GB` : item.name,
+        }));
+      if (current && !installed.some(item => item.value === current)) {
+        installed.unshift({ value: current, label: `${current} — saved` });
+      }
+      return installed;
+    },
+
+    routePreviewText(model) {
+      const key = this.roleSettingKey(model.role);
+      const configured = this.settingsForm?.[key] || '';
+      if (configured) {
+        return `${model.label} is pinned to ${configured}, with ${model.match_count || 0} matching local install${(model.match_count || 0) === 1 ? '' : 's'} available.`;
+      }
+      if (model.resolved_model) {
+        return `${model.label} is auto-routing to ${model.resolved_model} from the ${model.default_family} family.`;
+      }
+      return `${model.label} will auto-discover a local match from ${model.default_family}. Install one of the listed family matches to activate it.`;
     },
 
     chatComposerPlaceholder() {
@@ -3322,7 +3730,7 @@ function devbrain() {
         ]);
         this.ollamaModels = modRes.models || [];
         this.ollamaRecommended = recRes.models || [];
-        this.syncChatModel(this.settingsForm.ollama_model || this.selectedChatModel);
+        this.syncChatModel(this.settingsForm.code_model || this.settingsForm.ollama_model || this.selectedChatModel);
       } catch(e) {
         this.ollamaModels = [];
         this.ollamaRecommended = [];
@@ -3735,27 +4143,52 @@ function devbrain() {
         const s = await this.api('GET', '/api/settings');
         this.settingsForm = {
           anthropic_api_key: '',  // always blank, let user re-enter
+          anthropic_base_url: s.anthropic_base_url || '',
+          anthropic_api_model: s.anthropic_api_model || '',
           projects_root: s.projects_root || '~/Desktop',
           scan_interval_hours: s.scan_interval_hours || '6',
           morning_digest_hour: s.morning_digest_hour || '8',
-          ai_backend: s.ai_backend || 'api',
+          ai_backend: s.ai_backend || 'ollama',
+          api_provider: s.api_provider || 'anthropic',
           claude_cli_path: s.claude_cli_path || '',
           ollama_url: s.ollama_url || '',
           ollama_model: s.ollama_model || '',
+          code_model: s.code_model || s.ollama_model || '',
+          general_model: s.general_model || '',
+          reasoning_model: s.reasoning_model || '',
+          embeddings_model: s.embeddings_model || '',
+          vision_model: s.vision_model || '',
+          cloud_agents_enabled: this.settingEnabled(s.cloud_agents_enabled),
+          openai_gpts_enabled: this.settingEnabled(s.openai_gpts_enabled),
+          gemini_gems_enabled: this.settingEnabled(s.gemini_gems_enabled),
+          generic_api_enabled: this.settingEnabled(s.generic_api_enabled),
+          openai_api_key: '',
+          openai_base_url: s.openai_base_url || '',
+          openai_api_model: s.openai_api_model || '',
+          gemini_api_key: '',
+          gemini_base_url: s.gemini_base_url || '',
+          gemini_api_model: s.gemini_api_model || '',
+          generic_api_key: '',
+          generic_api_url: s.generic_api_url || '',
+          generic_api_model: s.generic_api_model || '',
           github_token: '',   // never pre-fill secrets
           slack_webhook_url: s.slack_webhook_url || '',
           webhook_urls: s.webhook_urls || '',
           webhook_secret: '',  // never pre-fill
           azure_speech_key: '',  // never pre-fill secrets
           azure_speech_region: s.azure_speech_region || 'eastus',
-          azure_voice: 'en-ZA-LeahNeural'
+          azure_voice: s.azure_voice || 'en-ZA-LeahNeural'
         };
-        this.selectedChatModel = s.ollama_model || this.selectedChatModel || '';
+        this.selectedChatModel = s.code_model || s.ollama_model || this.selectedChatModel || '';
         if (s.ai_backend === 'ollama') { this.checkOllamaStatus(); this.loadOllamaModels(); }
         this.loadSystemActions();
         if (s.api_key_set) {
           this.settingsForm._keyHint = s.anthropic_api_key;
         }
+        this.settingsForm._anthropicKeyHint = s.anthropic_api_key_set ? s.anthropic_api_key : '';
+        this.settingsForm._openaiKeyHint = s.openai_api_key_set ? s.openai_api_key : '';
+        this.settingsForm._geminiKeyHint = s.gemini_api_key_set ? s.gemini_api_key : '';
+        this.settingsForm._genericKeyHint = s.generic_api_key_set ? s.generic_api_key : '';
         if (s.github_token_set) {
           this.settingsForm._githubTokenHint = s.github_token;
         } else {
@@ -3769,28 +4202,55 @@ function devbrain() {
       this.settingsSaved = false;
       const payload = {};
       if (this.settingsForm.anthropic_api_key) payload.anthropic_api_key = this.settingsForm.anthropic_api_key;
+      payload.anthropic_base_url = this.settingsForm.anthropic_base_url || '';
+      payload.anthropic_api_model = this.settingsForm.anthropic_api_model || '';
       if (this.settingsForm.projects_root) payload.projects_root = this.settingsForm.projects_root;
       if (this.settingsForm.scan_interval_hours) payload.scan_interval_hours = String(this.settingsForm.scan_interval_hours);
       if (this.settingsForm.morning_digest_hour) payload.morning_digest_hour = String(this.settingsForm.morning_digest_hour);
       if (this.settingsForm.ai_backend) payload.ai_backend = this.settingsForm.ai_backend;
+      payload.api_provider = this.settingsForm.api_provider || 'anthropic';
       payload.claude_cli_path = this.settingsForm.claude_cli_path || '';
       payload.ollama_url = this.settingsForm.ollama_url || '';
       payload.ollama_model = this.settingsForm.ollama_model || '';
+      payload.code_model = this.settingsForm.code_model || '';
+      payload.general_model = this.settingsForm.general_model || '';
+      payload.reasoning_model = this.settingsForm.reasoning_model || '';
+      payload.embeddings_model = this.settingsForm.embeddings_model || '';
+      payload.vision_model = this.settingsForm.vision_model || '';
+      payload.cloud_agents_enabled = !!this.settingsForm.cloud_agents_enabled;
+      payload.openai_gpts_enabled = !!this.settingsForm.openai_gpts_enabled;
+      payload.gemini_gems_enabled = !!this.settingsForm.gemini_gems_enabled;
+      payload.generic_api_enabled = !!this.settingsForm.generic_api_enabled;
+      if (this.settingsForm.openai_api_key) payload.openai_api_key = this.settingsForm.openai_api_key;
+      payload.openai_base_url = this.settingsForm.openai_base_url || '';
+      payload.openai_api_model = this.settingsForm.openai_api_model || '';
+      if (this.settingsForm.gemini_api_key) payload.gemini_api_key = this.settingsForm.gemini_api_key;
+      payload.gemini_base_url = this.settingsForm.gemini_base_url || '';
+      payload.gemini_api_model = this.settingsForm.gemini_api_model || '';
+      if (this.settingsForm.generic_api_key) payload.generic_api_key = this.settingsForm.generic_api_key;
+      payload.generic_api_url = this.settingsForm.generic_api_url || '';
+      payload.generic_api_model = this.settingsForm.generic_api_model || '';
       if (this.settingsForm.github_token) payload.github_token = this.settingsForm.github_token;
       payload.slack_webhook_url = this.settingsForm.slack_webhook_url || '';
       payload.webhook_urls = this.settingsForm.webhook_urls || '';
       if (this.settingsForm.webhook_secret) payload.webhook_secret = this.settingsForm.webhook_secret;
       if (this.settingsForm.azure_speech_key) payload.azure_speech_key = this.settingsForm.azure_speech_key;
       payload.azure_speech_region = this.settingsForm.azure_speech_region || 'eastus';
+      payload.azure_voice = this.settingsForm.azure_voice || 'en-ZA-LeahNeural';
       try {
         await this.api('POST', '/api/settings', payload);
+        this.updateProviderKeyHint('anthropic');
+        this.updateProviderKeyHint('openai_gpts');
+        this.updateProviderKeyHint('gemini_gems');
+        this.updateProviderKeyHint('generic_api');
         if (this.settingsForm.github_token) {
           const raw = this.settingsForm.github_token;
           this.settingsForm._githubTokenHint = raw.length > 10 ? `${raw.slice(0, 4)}...${raw.slice(-4)}` : 'set';
           this.settingsForm.github_token = '';
         }
-        this.syncChatModel(this.settingsForm.ollama_model || this.selectedChatModel);
+        this.syncChatModel(this.settingsForm.code_model || this.settingsForm.ollama_model || this.selectedChatModel);
         this.settingsSaved = true;
+        this.loadRuntimeStatus();
         setTimeout(() => this.settingsSaved = false, 3000);
       } catch(e) { this.showToast('Failed to save'); }
       this.settingsSaving = false;
@@ -4444,6 +4904,8 @@ function devbrain() {
     },
   };
 }
+// TODO(axon-compat): keep the legacy root function name until a dedicated migration pass removes old embeds safely.
+window.axon = devbrain;
 </script>
 </body>
 </html>
