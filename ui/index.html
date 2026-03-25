@@ -4130,14 +4130,14 @@
 
     <!-- Tunnel controls -->
     <div class="flex gap-2 justify-center mb-2">
-      <template x-if="!(mobileInfo.cloudflared_url || (mobileInfo.tunnel_mode === 'named' && mobileInfo.tunnel_running))">
-        <button type="button" @click="startTunnel()" :disabled="mobileInfo._tunnelStarting"
+      <template x-if="!mobileInfo.tunnel_running && mobileInfo.tunnel_mode !== 'external'">
+        <button @click="startTunnel()" :disabled="mobileInfo._tunnelStarting"
                 class="flex items-center gap-1 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white text-xs rounded-xl transition">
-          <span x-text="mobileInfo._tunnelStarting ? '⏳ Starting...' : (mobileInfo.tunnel_mode === 'named' ? '🌍 Start Named Tunnel' : '🔒 Start HTTPS Tunnel')"></span>
+          <span x-text="mobileInfo._tunnelStarting ? '⏳ Starting...' : mobileInfo.tunnel_mode === 'named' ? '🌐 Start Named Tunnel' : '🔒 Start HTTPS Tunnel'"></span>
         </button>
       </template>
-      <template x-if="mobileInfo.cloudflared_url || (mobileInfo.tunnel_mode === 'named' && mobileInfo.tunnel_running)">
-        <button type="button" @click="stopTunnel()" :disabled="mobileInfo._tunnelStopping"
+      <template x-if="mobileInfo.tunnel_running && mobileInfo.tunnel_mode !== 'external'">
+        <button @click="stopTunnel()" :disabled="mobileInfo._tunnelStopping"
                 class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-slate-300 text-xs rounded-xl transition">
           <span x-text="mobileInfo._tunnelStopping ? 'Stopping...' : 'Stop Tunnel'"></span>
         </button>
@@ -4145,7 +4145,7 @@
     </div>
 
     <!-- No HTTPS warning -->
-    <div x-show="!(mobileInfo.cloudflared_url || mobileInfo.stable_domain_status === 'active')" class="text-[10px] text-amber-400 mb-2">
+    <div x-show="!mobileInfo.cloudflared_url && mobileInfo.stable_domain_status !== 'active'" class="text-[10px] text-amber-400 mb-2">
       ⚠️ Use a stable domain or start an HTTPS tunnel above for PWA install on phone
     </div>
     <button @click="showMobileModal = false" class="mt-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm rounded-xl transition">Close</button>
@@ -4738,8 +4738,8 @@ function devbrain() {
       cloudflared_url: '',
       stable_domain: 'axon.edudashpro.org.za',
       stable_domain_url: 'https://axon.edudashpro.org.za',
-      stable_domain_status: 'planned',
       stable_domain_enabled: false,
+      stable_domain_status: 'planned',
       stable_domain_detail: '',
       tunnel_mode: 'trycloudflare',
       named_tunnel_ready: false,
@@ -7572,7 +7572,7 @@ function devbrain() {
           live_feed_enabled: this.settingEnabled(s.live_feed_enabled ?? true),
           stable_domain_enabled: this.settingEnabled(s.stable_domain_enabled),
           stable_domain: s.stable_domain || 'axon.edudashpro.org.za',
-          public_base_url: s.public_base_url || 'https://axon.edudashpro.org.za',
+          public_base_url: s.public_base_url || `https://${s.stable_domain || 'axon.edudashpro.org.za'}`,
           tunnel_mode: s.tunnel_mode || 'trycloudflare',
           cloudflare_tunnel_token: '',
           terminal_default_mode: s.terminal_default_mode || 'read_only',
@@ -7657,7 +7657,7 @@ function devbrain() {
       payload.live_feed_enabled = !!this.settingsForm.live_feed_enabled;
       payload.stable_domain_enabled = !!this.settingsForm.stable_domain_enabled;
       payload.stable_domain = this.settingsForm.stable_domain || 'axon.edudashpro.org.za';
-      payload.public_base_url = this.settingsForm.public_base_url || `https://${payload.stable_domain}`;
+      payload.public_base_url = this.settingsForm.public_base_url || `https://${this.settingsForm.stable_domain || 'axon.edudashpro.org.za'}`;
       payload.tunnel_mode = this.settingsForm.tunnel_mode || 'trycloudflare';
       if (this.settingsForm.cloudflare_tunnel_token) payload.cloudflare_tunnel_token = this.settingsForm.cloudflare_tunnel_token;
       payload.terminal_default_mode = this.settingsForm.terminal_default_mode || 'read_only';
@@ -7695,7 +7695,7 @@ function devbrain() {
         }
         if (this.settingsForm.cloudflare_tunnel_token) {
           const raw = this.settingsForm.cloudflare_tunnel_token;
-          this.settingsForm._cloudflareTunnelTokenHint = raw.length > 12 ? `${raw.slice(0, 6)}...${raw.slice(-4)}` : 'set';
+          this.settingsForm._cloudflareTunnelTokenHint = raw.length > 10 ? `${raw.slice(0, 4)}...${raw.slice(-4)}` : 'set';
           this.settingsForm.cloudflare_tunnel_token = '';
         }
         if (this.settingsForm.github_token) {
@@ -8188,16 +8188,10 @@ function devbrain() {
           stable_domain_status: r.mode === 'named' && r.running ? 'configured' : this.mobileInfo.stable_domain_status,
         };
         await this.loadMobileInfo();
-        if (r.url) {
-          this.showToast(r.mode === 'named' ? '🌍 Stable domain ready for Axon.' : '🔒 HTTPS tunnel ready! Scan the QR code.');
-        } else {
-          this.showToast('Tunnel starting — reload in a moment');
-        }
-      } catch(e) {
-        this.showToast(`Failed to start tunnel: ${e.message || e}`);
-      } finally {
-        this.mobileInfo = { ...this.mobileInfo, _tunnelStarting: false };
-      }
+        if (r.url) this.showToast(r.mode === 'named' ? '🌐 Named tunnel ready. Use your stable domain.' : '🔒 HTTPS tunnel ready! Scan the QR code.');
+        else this.showToast('Tunnel starting — reload in a moment');
+      } catch(e) { this.showToast(e.message || 'Failed to start tunnel'); }
+      this.mobileInfo = { ...this.mobileInfo, _tunnelStarting: false };
     },
     async stopTunnel() {
       if (this.mobileInfo._tunnelStopping) return;
