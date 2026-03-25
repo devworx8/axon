@@ -452,9 +452,10 @@ async def serve_ui():
     ui_file = UI_DIR / "index.html"
     if not ui_file.exists():
         return HTMLResponse("<h1>Axon UI not found</h1><p>Run install.sh again.</p>", status_code=404)
+    html = ui_file.read_text().replace("__AXON_BUILD_VERSION__", _SW_CACHE_VERSION)
     return HTMLResponse(
-        ui_file.read_text(),
-        headers={"Cache-Control": "no-cache, must-revalidate"},
+        html,
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
     )
 
 
@@ -464,7 +465,10 @@ async def serve_manual():
     manual_file = UI_DIR / "manual.html"
     if not manual_file.exists():
         return HTMLResponse("<h1>Manual not found</h1>", status_code=404)
-    return HTMLResponse(manual_file.read_text())
+    return HTMLResponse(
+        manual_file.read_text().replace("__AXON_BUILD_VERSION__", _SW_CACHE_VERSION),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
 
 
 # ─── Projects ────────────────────────────────────────────────────────────────

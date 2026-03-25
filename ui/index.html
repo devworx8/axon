@@ -8,13 +8,15 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Axon" />
   <meta name="theme-color" content="#0f172a" />
-  <link rel="manifest" href="/manifest.json" />
+  <meta name="axon-build" content="__AXON_BUILD_VERSION__" />
+  <link rel="manifest" href="/manifest.json?v=__AXON_BUILD_VERSION__" />
   <title>Axon</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     // Register service worker for PWA
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js', { scope: '/' }).then(reg => {
+      const AXON_BUILD_VERSION = '__AXON_BUILD_VERSION__';
+      navigator.serviceWorker.register(`/sw.js?v=${encodeURIComponent(AXON_BUILD_VERSION)}`, { scope: '/' }).then(reg => {
         // Check for SW updates every 5 minutes (less aggressive)
         setInterval(() => reg.update(), 300000);
         // Only reload on genuine updates (not first install)
@@ -26,7 +28,7 @@
           sw.addEventListener('statechange', () => {
             if (sw.state === 'activated' && navigator.serviceWorker.controller) {
               // Guard: reload at most once per browser session to prevent loops
-              const key = 'devbrain-sw-reloaded';
+              const key = `axon-sw-reloaded-${AXON_BUILD_VERSION}`;
               if (!sessionStorage.getItem(key)) {
                 sessionStorage.setItem(key, '1');
                 window.location.reload();
@@ -425,146 +427,347 @@
         <div class="font-semibold text-white">Dashboard</div>
       </div>
       <div class="flex-1 overflow-y-auto">
-        <div class="p-4 md:p-6 space-y-4 md:space-y-5 max-w-5xl mx-auto w-full">
+        <div class="w-full max-w-[1600px] mx-auto px-4 py-4 md:px-6 md:py-6 xl:px-8 2xl:px-10">
+          <div class="xl:grid xl:grid-cols-[minmax(0,1fr)_360px] xl:gap-6 xl:items-start">
+            <div class="min-w-0 space-y-4 md:space-y-5">
 
-          <!-- Greeting -->
-          <div class="mb-2">
-            <h2 class="text-lg font-bold text-white">Good morning</h2>
-            <p class="text-sm text-slate-400">Axon is active and monitoring your local workspace</p>
-          </div>
-
-          <!-- Stat cards — 2x2 grid -->
-          <div class="grid grid-cols-2 gap-3">
-            <!-- Workspaces -->
-            <div class="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-4">
-              <div class="flex items-center gap-2 mb-2">
-                <div class="w-8 h-8 rounded-xl bg-blue-600/20 flex items-center justify-center text-blue-400 text-base">📁</div>
-                <span class="text-xs text-slate-400 font-medium">Workspaces</span>
-              </div>
-              <div class="text-2xl font-bold text-white" x-text="dashStats.active"></div>
-              <div class="text-[11px] text-slate-500" x-text="'of ' + dashStats.projects + ' tracked'"></div>
-            </div>
-            <!-- Missions -->
-            <div class="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-4">
-              <div class="flex items-center gap-2 mb-2">
-                <div class="w-8 h-8 rounded-xl bg-green-600/20 flex items-center justify-center text-green-400 text-base">✅</div>
-                <span class="text-xs text-slate-400 font-medium">Missions</span>
-              </div>
-              <div class="text-2xl font-bold text-white" x-text="dashStats.tasks"></div>
-              <div class="text-[11px] text-slate-500"><span class="text-amber-400 font-semibold" x-text="dashStats.urgent"></span> priority</div>
-            </div>
-            <!-- System health -->
-            <div class="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-4">
-              <div class="flex items-center gap-2 mb-2">
-                <div class="w-8 h-8 rounded-xl bg-emerald-600/20 flex items-center justify-center text-emerald-400 text-base">💚</div>
-                <span class="text-xs text-slate-400 font-medium">System Health</span>
-              </div>
-              <div class="text-2xl font-bold" :class="dashStats.health_avg >= 70 ? 'text-green-400' : dashStats.health_avg >= 40 ? 'text-yellow-400' : 'text-red-400'" x-text="dashStats.health_avg + '%'"></div>
-              <div class="text-[11px] text-slate-500">across active workspaces</div>
-            </div>
-            <!-- AI runtime -->
-            <div class="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-4">
-              <div class="flex items-center gap-2 mb-2">
-                <div class="w-8 h-8 rounded-xl bg-purple-600/20 flex items-center justify-center text-purple-400 text-base">🧠</div>
-                <span class="text-xs text-slate-400 font-medium">AI Runtime</span>
-              </div>
-              <div class="text-2xl font-bold text-white" x-text="runtimeStatus.runtime_label || backendBadge()"></div>
-              <div class="text-[11px] text-slate-500" x-text="runtimeStatus.active_model || composerModelSummary() || 'Awaiting model selection'"></div>
-            </div>
-          </div>
-
-          <div class="grid gap-2 md:grid-cols-5">
-            <template x-for="item in runtimeStatusCards()" :key="item.label">
-              <div class="rounded-2xl border px-3 py-3 bg-slate-900/55 backdrop-blur"
-                   :class="item.tone === 'ok' ? 'border-emerald-500/15' : item.tone === 'warn' ? 'border-amber-500/15' : 'border-slate-800'">
-                <div class="text-[10px] uppercase tracking-[0.2em] text-slate-500" x-text="item.label"></div>
-                <div class="mt-1 text-sm font-medium text-slate-100" x-text="item.value"></div>
-              </div>
-            </template>
-          </div>
-
-          <div class="rounded-2xl border border-slate-800 bg-slate-900/45 px-3 py-3">
-            <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500 mb-2">Runtime Signals</div>
-            <div class="flex flex-wrap gap-2">
-              <template x-for="badge in runtimeProviderBadges()" :key="badge.label">
-                <span class="rounded-full border px-2.5 py-1 text-[10px]"
-                      :class="runtimeProviderBadgeClass(badge.tone)"
-                      x-text="badge.label"></span>
-              </template>
-            </div>
-          </div>
-
-          <!-- Quick actions row -->
-          <div class="flex gap-2 overflow-x-auto no-scrollbar">
-            <button @click="switchTab('chat')" class="flex items-center gap-2 px-4 py-2.5 bg-blue-600/20 border border-blue-500/30 rounded-xl text-sm text-blue-300 font-medium shrink-0 press-scale">
-              💬 Open Console
-            </button>
-            <button @click="runScan()" :disabled="scanning" class="flex items-center gap-2 px-4 py-2.5 bg-slate-800/80 border border-slate-700/50 rounded-xl text-sm text-slate-300 font-medium shrink-0 press-scale">
-              <span x-text="scanning ? '⏳' : '🔄'"></span> <span x-text="scanning ? 'Scanning...' : 'Run Axon Scan'"></span>
-            </button>
-            <button @click="switchTab('tasks'); showAddTask = true" class="flex items-center gap-2 px-4 py-2.5 bg-slate-800/80 border border-slate-700/50 rounded-xl text-sm text-slate-300 font-medium shrink-0 press-scale">
-              ➕ New Mission
-            </button>
-            <button x-show="!isMobile" @click="showMobileModal = true; loadMobileInfo()" class="flex items-center gap-2 px-4 py-2.5 bg-slate-800/80 border border-slate-700/50 rounded-xl text-sm text-slate-300 font-medium shrink-0 press-scale">
-              📱 Connect Mobile
-            </button>
-          </div>
-
-          <!-- Urgent tasks (if any) -->
-          <div x-show="dashStats.urgent > 0">
-            <div class="text-xs font-semibold text-amber-400 mb-2">🔥 Priority Missions</div>
-            <div class="space-y-2">
-              <template x-for="t in tasks.filter(t => t.priority === 'urgent' && t.status !== 'done').slice(0,3)" :key="t.id">
-                <div class="bg-red-950/40 border border-red-500/20 rounded-xl px-4 py-3 flex items-center gap-3 press-scale"
-                     @click="switchTab('tasks')">
-                  <div class="w-2 h-2 rounded-full bg-red-400 shrink-0"></div>
-                  <div class="flex-1 min-w-0">
-                    <div class="text-sm text-white font-medium truncate" x-text="t.title"></div>
-                    <div class="text-[11px] text-slate-500" x-text="t.project_name || 'No workspace'"></div>
-                  </div>
-                </div>
-              </template>
-            </div>
-          </div>
-
-          <!-- Top workspaces -->
-          <div x-show="dashTopProjects.length > 0">
-            <div class="text-xs font-semibold text-slate-400 mb-2">📊 Workspaces</div>
-            <div class="space-y-2">
-              <template x-for="p in dashTopProjects" :key="p.id">
-                <div class="bg-slate-800/60 border border-slate-700/50 rounded-xl px-4 py-3 flex items-center gap-3 press-scale"
-                     @click="chatProjectId = String(p.id); chatProject = p; switchTab('chat');">
-                  <div class="w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0"
-                       :class="p.health >= 70 ? 'bg-green-900/40 text-green-400' : p.health >= 40 ? 'bg-yellow-900/40 text-yellow-400' : 'bg-red-900/40 text-red-400'"
-                       x-text="p.health + '%'">
-                  </div>
-                  <div class="flex-1 min-w-0">
-                    <div class="text-sm text-white font-medium truncate" x-text="p.name"></div>
-                    <div class="flex items-center gap-2 text-[11px] text-slate-500">
-                      <span x-text="p.stack || 'unknown'"></span>
-                      <span x-show="p.todo_count > 0" class="text-amber-400" x-text="p.todo_count + ' TODOs'"></span>
+              <div class="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.95fr)]">
+                <section class="rounded-[28px] border border-slate-800 bg-slate-900/55 p-5 shadow-[0_24px_80px_rgba(15,23,42,0.34)] backdrop-blur md:p-6">
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.24em] text-cyan-300/80">Operator Console</div>
+                      <h2 class="mt-3 text-2xl font-bold text-white md:text-3xl">Good morning</h2>
+                      <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-400">Axon is active and monitoring your local workspace. Use this view as the control room for missions, runtime health, and what Axon is doing right now.</p>
+                    </div>
+                    <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3 min-w-[220px]">
+                      <div class="text-[10px] uppercase tracking-[0.2em] text-slate-500">Current focus</div>
+                      <div class="mt-2 text-sm font-medium text-slate-100" x-text="liveOperator.title || lastOperatorOutcome.title || 'Standing by'"></div>
+                      <div class="mt-1 text-[11px] leading-5 text-slate-400" x-text="liveOperator.detail || lastOperatorOutcome.summary || 'The next visible action appears here as soon as Axon starts working.'"></div>
                     </div>
                   </div>
-                  <svg class="w-4 h-4 text-slate-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-                </div>
-              </template>
-            </div>
-          </div>
 
-          <!-- Recent activity -->
-          <div x-show="dashRecentActivity.length > 0">
-            <div class="text-xs font-semibold text-slate-400 mb-2">🕐 Recent Timeline</div>
-            <div class="space-y-1.5">
-              <template x-for="a in dashRecentActivity" :key="a.id">
-                <div class="flex items-center gap-2.5 py-1.5">
-                  <span class="text-sm shrink-0" x-text="eventIcon(a.event_type)"></span>
-                  <div class="flex-1 min-w-0 text-xs text-slate-400 truncate" x-text="a.summary || a.event_type"></div>
-                  <span class="text-[10px] text-slate-600 shrink-0" x-text="timeAgo(a.created_at)"></span>
-                </div>
-              </template>
-            </div>
-          </div>
+                  <div class="mt-5 flex flex-wrap gap-2">
+                    <button @click="switchTab('chat')" class="flex items-center gap-2 rounded-2xl border border-blue-500/30 bg-blue-600/15 px-4 py-2.5 text-sm font-medium text-blue-200 transition hover:border-blue-400/40 hover:bg-blue-500/20 press-scale">
+                      💬 Open Console
+                    </button>
+                    <button @click="runScan()" :disabled="scanning" class="flex items-center gap-2 rounded-2xl border border-slate-700/70 bg-slate-950/70 px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:border-slate-500 press-scale">
+                      <span x-text="scanning ? '⏳' : '🔄'"></span>
+                      <span x-text="scanning ? 'Scanning…' : 'Run Axon Scan'"></span>
+                    </button>
+                    <button @click="switchTab('tasks'); showAddTask = true" class="flex items-center gap-2 rounded-2xl border border-slate-700/70 bg-slate-950/70 px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:border-slate-500 press-scale">
+                      ➕ New Mission
+                    </button>
+                    <button x-show="!isMobile" @click="showMobileModal = true; loadMobileInfo()" class="flex items-center gap-2 rounded-2xl border border-slate-700/70 bg-slate-950/70 px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:border-slate-500 press-scale">
+                      📱 Connect Mobile
+                    </button>
+                  </div>
+                </section>
 
+                <section class="rounded-[28px] border border-cyan-500/15 bg-gradient-to-br from-slate-950 via-slate-900/95 to-slate-900/80 p-5 shadow-[0_28px_90px_rgba(8,145,178,0.14)] md:p-6">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.22em] text-cyan-300/80">Proof of Work</div>
+                      <div class="mt-2 flex items-center gap-2">
+                        <span class="h-2.5 w-2.5 rounded-full animate-pulse" :class="liveOperator.phase === 'recover' ? 'bg-amber-400' : (liveOperator.active ? 'bg-emerald-400' : 'bg-slate-500')"></span>
+                        <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em]"
+                              :class="phaseChipClass(liveOperator.phase || agentProgressState || 'observe')"
+                              x-text="phaseLabel(liveOperator.phase || agentProgressState || 'observe')"></span>
+                      </div>
+                    </div>
+                    <div class="text-right text-[10px] text-slate-500">
+                      <div x-text="liveOperator.startedAt ? 'Started ' + timeAgo(liveOperator.startedAt) : 'Ready now'"></div>
+                      <div x-text="lastOperatorOutcome.at ? 'Last result ' + timeAgo(lastOperatorOutcome.at) : ''"></div>
+                    </div>
+                  </div>
+
+                  <div class="mt-4">
+                    <div class="text-lg font-semibold text-white" x-text="liveOperator.title || lastOperatorOutcome.title || 'Axon is ready'"></div>
+                    <div class="mt-2 text-sm leading-6 text-slate-400" x-text="liveOperator.detail || lastOperatorOutcome.summary || 'When Axon is planning, executing, or verifying, you will see the active workspace, step detail, and result summary here.'"></div>
+                  </div>
+
+                  <div class="mt-4 h-1.5 overflow-hidden rounded-full bg-slate-800/90">
+                    <div class="h-full rounded-full bg-gradient-to-r from-cyan-400 via-blue-500 to-emerald-400 transition-all duration-300"
+                         :style="`width:${operatorProgressWidth()}`"></div>
+                  </div>
+
+                  <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                      <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Workspace</div>
+                      <div class="mt-2 text-sm font-medium text-slate-100" x-text="liveOperator.workspaceName || chatProject?.name || dashboardWeakestWorkspace()?.name || 'No workspace pinned'"></div>
+                      <div class="mt-1 text-[11px] text-slate-500" x-text="dashboardWeakestWorkspace() ? `Lowest health currently ${dashboardWeakestWorkspace().health}%` : 'Axon will name the active workspace while it works.'"></div>
+                    </div>
+                    <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                      <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Last action</div>
+                      <div class="mt-2 text-sm font-medium text-slate-100" x-text="lastOperatorOutcome.tool ? prettyToolName(lastOperatorOutcome.tool) : 'Waiting for the next action'"></div>
+                      <div class="mt-1 text-[11px] text-slate-500" x-text="lastOperatorOutcome.summary || 'The latest verified result lands here so you can see proof that work really happened.'"></div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+
+              <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
+                <div class="rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">
+                  <div class="mb-2 flex items-center gap-2">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-blue-600/20 text-base text-blue-400">📁</div>
+                    <span class="text-xs font-medium text-slate-400">Workspaces</span>
+                  </div>
+                  <div class="text-2xl font-bold text-white" x-text="dashStats.active"></div>
+                  <div class="text-[11px] text-slate-500" x-text="'of ' + dashStats.projects + ' tracked'"></div>
+                </div>
+                <div class="rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">
+                  <div class="mb-2 flex items-center gap-2">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-green-600/20 text-base text-green-400">✅</div>
+                    <span class="text-xs font-medium text-slate-400">Missions</span>
+                  </div>
+                  <div class="text-2xl font-bold text-white" x-text="dashStats.tasks"></div>
+                  <div class="text-[11px] text-slate-500"><span class="font-semibold text-amber-400" x-text="dashStats.urgent"></span> priority</div>
+                </div>
+                <div class="rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">
+                  <div class="mb-2 flex items-center gap-2">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-600/20 text-base text-emerald-400">💚</div>
+                    <span class="text-xs font-medium text-slate-400">System Health</span>
+                  </div>
+                  <div class="text-2xl font-bold" :class="dashStats.health_avg >= 70 ? 'text-green-400' : dashStats.health_avg >= 40 ? 'text-yellow-400' : 'text-red-400'" x-text="dashStats.health_avg + '%'"></div>
+                  <div class="text-[11px] text-slate-500">across active workspaces</div>
+                </div>
+                <div class="rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">
+                  <div class="mb-2 flex items-center gap-2">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-purple-600/20 text-base text-purple-400">🧠</div>
+                    <span class="text-xs font-medium text-slate-400">AI Runtime</span>
+                  </div>
+                  <div class="text-2xl font-bold text-white" x-text="runtimeStatus.runtime_label || backendBadge()"></div>
+                  <div class="text-[11px] text-slate-500" x-text="runtimeStatus.active_model || composerModelSummary() || 'Awaiting model selection'"></div>
+                </div>
+              </div>
+
+              <div class="grid gap-2 md:grid-cols-5">
+                <template x-for="item in runtimeStatusCards()" :key="item.label">
+                  <div class="rounded-2xl border bg-slate-900/55 px-3 py-3 backdrop-blur"
+                       :class="item.tone === 'ok' ? 'border-emerald-500/15' : item.tone === 'warn' ? 'border-amber-500/15' : 'border-slate-800'">
+                    <div class="text-[10px] uppercase tracking-[0.2em] text-slate-500" x-text="item.label"></div>
+                    <div class="mt-1 text-sm font-medium text-slate-100" x-text="item.value"></div>
+                  </div>
+                </template>
+              </div>
+
+              <div class="grid gap-4 lg:grid-cols-[minmax(0,1.12fr)_minmax(320px,0.88fr)]">
+                <section class="rounded-[28px] border border-slate-800 bg-slate-900/45 p-4 md:p-5">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Workspace Risk</div>
+                      <div class="mt-2 text-lg font-semibold text-white">Weakest workspaces first</div>
+                    </div>
+                    <button @click="switchTab('projects')" class="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-[10px] text-slate-300 transition hover:border-slate-500">Open Workspaces</button>
+                  </div>
+                  <div class="mt-4 space-y-3" x-show="dashTopProjects.length">
+                    <template x-for="p in dashTopProjects" :key="p.id">
+                      <button @click="chatProjectId = String(p.id); chatProject = p; switchTab('chat');"
+                              class="flex w-full items-center gap-3 rounded-2xl border border-slate-800 bg-slate-950/65 px-4 py-3 text-left transition hover:border-slate-600 press-scale">
+                        <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-sm font-semibold"
+                             :class="p.health >= 70 ? 'bg-emerald-500/10 text-emerald-300' : p.health >= 40 ? 'bg-amber-500/10 text-amber-300' : 'bg-rose-500/10 text-rose-300'"
+                             x-text="`${p.health}%`"></div>
+                        <div class="min-w-0 flex-1">
+                          <div class="truncate text-sm font-medium text-slate-100" x-text="p.name"></div>
+                          <div class="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                            <span x-text="p.stack || 'unknown stack'"></span>
+                            <span x-show="p.todo_count > 0" class="text-amber-400" x-text="`${p.todo_count} TODOs`"></span>
+                          </div>
+                        </div>
+                        <svg class="h-4 w-4 shrink-0 text-slate-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+                      </button>
+                    </template>
+                  </div>
+                  <div x-show="!dashTopProjects.length" class="mt-4 rounded-2xl border border-dashed border-slate-800 bg-slate-950/60 px-4 py-5 text-sm text-slate-500">
+                    Add a workspace or run Axon Scan to start tracking health here.
+                  </div>
+                </section>
+
+                <section class="rounded-[28px] border border-slate-800 bg-slate-900/45 p-4 md:p-5">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300/80">Priority Missions</div>
+                      <div class="mt-2 text-lg font-semibold text-white">What needs attention next</div>
+                    </div>
+                    <button @click="switchTab('tasks')" class="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-[10px] text-slate-300 transition hover:border-slate-500">View Missions</button>
+                  </div>
+                  <div class="mt-4 space-y-3" x-show="dashboardPriorityMissions().length">
+                    <template x-for="task in dashboardPriorityMissions()" :key="task.id">
+                      <button @click="switchTab('tasks')"
+                              class="w-full rounded-2xl border px-4 py-3 text-left transition press-scale"
+                              :class="task.priority === 'urgent' ? 'border-rose-500/20 bg-rose-500/10' : 'border-slate-800 bg-slate-950/65 hover:border-slate-700'">
+                        <div class="flex items-start gap-3">
+                          <div class="mt-1 h-2.5 w-2.5 shrink-0 rounded-full"
+                               :class="task.priority === 'urgent' ? 'bg-rose-400' : task.priority === 'high' ? 'bg-amber-400' : 'bg-slate-500'"></div>
+                          <div class="min-w-0 flex-1">
+                            <div class="truncate text-sm font-medium text-slate-100" x-text="task.title"></div>
+                            <div class="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                              <span x-text="task.project_name || 'No workspace'"></span>
+                              <span class="uppercase tracking-[0.16em]" x-text="task.priority"></span>
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    </template>
+                  </div>
+                  <div x-show="!dashboardPriorityMissions().length" class="mt-4 rounded-2xl border border-dashed border-slate-800 bg-slate-950/60 px-4 py-5 text-sm text-slate-500">
+                    No urgent or high-priority missions right now. Axon will surface the next safe move here when something changes.
+                  </div>
+                </section>
+              </div>
+
+              <div class="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+                <section class="rounded-[28px] border border-slate-800 bg-slate-900/45 p-4 md:p-5">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Recent Timeline</div>
+                      <div class="mt-2 text-lg font-semibold text-white">What just happened</div>
+                    </div>
+                    <button @click="switchTab('activity')" class="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-[10px] text-slate-300 transition hover:border-slate-500">Open Timeline</button>
+                  </div>
+                  <div class="mt-4 space-y-2.5" x-show="dashRecentActivity.length">
+                    <template x-for="a in dashRecentActivity" :key="a.id">
+                      <div class="flex items-center gap-3 rounded-2xl border border-slate-800 bg-slate-950/60 px-4 py-3">
+                        <span class="text-sm shrink-0" x-text="eventIcon(a.event_type)"></span>
+                        <div class="min-w-0 flex-1">
+                          <div class="truncate text-sm text-slate-100" x-text="a.summary || a.event_type"></div>
+                          <div class="mt-1 text-[11px] text-slate-500">
+                            <span x-text="a.project_name || 'General'"></span>
+                          </div>
+                        </div>
+                        <span class="shrink-0 text-[10px] text-slate-500" x-text="timeAgo(a.created_at)"></span>
+                      </div>
+                    </template>
+                  </div>
+                  <div x-show="!dashRecentActivity.length" class="mt-4 rounded-2xl border border-dashed border-slate-800 bg-slate-950/60 px-4 py-5 text-sm text-slate-500">
+                    Timeline updates will appear here after scans, missions, resource work, or operator actions.
+                  </div>
+                </section>
+
+                <section class="rounded-[28px] border border-slate-800 bg-slate-900/45 p-4 md:p-5">
+                  <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Runtime Signals</div>
+                  <div class="mt-2 text-lg font-semibold text-white">Connection and model posture</div>
+                  <div class="mt-4 flex flex-wrap gap-2">
+                    <template x-for="badge in runtimeProviderBadges()" :key="badge.label">
+                      <span class="rounded-full border px-2.5 py-1 text-[10px]"
+                            :class="runtimeProviderBadgeClass(badge.tone)"
+                            x-text="badge.label"></span>
+                    </template>
+                  </div>
+                  <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                      <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Connection</div>
+                      <div class="mt-2 text-sm font-medium text-slate-100" x-text="connectionStatusBadges().map(item => item.label).join(' · ') || 'Local only'"></div>
+                      <div class="mt-1 text-[11px] text-slate-500" x-text="liveFeed.connected ? 'Live feed is connected.' : 'Live feed is idle until Axon starts work.'"></div>
+                    </div>
+                    <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                      <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Memory posture</div>
+                      <div class="mt-2 text-sm font-medium text-slate-100" x-text="runtimeStatus.memory_state || 'Ready'"></div>
+                      <div class="mt-1 text-[11px] text-slate-500" x-text="memoryOverviewText()"></div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </div>
+
+            <aside class="hidden xl:block">
+              <div class="sticky top-6 space-y-4">
+                <section class="rounded-[28px] border border-cyan-500/15 bg-slate-900/70 p-5 shadow-[0_20px_80px_rgba(8,145,178,0.12)] backdrop-blur">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.22em] text-cyan-300/80">Axon Live</div>
+                      <div class="mt-2 text-lg font-semibold text-white">Operator status</div>
+                    </div>
+                    <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em]"
+                          :class="phaseChipClass(liveOperator.phase || agentProgressState || 'observe')"
+                          x-text="phaseLabel(liveOperator.phase || agentProgressState || 'observe')"></span>
+                  </div>
+                  <div class="mt-4 text-base font-semibold text-slate-100" x-text="liveOperator.title || 'Standing by'"></div>
+                  <div class="mt-2 text-sm leading-6 text-slate-400" x-text="liveOperator.detail || 'Axon Live shows what Axon is doing right now, even before the final answer lands.'"></div>
+                  <div class="mt-4 h-1.5 overflow-hidden rounded-full bg-slate-950/90">
+                    <div class="h-full rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-cyan-300 transition-all duration-300"
+                         :style="`width:${operatorProgressWidth()}`"></div>
+                  </div>
+                  <div class="mt-3 flex items-center justify-between text-[11px] text-slate-500">
+                    <span x-text="liveOperator.startedAt ? 'Started ' + timeAgo(liveOperator.startedAt) : 'Waiting for a task'"></span>
+                    <span x-text="liveOperator.workspaceName || chatProject?.name || 'Global scope'"></span>
+                  </div>
+                </section>
+
+                <section class="rounded-[28px] border border-slate-800 bg-slate-900/55 p-5">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Live Activity</div>
+                      <div class="mt-2 text-lg font-semibold text-white">Recent steps</div>
+                    </div>
+                    <span class="text-[10px] text-slate-500" x-text="`${dashboardLiveEntries().length} items`"></span>
+                  </div>
+                  <div class="mt-4 space-y-2 max-h-[320px] overflow-y-auto pr-1">
+                    <template x-if="!dashboardLiveEntries().length">
+                      <div class="rounded-2xl border border-dashed border-slate-800 bg-slate-950/70 px-4 py-4 text-sm text-slate-500">
+                        When Axon starts working, the feed shows phase, detail, and proof that activity is happening.
+                      </div>
+                    </template>
+                    <template x-for="entry in dashboardLiveEntries()" :key="entry.id">
+                      <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                        <div class="flex items-center justify-between gap-2">
+                          <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.16em]"
+                                :class="phaseChipClass(entry.phase || 'observe')"
+                                x-text="phaseLabel(entry.phase || 'observe')"></span>
+                          <span class="text-[10px] text-slate-500" x-text="timeAgo(entry.at || entry.created_at)"></span>
+                        </div>
+                        <div class="mt-2 text-sm font-medium text-slate-100" x-text="entry.title"></div>
+                        <div class="mt-1 text-[11px] leading-5 text-slate-400" x-text="entry.detail"></div>
+                      </div>
+                    </template>
+                  </div>
+                </section>
+
+                <section class="rounded-[28px] border border-slate-800 bg-slate-900/55 p-5">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Desktop Preview</div>
+                      <div class="mt-2 text-lg font-semibold text-white">Proof of work</div>
+                    </div>
+                    <button @click="refreshDesktopPreview(true)"
+                            class="rounded-full border border-slate-700 bg-slate-950/70 px-3 py-1 text-[10px] text-slate-300 transition hover:border-slate-500">
+                      Refresh
+                    </button>
+                  </div>
+                  <div class="mt-4 overflow-hidden rounded-2xl border border-slate-800 bg-slate-950/80 aspect-video flex items-center justify-center">
+                    <img x-show="desktopPreview.url" :src="desktopPreview.url" alt="Live desktop preview" class="h-full w-full object-cover" />
+                    <div x-show="!desktopPreview.url && desktopPreview.loading" class="px-5 text-center text-sm text-slate-400">Pulling a fresh desktop preview…</div>
+                    <div x-show="!desktopPreview.url && !desktopPreview.loading && !desktopPreview.error" class="px-5 text-center text-sm text-slate-500">Desktop Preview appears here while Axon is active so you can see that work is really happening.</div>
+                    <div x-show="desktopPreview.error" class="px-5 text-center text-sm text-amber-300" x-text="desktopPreview.error"></div>
+                  </div>
+                  <div class="mt-3 text-[11px] text-slate-500" x-text="desktopPreview.lastUpdated ? 'Updated ' + timeAgo(desktopPreview.lastUpdated) : 'Refresh to capture the latest desktop state.'"></div>
+                </section>
+
+                <section class="rounded-[28px] border border-slate-800 bg-slate-900/55 p-5">
+                  <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Runtime + Connectivity</div>
+                  <div class="mt-2 text-lg font-semibold text-white">Stay grounded</div>
+                  <div class="mt-4 flex flex-wrap gap-2">
+                    <template x-for="badge in connectionStatusBadges()" :key="badge.key">
+                      <span class="rounded-full border px-2.5 py-1 text-[10px]"
+                            :class="connectionBadgeClass(badge.state)"
+                            x-text="badge.label"></span>
+                    </template>
+                  </div>
+                  <div class="mt-4 space-y-3">
+                    <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                      <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Runtime</div>
+                      <div class="mt-2 text-sm font-medium text-slate-100" x-text="runtimeStatus.runtime_label || backendBadge()"></div>
+                      <div class="mt-1 text-[11px] text-slate-500" x-text="runtimeStatus.active_model || composerModelSummary() || 'Awaiting model selection'"></div>
+                    </div>
+                    <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                      <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Live connection</div>
+                      <div class="mt-2 text-sm font-medium text-slate-100" x-text="liveFeed.connected ? 'Connected' : (liveFeed.reconnecting ? 'Reconnecting' : 'Idle')"></div>
+                      <div class="mt-1 text-[11px] text-slate-500" x-text="liveFeed.latest?.at ? 'Latest update ' + timeAgo(liveFeed.latest.at) : 'Axon will show the next live event here.'"></div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </aside>
+          </div>
         </div>
       </div>
     </div>
@@ -4671,6 +4874,35 @@ function devbrain() {
       ];
     },
 
+    dashboardWeakestWorkspace() {
+      return (this.dashTopProjects || [])[0] || null;
+    },
+
+    dashboardPriorityMissions() {
+      const rank = { urgent: 0, high: 1, medium: 2, low: 3 };
+      return (this.tasks || [])
+        .filter(task => !['done', 'cancelled'].includes(String(task.status || '').toLowerCase()))
+        .sort((a, b) => {
+          const priorityDelta = (rank[a.priority] ?? 4) - (rank[b.priority] ?? 4);
+          if (priorityDelta !== 0) return priorityDelta;
+          return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+        })
+        .slice(0, 4);
+    },
+
+    dashboardLiveEntries() {
+      if ((this.liveOperatorFeed || []).length) {
+        return [...this.liveOperatorFeed].slice(-6).reverse();
+      }
+      return (this.dashRecentActivity || []).slice(0, 6).map(item => ({
+        id: `activity-${item.id}`,
+        phase: item.event_type === 'alert' ? 'recover' : 'observe',
+        title: item.summary || this.prettyToolName(item.event_type || 'activity'),
+        detail: item.project_name ? `Workspace · ${item.project_name}` : (item.event_type || 'Timeline update'),
+        at: item.created_at,
+      }));
+    },
+
     tabLabelFor(id) {
       const item = [...this.navItems, ...this.mobileNavItems].find(tab => tab.id === id);
       if (item?.label) return item.label;
@@ -5307,7 +5539,7 @@ function devbrain() {
         msg ? `Goal received: ${msg.slice(0, 120)}` : this.liveOperator.detail,
       );
       if (mode === 'agent') this.setAgentStage('observe');
-      if (this.isMobile) {
+      if (this.desktopPreview.enabled) {
         this.refreshDesktopPreview(true);
         this.scheduleDesktopPreview();
       }
@@ -5449,7 +5681,6 @@ function devbrain() {
     },
 
     async refreshDesktopPreview(force = false) {
-      if (!this.isMobile) return;
       if (!this.desktopPreview.enabled && !force) return;
       this.desktopPreview.loading = true;
       this.desktopPreview.error = '';
@@ -5480,7 +5711,7 @@ function devbrain() {
 
     scheduleDesktopPreview() {
       if (this.desktopPreview.timer) clearTimeout(this.desktopPreview.timer);
-      if (!this.isMobile || !this.desktopPreview.enabled || !(this.chatLoading || this.liveOperator.active)) return;
+      if (!this.desktopPreview.enabled || !(this.chatLoading || this.liveOperator.active)) return;
       this.desktopPreview.timer = setTimeout(async () => {
         await this.refreshDesktopPreview();
         this.scheduleDesktopPreview();
