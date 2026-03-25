@@ -39,6 +39,8 @@
   </script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/microsoft-cognitiveservices-speech-sdk/distrib/browser/microsoft.cognitiveservices.speech.sdk.bundle-min.js"
+          onload="window.dispatchEvent(new Event('axon-speech-sdk-ready'))"></script>
   <style>
     [x-cloak] { display: none !important; }
 
@@ -59,9 +61,79 @@
     .prose-dark ul, .prose-dark ol { color: #cbd5e1; padding-left: 1.25rem; margin-bottom: 0.5rem; }
     .prose-dark li { margin-bottom: 0.2rem; }
     .prose-dark strong { color: #f1f5f9; }
+    .prose-dark a { color: #7dd3fc; text-decoration: underline; text-underline-offset: 2px; }
+    .prose-dark blockquote {
+      margin: 0.75rem 0;
+      border-left: 3px solid rgba(56, 189, 248, 0.35);
+      padding: 0.15rem 0 0.15rem 0.9rem;
+      color: #cbd5e1;
+      background: rgba(15, 23, 42, 0.42);
+      border-radius: 0 12px 12px 0;
+    }
+    .prose-dark hr {
+      border: 0;
+      height: 1px;
+      margin: 1rem 0;
+      background: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.28), transparent);
+    }
+    .prose-dark table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0.85rem 0;
+      overflow: hidden;
+      border-radius: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.12);
+    }
+    .prose-dark thead { background: rgba(30, 41, 59, 0.92); }
+    .prose-dark th, .prose-dark td {
+      border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+      padding: 0.7rem 0.8rem;
+      text-align: left;
+      vertical-align: top;
+      color: #cbd5e1;
+      font-size: 0.92em;
+    }
+    .prose-dark th { color: #f8fafc; font-weight: 600; }
     .prose-dark code { background: #1e293b; border-radius: 4px; padding: 1px 5px; font-size: 0.85em; color: #7dd3fc; }
     .prose-dark pre { background: #0f172a; border-radius: 8px; padding: 1rem; overflow-x: auto; margin: 0.5rem 0; }
     .prose-dark pre code { background: none; padding: 0; }
+    .canvas-shell {
+      background:
+        radial-gradient(circle at top, rgba(56, 189, 248, 0.08), transparent 42%),
+        rgba(2, 6, 23, 0.9);
+      backdrop-filter: blur(18px);
+    }
+    .canvas-paper {
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.02), transparent 18%),
+        rgba(15, 23, 42, 0.97);
+      border: 1px solid rgba(148, 163, 184, 0.12);
+      box-shadow: 0 40px 120px rgba(2, 6, 23, 0.55);
+    }
+    .canvas-prose {
+      font-size: 15px;
+      line-height: 1.75;
+    }
+    .canvas-prose h1, .canvas-prose h2, .canvas-prose h3 {
+      scroll-margin-top: 3rem;
+    }
+    .canvas-prose h1 { font-size: 1.7rem; margin-top: 0.2rem; }
+    .canvas-prose h2 { font-size: 1.35rem; margin-top: 1.25rem; }
+    .canvas-prose h3 { font-size: 1.1rem; margin-top: 1rem; }
+    .canvas-prose p, .canvas-prose li, .canvas-prose td, .canvas-prose th { font-size: 0.98rem; }
+    @media print {
+      body * { visibility: hidden !important; }
+      .print-surface, .print-surface * { visibility: visible !important; }
+      .print-surface {
+        position: absolute !important;
+        left: 0; top: 0;
+        width: 100%;
+        margin: 0 !important;
+        padding: 0 !important;
+        background: white !important;
+        color: black !important;
+      }
+    }
 
     /* ── Chat ── */
     .chat-bubble { max-width: 80%; word-break: break-word; }
@@ -625,7 +697,7 @@
                   ? 'bg-slate-800/95 border border-amber-500/20 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm'
                   : 'bg-slate-800/90 border border-slate-700/50 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm')">
                 <div x-show="msg.role === 'assistant'" class="prose-dark text-sm">
-                  <span x-html="renderMd(msg.content)"></span>
+                  <div x-html="renderMd(msg.content)"></div>
                   <!-- Streaming cursor -->
                   <span x-show="msg.streaming" class="inline-block w-2 h-4 bg-blue-400 ml-0.5 animate-pulse rounded-sm align-middle"></span>
                 </div>
@@ -648,9 +720,15 @@
                 <span x-show="msg.role === 'assistant' && msg.modelLabel"
                       class="max-w-[140px] truncate text-[10px] px-2 py-0.5 rounded-full border border-slate-700/70 bg-slate-900/70 text-slate-400"
                       x-text="msg.modelLabel"></span>
-                <button x-show="msg.role === 'assistant' && speechSupported && !msg.streaming"
+                <button x-show="msg.role === 'assistant' && voiceOutputAvailable() && !msg.streaming"
                         @click="speakMessage(msg.content)"
                         class="text-[10px] text-slate-600 hover:text-blue-400 transition" title="Read aloud">🔊</button>
+                <button x-show="msg.role === 'assistant' && !msg.streaming"
+                        @click="openCanvas(msg)"
+                        class="text-[10px] text-slate-600 hover:text-sky-300 transition" title="Open document canvas">Canvas</button>
+                <button x-show="msg.role === 'assistant' && !msg.streaming"
+                        @click="copyToClipboard(msg.content, 'Markdown')"
+                        class="text-[10px] text-slate-600 hover:text-slate-300 transition" title="Copy markdown">Copy</button>
                 <button x-show="msg.error"
                         @click="retryChat(msg)"
                         class="text-[10px] px-2 py-0.5 bg-amber-600/30 hover:bg-amber-600/50 text-amber-300 rounded-full transition" title="Retry this message">🔄 Retry</button>
@@ -775,6 +853,61 @@
             </template>
           </div>
 
+          <div class="hidden md:block mt-2" x-show="chatLoading || liveOperator.active">
+            <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="h-2 w-2 rounded-full animate-pulse" :class="liveOperator.phase === 'recover' ? 'bg-amber-400' : 'bg-emerald-400'"></span>
+                    <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em]"
+                          :class="phaseChipClass(liveOperator.phase || agentProgressState)"
+                          x-text="phaseLabel(liveOperator.phase || agentProgressState)"></span>
+                    <span class="truncate text-xs font-semibold text-slate-100" x-text="liveOperator.title || 'Axon is working…'"></span>
+                  </div>
+                  <div class="mt-1 text-[11px] text-slate-400" x-text="liveOperator.detail || 'Axon is actively working through the request.'"></div>
+                </div>
+                <div class="shrink-0 text-right">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Live Work Log</div>
+                  <div class="mt-1 text-[10px] text-slate-500" x-text="liveOperator.startedAt ? 'Started ' + timeAgo(liveOperator.startedAt) : ''"></div>
+                </div>
+              </div>
+              <div class="mt-3 h-1.5 rounded-full bg-slate-900/80 overflow-hidden">
+                <div class="h-full rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-cyan-300 transition-all duration-300"
+                     :style="`width:${operatorProgressWidth()}`"></div>
+              </div>
+              <div class="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,0.92fr)_minmax(320px,1.08fr)]">
+                <div class="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Current step</div>
+                  <div class="mt-1 text-sm font-medium text-slate-100" x-text="liveOperator.title || 'Waiting for the next step'"></div>
+                  <div class="mt-1 text-[11px] leading-5 text-slate-400" x-text="liveOperator.detail || 'Axon will show the next action here.'"></div>
+                </div>
+                <div class="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2">
+                  <div class="flex items-center justify-between gap-2">
+                    <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Recent activity</div>
+                    <div class="text-[10px] text-slate-500" x-text="`${liveOperatorFeed.length} step(s)`"></div>
+                  </div>
+                  <div class="mt-2 space-y-2 max-h-28 overflow-y-auto pr-1">
+                    <template x-if="!liveOperatorFeed.length">
+                      <div class="text-[11px] text-slate-500">Axon will stream the plan, tool use, and verification steps here.</div>
+                    </template>
+                    <template x-for="entry in liveOperatorFeed" :key="entry.id">
+                      <div class="rounded-lg border border-slate-800 bg-slate-950/70 px-2.5 py-2">
+                        <div class="flex items-center justify-between gap-2">
+                          <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.16em]"
+                                :class="phaseChipClass(entry.phase)"
+                                x-text="phaseLabel(entry.phase)"></span>
+                          <span class="text-[10px] text-slate-500" x-text="timeAgo(entry.at)"></span>
+                        </div>
+                        <div class="mt-1 text-[11px] font-medium text-slate-100" x-text="entry.title"></div>
+                        <div class="mt-0.5 text-[10px] leading-5 text-slate-400" x-text="entry.detail"></div>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div class="md:hidden mt-2" x-show="chatLoading || liveOperator.active">
             <div class="mobile-live-strip rounded-2xl px-3 py-2">
               <div class="flex items-center gap-2">
@@ -821,6 +954,15 @@
 
           <div x-show="!isMobile && usesOllamaBackend() && activeChatModel()" class="px-1 pt-2 text-[11px] text-slate-500" x-text="composerModelSummary()"></div>
 
+          <div x-show="composerSummaryChips().length" class="mt-2 flex flex-wrap gap-2">
+            <template x-for="chip in composerSummaryChips()" :key="chip.key">
+              <span class="inline-flex items-center gap-1 rounded-full border border-violet-500/20 bg-violet-500/10 px-2.5 py-1 text-[10px] text-violet-200">
+                <span x-text="chip.label"></span>
+                <button @click="removeComposerChip(chip.key)" class="text-violet-100/70 hover:text-white">✕</button>
+              </span>
+            </template>
+          </div>
+
           <div x-show="selectedResources.length" class="mt-2 flex flex-wrap gap-2">
             <template x-for="resource in selectedResources" :key="resource.id">
               <span class="inline-flex items-center gap-1 rounded-full border border-sky-500/20 bg-sky-500/10 px-2.5 py-1 text-[10px] text-sky-200">
@@ -829,6 +971,15 @@
                 <button @click="removeResourceAttachment(resource.id)" class="text-sky-100/70 hover:text-white">✕</button>
               </span>
             </template>
+          </div>
+
+          <div x-show="currentResearchPack()" class="mt-2 flex flex-wrap gap-2">
+            <span class="inline-flex items-center gap-1 rounded-full border border-violet-500/20 bg-violet-500/10 px-2.5 py-1 text-[10px] text-violet-200">
+              <span>🧠</span>
+              <span class="max-w-[220px] truncate" x-text="`Research Pack: ${currentResearchPack()?.title}`"></span>
+              <span class="text-violet-100/60" x-text="`${currentResearchPack()?.resource_count || currentResearchPack()?.resources?.length || 0} resources`"></span>
+              <button @click="clearResearchPack()" class="text-violet-100/70 hover:text-white">✕</button>
+            </span>
           </div>
 
           <div x-show="showResourcePicker" class="mt-3 rounded-2xl border border-slate-800 bg-slate-950/60 p-3 space-y-3">
@@ -859,7 +1010,7 @@
               </button>
               <button @click="switchTab('resources'); showResourcePicker = false"
                       class="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300 transition hover:border-slate-600">
-                Open Resource Bank
+                <span x-text="currentResearchPack() ? `Pack: ${currentResearchPack().title}` : 'Open Resource Bank'"></span>
               </button>
               <span class="text-[10px] text-slate-500" x-text="runtimeStatus.resource_bank?.count ? `${runtimeStatus.resource_bank.count} resources ready` : 'No resources stored yet'"></span>
             </div>
@@ -884,6 +1035,11 @@
                             :class="isResourceAttached(resource.id) ? 'bg-sky-500/15 text-sky-200 border border-sky-500/20' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
                       <span x-text="isResourceAttached(resource.id) ? 'Attached' : 'Attach'"></span>
                     </button>
+                    <button x-show="currentResearchPack()"
+                            @click.stop="addResourceToSelectedPack(resource)"
+                            class="rounded-xl border border-violet-500/20 bg-violet-500/10 px-3 py-2 text-[11px] text-violet-200 transition hover:bg-violet-500/15">
+                      <span x-text="resourceInSelectedPack(resource.id) ? 'In pack' : '+ Pack'"></span>
+                    </button>
                     <button @click="viewResource(resource); switchTab('resources'); showResourcePicker = false"
                             class="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-[11px] text-slate-300 transition hover:border-slate-600">
                       Inspect
@@ -894,8 +1050,123 @@
             </div>
           </div>
 
+          <div x-show="showComposerMenu" class="mt-3 rounded-2xl border border-slate-800 bg-slate-950/70 p-3 space-y-3">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <div class="text-xs font-semibold text-white">Composer Controls</div>
+                <div class="text-[10px] text-slate-500">Guide how Axon thinks, retrieves memory, acts, and uses external help.</div>
+              </div>
+              <button @click="showComposerMenu = false" class="rounded-full border border-slate-800 bg-slate-900/70 px-2 py-1 text-[10px] text-slate-400 hover:text-slate-100">Close</button>
+            </div>
+            <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-[10px] text-slate-400" x-text="memoryOverviewText()"></div>
+
+            <div class="grid gap-3 lg:grid-cols-2">
+              <div class="space-y-2">
+                <div class="text-[11px] font-semibold text-slate-100">Intelligence Modes</div>
+                <div class="flex flex-wrap gap-2">
+                  <template x-for="mode in intelligenceModes()" :key="mode.value">
+                    <button @click="setComposerOption('intelligence_mode', mode.value)"
+                            class="rounded-xl px-3 py-2 text-[11px] transition"
+                            :class="composerOptions.intelligence_mode === mode.value ? 'border border-violet-500/30 bg-violet-500/10 text-violet-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                      <span x-text="mode.label"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+
+              <div class="space-y-2">
+                <div class="text-[11px] font-semibold text-slate-100">Action Modes</div>
+                <div class="flex flex-wrap gap-2">
+                  <template x-for="mode in actionModes()" :key="mode.value || 'none'">
+                    <button @click="setComposerOption('action_mode', mode.value)"
+                            class="rounded-xl px-3 py-2 text-[11px] transition"
+                            :class="composerOptions.action_mode === mode.value ? 'border border-amber-500/30 bg-amber-500/10 text-amber-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                      <span x-text="mode.label"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+
+              <div class="space-y-2">
+                <div class="text-[11px] font-semibold text-slate-100">Context Controls</div>
+                <div class="flex flex-wrap gap-2">
+                  <button @click="openResourcePicker()"
+                          class="rounded-xl bg-slate-800 px-3 py-2 text-[11px] text-slate-200 transition hover:bg-slate-700">
+                    Attach Resource
+                  </button>
+                  <button @click="toggleComposerFlag('use_workspace_memory')"
+                          class="rounded-xl px-3 py-2 text-[11px] transition"
+                          :class="composerOptions.use_workspace_memory ? 'border border-sky-500/25 bg-sky-500/10 text-sky-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                    Use Workspace Memory
+                  </button>
+                  <button @click="toggleComposerFlag('pin_context')"
+                          class="rounded-xl px-3 py-2 text-[11px] transition"
+                          :class="composerOptions.pin_context ? 'border border-sky-500/25 bg-sky-500/10 text-sky-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                    Pin Context
+                  </button>
+                  <button @click="switchTab('resources'); showComposerMenu = false"
+                          class="rounded-xl bg-slate-800 px-3 py-2 text-[11px] text-slate-200 transition hover:bg-slate-700">
+                    Select Research Pack
+                  </button>
+                  <button @click="toggleComposerFlag('include_timeline_history')"
+                          class="rounded-xl px-3 py-2 text-[11px] transition"
+                          :class="composerOptions.include_timeline_history ? 'border border-sky-500/25 bg-sky-500/10 text-sky-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                    Include Timeline History
+                  </button>
+                </div>
+              </div>
+
+              <div class="space-y-2">
+                <div class="text-[11px] font-semibold text-slate-100">Agent Modes</div>
+                <div class="flex flex-wrap gap-2">
+                  <template x-for="mode in agentModes()" :key="mode.value || 'auto'">
+                    <button @click="setComposerOption('agent_role', mode.value)"
+                            class="rounded-xl px-3 py-2 text-[11px] transition"
+                            :class="composerOptions.agent_role === mode.value ? 'border border-amber-500/30 bg-amber-500/10 text-amber-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                      <span x-text="mode.label"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+
+              <div class="space-y-2">
+                <div class="text-[11px] font-semibold text-slate-100">Control &amp; Safety</div>
+                <div class="flex flex-wrap gap-2">
+                  <button @click="toggleComposerFlag('require_approval')"
+                          class="rounded-xl px-3 py-2 text-[11px] transition"
+                          :class="composerOptions.require_approval ? 'border border-rose-500/25 bg-rose-500/10 text-rose-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                    Require Approval
+                  </button>
+                  <button @click="toggleComposerFlag('safe_mode')"
+                          class="rounded-xl px-3 py-2 text-[11px] transition"
+                          :class="composerOptions.safe_mode ? 'border border-emerald-500/25 bg-emerald-500/10 text-emerald-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                    Safe Mode
+                  </button>
+                  <button @click="toggleComposerFlag('simulation_mode')"
+                          class="rounded-xl px-3 py-2 text-[11px] transition"
+                          :class="composerOptions.simulation_mode ? 'border border-amber-500/25 bg-amber-500/10 text-amber-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                    Simulation Mode
+                  </button>
+                </div>
+              </div>
+
+              <div class="space-y-2">
+                <div class="text-[11px] font-semibold text-slate-100">External Intelligence</div>
+                <div class="flex flex-wrap gap-2">
+                  <template x-for="mode in externalModes()" :key="mode.value">
+                    <button @click="setComposerOption('external_mode', mode.value)"
+                            class="rounded-xl px-3 py-2 text-[11px] transition"
+                            :class="composerOptions.external_mode === mode.value ? 'border border-blue-500/30 bg-blue-500/10 text-blue-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                      <span x-text="mode.label"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div class="mt-2 flex gap-1.5 md:gap-2 items-end">
-            <button x-show="speechSupported" @click="startVoice()"
+            <button x-show="voiceInputAvailable()" @click="startVoice()"
                     :class="voiceActive ? 'bg-red-500 text-white shadow-lg shadow-red-500/30' : 'bg-slate-800 text-slate-400'"
                     class="w-9 h-9 md:w-11 md:h-11 flex-none rounded-[16px] md:rounded-2xl transition flex items-center justify-center press-scale" title="Voice input">
               <svg class="w-4 h-4" :class="voiceActive ? 'animate-pulse' : ''" viewBox="0 0 24 24" fill="currentColor">
@@ -905,6 +1176,12 @@
                 <rect x="14" y="5" width="2.5" height="14" rx="1.25"/>
                 <rect x="18" y="9" width="2.5" height="6" rx="1.25"/>
               </svg>
+            </button>
+
+            <button @click="openComposerMenu()"
+                    :class="showComposerMenu || composerSummaryChips().length ? 'bg-violet-500/15 text-violet-200 shadow-lg shadow-violet-500/10' : 'bg-slate-800 text-slate-400'"
+                    class="w-9 h-9 md:w-11 md:h-11 flex-none rounded-[16px] md:rounded-2xl transition flex items-center justify-center press-scale" title="Composer controls">
+              <span class="text-lg leading-none">+</span>
             </button>
 
             <button @click="openResourcePicker()"
@@ -1274,7 +1551,48 @@
             <button @click="sendAnalysisFollowup()" :disabled="!analysisFollowup.trim() || analysisFollowupLoading"
                     class="px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded-xl text-sm transition">→</button>
             <button @click="speakMessage(analysisText)" title="Read analysis aloud"
-                    class="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-xl text-sm transition" x-show="speechSupported">🔊</button>
+                    class="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-xl text-sm transition" x-show="voiceOutputAvailable()">🔊</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════════════════════════════════
+         DOCUMENT CANVAS
+    ════════════════════════════════════════════════════════════ -->
+    <div x-show="canvasModal.open"
+         x-cloak
+         class="fixed inset-0 z-[90] flex items-center justify-center p-3 md:p-6 canvas-shell"
+         @keydown.escape.window="closeCanvas()">
+      <div class="absolute inset-0 bg-slate-950/70" @click="closeCanvas()"></div>
+      <div class="relative z-10 w-full max-w-5xl h-[90vh] md:h-[88vh] flex flex-col rounded-[28px] canvas-paper overflow-hidden">
+        <div class="flex items-center justify-between gap-3 px-4 md:px-6 py-4 border-b border-slate-800 bg-slate-950/80">
+          <div class="min-w-0">
+            <div class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Document Canvas</div>
+            <div class="mt-1 truncate text-base font-semibold text-white" x-text="canvasModal.title || 'Assistant document'"></div>
+            <div class="mt-1 text-[11px] text-slate-500" x-text="canvasModal.meta"></div>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <button @click="copyToClipboard(canvasModal.content || '', 'Markdown')"
+                    class="rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-2 text-xs text-slate-300 hover:border-slate-600">Copy MD</button>
+            <button @click="downloadCanvasMarkdown()"
+                    class="rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-2 text-xs text-slate-300 hover:border-slate-600">Download MD</button>
+            <button @click="downloadCanvasHtml()"
+                    class="rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-2 text-xs text-slate-300 hover:border-slate-600">Download HTML</button>
+            <button @click="saveCanvasPdf()"
+                    class="rounded-xl bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-500">Save PDF</button>
+            <button @click="closeCanvas()"
+                    class="rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-2 text-xs text-slate-300 hover:border-slate-600">Close</button>
+          </div>
+        </div>
+        <div class="flex-1 overflow-y-auto px-4 py-4 md:px-8 md:py-6">
+          <div id="canvas-print-surface" class="print-surface mx-auto max-w-3xl rounded-[26px] border border-slate-800 bg-slate-950/90 px-5 py-6 md:px-10 md:py-10">
+            <div class="mb-6 border-b border-slate-800 pb-4">
+              <div class="text-[11px] uppercase tracking-[0.18em] text-sky-300/80">Axon Canvas</div>
+              <div class="mt-2 text-2xl font-semibold text-white" x-text="canvasModal.title || 'Assistant document'"></div>
+              <div class="mt-2 text-[12px] text-slate-500" x-text="canvasModal.meta"></div>
+            </div>
+            <article class="prose-dark canvas-prose" x-html="renderMd(canvasModal.content || '')"></article>
           </div>
         </div>
       </div>
@@ -1414,11 +1732,31 @@
             <input x-model="newPrompt.tags" placeholder="tags (comma-sep)"
                    class="flex-1 bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-1.5 placeholder-slate-600" />
           </div>
+          <div class="mb-3 rounded-xl border border-slate-800 bg-slate-950/50 p-3 space-y-2">
+            <label class="inline-flex items-center gap-2 text-xs text-slate-300">
+              <input type="checkbox" x-model="newPrompt.save_composer_preset" class="accent-violet-500">
+              Save the current composer setup with this playbook
+            </label>
+            <div x-show="newPrompt.save_composer_preset" class="grid gap-2 md:grid-cols-2 text-[11px] text-slate-400">
+              <label class="inline-flex items-center gap-2">
+                <input type="checkbox" x-model="newPrompt.include_selected_resources" class="accent-sky-500">
+                Include selected resources
+              </label>
+              <label class="inline-flex items-center gap-2">
+                <input type="checkbox" x-model="newPrompt.include_selected_research_pack" class="accent-violet-500">
+                Include active research pack
+              </label>
+            </div>
+          </div>
           <div class="flex gap-2">
             <button @click="savePrompt()" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded-lg transition">Save</button>
             <button @click="enhancePrompt()" :disabled="!newPrompt.content"
                     class="px-4 py-1.5 bg-purple-700/40 hover:bg-purple-700/60 text-purple-300 text-xs rounded-lg transition disabled:opacity-40">
               ✨ Enhance with AI
+            </button>
+            <button @click="prefillPlaybookFromComposer()"
+                    class="px-4 py-1.5 bg-violet-700/40 hover:bg-violet-700/60 text-violet-200 text-xs rounded-lg transition">
+              + Use current composer
             </button>
             <button @click="showAddPrompt = false; resetNewPrompt()" class="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-lg transition">Cancel</button>
           </div>
@@ -1445,6 +1783,7 @@
                   <div class="flex items-center gap-1.5">
                     <span x-show="pr.pinned" class="text-amber-400 text-xs">📌</span>
                     <div class="font-medium text-white text-sm truncate" x-text="pr.title"></div>
+                    <span x-show="promptIsComposerPreset(pr)" class="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[9px] text-violet-200">Preset</span>
                   </div>
                   <div class="flex flex-wrap gap-2 mt-0.5 text-[10px] text-slate-500">
                     <span x-show="pr.project_name" x-text="'📁 ' + pr.project_name"></span>
@@ -1464,6 +1803,12 @@
                           class="px-2 py-1 text-[10px] bg-slate-800 hover:bg-blue-600/30 text-slate-400 hover:text-blue-400 rounded-lg transition"
                           title="Copy to clipboard">
                     📋
+                  </button>
+                  <button x-show="promptIsComposerPreset(pr)"
+                          @click.stop="applyPromptPreset(pr)"
+                          class="px-2 py-1 text-[10px] bg-violet-500/10 hover:bg-violet-500/20 text-violet-200 rounded-lg transition"
+                          title="Load composer preset">
+                    ⚙️
                   </button>
                   <button @click.stop="sendPromptToChat(pr)"
                           class="px-2 py-1 text-[10px] bg-slate-800 hover:bg-blue-600/30 text-slate-400 hover:text-blue-400 rounded-lg transition"
@@ -2461,6 +2806,110 @@
       </div>
     </div>
 
+    <!-- ── Memory tab ────────────────────────────────────────────── -->
+    <div x-show="activeTab === 'memory'" class="flex flex-col h-full">
+      <div class="px-5 py-3 border-b border-slate-800 bg-slate-900/50">
+        <div class="font-semibold text-white">Memory</div>
+      </div>
+      <div class="flex-1 overflow-y-auto p-3 md:p-5">
+        <div class="max-w-6xl mx-auto space-y-4">
+          <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 space-y-3">
+            <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <div class="text-sm font-semibold text-white">Axon Memory View</div>
+                <div class="text-[11px] text-slate-500">Inspect what Axon remembers across workspaces, resources, missions, and preferences. Pin the highest-value items and raise trust when you verify them.</div>
+              </div>
+              <button @click="loadMemoryItems()"
+                      class="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300 transition hover:border-slate-600">
+                Refresh
+              </button>
+            </div>
+            <div class="flex flex-wrap gap-2 text-[10px] text-slate-500">
+              <span class="rounded-full border border-slate-800 bg-slate-950/60 px-2 py-1" x-text="`${runtimeStatus.memory_overview?.total || memoryItems.length} items`"></span>
+              <span class="rounded-full border border-slate-800 bg-slate-950/60 px-2 py-1" x-text="`Workspace ${runtimeStatus.memory_overview?.layers?.workspace || 0}`"></span>
+              <span class="rounded-full border border-slate-800 bg-slate-950/60 px-2 py-1" x-text="`Resource ${runtimeStatus.memory_overview?.layers?.resource || 0}`"></span>
+              <span class="rounded-full border border-slate-800 bg-slate-950/60 px-2 py-1" x-text="`Mission ${runtimeStatus.memory_overview?.layers?.mission || 0}`"></span>
+              <span class="rounded-full border border-slate-800 bg-slate-950/60 px-2 py-1" x-text="`User ${runtimeStatus.memory_overview?.layers?.user || 0}`"></span>
+            </div>
+            <div class="grid gap-3 md:grid-cols-4">
+              <input x-model="memorySearch"
+                     placeholder="Search title, summary, source"
+                     class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-sky-500/60 transition" />
+              <select x-model="memoryLayerFilter" class="dark-select rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100">
+                <option value="">All layers</option>
+                <option value="workspace">Workspace Memory</option>
+                <option value="resource">Resource Bank</option>
+                <option value="mission">Mission Memory</option>
+                <option value="user">User Memory</option>
+              </select>
+              <select x-model="memoryTrustFilter" class="dark-select rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100">
+                <option value="">All trust</option>
+                <option value="high">High trust</option>
+                <option value="medium">Medium trust</option>
+                <option value="low">Low trust</option>
+              </select>
+              <label class="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+                <input type="checkbox" x-model="memoryPinnedOnly" class="accent-amber-500">
+                Show pinned only
+              </label>
+            </div>
+          </div>
+
+          <div x-show="memoryLoading" class="space-y-2">
+            <template x-for="i in [1,2,3,4]" :key="i">
+              <div class="h-24 rounded-2xl bg-slate-800/60 animate-pulse"></div>
+            </template>
+          </div>
+
+          <div x-show="!memoryLoading && filteredMemoryItems.length === 0" class="rounded-2xl border border-dashed border-slate-800 px-4 py-10 text-center">
+            <div class="text-4xl mb-3">🧠</div>
+            <div class="text-sm text-slate-200">No memory items matched</div>
+            <div class="mt-1 text-[11px] text-slate-500">Refresh memory or loosen the filters to inspect what Axon has learned.</div>
+          </div>
+
+          <div class="grid gap-3">
+            <template x-for="item in filteredMemoryItems" :key="item.id">
+              <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+                <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span x-show="item.pinned" class="text-amber-400 text-xs">📌</span>
+                      <div class="text-sm font-medium text-white" x-text="item.title"></div>
+                      <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-[10px] text-slate-400" x-text="item.layer"></span>
+                      <span class="rounded-full border px-2 py-0.5 text-[10px]"
+                            :class="item.trust_level === 'high' ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : (item.trust_level === 'low' ? 'border-rose-500/20 bg-rose-500/10 text-rose-300' : 'border-amber-500/20 bg-amber-500/10 text-amber-300')"
+                            x-text="`${item.trust_level || 'medium'} trust`"></span>
+                    </div>
+                    <div class="mt-1 text-[11px] text-slate-500">
+                      <span x-text="item.source || 'memory'"></span>
+                      <span x-show="item.workspace_name"> · <span x-text="item.workspace_name"></span></span>
+                      <span x-show="item.updated_at"> · Updated <span x-text="timeAgo(item.updated_at)"></span></span>
+                    </div>
+                  </div>
+                  <div class="flex flex-wrap gap-2">
+                    <button @click="setMemoryPinned(item, !item.pinned)"
+                            class="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200 transition hover:bg-amber-500/15"
+                            x-text="item.pinned ? 'Unpin' : 'Pin'"></button>
+                    <select @change="setMemoryTrust(item, $event.target.value)"
+                            :value="item.trust_level || 'medium'"
+                            class="dark-select rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-200">
+                      <option value="high">High trust</option>
+                      <option value="medium">Medium trust</option>
+                      <option value="low">Low trust</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="mt-3 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Summary</div>
+                  <div class="text-sm leading-6 text-slate-300" x-text="item.summary || item.content || 'No summary available.'"></div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ── Resources tab ─────────────────────────────────────────── -->
     <div x-show="activeTab === 'resources'" class="flex flex-col h-full">
       <div class="px-5 py-3 border-b border-slate-800 bg-slate-900/50">
@@ -2570,6 +3019,98 @@
           </div>
 
           <div class="space-y-4">
+            <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-sm font-semibold text-white">Research Packs</div>
+                  <div class="text-[11px] text-slate-500">Named bundles of resources you can attach to the composer in one step.</div>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button @click="loadResearchPacks(selectedResearchPackId || null)"
+                          class="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300 transition hover:border-slate-600">
+                    Refresh
+                  </button>
+                  <button @click="showAddResearchPack = !showAddResearchPack"
+                          class="rounded-xl bg-violet-600 px-3 py-2 text-xs text-white transition hover:bg-violet-500">
+                    <span x-text="showAddResearchPack ? 'Close' : '+ New pack'"></span>
+                  </button>
+                </div>
+              </div>
+
+              <div x-show="showAddResearchPack" class="mt-3 rounded-2xl border border-violet-500/20 bg-violet-500/5 p-3 space-y-2">
+                <input x-model="newResearchPack.title"
+                       placeholder="Pack title"
+                       class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-violet-500/50 transition" />
+                <textarea x-model="newResearchPack.description"
+                          placeholder="What should this pack help Axon with?"
+                          rows="3"
+                          class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-violet-500/50 transition"></textarea>
+                <label class="inline-flex items-center gap-2 text-xs text-slate-400">
+                  <input type="checkbox" x-model="newResearchPack.pinned" class="accent-violet-500">
+                  Pin this pack
+                </label>
+                <div class="flex justify-end">
+                  <button @click="createResearchPack()" class="rounded-xl bg-violet-600 px-3 py-2 text-xs text-white transition hover:bg-violet-500">Create pack</button>
+                </div>
+              </div>
+
+              <div x-show="researchPacksLoading" class="mt-3 text-[11px] text-slate-500">Loading research packs…</div>
+              <div x-show="!researchPacksLoading && !filteredResearchPacks.length" class="mt-3 rounded-xl border border-dashed border-slate-800 px-3 py-4 text-[11px] text-slate-500">
+                No Research Packs yet. Create one, then add resources to build reusable context packs.
+              </div>
+              <div class="mt-3 space-y-2" x-show="filteredResearchPacks.length">
+                <template x-for="pack in filteredResearchPacks" :key="pack.id">
+                  <div class="rounded-xl border p-3 transition cursor-pointer"
+                       :class="Number(selectedResearchPackId) === Number(pack.id) ? 'border-violet-500/30 bg-violet-500/8' : 'border-slate-800 bg-slate-900/50 hover:border-slate-600'"
+                       @click="selectedResearchPackId = Number(pack.id)">
+                    <div class="flex items-start justify-between gap-2">
+                      <div class="min-w-0">
+                        <div class="flex items-center gap-2">
+                          <span x-show="pack.pinned" class="text-amber-400 text-xs">📌</span>
+                          <div class="truncate text-sm font-medium text-white" x-text="pack.title"></div>
+                        </div>
+                        <div class="mt-1 text-[11px] text-slate-500">
+                          <span x-text="`${pack.resource_count || pack.resources?.length || 0} resources`"></span>
+                        </div>
+                        <div class="mt-1 text-[11px] leading-5 text-slate-400" x-text="pack.description || 'Reusable research context for Axon.'"></div>
+                      </div>
+                      <div class="flex items-center gap-1 shrink-0" @click.stop>
+                        <button @click="toggleResearchPackPin(pack)" class="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-300 hover:text-amber-300">📌</button>
+                        <button @click="useResearchPack(pack)" class="rounded-lg bg-violet-600 px-2 py-1 text-[10px] text-white hover:bg-violet-500">Use</button>
+                        <button @click="deleteResearchPack(pack)" class="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:text-rose-300">🗑</button>
+                      </div>
+                    </div>
+                    <div x-show="Number(selectedResearchPackId) === Number(pack.id)" class="mt-3 rounded-xl border border-slate-800 bg-slate-950/50 p-2.5">
+                      <div class="flex items-center justify-between gap-2">
+                        <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Pack resources</div>
+                        <button @click="switchTab('chat'); showToast(`Ready to use ${pack.title}`)"
+                                class="rounded-lg border border-violet-500/20 bg-violet-500/10 px-2 py-1 text-[10px] text-violet-200">
+                          Back to Console
+                        </button>
+                      </div>
+                      <div class="mt-2 space-y-2 max-h-36 overflow-y-auto pr-1">
+                        <template x-if="!(pack.resources || []).length">
+                          <div class="text-[11px] text-slate-500">Add resources from the list on the left to build this pack.</div>
+                        </template>
+                        <template x-for="resource in (pack.resources || [])" :key="resource.id">
+                          <div class="flex items-start justify-between gap-2 rounded-lg border border-slate-800 bg-slate-900/60 px-2.5 py-2">
+                            <div class="min-w-0">
+                              <div class="truncate text-[11px] text-slate-100" x-text="resource.title"></div>
+                              <div class="text-[10px] text-slate-500" x-text="resource.kind || resource.mime_type"></div>
+                            </div>
+                            <button @click.stop="removePackResource(pack.id, resource.id)"
+                                    class="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:text-rose-300">
+                              Remove
+                            </button>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+
             <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 min-h-[320px]">
               <div x-show="resourceDetailLoading" class="space-y-3">
                 <div class="h-5 w-2/3 rounded bg-slate-800 animate-pulse"></div>
@@ -2775,7 +3316,7 @@
       <button
         @click="item.id === 'more' ? (showMoreMenu = !showMoreMenu) : (showMoreMenu = false, switchTab(item.id))"
         class="tab-btn flex-1 flex flex-col items-center justify-center gap-0.5 relative"
-        :class="(item.id === 'more' ? ['prompts','activity','resources','vault','settings'].includes(activeTab) : activeTab === item.id) ? 'active' : 'text-slate-500'"
+        :class="(item.id === 'more' ? ['prompts','activity','resources','memory','vault','settings'].includes(activeTab) : activeTab === item.id) ? 'active' : 'text-slate-500'"
       >
         <!-- Badge -->
         <span x-show="item.id === 'tasks' && urgentCount > 0"
@@ -2799,6 +3340,7 @@
         {id:'prompts',  icon:'📚', label:'Playbooks'},
         {id:'activity', icon:'📊', label:'Timeline'},
         {id:'resources', icon:'🗃️', label:'Resources'},
+        {id:'memory', icon:'🧠', label:'Memory'},
         {id:'vault',    icon:'🔐', label:'Secure Vault'},
         {id:'settings', icon:'⚙️', label:'Settings'},
       ]" :key="item.id">
@@ -2896,6 +3438,7 @@
         <div class="flex flex-wrap gap-2 mt-1 text-[10px] text-slate-500">
           <span x-show="promptModal.prompt?.project_name" x-text="'📁 ' + promptModal.prompt?.project_name"></span>
           <span x-text="'used ' + (promptModal.prompt?.used_count || 0) + 'x'"></span>
+          <span x-show="promptIsComposerPreset(promptModal.prompt)" class="bg-violet-500/10 text-violet-200 px-1.5 py-0.5 rounded">Composer preset</span>
           <template x-for="tag in ((promptModal.prompt?.tags || '').split(',').filter(t => t.trim()))" :key="tag">
             <span class="bg-slate-800 px-1.5 py-0.5 rounded" x-text="tag.trim()"></span>
           </template>
@@ -2956,6 +3499,11 @@
       <button @click="sendPromptToChat(promptModal.prompt); stopSpeech(); promptModal.open = false"
               class="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded-xl transition">
         💬 Send to Console
+      </button>
+      <button x-show="promptIsComposerPreset(promptModal.prompt)"
+              @click="applyPromptPreset(promptModal.prompt); stopSpeech(); promptModal.open = false"
+              class="px-3 py-1.5 text-xs bg-violet-500/10 hover:bg-violet-500/20 text-violet-200 rounded-xl transition">
+        ⚙️ Load preset
       </button>
       <button @click="speakMessage(promptModal.prompt?.content || '')"
               class="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-xl transition"
@@ -3105,6 +3653,7 @@ function devbrain() {
     isLocalhost: ['localhost','127.0.0.1','[::1]'].includes(location.hostname),
     isMobile: window.innerWidth < 768,
     viewportSyncBound: false,
+    voiceCapabilityBound: false,
 
     // ── State ──────────────────────────────────────────────────────
     activeTab: 'dashboard',
@@ -3116,6 +3665,7 @@ function devbrain() {
       { id: 'prompts',  icon: '📚', label: 'Playbooks' },
       { id: 'activity', icon: '📊', label: 'Timeline' },
       { id: 'resources', icon: '🗃️', label: 'Resources' },
+      { id: 'memory',   icon: '🧠', label: 'Memory' },
       { id: 'vault',    icon: '🔐', label: 'Secure Vault' },
     ],
     // Mobile tab bar — 5 most used
@@ -3151,6 +3701,7 @@ function devbrain() {
       ollama_runtime_mode: 'gpu_default',
       vision_status: { model: '', ready: false, runtime_label: 'Not configured' },
       resource_bank: { count: 0, storage_path: '~/.devbrain/resources', upload_max_mb: '20', url_import_enabled: true },
+      memory_overview: { total: 0, layers: { workspace: 0, resource: 0, mission: 0, user: 0 }, labels: {} },
     },
 
     // Chat
@@ -3162,7 +3713,21 @@ function devbrain() {
     agentMode: false,
     selectedChatModel: '',
     showResourcePicker: false,
+    showComposerMenu: false,
     selectedResources: [],
+    composerOptions: {
+      intelligence_mode: 'ask',
+      action_mode: '',
+      use_workspace_memory: true,
+      pin_context: false,
+      include_timeline_history: false,
+      agent_role: '',
+      require_approval: false,
+      safe_mode: true,
+      simulation_mode: false,
+      external_mode: 'local_first',
+    },
+    chatModelOpen: false,
     chatHints: [
       'What should Axon focus on first today?',
       'Which workspaces are going stale?',
@@ -3178,7 +3743,9 @@ function devbrain() {
       title: '',
       detail: '',
       tool: '',
+      startedAt: '',
     },
+    liveOperatorFeed: [],
     liveOperatorTimer: null,
     lastOperatorOutcome: {
       title: '',
@@ -3194,10 +3761,24 @@ function devbrain() {
     modelsLoading: false,
     customModelName: '',
     ollamaRuntimeSwitching: false,
+    ttsVoices: [],
+    ttsVoicesLoading: false,
+    ttsVoicesMeta: {
+      source: 'fallback',
+      live: false,
+      region: 'eastus',
+      warning: '',
+    },
+    azureVoiceQuery: '',
 
     // Resources
     resources: [],
     resourcesLoading: false,
+    researchPacks: [],
+    researchPacksLoading: false,
+    selectedResearchPackId: null,
+    showAddResearchPack: false,
+    newResearchPack: { title: '', description: '', pinned: false },
     resourceSearch: '',
     resourceKindFilter: '',
     resourceSourceFilter: '',
@@ -3234,12 +3815,25 @@ function devbrain() {
     prompts: [],
     promptSearch: '',
     showAddPrompt: false,
-    newPrompt: { title:'', content:'', project_id:'', tags:'' },
+    newPrompt: {
+      title:'', content:'', project_id:'', tags:'',
+      save_composer_preset: false,
+      include_selected_resources: true,
+      include_selected_research_pack: true,
+    },
     promptModal: {
       open: false, editing: false,
       prompt: null,
       editTitle: '', editContent: '', editTags: '',
     },
+
+    // Memory
+    memoryItems: [],
+    memoryLoading: false,
+    memorySearch: '',
+    memoryLayerFilter: '',
+    memoryTrustFilter: '',
+    memoryPinnedOnly: false,
 
     // Activity
     activity: [],
@@ -3332,6 +3926,8 @@ function devbrain() {
     // Voice
     voiceActive: false,
     speechSupported: false,
+    speechInputSupported: false,
+    speechOutputSupported: false,
     _currentAudio: null,
     _speechRecognizer: null,
 
@@ -3377,6 +3973,13 @@ function devbrain() {
 
     // Note modal
     noteModal: { open: false, project: null, value: '' },
+    canvasModal: {
+      open: false,
+      title: '',
+      content: '',
+      meta: '',
+      messageId: null,
+    },
 
     // Toast
     toast: { show: false, message: '' },
@@ -3390,7 +3993,11 @@ function devbrain() {
     },
 
     async _bootApp() {
-      this.speechSupported = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
+      this.refreshVoiceCapability();
+      if (!this.voiceCapabilityBound) {
+        window.addEventListener('axon-speech-sdk-ready', () => this.refreshVoiceCapability());
+        this.voiceCapabilityBound = true;
+      }
       if (!this.viewportSyncBound) {
         const syncViewport = () => {
           this.isMobile = window.innerWidth < 768;
@@ -3425,7 +4032,8 @@ function devbrain() {
       else if (id === 'tasks') this.loadTasks();
       else if (id === 'prompts') this.loadPrompts();
       else if (id === 'activity') this.loadActivity();
-      else if (id === 'resources') this.loadResources();
+      else if (id === 'resources') { this.loadResources(); this.loadResearchPacks(this.selectedResearchPackId || null); }
+      else if (id === 'memory') this.loadMemoryItems();
       else if (id === 'vault') this.loadVaultStatus();
       else if (id === 'settings') { this.loadSettings(); this.loadRuntimeStatus(); }
       else if (id === 'files' && !this.filePath) this.loadFiles('~');
@@ -3711,7 +4319,9 @@ function devbrain() {
         },
         {
           label: 'Memory',
-          value: this.runtimeStatus.memory_state || 'Ready',
+          value: this.runtimeStatus.memory_overview?.total
+            ? `${this.runtimeStatus.memory_state || 'Ready'} · ${this.runtimeStatus.memory_overview.total}`
+            : (this.runtimeStatus.memory_state || 'Ready'),
           tone: (this.runtimeStatus.memory_state || '').toLowerCase().includes('ready') ? 'ok' : 'warn',
         },
         {
@@ -4139,9 +4749,147 @@ function devbrain() {
       return `${model.label} will auto-discover a local match from ${model.default_family}. Install one of the listed family matches to activate it.`;
     },
 
+    intelligenceModes() {
+      return [
+        { value: 'ask', label: 'Ask' },
+        { value: 'deep_research', label: 'Deep Research' },
+        { value: 'analyze', label: 'Analyze' },
+        { value: 'summarize', label: 'Summarize' },
+        { value: 'explain', label: 'Explain' },
+        { value: 'compare', label: 'Compare' },
+      ];
+    },
+
+    actionModes() {
+      return [
+        { value: '', label: 'None' },
+        { value: 'execute_task', label: 'Execute Task' },
+        { value: 'fix_repair', label: 'Fix / Repair' },
+        { value: 'optimize', label: 'Optimize' },
+        { value: 'generate', label: 'Generate' },
+        { value: 'refactor', label: 'Refactor' },
+      ];
+    },
+
+    agentModes() {
+      return [
+        { value: '', label: 'Auto' },
+        { value: 'planner', label: 'Planner Mode' },
+        { value: 'coder', label: 'Coder Mode' },
+        { value: 'scanner', label: 'Scanner Mode' },
+        { value: 'reviewer', label: 'Reviewer Mode' },
+        { value: 'repair', label: 'Repair Mode' },
+      ];
+    },
+
+    externalModes() {
+      return [
+        { value: 'local_first', label: 'Local First' },
+        { value: 'cloud_assist', label: 'Use Cloud Assist' },
+        { value: 'external_agent', label: 'Use External Agent' },
+        { value: 'disable_external_calls', label: 'Disable External Calls' },
+      ];
+    },
+
+    setComposerOption(key, value) {
+      if (!this.composerOptions) return;
+      this.composerOptions[key] = value;
+    },
+
+    toggleComposerFlag(key) {
+      if (!this.composerOptions) return;
+      this.composerOptions[key] = !this.composerOptions[key];
+    },
+
+    openComposerMenu() {
+      this.showComposerMenu = !this.showComposerMenu;
+      if (this.showComposerMenu) this.showResourcePicker = false;
+    },
+
+    normalizedComposerOptions() {
+      const raw = this.composerOptions || {};
+      const researchPack = this.currentResearchPack();
+      const normalized = {
+        intelligence_mode: raw.intelligence_mode || 'ask',
+        use_workspace_memory: raw.use_workspace_memory !== false,
+        safe_mode: raw.safe_mode !== false,
+        external_mode: raw.external_mode || 'local_first',
+      };
+      if (raw.action_mode) normalized.action_mode = raw.action_mode;
+      if (raw.pin_context) normalized.pin_context = true;
+      if (raw.include_timeline_history) normalized.include_timeline_history = true;
+      if (raw.agent_role) normalized.agent_role = raw.agent_role;
+      if (raw.require_approval) normalized.require_approval = true;
+      if (raw.simulation_mode) normalized.simulation_mode = true;
+      if (researchPack) {
+        normalized.research_pack_id = Number(researchPack.id);
+        normalized.research_pack_title = researchPack.title;
+      }
+      return normalized;
+    },
+
+    composerSummaryChips() {
+      const opts = this.normalizedComposerOptions();
+      const chips = [];
+      if (opts.intelligence_mode && opts.intelligence_mode !== 'ask') {
+        chips.push({ key: 'intelligence_mode', label: opts.intelligence_mode.replace(/_/g, ' ') });
+      }
+      if (opts.action_mode) chips.push({ key: 'action_mode', label: opts.action_mode.replace(/_/g, ' ') });
+      if (opts.agent_role) chips.push({ key: 'agent_role', label: `${opts.agent_role} mode` });
+      if (opts.include_timeline_history) chips.push({ key: 'include_timeline_history', label: 'timeline history' });
+      if (opts.pin_context) chips.push({ key: 'pin_context', label: 'pin context' });
+      if (opts.require_approval) chips.push({ key: 'require_approval', label: 'approval' });
+      if (opts.simulation_mode) chips.push({ key: 'simulation_mode', label: 'simulation' });
+      if (opts.use_workspace_memory === false) chips.push({ key: 'use_workspace_memory', label: 'workspace memory off' });
+      if (opts.safe_mode === false) chips.push({ key: 'safe_mode', label: 'safe mode off' });
+      if (opts.external_mode && opts.external_mode !== 'local_first') {
+        chips.push({ key: 'external_mode', label: opts.external_mode.replace(/_/g, ' ') });
+      }
+      if (opts.research_pack_title) chips.push({ key: 'research_pack_id', label: `pack: ${opts.research_pack_title}` });
+      return chips;
+    },
+
+    removeComposerChip(key) {
+      if (!this.composerOptions) return;
+      if (key === 'intelligence_mode') this.composerOptions.intelligence_mode = 'ask';
+      else if (key === 'action_mode') this.composerOptions.action_mode = '';
+      else if (key === 'agent_role') this.composerOptions.agent_role = '';
+      else if (key === 'external_mode') this.composerOptions.external_mode = 'local_first';
+      else if (key === 'research_pack_id') this.selectedResearchPackId = null;
+      else if (key === 'use_workspace_memory' || key === 'safe_mode') this.composerOptions[key] = true;
+      else this.composerOptions[key] = false;
+    },
+
+    memoryOverviewText() {
+      const overview = this.runtimeStatus?.memory_overview || {};
+      const total = overview.total || 0;
+      if (!total) return 'Memory is ready to learn from workspaces, resources, missions, and preferences.';
+      const layers = overview.layers || {};
+      return `${total} items · ${layers.workspace || 0} workspace · ${layers.resource || 0} resource · ${layers.mission || 0} mission · ${layers.user || 0} user`;
+    },
+
+    composerPreferredMode(msg) {
+      const opts = this.normalizedComposerOptions();
+      if (opts.action_mode && ['execute_task', 'fix_repair', 'optimize', 'refactor'].includes(opts.action_mode)) {
+        return 'agent';
+      }
+      if (opts.agent_role) return 'agent';
+      if (opts.intelligence_mode === 'analyze') {
+        return this.shouldAutoUseAgent(msg) ? 'agent' : 'chat';
+      }
+      if (opts.intelligence_mode === 'deep_research') return 'chat';
+      if (opts.action_mode === 'generate') return 'chat';
+      return '';
+    },
+
     chatComposerPlaceholder() {
       const agent = this.resolveChatMode(this.chatInput) === 'agent';
-      if (!agent) return 'Give Axon a goal, task, or command...';
+      const opts = this.normalizedComposerOptions();
+      if (!agent) {
+        if (opts.intelligence_mode === 'deep_research') return 'Ask Axon to research, synthesize, and explain...';
+        if (opts.action_mode === 'generate') return 'Tell Axon what to create...';
+        return 'Give Axon a goal, task, or command...';
+      }
       return this.isMobile
         ? 'Give Axon a goal, task, or command...'
         : 'Give Axon a goal, task, or command...';
@@ -4165,6 +4913,25 @@ function devbrain() {
       return raw ? raw.replace(/\b\w/g, ch => ch.toUpperCase()) : 'tool';
     },
 
+    operatorProgressWidth() {
+      const phase = this.liveOperator.phase || this.agentProgressState || 'observe';
+      const idx = Math.max(this.agentLifecycle.indexOf(phase), 0);
+      return `${Math.max(16, ((idx + 1) / this.agentLifecycle.length) * 100)}%`;
+    },
+
+    pushLiveOperatorFeed(phase, title, detail = '') {
+      const entry = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        phase: phase || 'observe',
+        title: title || 'Working',
+        detail: detail || '',
+        at: new Date().toISOString(),
+      };
+      const last = this.liveOperatorFeed[this.liveOperatorFeed.length - 1];
+      if (last && last.phase === entry.phase && last.title === entry.title && last.detail === entry.detail) return;
+      this.liveOperatorFeed = [...this.liveOperatorFeed.slice(-5), entry];
+    },
+
     beginLiveOperator(mode, msg = '') {
       if (this.liveOperatorTimer) clearTimeout(this.liveOperatorTimer);
       this.liveOperator = {
@@ -4176,7 +4943,14 @@ function devbrain() {
           ? 'Axon is checking your goal and lining up the first safe step.'
           : 'Axon is preparing a response.',
         tool: '',
+        startedAt: new Date().toISOString(),
       };
+      this.liveOperatorFeed = [];
+      this.pushLiveOperatorFeed(
+        this.liveOperator.phase,
+        this.liveOperator.title,
+        msg ? `Goal received: ${msg.slice(0, 120)}` : this.liveOperator.detail,
+      );
       if (mode === 'agent') this.setAgentStage('observe');
       if (this.isMobile) {
         this.refreshDesktopPreview(true);
@@ -4195,6 +4969,7 @@ function devbrain() {
             title: 'Reply interrupted',
             detail: event.error,
           };
+          this.pushLiveOperatorFeed('recover', 'Reply interrupted', event.error);
           return;
         }
         if (event.done) {
@@ -4205,6 +4980,7 @@ function devbrain() {
             title: 'Reply complete',
             detail: 'Axon finished streaming the answer.',
           };
+          this.pushLiveOperatorFeed('verify', 'Reply complete', 'Axon finished streaming the answer.');
           return;
         }
         this.liveOperator = {
@@ -4214,6 +4990,7 @@ function devbrain() {
           title: 'Writing the reply',
           detail: 'Live response is flowing into the console now.',
         };
+        this.pushLiveOperatorFeed('execute', 'Writing the reply', 'Live response is flowing into the console now.');
         return;
       }
 
@@ -4226,6 +5003,7 @@ function devbrain() {
           detail: event.args ? JSON.stringify(event.args).slice(0, 96) : 'Using a local operator tool.',
           tool: event.name || '',
         };
+        this.pushLiveOperatorFeed('execute', `Running ${this.prettyToolName(event.name)}`, event.args ? JSON.stringify(event.args).slice(0, 96) : 'Using a local operator tool.');
         return;
       }
       if (event.type === 'tool_result') {
@@ -4237,6 +5015,7 @@ function devbrain() {
           detail: (event.result || 'Axon is reviewing the tool output.').slice(0, 120),
           tool: event.name || this.liveOperator.tool,
         };
+        this.pushLiveOperatorFeed('verify', `Checking ${this.prettyToolName(event.name)}`, (event.result || 'Axon is reviewing the tool output.').slice(0, 120));
         return;
       }
       if (event.type === 'text') {
@@ -4249,6 +5028,13 @@ function devbrain() {
             ? 'Axon is turning tool output into a final answer.'
             : 'Axon is reasoning through the task before it acts.',
         };
+        this.pushLiveOperatorFeed(
+          this.liveOperator.tool ? 'verify' : 'plan',
+          this.liveOperator.tool ? 'Writing the result' : 'Planning the next step',
+          this.liveOperator.tool
+            ? 'Axon is turning tool output into a final answer.'
+            : 'Axon is reasoning through the task before it acts.',
+        );
         return;
       }
       if (event.type === 'done') {
@@ -4259,6 +5045,7 @@ function devbrain() {
           title: 'Task complete',
           detail: 'Axon finished the operator pass.',
         };
+        this.pushLiveOperatorFeed('verify', 'Task complete', 'Axon finished the operator pass.');
         return;
       }
       if (event.type === 'error') {
@@ -4269,6 +5056,7 @@ function devbrain() {
           title: 'Needs attention',
           detail: event.message || 'Axon hit an error and stopped safely.',
         };
+        this.pushLiveOperatorFeed('recover', 'Needs attention', event.message || 'Axon hit an error and stopped safely.');
       }
     },
 
@@ -4282,6 +5070,7 @@ function devbrain() {
           title: '',
           detail: '',
           tool: '',
+          startedAt: '',
         };
         this.stopDesktopPreview();
       };
@@ -4389,8 +5178,12 @@ function devbrain() {
 
     async openResourcePicker() {
       this.showResourcePicker = !this.showResourcePicker;
+      if (this.showResourcePicker) this.showComposerMenu = false;
       if (this.showResourcePicker && !this.resources.length) {
         await this.loadResources();
+      }
+      if (this.showResourcePicker && !this.researchPacks.length) {
+        await this.loadResearchPacks();
       }
     },
 
@@ -4607,6 +5400,8 @@ function devbrain() {
     },
 
     resolveChatMode(msg) {
+      const preferred = this.composerPreferredMode(msg);
+      if (preferred) return preferred;
       return this.agentMode || this.shouldAutoUseAgent(msg) ? 'agent' : 'chat';
     },
 
@@ -4630,6 +5425,7 @@ function devbrain() {
         message: msg,
         project_id: this.chatProjectId ? parseInt(this.chatProjectId) : null,
         resource_ids: resourceIds,
+        composer_options: this.normalizedComposerOptions(),
       };
       if (this.usesOllamaBackend()) payload.model = this.activeChatModel() || '';
 
@@ -4752,7 +5548,9 @@ function devbrain() {
       const msg = this.chatInput.trim();
       if (!msg || this.chatLoading) return;
       const mode = this.resolveChatMode(msg);
-      const attachedResources = [...this.selectedResources];
+      const researchPack = this.currentResearchPack();
+      const packResources = researchPack?.resources || [];
+      const attachedResources = this.mergeUniqueResources([...packResources, ...this.selectedResources]);
       const attachedResourceIds = attachedResources.map(resource => Number(resource.id)).filter(Boolean);
       if (mode === 'agent' && !this.usesOllamaBackend()) {
         this.showToast('Agent mode requires the Ollama backend.');
@@ -4761,8 +5559,11 @@ function devbrain() {
       this.setAgentStage(mode === 'agent' ? 'observe' : 'observe');
 
       this.chatInput = '';
-      this.selectedResources = [];
+      if (!this.composerOptions.pin_context) {
+        this.selectedResources = [];
+      }
       this.showResourcePicker = false;
+      this.showComposerMenu = false;
       this.resetChatComposerHeight();
       this.chatMessages.push({
         id: Date.now(),
@@ -4813,7 +5614,10 @@ function devbrain() {
       const msg = errorMsg.retryMsg;
       if (!msg) return;
       const mode = errorMsg.mode || this.resolveChatMode(msg);
-      const resourceIds = errorMsg.retryResources || [];
+      const researchPack = this.currentResearchPack();
+      const resourceIds = (errorMsg.retryResources && errorMsg.retryResources.length)
+        ? errorMsg.retryResources
+        : (researchPack?.resources || []).map(resource => Number(resource.id)).filter(Boolean);
       this.chatMessages = this.chatMessages.filter(m => m.id !== errorMsg.id);
       this.chatLoading = true;
       this.beginLiveOperator(mode, msg);
@@ -5131,7 +5935,43 @@ function devbrain() {
       this.newTask = { title:'', detail:'', priority:'medium', project_id:'', due_date:'' };
     },
 
-    // ── Prompts ────────────────────────────────────────────────────
+    currentResearchPack() {
+      return (this.researchPacks || []).find(pack => Number(pack.id) === Number(this.selectedResearchPackId)) || null;
+    },
+
+    mergeUniqueResources(items = []) {
+      const next = [];
+      for (const item of items || []) {
+        const id = Number(item?.id);
+        if (!id || next.some(existing => Number(existing.id) === id)) continue;
+        next.push(item);
+      }
+      return next;
+    },
+
+    get filteredResearchPacks() {
+      return this.researchPacks || [];
+    },
+
+    get filteredMemoryItems() {
+      const q = (this.memorySearch || '').toLowerCase().trim();
+      const layer = (this.memoryLayerFilter || '').toLowerCase();
+      const trust = (this.memoryTrustFilter || '').toLowerCase();
+      return (this.memoryItems || []).filter(item => {
+        const matchesSearch = !q || [
+          item.title,
+          item.summary,
+          item.source,
+          item.workspace_name,
+        ].some(value => String(value || '').toLowerCase().includes(q));
+        const matchesLayer = !layer || String(item.layer || '').toLowerCase() === layer;
+        const matchesTrust = !trust || String(item.trust_level || '').toLowerCase() === trust;
+        const matchesPinned = !this.memoryPinnedOnly || !!item.pinned;
+        return matchesSearch && matchesLayer && matchesTrust && matchesPinned;
+      });
+    },
+
+    // ── Resources + memory + playbooks ────────────────────────────
     get filteredResources() {
       const search = (this.resourceSearch || '').toLowerCase().trim();
       const kind = (this.resourceKindFilter || '').toLowerCase();
@@ -5161,6 +6001,58 @@ function devbrain() {
       );
     },
 
+    promptIsComposerPreset(pr) {
+      return (pr?.meta?.preset_type || '') === 'composer';
+    },
+
+    composerPresetPayload(includeResources = true, includeResearchPack = true) {
+      const options = this.normalizedComposerOptions();
+      const researchPack = includeResearchPack ? this.currentResearchPack() : null;
+      return {
+        preset_type: 'composer',
+        composer_options: options,
+        resource_ids: includeResources ? this.selectedResources.map(resource => Number(resource.id)).filter(Boolean) : [],
+        research_pack_id: researchPack ? Number(researchPack.id) : null,
+        research_pack_title: researchPack?.title || '',
+      };
+    },
+
+    prefillPlaybookFromComposer() {
+      this.newPrompt = {
+        title: '',
+        content: this.chatInput || '',
+        project_id: this.chatProjectId || '',
+        tags: 'composer,preset',
+        save_composer_preset: true,
+        include_selected_resources: true,
+        include_selected_research_pack: true,
+      };
+      this.switchTab('prompts');
+      this.showAddPrompt = true;
+      this.showComposerMenu = false;
+      this.showToast('Composer setup copied into a new playbook draft');
+    },
+
+    async applyPromptPreset(pr, { showToast = true } = {}) {
+      const meta = pr?.meta || {};
+      if (!this.promptIsComposerPreset(pr)) return;
+      this.composerOptions = {
+        ...this.composerOptions,
+        ...(meta.composer_options || {}),
+      };
+      const resourceIds = Array.isArray(meta.resource_ids) ? meta.resource_ids.map(Number).filter(Boolean) : [];
+      if (resourceIds.length) {
+        if (!this.resources.length) await this.loadResources();
+        const matched = this.resources.filter(resource => resourceIds.includes(Number(resource.id)));
+        this.mergeSelectedResources(matched);
+      }
+      if (meta.research_pack_id) {
+        if (!this.researchPacks.length) await this.loadResearchPacks(meta.research_pack_id);
+        else this.selectedResearchPackId = Number(meta.research_pack_id);
+      }
+      if (showToast) this.showToast('Composer preset loaded');
+    },
+
     async loadPrompts() {
       try {
         this.prompts = await this.api('GET', '/api/prompts');
@@ -5170,9 +6062,18 @@ function devbrain() {
     async savePrompt() {
       if (!this.newPrompt.title || !this.newPrompt.content) return;
       try {
+        const meta = this.newPrompt.save_composer_preset
+          ? this.composerPresetPayload(
+              this.newPrompt.include_selected_resources,
+              this.newPrompt.include_selected_research_pack,
+            )
+          : {};
         await this.api('POST', '/api/prompts', {
-          ...this.newPrompt,
+          title: this.newPrompt.title,
+          content: this.newPrompt.content,
+          tags: this.newPrompt.tags,
           project_id: this.newPrompt.project_id ? parseInt(this.newPrompt.project_id) : null,
+          meta,
         });
         await this.loadPrompts();
         this.showAddPrompt = false;
@@ -5201,9 +6102,13 @@ function devbrain() {
       this.showToast('Copied to clipboard');
     },
 
-    sendPromptToChat(pr) {
+    async sendPromptToChat(pr) {
+      if (this.promptIsComposerPreset(pr)) {
+        await this.applyPromptPreset(pr, { showToast: false });
+      }
       this.chatInput = pr.content;
       this.activeTab = 'chat';
+      this.showToast(this.promptIsComposerPreset(pr) ? 'Preset loaded into Console' : 'Playbook sent to Console');
     },
 
     async deletePrompt(id) {
@@ -5213,7 +6118,12 @@ function devbrain() {
     },
 
     resetNewPrompt() {
-      this.newPrompt = { title:'', content:'', project_id:'', tags:'' };
+      this.newPrompt = {
+        title:'', content:'', project_id:'', tags:'',
+        save_composer_preset: false,
+        include_selected_resources: true,
+        include_selected_research_pack: true,
+      };
     },
 
     openPrompt(pr) {
@@ -5250,6 +6160,141 @@ function devbrain() {
       this.showToast(res.pinned ? '📌 Pinned' : 'Unpinned');
       // Re-sort: pinned first
       this.prompts = [...this.prompts].sort((a, b) => (b.pinned || 0) - (a.pinned || 0));
+    },
+
+    async loadResearchPacks(selectId = null) {
+      this.researchPacksLoading = true;
+      try {
+        const data = await this.api('GET', '/api/research-packs?include_resources=true');
+        this.researchPacks = data.items || [];
+        if (selectId) this.selectedResearchPackId = Number(selectId);
+        else if (this.selectedResearchPackId && !this.researchPacks.some(pack => Number(pack.id) === Number(this.selectedResearchPackId))) this.selectedResearchPackId = null;
+      } catch(e) {
+        this.showToast(`Research packs error: ${e.message}`);
+      }
+      this.researchPacksLoading = false;
+    },
+
+    async createResearchPack() {
+      const title = (this.newResearchPack.title || '').trim();
+      if (!title) return;
+      try {
+        const pack = await this.api('POST', '/api/research-packs', {
+          title,
+          description: this.newResearchPack.description || '',
+          pinned: !!this.newResearchPack.pinned,
+        });
+        await this.loadResearchPacks(pack.id);
+        this.newResearchPack = { title: '', description: '', pinned: false };
+        this.showAddResearchPack = false;
+        this.showToast('Research pack created');
+      } catch(e) {
+        this.showToast(`Create failed: ${e.message}`);
+      }
+    },
+
+    async addResourceToSelectedPack(resource) {
+      const pack = this.currentResearchPack();
+      if (!pack) {
+        this.showToast('Select a research pack first');
+        return;
+      }
+      try {
+        const updated = await this.api('POST', `/api/research-packs/${pack.id}/items`, {
+          resource_ids: [Number(resource.id)],
+        });
+        const idx = this.researchPacks.findIndex(item => Number(item.id) === Number(pack.id));
+        if (idx !== -1) this.researchPacks[idx] = updated;
+        this.selectedResearchPackId = Number(updated.id);
+        this.showToast('Added to research pack');
+      } catch(e) {
+        this.showToast(`Pack update failed: ${e.message}`);
+      }
+    },
+
+    resourceInSelectedPack(resourceId) {
+      const pack = this.currentResearchPack();
+      if (!pack) return false;
+      return (pack.resources || []).some(resource => Number(resource.id) === Number(resourceId));
+    },
+
+    async removePackResource(packId, resourceId) {
+      try {
+        const updated = await this.api('DELETE', `/api/research-packs/${packId}/items/${resourceId}`);
+        const idx = this.researchPacks.findIndex(item => Number(item.id) === Number(packId));
+        if (idx !== -1) this.researchPacks[idx] = updated;
+        this.showToast('Removed from research pack');
+      } catch(e) {
+        this.showToast(`Remove failed: ${e.message}`);
+      }
+    },
+
+    async toggleResearchPackPin(pack) {
+      try {
+        const updated = await this.api('PATCH', `/api/research-packs/${pack.id}`, {
+          pinned: !pack.pinned,
+        });
+        const idx = this.researchPacks.findIndex(item => Number(item.id) === Number(pack.id));
+        if (idx !== -1) this.researchPacks[idx] = updated;
+        this.researchPacks = [...this.researchPacks].sort((a, b) => (Number(b.pinned) - Number(a.pinned)));
+      } catch(e) {
+        this.showToast(`Pin failed: ${e.message}`);
+      }
+    },
+
+    useResearchPack(pack) {
+      this.selectedResearchPackId = Number(pack.id);
+      this.showComposerMenu = false;
+      this.switchTab('chat');
+      this.showToast(`Research Pack ready: ${pack.title}`);
+    },
+
+    clearResearchPack() {
+      this.selectedResearchPackId = null;
+      this.showToast('Research Pack cleared');
+    },
+
+    async deleteResearchPack(pack) {
+      if (!confirm(`Delete research pack "${pack.title}"?`)) return;
+      try {
+        await this.api('DELETE', `/api/research-packs/${pack.id}`);
+        this.researchPacks = this.researchPacks.filter(item => Number(item.id) !== Number(pack.id));
+        if (Number(this.selectedResearchPackId) === Number(pack.id)) this.selectedResearchPackId = null;
+        this.showToast('Research pack deleted');
+      } catch(e) {
+        this.showToast(`Delete failed: ${e.message}`);
+      }
+    },
+
+    async loadMemoryItems() {
+      this.memoryLoading = true;
+      try {
+        const data = await this.api('GET', '/api/memory/items?limit=180');
+        this.memoryItems = data.items || [];
+      } catch(e) {
+        this.showToast(`Memory error: ${e.message}`);
+      }
+      this.memoryLoading = false;
+    },
+
+    async setMemoryPinned(item, value) {
+      try {
+        const updated = await this.api('PATCH', `/api/memory/items/${item.id}`, { pinned: !!value });
+        const idx = this.memoryItems.findIndex(entry => Number(entry.id) === Number(item.id));
+        if (idx !== -1) this.memoryItems[idx] = updated;
+      } catch(e) {
+        this.showToast(`Pin failed: ${e.message}`);
+      }
+    },
+
+    async setMemoryTrust(item, value) {
+      try {
+        const updated = await this.api('PATCH', `/api/memory/items/${item.id}`, { trust_level: value });
+        const idx = this.memoryItems.findIndex(entry => Number(entry.id) === Number(item.id));
+        if (idx !== -1) this.memoryItems[idx] = updated;
+      } catch(e) {
+        this.showToast(`Trust update failed: ${e.message}`);
+      }
     },
 
     // ── Activity ───────────────────────────────────────────────────
@@ -5344,6 +6389,7 @@ function devbrain() {
           this.settingsForm._githubTokenHint = '';
         }
         this.loadTtsVoices(true);
+        this.refreshVoiceCapability();
       } catch(e) {}
     },
 
@@ -5407,6 +6453,7 @@ function devbrain() {
           this.settingsForm._githubTokenHint = raw.length > 10 ? `${raw.slice(0, 4)}...${raw.slice(-4)}` : 'set';
           this.settingsForm.github_token = '';
         }
+        this.refreshVoiceCapability();
         this.syncChatModel(this.settingsForm.code_model || this.settingsForm.ollama_model || this.selectedChatModel);
         await this.loadTtsVoices(true);
         this.settingsSaved = true;
@@ -5628,10 +6675,40 @@ function devbrain() {
     },
 
     // ── Voice ──────────────────────────────────────────────────────
+    azureSpeechConfigured() {
+      return !!(this.settingsForm.azure_speech_key || this.settingsForm._azureSpeechKeyHint);
+    },
+
+    speechLocale() {
+      const voice = this.settingsForm.azure_voice || 'en-ZA-LeahNeural';
+      const match = String(voice).match(/^[a-z]{2}-[A-Z]{2}/);
+      return match ? match[0] : 'en-ZA';
+    },
+
+    refreshVoiceCapability() {
+      const hasBrowserRecognition = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
+      const hasAzureSdk = !!window.SpeechSDK;
+      this.speechInputSupported = hasBrowserRecognition || (hasAzureSdk && this.azureSpeechConfigured());
+      this.speechOutputSupported = !!window.speechSynthesis || this.azureSpeechConfigured();
+      this.speechSupported = this.speechInputSupported || this.speechOutputSupported;
+    },
+
+    voiceInputAvailable() {
+      return !!this.speechInputSupported;
+    },
+
+    voiceOutputAvailable() {
+      return !!this.speechOutputSupported;
+    },
+
     async startVoice() {
       if (this.voiceActive && this._speechRecognizer) {
-        try { this._speechRecognizer.stop(); } catch (_) {}
+        try {
+          if (typeof this._speechRecognizer.stop === 'function') this._speechRecognizer.stop();
+          if (typeof this._speechRecognizer.close === 'function') this._speechRecognizer.close();
+        } catch (_) {}
         this.voiceActive = false;
+        this._speechRecognizer = null;
         this.showToast('Voice capture stopped');
         return;
       }
@@ -5639,10 +6716,6 @@ function devbrain() {
       const isTrustedLocal = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
       if (!isTrustedLocal && !window.isSecureContext) {
         this.showToast('Voice input needs HTTPS or localhost');
-        return;
-      }
-      if (!SpeechRec) {
-        this.showToast('This browser does not expose live speech recognition here');
         return;
       }
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -5661,9 +6734,17 @@ function devbrain() {
         }
         return;
       }
+      if (!SpeechRec && window.SpeechSDK && this.azureSpeechConfigured()) {
+        await this.startAzureVoiceRecognition();
+        return;
+      }
+      if (!SpeechRec) {
+        this.showToast('This browser does not expose live speech recognition here');
+        return;
+      }
       const recog = new SpeechRec();
       this._speechRecognizer = recog;
-      recog.lang = 'en-ZA';
+      recog.lang = this.speechLocale();
       recog.interimResults = false;
       recog.maxAlternatives = 1;
       if ('continuous' in recog) recog.continuous = false;
@@ -5710,6 +6791,50 @@ function devbrain() {
       }
     },
 
+    async startAzureVoiceRecognition() {
+      try {
+        const cfg = await this.api('GET', '/api/stt/token');
+        if (!window.SpeechSDK) {
+          this.showToast('Azure Speech SDK is still loading');
+          return;
+        }
+        const sdk = window.SpeechSDK;
+        const speechConfig = sdk.SpeechConfig.fromAuthorizationToken(cfg.token, cfg.region);
+        speechConfig.speechRecognitionLanguage = this.speechLocale();
+        const audioConfig = sdk.AudioConfig.fromDefaultMicrophoneInput();
+        const recognizer = new sdk.SpeechRecognizer(speechConfig, audioConfig);
+        this._speechRecognizer = recognizer;
+        this.voiceActive = true;
+        recognizer.recognizeOnceAsync(
+          (result) => {
+            const text = String(result?.text || '').trim();
+            if (!text) {
+              this.showToast('No speech was detected');
+            } else if (this.chatInput.trim()) {
+              this.chatInput = `${this.chatInput.trim()} ${text}`.trim();
+            } else {
+              this.chatInput = text;
+            }
+            this.resetChatComposerHeight();
+            try { recognizer.close(); } catch (_) {}
+            this.voiceActive = false;
+            this._speechRecognizer = null;
+          },
+          (err) => {
+            try { recognizer.close(); } catch (_) {}
+            this.voiceActive = false;
+            this._speechRecognizer = null;
+            const message = typeof err === 'string' ? err : (err?.message || err?.errorDetails || '');
+            this.showToast(message ? `Azure voice failed: ${message}` : 'Azure voice input failed');
+          },
+        );
+      } catch (e) {
+        this.voiceActive = false;
+        this._speechRecognizer = null;
+        this.showToast(`Azure voice unavailable: ${e.message || e}`);
+      }
+    },
+
     _cleanForSpeech(text) {
       return text
         .replace(/```[\s\S]*?```/g, 'code block.')       // fenced code blocks
@@ -5746,16 +6871,15 @@ function devbrain() {
       this.stopSpeech();  // always cancel any current playback first
       const clean = this._cleanForSpeech(text);
       // Try Azure TTS if configured
-      if (this.settingsForm.azure_speech_key && this.settingsForm.azure_speech_region) {
+      if (this.azureSpeechConfigured() && this.settingsForm.azure_speech_region) {
         try {
           const res = await fetch('/api/tts', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: this.authHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
               text: clean,
               voice: this.settingsForm.azure_voice || 'en-ZA-LeahNeural',
               region: this.settingsForm.azure_speech_region,
-              key: this.settingsForm.azure_speech_key,
             }),
           });
           if (res.ok) {
@@ -6030,10 +7154,203 @@ function devbrain() {
       } catch(e) { this.showToast('Copy failed'); }
     },
 
+    openCanvas(message) {
+      if (!message) return;
+      const baseTitle = message.role === 'user' ? 'Your note' : 'Axon response';
+      const derivedTitle = this.documentTitleFromMarkdown(message.content) || baseTitle;
+      const runtimeBits = [
+        message.mode === 'agent' ? '#NEXT-GEN' : 'Console',
+        message.modelLabel || this.assistantRuntimeLabel() || '',
+        message.created_at ? `Updated ${this.formatTime(message.created_at)}` : '',
+      ].filter(Boolean);
+      this.canvasModal = {
+        open: true,
+        title: derivedTitle,
+        content: message.content || '',
+        meta: runtimeBits.join(' · '),
+        messageId: message.id || null,
+      };
+      document.body.classList.add('overflow-hidden');
+    },
+
+    closeCanvas() {
+      this.canvasModal.open = false;
+      document.body.classList.remove('overflow-hidden');
+    },
+
+    documentTitleFromMarkdown(text = '') {
+      const lines = String(text || '')
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean);
+      for (const line of lines) {
+        const heading = line.match(/^#{1,3}\s+(.+)$/);
+        if (heading) return heading[1].trim();
+      }
+      const first = lines[0] || '';
+      return first.slice(0, 72);
+    },
+
+    slugifyFilename(value = 'axon-document') {
+      return String(value || 'axon-document')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 64) || 'axon-document';
+    },
+
+    downloadBlob(filename, content, mimeType = 'text/plain;charset=utf-8') {
+      const blob = new Blob([content], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    },
+
+    downloadCanvasMarkdown() {
+      const filename = `${this.slugifyFilename(this.canvasModal.title)}.md`;
+      this.downloadBlob(filename, this.canvasModal.content || '', 'text/markdown;charset=utf-8');
+      this.showToast('Markdown downloaded');
+    },
+
+    downloadCanvasHtml() {
+      const title = this.canvasModal.title || 'Axon document';
+      const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${this.escapeHtml(title)}</title>
+  <style>
+    body { font-family: Inter, Arial, sans-serif; margin: 40px auto; max-width: 880px; color: #0f172a; background: #fff; line-height: 1.7; }
+    h1, h2, h3 { color: #020617; }
+    pre { background: #0f172a; color: #e2e8f0; padding: 16px; border-radius: 12px; overflow-x: auto; }
+    code { background: #e2e8f0; padding: 2px 6px; border-radius: 6px; }
+    blockquote { border-left: 4px solid #38bdf8; padding-left: 16px; color: #334155; }
+    table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+    th, td { border: 1px solid #cbd5e1; padding: 10px 12px; text-align: left; }
+  </style>
+</head>
+<body>
+  <h1>${this.escapeHtml(title)}</h1>
+  ${this.renderMd(this.canvasModal.content || '')}
+</body>
+</html>`;
+      const filename = `${this.slugifyFilename(title)}.html`;
+      this.downloadBlob(filename, html, 'text/html;charset=utf-8');
+      this.showToast('HTML downloaded');
+    },
+
+    saveCanvasPdf() {
+      const surface = document.getElementById('canvas-print-surface');
+      const title = this.canvasModal.title || 'Axon document';
+      if (!surface) return;
+      const win = window.open('', '_blank', 'width=980,height=1100');
+      if (!win) {
+        this.showToast('Popup blocked — allow popups to save PDF');
+        return;
+      }
+      const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>${this.escapeHtml(title)}</title>
+  <style>
+    @page { size: A4; margin: 18mm; }
+    body { font-family: Inter, Arial, sans-serif; color: #0f172a; background: #fff; line-height: 1.7; }
+    h1, h2, h3 { color: #020617; }
+    pre { background: #0f172a; color: #e2e8f0; padding: 16px; border-radius: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+    code { background: #e2e8f0; padding: 2px 6px; border-radius: 6px; }
+    blockquote { border-left: 4px solid #38bdf8; padding-left: 16px; color: #334155; }
+    table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+    th, td { border: 1px solid #cbd5e1; padding: 10px 12px; text-align: left; vertical-align: top; }
+    .meta { margin-bottom: 18px; color: #64748b; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="meta">${this.escapeHtml(this.canvasModal.meta || '')}</div>
+  ${surface.innerHTML}
+  <script>
+    window.onload = () => {
+      window.print();
+      setTimeout(() => window.close(), 120);
+    };
+  <\/script>
+</body>
+</html>`;
+      win.document.open();
+      win.document.write(html);
+      win.document.close();
+    },
+
     // ── Helpers ────────────────────────────────────────────────────
+    escapeHtml(text = '') {
+      return String(text || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    },
+
+    sanitizeRenderedHtml(html = '') {
+      const template = document.createElement('template');
+      template.innerHTML = html;
+      const allowedTags = new Set([
+        'A', 'ARTICLE', 'B', 'BLOCKQUOTE', 'BR', 'CODE', 'DEL', 'DIV', 'EM', 'H1', 'H2', 'H3', 'H4',
+        'H5', 'H6', 'HR', 'I', 'LI', 'OL', 'P', 'PRE', 'S', 'SPAN', 'STRONG', 'TABLE', 'TBODY',
+        'TD', 'TH', 'THEAD', 'TR', 'UL',
+      ]);
+      const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_ELEMENT);
+      const toRemove = [];
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (!allowedTags.has(node.tagName)) {
+          toRemove.push(node);
+          continue;
+        }
+        [...node.attributes].forEach(attr => {
+          const name = attr.name.toLowerCase();
+          const value = attr.value || '';
+          if (name.startsWith('on')) {
+            node.removeAttribute(attr.name);
+            return;
+          }
+          if (name === 'href') {
+            if (!/^(https?:|mailto:|#)/i.test(value)) {
+              node.removeAttribute(attr.name);
+            } else {
+              node.setAttribute('target', '_blank');
+              node.setAttribute('rel', 'noopener noreferrer');
+            }
+            return;
+          }
+          if (name !== 'href' && name !== 'colspan' && name !== 'rowspan') {
+            node.removeAttribute(attr.name);
+          }
+        });
+      }
+      toRemove.forEach(node => node.replaceWith(...node.childNodes));
+      return template.innerHTML;
+    },
+
     renderMd(text) {
       if (!text || typeof marked === 'undefined') return text || '';
-      return marked.parse(text);
+      if (!this._markdownConfigured) {
+        marked.setOptions({
+          gfm: true,
+          breaks: true,
+          headerIds: false,
+          mangle: false,
+        });
+        this._markdownConfigured = true;
+      }
+      const html = marked.parse(String(text || ''));
+      return this.sanitizeRenderedHtml(html);
     },
 
     formatTime(iso) {

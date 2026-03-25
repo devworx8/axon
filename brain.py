@@ -379,6 +379,13 @@ async def stream_chat(
 ) -> AsyncGenerator[str, None]:
     """Public async generator — yields chat response chunks (Ollama only, for SSE streaming)."""
     system = SYSTEM_PROMPT_OLLAMA
+    if _is_general_planning_request(user_message):
+        history = _filtered_general_history(history)
+        system += (
+            "\n\nThis is a general planning, writing, or research task."
+            "\nDo not assume repository or file context unless the user explicitly asks for local data."
+            "\nRespond with a clear structure, a polished draft when useful, and concise next-step options."
+        )
     if context_block:
         system += f"\n\n{context_block[:2000]}"
     if resource_context:
@@ -1069,6 +1076,7 @@ async def run_agent(
     ollama_url: str = "",
     ollama_model: str = "",
     max_iterations: int = 6,
+    force_tool_mode: bool = False,
 ) -> AsyncGenerator[dict, None]:
     """
     Async generator yielding agent events (ReAct-style, streaming-compatible):
@@ -1083,7 +1091,7 @@ async def run_agent(
         t for t in tools if t in _TOOL_REGISTRY
     ]
 
-    if _is_general_planning_request(user_message):
+    if not force_tool_mode and _is_general_planning_request(user_message):
         system = (
             "You are Axon, a calm and practical AI operator.\n"
             "This request is a general planning or writing task, not a local tool task.\n"
@@ -1435,6 +1443,13 @@ async def chat(
     Supports local Ollama, CLI agent, and external API runtimes.
     """
     system = SYSTEM_PROMPT_OLLAMA if backend == "ollama" else SYSTEM_PROMPT
+    if _is_general_planning_request(user_message):
+        history = _filtered_general_history(history)
+        system += (
+            "\n\nThis is a general planning, writing, or research task."
+            "\nDo not assume repository, file, or git context unless the user explicitly asks for local data."
+            "\nPrefer a strong structure, concise synthesis, and 2-4 useful next-step options."
+        )
     if context_block:
         # Trim context for local models (keep manageable, qwen2.5 handles 4k fine)
         if backend == "ollama":

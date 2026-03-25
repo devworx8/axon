@@ -58,6 +58,7 @@ async def init_db():
                 title       TEXT NOT NULL,
                 content     TEXT NOT NULL,
                 tags        TEXT,          -- comma-separated
+                meta_json   TEXT DEFAULT '{}',
                 pinned      INTEGER DEFAULT 0,
                 used_count  INTEGER DEFAULT 0,
                 created_at  TEXT DEFAULT (datetime('now')),
@@ -142,6 +143,43 @@ async def init_db():
                 created_at      TEXT DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS memory_items (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                memory_key      TEXT NOT NULL UNIQUE,
+                layer           TEXT NOT NULL,                  -- resource|workspace|user|mission
+                title           TEXT NOT NULL,
+                content         TEXT NOT NULL,
+                summary         TEXT DEFAULT '',
+                source          TEXT DEFAULT '',
+                source_id       TEXT DEFAULT '',
+                workspace_id    INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+                trust_level     TEXT DEFAULT 'medium',         -- high|medium|low
+                relevance_score REAL DEFAULT 0,
+                embedding_json  TEXT DEFAULT '',
+                meta_json       TEXT DEFAULT '{}',
+                pinned          INTEGER DEFAULT 0,
+                created_at      TEXT DEFAULT (datetime('now')),
+                updated_at      TEXT DEFAULT (datetime('now')),
+                last_accessed_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS research_packs (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                title           TEXT NOT NULL,
+                description     TEXT DEFAULT '',
+                pinned          INTEGER DEFAULT 0,
+                created_at      TEXT DEFAULT (datetime('now')),
+                updated_at      TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS research_pack_items (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                pack_id         INTEGER NOT NULL REFERENCES research_packs(id) ON DELETE CASCADE,
+                resource_id     INTEGER NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+                created_at      TEXT DEFAULT (datetime('now')),
+                UNIQUE(pack_id, resource_id)
+            );
+
             -- Default settings
             INSERT OR IGNORE INTO settings (key, value) VALUES
                 ('anthropic_api_key', ''),
@@ -165,6 +203,15 @@ async def init_db():
                 ('resource_upload_max_mb', '20'),
                 ('resource_url_import_enabled', '1');
         """)
+        async def ensure_column(table: str, column: str, definition: str):
+            cur = await db.execute(f"PRAGMA table_info({table})")
+            rows = await cur.fetchall()
+            existing = {row["name"] for row in rows}
+            if column not in existing:
+                await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+        await ensure_column("prompts", "meta_json", "TEXT DEFAULT '{}'")
+        await ensure_column("memory_items", "pinned", "INTEGER DEFAULT 0")
         await db.commit()
     print(f"[Axon] Database initialised at {DB_PATH}")
 
@@ -227,11 +274,11 @@ async def update_project_status(db: aiosqlite.Connection, project_id: int, statu
 # ─── Prompts ─────────────────────────────────────────────────────────────────
 
 async def save_prompt(db: aiosqlite.Connection, project_id: Optional[int], title: str,
-                      content: str, tags: str = "") -> int:
+                      content: str, tags: str = "", meta_json: str = "{}") -> int:
     cur = await db.execute("""
-        INSERT INTO prompts (project_id, title, content, tags)
-        VALUES (?, ?, ?, ?)
-    """, (project_id, title, content, tags))
+        INSERT INTO prompts (project_id, title, content, tags, meta_json)
+        VALUES (?, ?, ?, ?, ?)
+    """, (project_id, title, content, tags, meta_json))
     await db.commit()
     return cur.lastrowid
 
@@ -262,6 +309,14 @@ async def increment_prompt_usage(db: aiosqlite.Connection, prompt_id: int):
 async def delete_prompt(db: aiosqlite.Connection, prompt_id: int):
     await db.execute("DELETE FROM prompts WHERE id = ?", (prompt_id,))
     await db.commit()
+
+
+async def get_prompt(db: aiosqlite.Connection, prompt_id: int):
+    cur = await db.execute(
+        "SELECT p.*, pr.name as project_name FROM prompts p LEFT JOIN projects pr ON p.project_id = pr.id WHERE p.id = ?",
+        (prompt_id,),
+    )
+    return await cur.fetchone()
 
 
 # ─── Tasks ───────────────────────────────────────────────────────────────────
@@ -522,3 +577,340 @@ async def touch_resource_used(db: aiosqlite.Connection, resource_id: int):
         (resource_id,),
     )
     await db.commit()
+
+
+# ─── Memory Engine ───────────────────────────────────────────────────────────
+
+async def upsert_memory_item(
+    db: aiosqlite.Connection,
+    *,
+    memory_key: str,
+    layer: str,
+    title: str,
+    content: str,
+    summary: str = "",
+    source: str = "",
+    source_id: str = "",
+    workspace_id: Optional[int] = None,
+    trust_level: str = "medium",
+    relevance_score: float = 0.0,
+    embedding_json: str = "",
+    meta_json: str = "{}",
+    commit: bool = True,
+):
+    await db.execute(
+        """
+        INSERT INTO memory_items (
+            memory_key, layer, title, content, summary, source, source_id,
+            workspace_id, trust_level, relevance_score, embedding_json, meta_json,
+            updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(memory_key) DO UPDATE SET
+            layer = excluded.layer,
+            title = excluded.title,
+            content = excluded.content,
+            summary = excluded.summary,
+            source = excluded.source,
+            source_id = excluded.source_id,
+            workspace_id = excluded.workspace_id,
+            trust_level = excluded.trust_level,
+            relevance_score = excluded.relevance_score,
+            embedding_json = excluded.embedding_json,
+            meta_json = excluded.meta_json,
+            updated_at = datetime('now')
+        """,
+        (
+            memory_key,
+            layer,
+            title,
+            content,
+            summary,
+            source,
+            source_id,
+            workspace_id,
+            trust_level,
+            relevance_score,
+            embedding_json,
+            meta_json,
+        ),
+    )
+    if commit:
+        await db.commit()
+
+
+async def get_memory_item(db: aiosqlite.Connection, memory_id: int):
+    cur = await db.execute("SELECT * FROM memory_items WHERE id = ?", (memory_id,))
+    return await cur.fetchone()
+
+
+async def get_memory_item_by_key(db: aiosqlite.Connection, memory_key: str):
+    cur = await db.execute("SELECT * FROM memory_items WHERE memory_key = ?", (memory_key,))
+    return await cur.fetchone()
+
+
+async def list_memory_items(
+    db: aiosqlite.Connection,
+    *,
+    layer: str = "",
+    workspace_id: Optional[int] = None,
+    limit: int = 500,
+):
+    clauses = []
+    params: list[object] = []
+    if layer:
+        clauses.append("layer = ?")
+        params.append(layer)
+    if workspace_id is not None:
+        clauses.append("(workspace_id = ? OR workspace_id IS NULL)")
+        params.append(workspace_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    cur = await db.execute(
+        f"""
+        SELECT * FROM memory_items
+        {where}
+        ORDER BY COALESCE(last_accessed_at, updated_at) DESC, updated_at DESC
+        LIMIT ?
+        """,
+        (*params, limit),
+    )
+    return await cur.fetchall()
+
+
+async def delete_stale_memory_items(
+    db: aiosqlite.Connection,
+    *,
+    layer: str,
+    keep_keys: list[str],
+    commit: bool = True,
+):
+    if keep_keys:
+        placeholders = ",".join("?" for _ in keep_keys)
+        await db.execute(
+            f"DELETE FROM memory_items WHERE layer = ? AND memory_key NOT IN ({placeholders})",
+            (layer, *keep_keys),
+        )
+    else:
+        await db.execute("DELETE FROM memory_items WHERE layer = ?", (layer,))
+    if commit:
+        await db.commit()
+
+
+async def touch_memory_item(db: aiosqlite.Connection, memory_id: int):
+    await db.execute(
+        "UPDATE memory_items SET last_accessed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+        (memory_id,),
+    )
+    await db.commit()
+
+
+async def count_memory_items_by_layer(db: aiosqlite.Connection) -> dict[str, int]:
+    cur = await db.execute(
+        "SELECT layer, COUNT(*) AS total FROM memory_items GROUP BY layer"
+    )
+    rows = await cur.fetchall()
+    return {row["layer"]: row["total"] for row in rows}
+
+
+async def update_memory_item_state(
+    db: aiosqlite.Connection,
+    memory_id: int,
+    *,
+    pinned: Optional[bool] = None,
+    trust_level: Optional[str] = None,
+):
+    fields = []
+    values: list[object] = []
+    if pinned is not None:
+        fields.append("pinned = ?")
+        values.append(1 if pinned else 0)
+    if trust_level is not None:
+        fields.append("trust_level = ?")
+        values.append(trust_level)
+    if not fields:
+        return
+    values.append(memory_id)
+    await db.execute(
+        f"UPDATE memory_items SET {', '.join(fields)}, updated_at = datetime('now') WHERE id = ?",
+        values,
+    )
+    await db.commit()
+
+
+async def list_memory_items_filtered(
+    db: aiosqlite.Connection,
+    *,
+    search: str = "",
+    layer: str = "",
+    trust_level: str = "",
+    pinned: Optional[bool] = None,
+    workspace_id: Optional[int] = None,
+    limit: int = 200,
+):
+    clauses = []
+    params: list[object] = []
+    if search.strip():
+        token = f"%{search.strip()}%"
+        clauses.append("(title LIKE ? OR summary LIKE ? OR content LIKE ? OR source LIKE ?)")
+        params.extend([token, token, token, token])
+    if layer:
+        clauses.append("layer = ?")
+        params.append(layer)
+    if trust_level:
+        clauses.append("trust_level = ?")
+        params.append(trust_level)
+    if pinned is not None:
+        clauses.append("pinned = ?")
+        params.append(1 if pinned else 0)
+    if workspace_id is not None:
+        clauses.append("(workspace_id = ? OR workspace_id IS NULL)")
+        params.append(workspace_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    cur = await db.execute(
+        f"""
+        SELECT mi.*, p.name as workspace_name
+        FROM memory_items mi
+        LEFT JOIN projects p ON mi.workspace_id = p.id
+        {where}
+        ORDER BY pinned DESC, COALESCE(last_accessed_at, updated_at) DESC, updated_at DESC
+        LIMIT ?
+        """,
+        (*params, limit),
+    )
+    return await cur.fetchall()
+
+
+# ─── Research packs ──────────────────────────────────────────────────────────
+
+async def create_research_pack(
+    db: aiosqlite.Connection,
+    *,
+    title: str,
+    description: str = "",
+    pinned: bool = False,
+) -> int:
+    cur = await db.execute(
+        """
+        INSERT INTO research_packs (title, description, pinned)
+        VALUES (?, ?, ?)
+        """,
+        (title, description, 1 if pinned else 0),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def list_research_packs(db: aiosqlite.Connection, *, search: str = "", limit: int = 100):
+    clauses = []
+    params: list[object] = []
+    if search.strip():
+        token = f"%{search.strip()}%"
+        clauses.append("(rp.title LIKE ? OR rp.description LIKE ?)")
+        params.extend([token, token])
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    cur = await db.execute(
+        f"""
+        SELECT
+            rp.*,
+            COUNT(rpi.resource_id) AS resource_count
+        FROM research_packs rp
+        LEFT JOIN research_pack_items rpi ON rpi.pack_id = rp.id
+        {where}
+        GROUP BY rp.id
+        ORDER BY rp.pinned DESC, rp.updated_at DESC, rp.created_at DESC
+        LIMIT ?
+        """,
+        (*params, limit),
+    )
+    return await cur.fetchall()
+
+
+async def get_research_pack(db: aiosqlite.Connection, pack_id: int):
+    cur = await db.execute(
+        """
+        SELECT
+            rp.*,
+            COUNT(rpi.resource_id) AS resource_count
+        FROM research_packs rp
+        LEFT JOIN research_pack_items rpi ON rpi.pack_id = rp.id
+        WHERE rp.id = ?
+        GROUP BY rp.id
+        """,
+        (pack_id,),
+    )
+    return await cur.fetchone()
+
+
+async def update_research_pack(db: aiosqlite.Connection, pack_id: int, **fields):
+    if not fields:
+        return
+    set_clauses = [f"{key} = ?" for key in fields]
+    values = list(fields.values()) + [pack_id]
+    await db.execute(
+        f"UPDATE research_packs SET {', '.join(set_clauses)}, updated_at = datetime('now') WHERE id = ?",
+        values,
+    )
+    await db.commit()
+
+
+async def delete_research_pack(db: aiosqlite.Connection, pack_id: int):
+    await db.execute("DELETE FROM research_packs WHERE id = ?", (pack_id,))
+    await db.commit()
+
+
+async def add_research_pack_items(db: aiosqlite.Connection, pack_id: int, resource_ids: list[int]):
+    for resource_id in resource_ids:
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO research_pack_items (pack_id, resource_id)
+            VALUES (?, ?)
+            """,
+            (pack_id, resource_id),
+        )
+    await db.execute(
+        "UPDATE research_packs SET updated_at = datetime('now') WHERE id = ?",
+        (pack_id,),
+    )
+    await db.commit()
+
+
+async def remove_research_pack_item(db: aiosqlite.Connection, pack_id: int, resource_id: int):
+    await db.execute(
+        "DELETE FROM research_pack_items WHERE pack_id = ? AND resource_id = ?",
+        (pack_id, resource_id),
+    )
+    await db.execute(
+        "UPDATE research_packs SET updated_at = datetime('now') WHERE id = ?",
+        (pack_id,),
+    )
+    await db.commit()
+
+
+async def get_research_pack_items(db: aiosqlite.Connection, pack_id: int):
+    cur = await db.execute(
+        """
+        SELECT
+            rpi.pack_id,
+            r.id,
+            r.title,
+            r.kind,
+            r.source_type,
+            r.source_url,
+            r.local_path,
+            r.mime_type,
+            r.size_bytes,
+            r.sha256,
+            r.status,
+            r.summary,
+            r.preview_text,
+            r.meta_json,
+            r.created_at,
+            r.updated_at,
+            r.last_used_at
+        FROM research_pack_items rpi
+        JOIN resources r ON r.id = rpi.resource_id
+        WHERE rpi.pack_id = ?
+        ORDER BY rpi.created_at ASC, r.created_at ASC
+        """,
+        (pack_id,),
+    )
+    return await cur.fetchall()

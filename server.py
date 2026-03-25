@@ -38,6 +38,8 @@ import runtime_manager
 import gpu_guard
 import provider_registry
 import resource_bank
+import memory_engine
+from model_router import resolve_model_for_role
 
 PORT = 7734
 DEVBRAIN_DIR = Path.home() / ".devbrain"
@@ -346,26 +348,29 @@ class PromptCreate(BaseModel):
     title: str
     content: str
     tags: str = ""
+    meta: Optional[dict] = None
 
 
 @app.get("/api/prompts")
 async def list_prompts(project_id: Optional[int] = None):
     async with devdb.get_db() as conn:
         rows = await devdb.get_prompts(conn, project_id=project_id)
-        return [dict(r) for r in rows]
+        return [_serialize_prompt(r) for r in rows]
 
 
 @app.post("/api/prompts")
 async def create_prompt(body: PromptCreate):
     async with devdb.get_db() as conn:
         prompt_id = await devdb.save_prompt(
-            conn, body.project_id, body.title, body.content, body.tags
+            conn, body.project_id, body.title, body.content, body.tags,
+            meta_json=_json.dumps(body.meta or {}),
         )
         await devdb.log_event(
             conn, "prompt_saved", f"Saved prompt: {body.title}",
             project_id=body.project_id
         )
-        return {"id": prompt_id, "title": body.title}
+        row = await devdb.get_prompt(conn, prompt_id)
+        return _serialize_prompt(row)
 
 
 @app.delete("/api/prompts/{prompt_id}")
@@ -380,12 +385,15 @@ class PromptUpdate(BaseModel):
     content: Optional[str] = None
     tags: Optional[str] = None
     project_id: Optional[int] = None
+    meta: Optional[dict] = None
 
 
 @app.patch("/api/prompts/{prompt_id}")
 async def update_prompt(prompt_id: int, body: PromptUpdate):
     async with devdb.get_db() as conn:
         fields = {k: v for k, v in body.dict().items() if v is not None}
+        if "meta" in fields:
+            fields["meta_json"] = _json.dumps(fields.pop("meta") or {})
         if not fields:
             raise HTTPException(400, "Nothing to update")
         set_clauses = ", ".join(f"{k} = ?" for k in fields)
@@ -395,9 +403,8 @@ async def update_prompt(prompt_id: int, body: PromptUpdate):
             values
         )
         await conn.commit()
-        cur = await conn.execute("SELECT * FROM prompts WHERE id = ?", (prompt_id,))
-        row = await cur.fetchone()
-        return dict(row)
+        row = await devdb.get_prompt(conn, prompt_id)
+        return _serialize_prompt(row)
 
 
 @app.post("/api/prompts/{prompt_id}/pin")
@@ -505,6 +512,201 @@ def _ai_params(settings: dict) -> dict:
         "api_model": api_runtime.get("api_model", ""),
         "backend": backend, "cli_path": cli_path,
         "ollama_url": ollama_url, "ollama_model": ollama_model,
+    }
+
+
+def _composer_options_dict(composer_options) -> dict:
+    if composer_options is None:
+        return {}
+    if isinstance(composer_options, dict):
+        return {k: v for k, v in composer_options.items() if v not in (None, "", [], {})}
+    if hasattr(composer_options, "model_dump"):
+        return {k: v for k, v in composer_options.model_dump(exclude_none=True).items() if v not in (None, "", [], {})}
+    return {}
+
+
+def _composer_instruction_block(options: dict) -> str:
+    if not options:
+        return ""
+    lines = ["## Composer Directives"]
+    intelligence = options.get("intelligence_mode") or "ask"
+    action = options.get("action_mode") or ""
+    agent_role = options.get("agent_role") or ""
+    external_mode = options.get("external_mode") or "local_first"
+    research_pack_title = options.get("research_pack_title") or ""
+
+    lines.append(f"- Intelligence mode: {str(intelligence).replace('_', ' ').title()}")
+    if action:
+        lines.append(f"- Action mode: {str(action).replace('_', ' ').title()}")
+    if agent_role:
+        lines.append(f"- Agent role: {str(agent_role).replace('_', ' ').title()} Agent")
+    if options.get("use_workspace_memory", True):
+        lines.append("- Use workspace memory when it is relevant.")
+    if options.get("include_timeline_history"):
+        lines.append("- Include mission and timeline history when it helps.")
+    if options.get("require_approval"):
+        lines.append("- Require approval before risky actions or destructive changes.")
+    if options.get("safe_mode", True):
+        lines.append("- Safe mode is on: avoid destructive or high-risk actions.")
+    if options.get("simulation_mode"):
+        lines.append("- Simulation mode is on: plan and simulate, do not make changes.")
+    if research_pack_title:
+        lines.append(f"- Use the selected Research Pack: {research_pack_title}.")
+    if external_mode == "disable_external_calls":
+        lines.append("- Do not use cloud or external services. Stay fully local-first.")
+    elif external_mode == "cloud_assist":
+        lines.append("- Cloud assist is allowed when it materially improves the answer.")
+    elif external_mode == "external_agent":
+        lines.append("- External specialist agents are allowed if enabled, but local-first remains preferred.")
+
+    if intelligence == "deep_research":
+        lines.append("- Perform multi-step retrieval and synthesis. Return summary, key findings, supporting context, and gaps.")
+    elif intelligence == "summarize":
+        lines.append("- Compress the input and memory into a concise summary with minimal repetition.")
+    elif intelligence == "explain":
+        lines.append("- Explain clearly and simply, like a calm operator teaching a beginner.")
+    elif intelligence == "compare":
+        lines.append("- Compare options with pros, trade-offs, and a recommendation.")
+    elif intelligence == "analyze":
+        lines.append("- Inspect the available context carefully before concluding.")
+
+    return "\n".join(lines)
+
+
+def _composer_memory_layers(options: dict, *, has_attached_resources: bool = False) -> list[str]:
+    intelligence = str(options.get("intelligence_mode") or "ask").lower()
+    layers: list[str] = []
+    if options.get("use_workspace_memory", True):
+        layers.append("workspace")
+    if intelligence == "deep_research" or options.get("select_research_pack") or options.get("research_pack_id"):
+        layers.append("resource")
+    if options.get("include_timeline_history") or intelligence in {"deep_research", "analyze"}:
+        layers.append("mission")
+    layers.append("user")
+    if has_attached_resources and "resource" not in layers:
+        layers.append("resource")
+    deduped: list[str] = []
+    for layer in layers:
+        if layer not in deduped:
+            deduped.append(layer)
+    return deduped
+
+
+def _loads_json_object(value: str | None) -> dict:
+    raw = str(value or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = _json.loads(raw)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _serialize_prompt(row) -> dict:
+    item = dict(row)
+    item["meta"] = _loads_json_object(item.get("meta_json"))
+    return item
+
+
+def _serialize_memory_item(row) -> dict:
+    item = dict(row)
+    item["meta"] = _loads_json_object(item.get("meta_json"))
+    item["pinned"] = bool(item.get("pinned"))
+    return item
+
+
+def _serialize_research_pack(row, *, resources: Optional[list[dict]] = None) -> dict:
+    item = dict(row)
+    item["pinned"] = bool(item.get("pinned"))
+    item["resource_count"] = int(item.get("resource_count") or 0)
+    if resources is not None:
+        item["resources"] = resources
+    return item
+
+
+def _local_role_for_composer(options: dict, agent_request: bool = False) -> str:
+    agent_role = str(options.get("agent_role") or "").lower()
+    intelligence = str(options.get("intelligence_mode") or "ask").lower()
+    action = str(options.get("action_mode") or "").lower()
+
+    if agent_role in {"planner", "reviewer", "repair"}:
+        return "reasoning"
+    if agent_role == "coder":
+        return "code"
+    if agent_role == "scanner":
+        return "general"
+    if action in {"fix_repair", "optimize", "refactor"}:
+        return "code"
+    if intelligence in {"deep_research", "compare"}:
+        return "reasoning"
+    if intelligence in {"summarize", "explain", "generate"}:
+        return "general"
+    if agent_request:
+        return "code"
+    return "general"
+
+
+async def _effective_ai_params(settings: dict, composer_options: dict, *, agent_request: bool = False, requested_model: str = "") -> dict:
+    ai = dict(_ai_params(settings))
+    external_mode = str(composer_options.get("external_mode") or "local_first").lower()
+
+    if not agent_request:
+        if external_mode == "disable_external_calls" and ai.get("backend") != "ollama":
+            ai["backend"] = "ollama"
+        elif external_mode in {"cloud_assist", "external_agent"} and ai.get("backend") == "ollama":
+            api_runtime = provider_registry.runtime_api_config(settings)
+            if api_runtime.get("api_key"):
+                ai.update(
+                    {
+                        "backend": "api",
+                        "api_key": api_runtime.get("api_key", ""),
+                        "api_provider": api_runtime.get("provider_id", "anthropic"),
+                        "api_base_url": api_runtime.get("api_base_url", ""),
+                        "api_model": api_runtime.get("api_model", ""),
+                    }
+                )
+
+    if ai.get("backend") == "ollama":
+        if requested_model:
+            ai["ollama_model"] = requested_model
+            return ai
+        available_models = await brain.ollama_list_models(settings.get("ollama_url", ""))
+        route = resolve_model_for_role(
+            _local_role_for_composer(composer_options, agent_request=agent_request),
+            available_models,
+            runtime_manager.build_router_config(settings),
+        )
+        if route.get("selected_model"):
+            ai["ollama_model"] = route["selected_model"]
+    return ai
+
+
+async def _memory_bundle(
+    conn,
+    *,
+    user_message: str,
+    project_id: Optional[int],
+    resource_ids: list[int],
+    settings: dict,
+    composer_options: dict,
+) -> dict:
+    await memory_engine.sync_memory_layers(conn, settings)
+    layers = _composer_memory_layers(composer_options, has_attached_resources=bool(resource_ids))
+    intelligence = str(composer_options.get("intelligence_mode") or "ask").lower()
+    limit = 8 if intelligence == "deep_research" else 5
+    results = await memory_engine.search_memory(
+        conn,
+        query=user_message,
+        settings=settings,
+        workspace_id=project_id,
+        layers=layers,
+        limit=limit,
+    )
+    return {
+        "items": results,
+        "context_block": memory_engine.build_memory_context(results),
+        "overview": await memory_engine.build_memory_overview(conn),
     }
 
 
@@ -831,6 +1033,121 @@ async def delete_resource(resource_id: int):
     return {"deleted": True}
 
 
+# ─── Research packs ──────────────────────────────────────────────────────────
+
+class ResearchPackCreate(BaseModel):
+    title: str
+    description: str = ""
+    pinned: bool = False
+
+
+class ResearchPackUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    pinned: Optional[bool] = None
+
+
+class ResearchPackItemsBody(BaseModel):
+    resource_ids: list[int] = []
+
+
+@app.get("/api/research-packs")
+async def list_research_packs(search: str = "", include_resources: bool = False):
+    async with devdb.get_db() as conn:
+        rows = await devdb.list_research_packs(conn, search=search)
+        items = []
+        for row in rows:
+            resources = None
+            if include_resources:
+                resource_rows = await devdb.get_research_pack_items(conn, row["id"])
+                resources = [resource_bank.serialize_resource(item) for item in resource_rows]
+            items.append(_serialize_research_pack(row, resources=resources))
+        return {"items": items}
+
+
+@app.get("/api/research-packs/{pack_id}")
+async def get_research_pack(pack_id: int):
+    async with devdb.get_db() as conn:
+        row = await devdb.get_research_pack(conn, pack_id)
+        if not row:
+            raise HTTPException(404, "Research pack not found")
+        resource_rows = await devdb.get_research_pack_items(conn, pack_id)
+        resources = [resource_bank.serialize_resource(item) for item in resource_rows]
+        return _serialize_research_pack(row, resources=resources)
+
+
+@app.post("/api/research-packs")
+async def create_research_pack(body: ResearchPackCreate):
+    async with devdb.get_db() as conn:
+        pack_id = await devdb.create_research_pack(
+            conn,
+            title=body.title,
+            description=body.description,
+            pinned=body.pinned,
+        )
+        await devdb.log_event(conn, "resource_added", f"Created research pack: {body.title}")
+        row = await devdb.get_research_pack(conn, pack_id)
+        return _serialize_research_pack(row, resources=[])
+
+
+@app.patch("/api/research-packs/{pack_id}")
+async def update_research_pack(pack_id: int, body: ResearchPackUpdate):
+    fields = {k: v for k, v in body.dict().items() if v is not None}
+    if "pinned" in fields:
+        fields["pinned"] = 1 if fields["pinned"] else 0
+    if not fields:
+        raise HTTPException(400, "Nothing to update")
+    async with devdb.get_db() as conn:
+        await devdb.update_research_pack(conn, pack_id, **fields)
+        row = await devdb.get_research_pack(conn, pack_id)
+        if not row:
+            raise HTTPException(404, "Research pack not found")
+        resource_rows = await devdb.get_research_pack_items(conn, pack_id)
+        resources = [resource_bank.serialize_resource(item) for item in resource_rows]
+        return _serialize_research_pack(row, resources=resources)
+
+
+@app.post("/api/research-packs/{pack_id}/items")
+async def add_research_pack_items(pack_id: int, body: ResearchPackItemsBody):
+    ids = _clean_resource_ids(body.resource_ids)
+    if not ids:
+        raise HTTPException(400, "No resources selected")
+    async with devdb.get_db() as conn:
+        row = await devdb.get_research_pack(conn, pack_id)
+        if not row:
+            raise HTTPException(404, "Research pack not found")
+        await devdb.add_research_pack_items(conn, pack_id, ids)
+        await devdb.log_event(conn, "resource_used", f"Updated research pack: {row['title']}")
+        resource_rows = await devdb.get_research_pack_items(conn, pack_id)
+        resources = [resource_bank.serialize_resource(item) for item in resource_rows]
+        fresh = await devdb.get_research_pack(conn, pack_id)
+        return _serialize_research_pack(fresh, resources=resources)
+
+
+@app.delete("/api/research-packs/{pack_id}/items/{resource_id}")
+async def remove_research_pack_item(pack_id: int, resource_id: int):
+    async with devdb.get_db() as conn:
+        row = await devdb.get_research_pack(conn, pack_id)
+        if not row:
+            raise HTTPException(404, "Research pack not found")
+        await devdb.remove_research_pack_item(conn, pack_id, resource_id)
+        resource_rows = await devdb.get_research_pack_items(conn, pack_id)
+        resources = [resource_bank.serialize_resource(item) for item in resource_rows]
+        fresh = await devdb.get_research_pack(conn, pack_id)
+        return _serialize_research_pack(fresh, resources=resources)
+
+
+@app.delete("/api/research-packs/{pack_id}")
+async def delete_research_pack(pack_id: int):
+    async with devdb.get_db() as conn:
+        row = await devdb.get_research_pack(conn, pack_id)
+        if not row:
+            raise HTTPException(404, "Research pack not found")
+        await devdb.delete_research_pack(conn, pack_id)
+        await devdb.log_event(conn, "resource_removed", f"Deleted research pack: {row['title']}")
+    return {"deleted": True}
+
+
 # ─── Chat ─────────────────────────────────────────────────────────────────────
 
 class ChatMessage(BaseModel):
@@ -838,15 +1155,15 @@ class ChatMessage(BaseModel):
     project_id: Optional[int] = None
     model: Optional[str] = None
     resource_ids: Optional[list[int]] = None
+    composer_options: Optional[dict] = None
 
 
 @app.post("/api/chat")
 async def chat(body: ChatMessage):
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
-        ai = _ai_params(settings)
-        if body.model:
-            ai["ollama_model"] = body.model
+        composer_options = _composer_options_dict(body.composer_options)
+        ai = await _effective_ai_params(settings, composer_options, requested_model=body.model or "")
 
         # Build rich context
         projects = [dict(r) for r in await devdb.get_projects(conn, status="active")]
@@ -871,6 +1188,18 @@ async def chat(body: ChatMessage):
             user_message=body.message,
             settings=settings,
         )
+        memory_bundle = await _memory_bundle(
+            conn,
+            user_message=body.message,
+            project_id=body.project_id,
+            resource_ids=body.resource_ids or [],
+            settings=settings,
+            composer_options=composer_options,
+        )
+        composer_block = _composer_instruction_block(composer_options)
+        merged_context_block = "\n\n".join(
+            block for block in (context_block, memory_bundle["context_block"], composer_block) if block
+        )
 
         # Call AI with timeout handling
         try:
@@ -879,8 +1208,8 @@ async def chat(body: ChatMessage):
                 brain.chat(
                     body.message,
                     history,
-                    context_block,
-                    project_name,
+                    merged_context_block,
+                    project_name=project_name,
                     resource_context=resource_bundle["context_block"],
                     resource_image_paths=resource_bundle["image_paths"],
                     vision_model=resource_bundle["vision_model"],
@@ -925,9 +1254,12 @@ async def chat_stream(body: ChatMessage, request: Request):
     """SSE streaming chat — Ollama only; falls back to buffered for API/CLI."""
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
+        composer_options = _composer_options_dict(body.composer_options)
+        ai = await _effective_ai_params(settings, composer_options, requested_model=body.model or "")
+        settings = {**settings, "ai_backend": ai.get("backend", settings.get("ai_backend", "ollama"))}
+        if ai.get("ollama_model"):
+            settings["ollama_model"] = ai["ollama_model"]
         backend = settings.get("ai_backend", "ollama")
-        if body.model:
-            settings["ollama_model"] = body.model
 
         # Load context + history
         projects = [dict(r) for r in await devdb.get_projects(conn, status="active")]
@@ -947,16 +1279,27 @@ async def chat_stream(body: ChatMessage, request: Request):
             user_message=body.message,
             settings=settings,
         )
+        memory_bundle = await _memory_bundle(
+            conn,
+            user_message=body.message,
+            project_id=body.project_id,
+            resource_ids=body.resource_ids or [],
+            settings=settings,
+            composer_options=composer_options,
+        )
+        composer_block = _composer_instruction_block(composer_options)
+        merged_context_block = "\n\n".join(
+            block for block in (context_block, memory_bundle["context_block"], composer_block) if block
+        )
 
     if backend != "ollama":
         # Fall back to non-streaming for API/CLI — emit single SSE event
         try:
-            ai = _ai_params(settings)
             result = await brain.chat(
                 body.message,
                 history,
-                context_block,
-                project_name,
+                merged_context_block,
+                project_name=project_name,
                 resource_context=resource_bundle["context_block"],
                 resource_image_paths=resource_bundle["image_paths"],
                 vision_model=resource_bundle["vision_model"],
@@ -984,7 +1327,10 @@ async def chat_stream(body: ChatMessage, request: Request):
                 full_content.append(f"⚠️ {warning}\n\n")
                 yield {"data": _json.dumps({"chunk": f"⚠️ {warning}\n\n"})}
             async for chunk in brain.stream_chat(
-                body.message, history, context_block, project_name,
+                body.message,
+                history,
+                merged_context_block,
+                project_name=project_name,
                 resource_context=resource_bundle["context_block"],
                 resource_image_paths=resource_bundle["image_paths"],
                 vision_model=resource_bundle["vision_model"],
@@ -1018,6 +1364,7 @@ class AgentRequest(BaseModel):
     tools: Optional[list[str]] = None    # None = all tools
     model: Optional[str] = None
     resource_ids: Optional[list[int]] = None
+    composer_options: Optional[dict] = None
 
 
 @app.post("/api/agent")
@@ -1025,7 +1372,11 @@ async def agent_endpoint(body: AgentRequest, request: Request):
     """SSE streaming agent with tool-calling (Ollama only)."""
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
+        composer_options = _composer_options_dict(body.composer_options)
         backend = settings.get("ai_backend", "ollama")
+        if backend != "ollama" and str(composer_options.get("external_mode") or "").lower() == "disable_external_calls":
+            backend = "ollama"
+            settings["ai_backend"] = "ollama"
         if backend != "ollama":
             raise HTTPException(400, "Agent mode requires the Ollama backend. Switch in Settings.")
 
@@ -1046,9 +1397,22 @@ async def agent_endpoint(body: AgentRequest, request: Request):
             user_message=body.message,
             settings=settings,
         )
+        memory_bundle = await _memory_bundle(
+            conn,
+            user_message=body.message,
+            project_id=body.project_id,
+            resource_ids=body.resource_ids or [],
+            settings=settings,
+            composer_options=composer_options,
+        )
+        composer_block = _composer_instruction_block(composer_options)
+        merged_context_block = "\n\n".join(
+            block for block in (context_block, memory_bundle["context_block"], composer_block) if block
+        )
 
-    ollama_url = settings.get("ollama_url", "")
-    ollama_model = body.model or resource_bundle["vision_model"] or settings.get("ollama_model", "")
+    ai = await _effective_ai_params(settings, composer_options, agent_request=True, requested_model=body.model or "")
+    ollama_url = ai.get("ollama_url", settings.get("ollama_url", ""))
+    ollama_model = ai.get("ollama_model") or resource_bundle["vision_model"] or settings.get("ollama_model", "")
     collected_text: list[str] = []
 
     async def generate():
@@ -1057,12 +1421,16 @@ async def agent_endpoint(body: AgentRequest, request: Request):
                 collected_text.append(f"⚠️ {warning}\n\n")
                 yield {"data": _json.dumps({"type": "text", "chunk": f"⚠️ {warning}\n\n"})}
             async for event in brain.run_agent(
-                body.message, history, context_block, project_name,
+                body.message,
+                history,
+                merged_context_block,
+                project_name=project_name,
                 resource_context=resource_bundle["context_block"],
                 resource_image_paths=resource_bundle["image_paths"],
                 vision_model=resource_bundle["vision_model"],
                 tools=body.tools,
                 ollama_url=ollama_url, ollama_model=ollama_model,
+                force_tool_mode=bool(composer_options.get("action_mode") or composer_options.get("agent_role")),
             ):
                 if event.get("type") == "text":
                     collected_text.append(event["chunk"])
@@ -1423,6 +1791,106 @@ async def reset_usage():
     return {"reset": True}
 
 
+@app.post("/api/memory/sync")
+async def sync_memory():
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+        overview = await memory_engine.sync_memory_layers(conn, settings)
+    return {"synced": True, "overview": overview}
+
+
+@app.get("/api/memory/overview")
+async def memory_overview():
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+        await memory_engine.sync_memory_layers(conn, settings)
+        overview = await memory_engine.build_memory_overview(conn)
+    return overview
+
+
+@app.get("/api/memory/search")
+async def memory_search(
+    q: str = Query("", alias="q"),
+    project_id: Optional[int] = None,
+    layers: str = "",
+    limit: int = Query(6, ge=1, le=20),
+):
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+        await memory_engine.sync_memory_layers(conn, settings)
+        selected_layers = [item.strip() for item in layers.split(",") if item.strip()]
+        results = await memory_engine.search_memory(
+            conn,
+            query=q,
+            settings=settings,
+            workspace_id=project_id,
+            layers=selected_layers or None,
+            limit=limit,
+        )
+    return {
+        "items": [
+            {
+                "id": item["id"],
+                "layer": item["layer"],
+                "title": item["title"],
+                "summary": item.get("summary", ""),
+                "source": item.get("source", ""),
+                "trust_level": item.get("trust_level", "medium"),
+                "workspace_id": item.get("workspace_id"),
+                "score": item.get("score", 0),
+            }
+            for item in results
+        ]
+    }
+
+
+class MemoryUpdate(BaseModel):
+    pinned: Optional[bool] = None
+    trust_level: Optional[str] = None
+
+
+@app.get("/api/memory/items")
+async def list_memory_items(
+    q: str = Query("", alias="q"),
+    layer: str = "",
+    trust_level: str = "",
+    pinned: Optional[bool] = None,
+    project_id: Optional[int] = None,
+    limit: int = Query(120, ge=1, le=300),
+):
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+        await memory_engine.sync_memory_layers(conn, settings)
+        rows = await devdb.list_memory_items_filtered(
+            conn,
+            search=q,
+            layer=layer,
+            trust_level=trust_level,
+            pinned=pinned,
+            workspace_id=project_id,
+            limit=limit,
+        )
+    return {"items": [_serialize_memory_item(row) for row in rows]}
+
+
+@app.patch("/api/memory/items/{memory_id}")
+async def update_memory_item(memory_id: int, body: MemoryUpdate):
+    if body.trust_level not in (None, "high", "medium", "low"):
+        raise HTTPException(400, "Invalid trust level")
+    async with devdb.get_db() as conn:
+        row = await devdb.get_memory_item(conn, memory_id)
+        if not row:
+            raise HTTPException(404, "Memory item not found")
+        await devdb.update_memory_item_state(
+            conn,
+            memory_id,
+            pinned=body.pinned,
+            trust_level=body.trust_level,
+        )
+        updated = await devdb.get_memory_item(conn, memory_id)
+    return _serialize_memory_item(updated)
+
+
 @app.get("/api/runtime/status")
 async def runtime_status():
     """Return the Axon runtime snapshot used by the dashboard and settings."""
@@ -1430,6 +1898,7 @@ async def runtime_status():
         settings = await devdb.get_all_settings(conn)
         projects = await devdb.get_projects(conn, status="active")
         resources = await devdb.list_resources(conn)
+        memory_overview = await memory_engine.sync_memory_layers(conn, settings)
 
     available_models = await brain.ollama_list_models(settings.get("ollama_url", ""))
     ollama_service = _ollama_service_status()
@@ -1440,6 +1909,7 @@ async def runtime_status():
         vault_unlocked=devvault.VaultSession.is_unlocked(),
         workspace_count=len(projects),
         resource_count=len(resources),
+        memory_overview=memory_overview,
         usage=brain.get_session_usage(),
     )
     status["ollama_service"] = ollama_service
@@ -1659,6 +2129,22 @@ class TTSRequest(BaseModel):
     voice: str = "en-ZA-LeahNeural"   # South African English
 
 
+async def _issue_azure_speech_token(region: str, key: str) -> str:
+    """Mint a short-lived Azure Speech auth token."""
+    import aiohttp
+    token_url = f"https://{region}.api.cognitive.microsoft.com/sts/v1.0/issueToken"
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            token_url,
+            headers={"Ocp-Apim-Subscription-Key": key},
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as r:
+            if r.status != 200:
+                detail = await r.text()
+                raise HTTPException(400, f"Azure auth failed ({r.status})")
+            return await r.text()
+
+
 @app.post("/api/tts")
 async def azure_tts(body: TTSRequest):
     """Proxy text-to-speech via Azure Cognitive Services."""
@@ -1669,8 +2155,6 @@ async def azure_tts(body: TTSRequest):
     if not key:
         raise HTTPException(400, "Azure Speech key not set in Settings")
 
-    # Get access token
-    token_url = f"https://{region}.api.cognitive.microsoft.com/sts/v1.0/issueToken"
     ssml = f"""<speak version='1.0' xml:lang='en-ZA'>
         <voice name='{body.voice}'>{body.text[:500]}</voice>
     </speak>"""
@@ -1678,11 +2162,8 @@ async def azure_tts(body: TTSRequest):
 
     import aiohttp
     try:
+        token = await _issue_azure_speech_token(region, key)
         async with aiohttp.ClientSession() as session:
-            async with session.post(token_url, headers={"Ocp-Apim-Subscription-Key": key}) as r:
-                if r.status != 200:
-                    raise HTTPException(400, "Azure auth failed")
-                token = await r.text()
             async with session.post(
                 tts_url,
                 headers={
@@ -1701,6 +2182,23 @@ async def azure_tts(body: TTSRequest):
         raise
     except Exception as e:
         raise HTTPException(502, f"TTS error: {e}")
+
+
+@app.get("/api/stt/token")
+async def azure_stt_token():
+    """Return a short-lived Azure Speech auth token for browser microphone STT."""
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+    key = settings.get("azure_speech_key", "")
+    region = settings.get("azure_speech_region", "eastus")
+    if not key:
+        raise HTTPException(400, "Azure Speech key not set in Settings")
+    token = await _issue_azure_speech_token(region, key)
+    return {
+        "token": token,
+        "region": region,
+        "expires_in": 540,
+    }
 
 
 @app.get("/api/tts/voices")

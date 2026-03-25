@@ -47,9 +47,11 @@ def build_runtime_status(
     vault_unlocked: bool,
     workspace_count: int,
     resource_count: int = 0,
+    memory_overview: dict | None = None,
     usage: dict | None = None,
 ) -> dict:
     usage = usage or {}
+    memory_overview = memory_overview or {"total": 0, "layers": {}}
     config = build_router_config(settings)
     code_route = resolve_model_for_role("code", available_models, config)
     gpu_profile = gpu_guard.detect_display_gpu_state()
@@ -121,4 +123,5 @@ def build_runtime_status(
             "upload_max_mb": settings.get("resource_upload_max_mb", "20") or "20",
             "url_import_enabled": _setting_enabled(settings.get("resource_url_import_enabled", "1")),
         },
+        "memory_overview": memory_overview,
     }
