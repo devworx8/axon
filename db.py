@@ -122,12 +122,16 @@ async def init_db():
                 source_type     TEXT NOT NULL DEFAULT 'upload',   -- upload|url
                 source_url      TEXT DEFAULT '',
                 local_path      TEXT NOT NULL,
+                file_path       TEXT DEFAULT '',
                 mime_type       TEXT DEFAULT '',
                 size_bytes      INTEGER DEFAULT 0,
                 sha256          TEXT DEFAULT '',
                 status          TEXT DEFAULT 'pending',           -- pending|ready|processed|failed
                 summary         TEXT DEFAULT '',
                 preview_text    TEXT DEFAULT '',
+                trust_level     TEXT DEFAULT 'medium',
+                pinned          INTEGER DEFAULT 0,
+                workspace_id    INTEGER REFERENCES projects(id) ON DELETE SET NULL,
                 meta_json       TEXT DEFAULT '{}',
                 created_at      TEXT DEFAULT (datetime('now')),
                 updated_at      TEXT DEFAULT (datetime('now')),
@@ -139,7 +143,11 @@ async def init_db():
                 resource_id     INTEGER NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
                 chunk_index     INTEGER NOT NULL,
                 text            TEXT NOT NULL,
+                content         TEXT DEFAULT '',
+                token_estimate  INTEGER DEFAULT 0,
+                embedding_model TEXT DEFAULT '',
                 embedding_json  TEXT DEFAULT '',
+                embedding_vector TEXT DEFAULT '',
                 created_at      TEXT DEFAULT (datetime('now'))
             );
 
@@ -147,12 +155,15 @@ async def init_db():
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 memory_key      TEXT NOT NULL UNIQUE,
                 layer           TEXT NOT NULL,                  -- resource|workspace|user|mission
+                memory_type     TEXT DEFAULT '',
                 title           TEXT NOT NULL,
                 content         TEXT NOT NULL,
                 summary         TEXT DEFAULT '',
                 source          TEXT DEFAULT '',
                 source_id       TEXT DEFAULT '',
+                source_ref      TEXT DEFAULT '',
                 workspace_id    INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+                mission_id      INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
                 trust_level     TEXT DEFAULT 'medium',         -- high|medium|low
                 relevance_score REAL DEFAULT 0,
                 embedding_json  TEXT DEFAULT '',
@@ -160,13 +171,15 @@ async def init_db():
                 pinned          INTEGER DEFAULT 0,
                 created_at      TEXT DEFAULT (datetime('now')),
                 updated_at      TEXT DEFAULT (datetime('now')),
-                last_accessed_at TEXT
+                last_accessed_at TEXT,
+                last_used_at    TEXT
             );
 
             CREATE TABLE IF NOT EXISTS research_packs (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 title           TEXT NOT NULL,
                 description     TEXT DEFAULT '',
+                workspace_id    INTEGER REFERENCES projects(id) ON DELETE SET NULL,
                 pinned          INTEGER DEFAULT 0,
                 created_at      TEXT DEFAULT (datetime('now')),
                 updated_at      TEXT DEFAULT (datetime('now'))
@@ -178,6 +191,40 @@ async def init_db():
                 resource_id     INTEGER NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
                 created_at      TEXT DEFAULT (datetime('now')),
                 UNIQUE(pack_id, resource_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS memory_links (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_memory_id  INTEGER NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,
+                to_memory_id    INTEGER NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,
+                link_type       TEXT NOT NULL DEFAULT 'related',
+                weight          REAL DEFAULT 1.0,
+                created_at      TEXT DEFAULT (datetime('now')),
+                UNIQUE(from_memory_id, to_memory_id, link_type)
+            );
+
+            CREATE TABLE IF NOT EXISTS terminal_sessions (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                title               TEXT NOT NULL,
+                workspace_id        INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+                status              TEXT DEFAULT 'idle',     -- idle|pending_approval|running|completed|failed|stopped
+                mode                TEXT DEFAULT 'read_only', -- read_only|approval_required|simulation
+                cwd                 TEXT DEFAULT '',
+                pending_command     TEXT DEFAULT '',
+                active_command      TEXT DEFAULT '',
+                pid                 INTEGER DEFAULT 0,
+                created_at          TEXT DEFAULT (datetime('now')),
+                updated_at          TEXT DEFAULT (datetime('now')),
+                last_output_at      TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS terminal_events (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id      INTEGER NOT NULL REFERENCES terminal_sessions(id) ON DELETE CASCADE,
+                event_type      TEXT NOT NULL,   -- command|output|status|approval|error
+                content         TEXT DEFAULT '',
+                exit_code       INTEGER,
+                created_at      TEXT DEFAULT (datetime('now'))
             );
 
             -- Default settings
@@ -201,7 +248,10 @@ async def init_db():
                 ('azure_speech_region', 'eastus'),
                 ('resource_storage_path', '~/.devbrain/resources'),
                 ('resource_upload_max_mb', '20'),
-                ('resource_url_import_enabled', '1');
+                ('resource_url_import_enabled', '1'),
+                ('live_feed_enabled', '1'),
+                ('terminal_default_mode', 'read_only'),
+                ('terminal_command_timeout_seconds', '25');
         """)
         async def ensure_column(table: str, column: str, definition: str):
             cur = await db.execute(f"PRAGMA table_info({table})")
@@ -212,6 +262,19 @@ async def init_db():
 
         await ensure_column("prompts", "meta_json", "TEXT DEFAULT '{}'")
         await ensure_column("memory_items", "pinned", "INTEGER DEFAULT 0")
+        await ensure_column("resources", "file_path", "TEXT DEFAULT ''")
+        await ensure_column("resources", "trust_level", "TEXT DEFAULT 'medium'")
+        await ensure_column("resources", "pinned", "INTEGER DEFAULT 0")
+        await ensure_column("resources", "workspace_id", "INTEGER REFERENCES projects(id) ON DELETE SET NULL")
+        await ensure_column("resource_chunks", "content", "TEXT DEFAULT ''")
+        await ensure_column("resource_chunks", "token_estimate", "INTEGER DEFAULT 0")
+        await ensure_column("resource_chunks", "embedding_model", "TEXT DEFAULT ''")
+        await ensure_column("resource_chunks", "embedding_vector", "TEXT DEFAULT ''")
+        await ensure_column("memory_items", "memory_type", "TEXT DEFAULT ''")
+        await ensure_column("memory_items", "source_ref", "TEXT DEFAULT ''")
+        await ensure_column("memory_items", "mission_id", "INTEGER REFERENCES tasks(id) ON DELETE SET NULL")
+        await ensure_column("memory_items", "last_used_at", "TEXT")
+        await ensure_column("research_packs", "workspace_id", "INTEGER REFERENCES projects(id) ON DELETE SET NULL")
         await db.commit()
     print(f"[Axon] Database initialised at {DB_PATH}")
 
@@ -456,18 +519,22 @@ async def add_resource(
     status: str = "pending",
     summary: str = "",
     preview_text: str = "",
+    trust_level: str = "medium",
+    pinned: bool = False,
+    workspace_id: Optional[int] = None,
     meta_json: str = "{}",
 ) -> int:
     cur = await db.execute(
         """
         INSERT INTO resources (
-            title, kind, source_type, source_url, local_path, mime_type,
-            size_bytes, sha256, status, summary, preview_text, meta_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            title, kind, source_type, source_url, local_path, file_path, mime_type,
+            size_bytes, sha256, status, summary, preview_text, trust_level, pinned, workspace_id, meta_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            title, kind, source_type, source_url, local_path, mime_type,
-            size_bytes, sha256, status, summary, preview_text, meta_json,
+            title, kind, source_type, source_url, local_path, local_path, mime_type,
+            size_bytes, sha256, status, summary, preview_text,
+            trust_level, 1 if pinned else 0, workspace_id, meta_json,
         ),
     )
     await db.commit()
@@ -477,6 +544,8 @@ async def add_resource(
 async def update_resource(db: aiosqlite.Connection, resource_id: int, **fields):
     if not fields:
         return
+    if "local_path" in fields and "file_path" not in fields:
+        fields["file_path"] = fields["local_path"]
     set_clauses = [f"{key} = ?" for key in fields]
     values = list(fields.values())
     values.append(resource_id)
@@ -514,9 +583,11 @@ async def list_resources(
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     cur = await db.execute(
         f"""
-        SELECT * FROM resources
+        SELECT r.*, p.name AS workspace_name
+        FROM resources r
+        LEFT JOIN projects p ON p.id = r.workspace_id
         {where}
-        ORDER BY COALESCE(last_used_at, updated_at) DESC, created_at DESC
+        ORDER BY r.pinned DESC, COALESCE(r.last_used_at, r.updated_at) DESC, r.created_at DESC
         LIMIT ?
         """,
         (*params, limit),
@@ -525,7 +596,15 @@ async def list_resources(
 
 
 async def get_resource(db: aiosqlite.Connection, resource_id: int):
-    cur = await db.execute("SELECT * FROM resources WHERE id = ?", (resource_id,))
+    cur = await db.execute(
+        """
+        SELECT r.*, p.name AS workspace_name
+        FROM resources r
+        LEFT JOIN projects p ON p.id = r.workspace_id
+        WHERE r.id = ?
+        """,
+        (resource_id,),
+    )
     return await cur.fetchone()
 
 
@@ -534,7 +613,13 @@ async def get_resources_by_ids(db: aiosqlite.Connection, resource_ids: list[int]
         return []
     placeholders = ",".join("?" for _ in resource_ids)
     cur = await db.execute(
-        f"SELECT * FROM resources WHERE id IN ({placeholders}) ORDER BY created_at ASC",
+        f"""
+        SELECT r.*, p.name AS workspace_name
+        FROM resources r
+        LEFT JOIN projects p ON p.id = r.workspace_id
+        WHERE r.id IN ({placeholders})
+        ORDER BY r.created_at ASC
+        """,
         resource_ids,
     )
     return await cur.fetchall()
@@ -545,19 +630,34 @@ async def delete_resource(db: aiosqlite.Connection, resource_id: int):
     await db.commit()
 
 
-async def replace_resource_chunks(db: aiosqlite.Connection, resource_id: int, chunks: list[dict]):
+async def replace_resource_chunks(
+    db: aiosqlite.Connection,
+    resource_id: int,
+    chunks: list[dict],
+    *,
+    embedding_model: str = "",
+):
     await db.execute("DELETE FROM resource_chunks WHERE resource_id = ?", (resource_id,))
     for chunk in chunks:
+        text = chunk.get("text") or chunk.get("content") or ""
+        embedding_json = chunk.get("embedding_json", "") or chunk.get("embedding_vector", "")
         await db.execute(
             """
-            INSERT INTO resource_chunks (resource_id, chunk_index, text, embedding_json)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO resource_chunks (
+                resource_id, chunk_index, text, content, token_estimate,
+                embedding_model, embedding_json, embedding_vector
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 resource_id,
                 chunk.get("chunk_index", 0),
-                chunk.get("text", ""),
-                chunk.get("embedding_json", ""),
+                text,
+                text,
+                chunk.get("token_estimate", max(1, len(text) // 4) if text else 0),
+                chunk.get("embedding_model", embedding_model),
+                embedding_json,
+                embedding_json,
             ),
         )
     await db.commit()
@@ -592,6 +692,7 @@ async def upsert_memory_item(
     source: str = "",
     source_id: str = "",
     workspace_id: Optional[int] = None,
+    mission_id: Optional[int] = None,
     trust_level: str = "medium",
     relevance_score: float = 0.0,
     embedding_json: str = "",
@@ -601,18 +702,21 @@ async def upsert_memory_item(
     await db.execute(
         """
         INSERT INTO memory_items (
-            memory_key, layer, title, content, summary, source, source_id,
-            workspace_id, trust_level, relevance_score, embedding_json, meta_json,
+            memory_key, layer, memory_type, title, content, summary, source, source_id, source_ref,
+            workspace_id, mission_id, trust_level, relevance_score, embedding_json, meta_json,
             updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(memory_key) DO UPDATE SET
             layer = excluded.layer,
+            memory_type = excluded.memory_type,
             title = excluded.title,
             content = excluded.content,
             summary = excluded.summary,
             source = excluded.source,
             source_id = excluded.source_id,
+            source_ref = excluded.source_ref,
             workspace_id = excluded.workspace_id,
+            mission_id = excluded.mission_id,
             trust_level = excluded.trust_level,
             relevance_score = excluded.relevance_score,
             embedding_json = excluded.embedding_json,
@@ -622,12 +726,15 @@ async def upsert_memory_item(
         (
             memory_key,
             layer,
+            layer,
             title,
             content,
             summary,
             source,
             source_id,
+            source or source_id,
             workspace_id,
+            mission_id,
             trust_level,
             relevance_score,
             embedding_json,
@@ -697,7 +804,7 @@ async def delete_stale_memory_items(
 
 async def touch_memory_item(db: aiosqlite.Connection, memory_id: int):
     await db.execute(
-        "UPDATE memory_items SET last_accessed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+        "UPDATE memory_items SET last_accessed_at = datetime('now'), last_used_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
         (memory_id,),
     )
     await db.commit()
@@ -786,14 +893,15 @@ async def create_research_pack(
     *,
     title: str,
     description: str = "",
+    workspace_id: Optional[int] = None,
     pinned: bool = False,
 ) -> int:
     cur = await db.execute(
         """
-        INSERT INTO research_packs (title, description, pinned)
-        VALUES (?, ?, ?)
+        INSERT INTO research_packs (title, description, workspace_id, pinned)
+        VALUES (?, ?, ?, ?)
         """,
-        (title, description, 1 if pinned else 0),
+        (title, description, workspace_id, 1 if pinned else 0),
     )
     await db.commit()
     return cur.lastrowid
@@ -811,8 +919,10 @@ async def list_research_packs(db: aiosqlite.Connection, *, search: str = "", lim
         f"""
         SELECT
             rp.*,
+            p.name AS workspace_name,
             COUNT(rpi.resource_id) AS resource_count
         FROM research_packs rp
+        LEFT JOIN projects p ON p.id = rp.workspace_id
         LEFT JOIN research_pack_items rpi ON rpi.pack_id = rp.id
         {where}
         GROUP BY rp.id
@@ -829,8 +939,10 @@ async def get_research_pack(db: aiosqlite.Connection, pack_id: int):
         """
         SELECT
             rp.*,
+            p.name AS workspace_name,
             COUNT(rpi.resource_id) AS resource_count
         FROM research_packs rp
+        LEFT JOIN projects p ON p.id = rp.workspace_id
         LEFT JOIN research_pack_items rpi ON rpi.pack_id = rp.id
         WHERE rp.id = ?
         GROUP BY rp.id
@@ -902,6 +1014,9 @@ async def get_research_pack_items(db: aiosqlite.Connection, pack_id: int):
             r.status,
             r.summary,
             r.preview_text,
+            r.trust_level,
+            r.pinned,
+            r.workspace_id,
             r.meta_json,
             r.created_at,
             r.updated_at,
@@ -914,3 +1029,150 @@ async def get_research_pack_items(db: aiosqlite.Connection, pack_id: int):
         (pack_id,),
     )
     return await cur.fetchall()
+
+
+# ─── Memory links ────────────────────────────────────────────────────────────
+
+async def upsert_memory_link(
+    db: aiosqlite.Connection,
+    *,
+    from_memory_id: int,
+    to_memory_id: int,
+    link_type: str = "related",
+    weight: float = 1.0,
+):
+    await db.execute(
+        """
+        INSERT INTO memory_links (from_memory_id, to_memory_id, link_type, weight)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(from_memory_id, to_memory_id, link_type)
+        DO UPDATE SET weight = excluded.weight
+        """,
+        (from_memory_id, to_memory_id, link_type, weight),
+    )
+    await db.commit()
+
+
+async def list_memory_links(db: aiosqlite.Connection, memory_id: int, *, limit: int = 50):
+    cur = await db.execute(
+        """
+        SELECT ml.*, src.title AS from_title, dst.title AS to_title
+        FROM memory_links ml
+        LEFT JOIN memory_items src ON src.id = ml.from_memory_id
+        LEFT JOIN memory_items dst ON dst.id = ml.to_memory_id
+        WHERE ml.from_memory_id = ? OR ml.to_memory_id = ?
+        ORDER BY ml.weight DESC, ml.created_at DESC
+        LIMIT ?
+        """,
+        (memory_id, memory_id, limit),
+    )
+    return await cur.fetchall()
+
+
+# ─── Terminal sessions ──────────────────────────────────────────────────────
+
+async def create_terminal_session(
+    db: aiosqlite.Connection,
+    *,
+    title: str,
+    workspace_id: Optional[int] = None,
+    mode: str = "read_only",
+    cwd: str = "",
+) -> int:
+    cur = await db.execute(
+        """
+        INSERT INTO terminal_sessions (title, workspace_id, status, mode, cwd)
+        VALUES (?, ?, 'idle', ?, ?)
+        """,
+        (title, workspace_id, mode, cwd),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def list_terminal_sessions(db: aiosqlite.Connection, *, workspace_id: Optional[int] = None, limit: int = 30):
+    clauses = []
+    params: list[object] = []
+    if workspace_id is not None:
+        clauses.append("ts.workspace_id = ?")
+        params.append(workspace_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    cur = await db.execute(
+        f"""
+        SELECT ts.*, p.name AS workspace_name,
+               (SELECT COUNT(*) FROM terminal_events te WHERE te.session_id = ts.id) AS event_count
+        FROM terminal_sessions ts
+        LEFT JOIN projects p ON p.id = ts.workspace_id
+        {where}
+        ORDER BY ts.updated_at DESC, ts.created_at DESC
+        LIMIT ?
+        """,
+        (*params, limit),
+    )
+    return await cur.fetchall()
+
+
+async def get_terminal_session(db: aiosqlite.Connection, session_id: int):
+    cur = await db.execute(
+        """
+        SELECT ts.*, p.name AS workspace_name,
+               (SELECT COUNT(*) FROM terminal_events te WHERE te.session_id = ts.id) AS event_count
+        FROM terminal_sessions ts
+        LEFT JOIN projects p ON p.id = ts.workspace_id
+        WHERE ts.id = ?
+        """,
+        (session_id,),
+    )
+    return await cur.fetchone()
+
+
+async def update_terminal_session(db: aiosqlite.Connection, session_id: int, **fields):
+    if not fields:
+        return
+    set_clauses = [f"{key} = ?" for key in fields]
+    values = list(fields.values()) + [session_id]
+    await db.execute(
+        f"UPDATE terminal_sessions SET {', '.join(set_clauses)}, updated_at = datetime('now') WHERE id = ?",
+        values,
+    )
+    await db.commit()
+
+
+async def add_terminal_event(
+    db: aiosqlite.Connection,
+    *,
+    session_id: int,
+    event_type: str,
+    content: str = "",
+    exit_code: Optional[int] = None,
+):
+    await db.execute(
+        """
+        INSERT INTO terminal_events (session_id, event_type, content, exit_code)
+        VALUES (?, ?, ?, ?)
+        """,
+        (session_id, event_type, content, exit_code),
+    )
+    await db.execute(
+        """
+        UPDATE terminal_sessions
+        SET last_output_at = datetime('now'), updated_at = datetime('now')
+        WHERE id = ?
+        """,
+        (session_id,),
+    )
+    await db.commit()
+
+
+async def list_terminal_events(db: aiosqlite.Connection, session_id: int, *, limit: int = 200):
+    cur = await db.execute(
+        """
+        SELECT * FROM terminal_events
+        WHERE session_id = ?
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (session_id, limit),
+    )
+    rows = await cur.fetchall()
+    return list(reversed(rows))

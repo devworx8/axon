@@ -339,6 +339,12 @@ def resource_content_url(resource_id: int) -> str:
 
 def serialize_resource(row) -> dict:
     data = dict(row)
+    data["local_path"] = data.get("local_path") or data.get("file_path") or ""
+    data["file_path"] = data.get("file_path") or data.get("local_path") or ""
+    data["trust_level"] = data.get("trust_level") or "medium"
+    data["pinned"] = bool(data.get("pinned"))
+    data["workspace_id"] = data.get("workspace_id")
+    data["workspace_name"] = data.get("workspace_name") or ""
     data["content_url"] = resource_content_url(data["id"])
     try:
         data["meta"] = json.loads(data.get("meta_json") or "{}")
@@ -350,4 +356,3 @@ def serialize_resource(row) -> dict:
 
 def encode_image_base64(path: Path) -> str:
     return base64.b64encode(path.read_bytes()).decode("utf-8")
-

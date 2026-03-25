@@ -151,6 +151,7 @@
           <a href="#external-agents" class="block rounded-xl px-3 py-2 transition hover:bg-slate-900 hover:text-white">10. External agents</a>
           <a href="#dash-integration" class="block rounded-xl px-3 py-2 transition hover:bg-slate-900 hover:text-white">11. Dash integration</a>
           <a href="#important-commands" class="block rounded-xl px-3 py-2 transition hover:bg-slate-900 hover:text-white">12. Important commands</a>
+          <a href="#power-snippets" class="block rounded-xl px-3 py-2 transition hover:bg-slate-900 hover:text-white">13. Power-user snippets</a>
         </div>
       </div>
     </aside>
@@ -273,10 +274,10 @@
 
           <div class="panel p-5">
             <div class="text-sm font-semibold text-white">Console</div>
-            <p class="mt-2 text-sm text-slate-400">The place where you give Axon goals. Use it when you want Axon to think with context, inspect a workspace, or act through tools.</p>
+            <p class="mt-2 text-sm text-slate-400">The place where you give Axon goals. The composer stays compact: command bar first, selected chips second, runtime strip third. Use the + menu when you want deep research, workspace memory, research packs, live feed, or guarded terminal control.</p>
             <div class="placeholder mt-4">
               <div class="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200">Screenshot placeholder</div>
-              <div class="mt-3 text-sm text-slate-300">Drop in a real Console screenshot here showing the provider/model pill, phase chips, and the operator composer.</div>
+              <div class="mt-3 text-sm text-slate-300">Drop in a real Console screenshot here showing the provider/model pill, phase chips, live work panel, and the compact operator composer.</div>
             </div>
           </div>
 
@@ -308,6 +309,16 @@
           <div class="panel p-5">
             <div class="text-sm font-semibold text-white">Settings</div>
             <p class="mt-2 text-sm text-slate-400">Where you decide how Axon runs, which models it uses, what alerts it sends, and how mobile or future Dash handoffs should work.</p>
+          </div>
+
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Resources</div>
+            <p class="mt-2 text-sm text-slate-400">Your local Resource Bank. Bring in PDFs, notes, URLs, images, and other helpful material, then attach only the pieces you want Axon to use.</p>
+          </div>
+
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Memory</div>
+            <p class="mt-2 text-sm text-slate-400">Axon Memory is where useful knowledge gets ranked by trust, recency, and relevance so Axon feels smarter over time without dumping noise back at you.</p>
           </div>
         </div>
       </section>
@@ -363,6 +374,38 @@
             <p class="mt-2 text-sm text-slate-400">It tells you what changed and why.</p>
           </div>
         </div>
+        <div class="grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">How the composer works</div>
+            <div class="mt-4 space-y-3 text-sm text-slate-400">
+              <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                <div class="font-semibold text-white">Row 1: Main command bar</div>
+                <div class="mt-1">Type the goal here. Keep it natural. Example: “Build a brief from these resources and keep it local first.”</div>
+              </div>
+              <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                <div class="font-semibold text-white">Row 2: Selected chips</div>
+                <div class="mt-1">These show what you turned on, like Deep Research, Workspace Memory, Planner, Safe Mode, or Local Only.</div>
+              </div>
+              <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                <div class="font-semibold text-white">Row 3: Runtime strip</div>
+                <div class="mt-1">This quietly shows the current runtime, model, phase, and live status so you can see what Axon is doing.</div>
+              </div>
+            </div>
+          </div>
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Good + menu combinations</div>
+            <ul class="mt-3 space-y-2 text-sm text-slate-400">
+              <li><span class="text-white font-semibold">Deep Research + Workspace Memory</span>: best for understanding a project or topic before acting.</li>
+              <li><span class="text-white font-semibold">Generate + Research Pack</span>: best for briefs, reports, and portfolios built from attached sources.</li>
+              <li><span class="text-white font-semibold">Fix / Repair + Safe Mode</span>: best when you want Axon to investigate first and avoid reckless changes.</li>
+              <li><span class="text-white font-semibold">Terminal + Approval Required</span>: best when you want command power without surprise execution.</li>
+            </ul>
+            <div class="callout mt-4">
+              <div class="text-sm font-semibold text-white">Simple rule</div>
+              <div class="mt-2 text-sm text-slate-300">Use the + menu to shape Axon’s behavior. Do not type menu ideas into the prompt itself unless you want them to become part of the task.</div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section id="mobile-control" class="space-y-5">
@@ -375,6 +418,7 @@
             <div class="text-sm font-semibold text-white">What your phone can do</div>
             <ul class="mt-3 space-y-2 text-sm text-slate-400">
               <li>See runtime state and connection status.</li>
+              <li>See the current phase, live work log, and the latest action summary.</li>
               <li>Read workspace health and mission status.</li>
               <li>Browse allowed files and edit safe files.</li>
               <li>Run Axon Scan or approve guided system actions.</li>
@@ -417,6 +461,10 @@
             <div class="text-sm font-semibold text-white">HTTPS tunnel</div>
             <p class="mt-2 text-sm text-slate-400">Best for PWA install and easy browser access from anywhere.</p>
           </div>
+        </div>
+        <div class="callout">
+          <div class="text-sm font-semibold text-white">Live Desktop is awareness first</div>
+          <div class="mt-2 text-sm text-slate-300">Axon’s Live Desktop is not a heavy remote desktop. It gives you still-image refreshes, current phase, recent tool activity, and the last action summary so you can see that Axon is really working.</div>
         </div>
       </section>
 
@@ -490,6 +538,7 @@
             <ul class="mt-3 space-y-2 text-sm text-slate-400">
               <li>If the address keeps changing, your PWA feels confused.</li>
               <li>If the origin stays stable, reconnect logic gets simpler.</li>
+              <li>Keeping the Axon UI and API on one origin keeps auth, SSE, and live feed behavior much simpler.</li>
               <li>The user understands whether they are connected, reconnecting, or offline.</li>
               <li>Service worker caching behaves much more predictably.</li>
             </ul>
@@ -571,6 +620,16 @@
         <div class="callout">
           <div class="text-sm font-semibold text-white">Simple rule</div>
           <div class="mt-2 text-sm text-slate-300">Local means private brain on your computer. Cloud means optional outside helper. Axon uses local first.</div>
+        </div>
+        <div class="grid gap-4 md:grid-cols-2">
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Axon Memory</div>
+            <p class="mt-2 text-sm text-slate-400">Axon remembers useful things in four layers: Resource Bank, Workspace Memory, User Memory, and Mission Memory. It ranks them by trust, recency, and relevance before using them.</p>
+          </div>
+          <div class="panel p-5">
+            <div class="text-sm font-semibold text-white">Research Packs</div>
+            <p class="mt-2 text-sm text-slate-400">Research Packs are reusable bundles of resources. They let you attach a known set of documents and notes in one tap instead of rebuilding context every time.</p>
+          </div>
         </div>
       </section>
 
@@ -752,14 +811,60 @@
         </div>
       </section>
 
+      <section id="power-snippets" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">13. Power-user snippets</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">These are example requests you can paste into Console. They are not shell commands. They are good ways to think with Axon.</p>
+        </div>
+        <div class="grid gap-4 xl:grid-cols-2">
+          <div class="command-card">
+            <div class="text-sm font-semibold text-white">Beginner-friendly prompts</div>
+            <div class="mt-4 space-y-4 text-sm text-slate-400">
+              <div>
+                <div class="mono text-blue-300">Use Deep Research and my workspace memory to explain the top risks in this workspace.</div>
+                <div class="mt-1">Good when you want Axon to gather context first, then explain it simply.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">Attach this resource and build me a clear brief with next steps.</div>
+                <div class="mt-1">Good when you uploaded a PDF, note, or URL and want a polished summary.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">Show me what Axon is doing, then tell me the result in plain language.</div>
+                <div class="mt-1">Good when you want progress visibility and a simple close-out.</div>
+              </div>
+            </div>
+          </div>
+          <div class="command-card">
+            <div class="text-sm font-semibold text-white">Power-user prompts</div>
+            <div class="mt-4 space-y-4 text-sm text-slate-400">
+              <div>
+                <div class="mono text-blue-300">Planner + Deep Research + Workspace Memory. Build a remediation brief, then propose the next two missions.</div>
+                <div class="mt-1">Good for turning investigation into executable work.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">Terminal in approval-required mode. Show the exact test command, explain why it is safe, then wait for approval.</div>
+                <div class="mt-1">Good when you want command visibility before anything runs.</div>
+              </div>
+              <div>
+                <div class="mono text-blue-300">Use Research Pack “Proposal Sources”, stay local first, and generate a polished portfolio in markdown.</div>
+                <div class="mt-1">Good when you have a repeatable source bundle and want a reusable workflow.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="panel p-6">
         <div class="text-sm font-semibold text-white">Screenshot checklist for the next manual pass</div>
         <ul class="mt-3 space-y-2 text-sm text-slate-400">
           <li>Dashboard with connection state and Axon Alerts</li>
-          <li>Console with phase chips and provider/model pill</li>
+          <li>Console with phase chips, live work panel, and provider/model pill</li>
           <li>Workspaces list with Inspect and Open Console</li>
           <li>Timeline with Morning Brief and alerts</li>
+          <li>Resources view with Research Packs and trust state</li>
+          <li>Memory view with pinned/high-trust examples</li>
           <li>Mobile connect modal with QR code and stable-domain card</li>
+          <li>Guarded Terminal panel with approval mode</li>
         </ul>
       </section>
     </div>

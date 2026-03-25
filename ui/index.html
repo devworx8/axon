@@ -952,6 +952,136 @@
             </div>
           </div>
 
+          <div class="mt-2 rounded-2xl border border-slate-800 bg-slate-950/55 px-3 py-2.5">
+            <div class="flex flex-wrap items-center gap-2">
+              <template x-for="badge in connectionStatusBadges()" :key="badge.key">
+                <span class="rounded-full border px-2.5 py-1 text-[10px]"
+                      :class="connectionBadgeClass(badge.state)"
+                      x-text="badge.label"></span>
+              </template>
+              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-300"
+                    x-text="runtimeStatus.runtime_label || 'Local-first'"></span>
+              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-300"
+                    x-text="runtimeStatus.active_model || composerModelSummary() || 'Saved default'"></span>
+              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-300"
+                    x-text="phaseLabel((liveFeed.latest?.operator?.phase || liveOperator.phase || agentProgressState || 'observe'))"></span>
+            </div>
+            <div class="mt-2 flex flex-wrap items-start justify-between gap-3 text-[11px]">
+              <div class="min-w-0 flex-1">
+                <div class="font-medium text-slate-100"
+                     x-text="liveFeed.latest?.operator?.title || liveOperator.title || 'Axon is ready'"></div>
+                <div class="mt-0.5 text-slate-400"
+                     x-text="liveFeed.latest?.operator?.detail || liveOperator.detail || 'Live status will appear here while Axon works.'"></div>
+              </div>
+              <div class="shrink-0 text-right text-[10px] text-slate-500">
+                <div x-text="liveFeed.connected ? 'Live feed connected' : (liveFeed.reconnecting ? 'Live feed reconnecting…' : 'Live feed idle')"></div>
+                <div x-text="liveFeed.latest?.at ? 'Updated ' + timeAgo(liveFeed.latest.at) : ''"></div>
+              </div>
+            </div>
+          </div>
+
+          <div x-show="terminal.panelOpen || composerOptions.terminal_mode" class="mt-3 rounded-2xl border border-amber-500/20 bg-slate-950/70 p-3">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div class="text-xs font-semibold text-white">Guarded Terminal</div>
+                <div class="text-[10px] text-slate-500">Safe read-only by default. Approval mode shows the exact command before Axon runs it.</div>
+              </div>
+              <div class="flex items-center gap-2">
+                <button @click="createTerminalSession()"
+                        class="rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-2 text-[11px] text-slate-200 transition hover:border-slate-500">
+                  New session
+                </button>
+                <button @click="toggleTerminalMode(false)"
+                        class="rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-2 text-[11px] text-slate-400 transition hover:text-slate-200">
+                  Hide
+                </button>
+              </div>
+            </div>
+            <div class="mt-3 grid gap-3 lg:grid-cols-[240px_minmax(0,1fr)]">
+              <div class="space-y-2">
+                <div class="flex items-center justify-between">
+                  <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Sessions</div>
+                  <div class="text-[10px] text-slate-500" x-text="`${terminal.sessions.length} total`"></div>
+                </div>
+                <div class="space-y-2 max-h-56 overflow-y-auto pr-1">
+                  <template x-if="!terminal.sessions.length">
+                    <div class="rounded-xl border border-dashed border-slate-800 px-3 py-4 text-[11px] text-slate-500">
+                      No terminal sessions yet. Create one to run guarded commands.
+                    </div>
+                  </template>
+                  <template x-for="session in terminal.sessions" :key="session.id">
+                    <button @click="loadTerminalSessionDetail(session.id)"
+                            class="w-full rounded-xl border px-3 py-2 text-left transition"
+                            :class="Number(terminal.activeSessionId) === Number(session.id) ? 'border-amber-500/30 bg-amber-500/10' : 'border-slate-800 bg-slate-900/50 hover:border-slate-700'">
+                      <div class="flex items-start justify-between gap-2">
+                        <div class="min-w-0">
+                          <div class="truncate text-sm text-slate-100" x-text="session.title"></div>
+                          <div class="mt-1 text-[10px] text-slate-500" x-text="session.workspace_name || session.cwd || 'Home scope'"></div>
+                        </div>
+                        <span class="rounded-full border px-2 py-0.5 text-[9px]"
+                              :class="terminalStatusClass(session.status)"
+                              x-text="session.status"></span>
+                      </div>
+                    </button>
+                  </template>
+                </div>
+              </div>
+              <div class="space-y-3">
+                <div class="flex flex-wrap items-center gap-2">
+                  <template x-for="mode in terminalModeOptions()" :key="mode.value">
+                    <button @click="terminal.mode = mode.value"
+                            class="rounded-xl px-3 py-2 text-[11px] transition"
+                            :class="terminal.mode === mode.value ? 'border border-amber-500/30 bg-amber-500/10 text-amber-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                      <span x-text="mode.label"></span>
+                    </button>
+                  </template>
+                  <span x-show="terminal.sessionDetail?.cwd" class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-400" x-text="terminal.sessionDetail?.cwd"></span>
+                </div>
+                <div class="flex gap-2">
+                  <input x-model="terminal.command"
+                         placeholder="Run a safe command like pwd, ls, rg, git status, or npm test"
+                         class="flex-1 rounded-2xl border border-slate-700 bg-slate-950/80 px-3 py-2.5 text-sm text-slate-100 placeholder-slate-500 transition focus:border-amber-400/50" />
+                  <button @click="executeTerminalCommand(false)"
+                          :disabled="terminal.executing || !terminal.command.trim()"
+                          class="rounded-2xl bg-amber-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-amber-400 disabled:opacity-40">
+                    <span x-text="terminal.executing ? 'Running…' : 'Run'"></span>
+                  </button>
+                  <button x-show="terminal.approvalRequired"
+                          @click="executeTerminalCommand(true)"
+                          class="rounded-2xl border border-blue-500/20 bg-blue-500/10 px-4 py-2.5 text-sm font-semibold text-blue-200 transition hover:bg-blue-500/15">
+                    Approve
+                  </button>
+                  <button @click="stopTerminalCommand()"
+                          :disabled="terminal.stopping || !(currentTerminalSession()?.running)"
+                          class="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-2.5 text-sm font-semibold text-rose-200 transition hover:bg-rose-500/15 disabled:opacity-40">
+                    Stop
+                  </button>
+                </div>
+                <div x-show="terminal.approvalRequired" class="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">
+                  Axon is waiting for approval to run:
+                  <span class="mono block mt-1 text-amber-200" x-text="terminal.pendingCommand"></span>
+                </div>
+                <div class="rounded-2xl border border-slate-800 bg-slate-950/80 px-3 py-3">
+                  <div class="flex items-center justify-between gap-2">
+                    <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Output</div>
+                    <div class="text-[10px] text-slate-500" x-text="terminal.sessionDetail?.last_output_at ? 'Updated ' + timeAgo(terminal.sessionDetail.last_output_at) : ''"></div>
+                  </div>
+                  <div class="mt-2 max-h-64 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/70 p-3 font-mono text-[11px] leading-5 text-slate-300">
+                    <template x-if="!terminal.sessionDetail?.recent_events?.length">
+                      <div class="text-slate-500">Terminal output will appear here.</div>
+                    </template>
+                    <template x-for="event in terminal.sessionDetail?.recent_events || []" :key="event.id">
+                      <div class="mb-2">
+                        <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500" x-text="event.event_type"></div>
+                        <div class="whitespace-pre-wrap break-words" x-text="event.content"></div>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div x-show="!isMobile && usesOllamaBackend() && activeChatModel()" class="px-1 pt-2 text-[11px] text-slate-500" x-text="composerModelSummary()"></div>
 
           <div x-show="composerSummaryChips().length" class="mt-2 flex flex-wrap gap-2">
@@ -1050,7 +1180,11 @@
             </div>
           </div>
 
-          <div x-show="showComposerMenu" class="mt-3 rounded-2xl border border-slate-800 bg-slate-950/70 p-3 space-y-3">
+          <div x-show="showComposerMenu && isMobile" @click="showComposerMenu = false"
+               class="fixed inset-0 z-30 bg-slate-950/55 backdrop-blur-[1px]"></div>
+          <div x-show="showComposerMenu"
+               :class="isMobile ? 'fixed inset-x-3 bottom-24 z-40 max-h-[62vh] overflow-y-auto rounded-[26px] shadow-2xl shadow-slate-950/50' : 'mt-3 rounded-2xl'"
+               class="border border-slate-800 bg-slate-950/92 p-3 space-y-3">
             <div class="flex items-center justify-between gap-3">
               <div>
                 <div class="text-xs font-semibold text-white">Composer Controls</div>
@@ -1094,10 +1228,14 @@
                           class="rounded-xl bg-slate-800 px-3 py-2 text-[11px] text-slate-200 transition hover:bg-slate-700">
                     Attach Resource
                   </button>
+                  <button @click="switchTab('resources'); showComposerMenu = false"
+                          class="rounded-xl bg-slate-800 px-3 py-2 text-[11px] text-slate-200 transition hover:bg-slate-700">
+                    Resource Bank
+                  </button>
                   <button @click="toggleComposerFlag('use_workspace_memory')"
                           class="rounded-xl px-3 py-2 text-[11px] transition"
                           :class="composerOptions.use_workspace_memory ? 'border border-sky-500/25 bg-sky-500/10 text-sky-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
-                    Use Workspace Memory
+                    Workspace Memory
                   </button>
                   <button @click="toggleComposerFlag('pin_context')"
                           class="rounded-xl px-3 py-2 text-[11px] transition"
@@ -1106,12 +1244,20 @@
                   </button>
                   <button @click="switchTab('resources'); showComposerMenu = false"
                           class="rounded-xl bg-slate-800 px-3 py-2 text-[11px] text-slate-200 transition hover:bg-slate-700">
-                    Select Research Pack
+                    Research Pack
                   </button>
                   <button @click="toggleComposerFlag('include_timeline_history')"
                           class="rounded-xl px-3 py-2 text-[11px] transition"
                           :class="composerOptions.include_timeline_history ? 'border border-sky-500/25 bg-sky-500/10 text-sky-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
-                    Include Timeline History
+                    Mission History
+                  </button>
+                  <button @click="switchTab('activity'); showComposerMenu = false"
+                          class="rounded-xl bg-slate-800 px-3 py-2 text-[11px] text-slate-200 transition hover:bg-slate-700">
+                    Timeline Context
+                  </button>
+                  <button @click="switchTab('prompts'); showComposerMenu = false"
+                          class="rounded-xl bg-slate-800 px-3 py-2 text-[11px] text-slate-200 transition hover:bg-slate-700">
+                    Playbook
                   </button>
                 </div>
               </div>
@@ -1135,7 +1281,7 @@
                   <button @click="toggleComposerFlag('require_approval')"
                           class="rounded-xl px-3 py-2 text-[11px] transition"
                           :class="composerOptions.require_approval ? 'border border-rose-500/25 bg-rose-500/10 text-rose-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
-                    Require Approval
+                    Approval Required
                   </button>
                   <button @click="toggleComposerFlag('safe_mode')"
                           class="rounded-xl px-3 py-2 text-[11px] transition"
@@ -1147,19 +1293,47 @@
                           :class="composerOptions.simulation_mode ? 'border border-amber-500/25 bg-amber-500/10 text-amber-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
                     Simulation Mode
                   </button>
+                  <button @click="setLocalOnly(composerOptions.external_mode !== 'disable_external_calls')"
+                          class="rounded-xl px-3 py-2 text-[11px] transition"
+                          :class="composerOptions.external_mode === 'disable_external_calls' ? 'border border-slate-500/25 bg-slate-500/10 text-slate-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                    Local Only
+                  </button>
                 </div>
               </div>
 
               <div class="space-y-2">
-                <div class="text-[11px] font-semibold text-slate-100">External Intelligence</div>
+                <div class="text-[11px] font-semibold text-slate-100">Advanced</div>
                 <div class="flex flex-wrap gap-2">
-                  <template x-for="mode in externalModes()" :key="mode.value">
-                    <button @click="setComposerOption('external_mode', mode.value)"
-                            class="rounded-xl px-3 py-2 text-[11px] transition"
-                            :class="composerOptions.external_mode === mode.value ? 'border border-blue-500/30 bg-blue-500/10 text-blue-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
-                      <span x-text="mode.label"></span>
-                    </button>
-                  </template>
+                  <button @click="toggleTerminalMode()"
+                          class="rounded-xl px-3 py-2 text-[11px] transition"
+                          :class="composerOptions.terminal_mode ? 'border border-amber-500/30 bg-amber-500/10 text-amber-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                    Terminal
+                  </button>
+                  <button @click="toggleLiveDesktopFeed()"
+                          class="rounded-xl px-3 py-2 text-[11px] transition"
+                          :class="composerOptions.live_desktop_feed ? 'border border-sky-500/25 bg-sky-500/10 text-sky-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                    Live Desktop Feed
+                  </button>
+                  <button @click="setComposerOption('external_mode', 'cloud_assist'); composerOptions.external_provider_hint = ''"
+                          class="rounded-xl px-3 py-2 text-[11px] transition"
+                          :class="composerOptions.external_mode === 'cloud_assist' && !composerOptions.external_provider_hint ? 'border border-blue-500/30 bg-blue-500/10 text-blue-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                    Use Cloud Assist
+                  </button>
+                  <button @click="setExternalProviderHint('openai_gpts')"
+                          class="rounded-xl px-3 py-2 text-[11px] transition"
+                          :class="composerOptions.external_provider_hint === 'openai_gpts' ? 'border border-blue-500/30 bg-blue-500/10 text-blue-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                    OpenAI GPTs
+                  </button>
+                  <button @click="setExternalProviderHint('gemini_gems')"
+                          class="rounded-xl px-3 py-2 text-[11px] transition"
+                          :class="composerOptions.external_provider_hint === 'gemini_gems' ? 'border border-blue-500/30 bg-blue-500/10 text-blue-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                    Gemini Gems
+                  </button>
+                  <button @click="setExternalProviderHint('api_models')"
+                          class="rounded-xl px-3 py-2 text-[11px] transition"
+                          :class="composerOptions.external_provider_hint === 'api_models' ? 'border border-blue-500/30 bg-blue-500/10 text-blue-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                    API Models
+                  </button>
                 </div>
               </div>
             </div>
@@ -1218,8 +1392,17 @@
             </button>
           </div>
 
-          <div class="hidden md:flex items-center justify-between gap-3 px-1 pt-2 text-[10px] text-slate-500">
-            <span x-text="resolveChatMode(chatInput) === 'agent' ? 'Operator mode will use tools and give you the result.' : 'Action-oriented requests auto-switch into operator mode.'"></span>
+          <div class="flex flex-wrap items-center justify-between gap-3 px-1 pt-2 text-[10px] text-slate-500">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-300"
+                    x-text="runtimeStatus.runtime_label || 'Local-first'"></span>
+              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-300"
+                    x-text="activeChatModel() || runtimeStatus.active_model || 'Saved default'"></span>
+              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-300"
+                    x-text="phaseLabel(liveOperator.phase || agentProgressState || 'observe')"></span>
+              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-400"
+                    x-text="liveFeed.connected ? 'Live' : (liveFeed.reconnecting ? 'Reconnecting' : 'Idle')"></span>
+            </div>
             <span class="hidden md:inline">Enter to send · Shift+Enter for newline</span>
           </div>
         </div>
@@ -2467,6 +2650,48 @@
               <div class="mt-3 text-xs text-slate-300 font-mono" x-text="runtimeStatus.vision_status?.model || settingsForm.vision_model || 'No vision model selected yet'"></div>
               <div class="mt-2 text-[10px] text-slate-500" x-text="runtimeStatus.vision_status?.runtime_label || 'Local Ollama'"></div>
             </div>
+
+            <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 space-y-3">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-sm font-medium text-white">Live Feed + Terminal</div>
+                  <div class="text-[11px] text-slate-500">Control whether mobile live awareness stays connected and how new guarded terminal sessions begin.</div>
+                </div>
+                <span class="rounded-full border px-2 py-0.5 text-[10px]"
+                      :class="settingsForm.live_feed_enabled ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
+                      x-text="settingsForm.live_feed_enabled ? 'Feed on' : 'Feed paused'"></span>
+              </div>
+              <label class="flex items-center gap-2 text-[11px] text-slate-300">
+                <input type="checkbox"
+                       :checked="!!settingsForm.live_feed_enabled"
+                       @change="settingsForm.live_feed_enabled = $event.target.checked"
+                       class="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500">
+                <span>Enable the live desktop and operator feed for mobile awareness</span>
+              </label>
+              <div class="grid gap-3 md:grid-cols-2">
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Default terminal mode</label>
+                  <select x-model="settingsForm.terminal_default_mode"
+                          class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-blue-500 transition">
+                    <option value="read_only">Read-only</option>
+                    <option value="approval_required">Approval required</option>
+                    <option value="simulation">Simulation mode</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Command timeout (seconds)</label>
+                  <input x-model="settingsForm.terminal_command_timeout_seconds"
+                         type="number" min="5" max="300"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-blue-500 transition" />
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-2 text-[10px] text-slate-500">
+                <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1"
+                      x-text="connectionStatusBadges().map(item => item.label).join(' · ') || 'Local only'"></span>
+                <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1"
+                      x-text="`Terminal starts in ${String(settingsForm.terminal_default_mode || 'read_only').replace(/_/g, ' ')}`"></span>
+              </div>
+            </div>
           </div>
 
           <div class="border-t border-slate-800 pt-5 space-y-3">
@@ -2997,6 +3222,8 @@
                       <div class="flex items-center gap-2">
                         <div class="truncate text-sm font-medium text-white" x-text="resource.title"></div>
                         <span class="rounded-full border px-2 py-0.5 text-[9px]" :class="resourceStatusClass(resource.status)" x-text="resource.status || 'queued'"></span>
+                        <span x-show="resource.pinned" class="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[9px] text-amber-300">pinned</span>
+                        <span class="rounded-full border px-2 py-0.5 text-[9px]" :class="resourceTrustClass(resource.trust_level)" x-text="`${resource.trust_level || 'medium'} trust`"></span>
                       </div>
                       <div class="mt-1 text-[11px] text-slate-500">
                         <span x-text="resource.kind || 'resource'"></span>
@@ -3004,6 +3231,7 @@
                         <span x-text="resource.source_type || 'upload'"></span>
                         <span x-show="resource.size_bytes"> · <span x-text="formatBytes(resource.size_bytes)"></span></span>
                         <span x-show="resource.last_used_at"> · Used <span x-text="timeAgo(resource.last_used_at)"></span></span>
+                        <span x-show="resource.workspace_name || workspaceLabel(resource.workspace_id)"> · <span x-text="resource.workspace_name || workspaceLabel(resource.workspace_id)"></span></span>
                       </div>
                     </div>
                     <button @click.stop="toggleResourceAttachment(resource)"
@@ -3131,9 +3359,16 @@
                     <div class="mt-1 text-[11px] text-slate-500">
                       <span x-text="resourceDetail?.mime_type || resourceDetail?.kind || 'resource'"></span>
                       <span x-show="resourceDetail?.size_bytes"> · <span x-text="formatBytes(resourceDetail?.size_bytes || 0)"></span></span>
+                      <span x-show="resourceDetail?.workspace_name || workspaceLabel(resourceDetail?.workspace_id)"> · <span x-text="resourceDetail?.workspace_name || workspaceLabel(resourceDetail?.workspace_id)"></span></span>
                     </div>
                   </div>
                   <span class="rounded-full border px-2 py-0.5 text-[10px]" :class="resourceStatusClass(resourceDetail?.status)" x-text="resourceDetail?.status || 'queued'"></span>
+                </div>
+
+                <div class="flex flex-wrap gap-2 text-[10px]">
+                  <span class="rounded-full border px-2 py-1" :class="resourceTrustClass(resourceDetail?.trust_level)" x-text="`${resourceDetail?.trust_level || 'medium'} trust`"></span>
+                  <span x-show="resourceDetail?.pinned" class="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-amber-300">Pinned</span>
+                  <span x-show="resourceDetail?.workspace_name || workspaceLabel(resourceDetail?.workspace_id)" class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1 text-slate-300" x-text="`Workspace: ${resourceDetail?.workspace_name || workspaceLabel(resourceDetail?.workspace_id)}`"></span>
                 </div>
 
                 <div x-show="resourceDetail?.source_url" class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
@@ -3143,9 +3378,36 @@
 
                 <div class="grid gap-2 sm:grid-cols-2">
                   <button @click="useResourceInConsole(resourceDetail)" class="rounded-xl bg-blue-600 px-3 py-2 text-xs text-white transition hover:bg-blue-500">Use in Console</button>
+                  <button @click="useResourceInDeepResearch(resourceDetail)" class="rounded-xl border border-violet-500/20 bg-violet-500/10 px-3 py-2 text-xs text-violet-200 transition hover:bg-violet-500/15">Use in Deep Research</button>
+                  <button @click="setResourcePinned(resourceDetail, !resourceDetail?.pinned)" class="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200 transition hover:bg-amber-500/15" x-text="resourceDetail?.pinned ? 'Unpin resource' : 'Pin resource'"></button>
+                  <button @click="addResourceToSelectedPack(resourceDetail)" class="rounded-xl border border-violet-500/20 bg-slate-900/70 px-3 py-2 text-xs text-violet-200 transition hover:border-violet-500/40">Add to Research Pack</button>
                   <button @click="reprocessResource(resourceDetail)" class="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300 transition hover:border-slate-600">Reprocess</button>
                   <button @click="switchTab('chat'); mergeSelectedResources([resourceDetail])" class="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300 transition hover:border-slate-600">Attach and return</button>
                   <button @click="deleteResource(resourceDetail)" class="rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-300 transition hover:bg-rose-500/15">Delete</button>
+                </div>
+
+                <div class="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <div class="mb-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">Trust level</div>
+                    <select :value="resourceDetail?.trust_level || 'medium'"
+                            @change="setResourceTrust(resourceDetail, $event.target.value)"
+                            class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-200 focus:border-blue-500 transition">
+                      <option value="high">High trust</option>
+                      <option value="medium">Medium trust</option>
+                      <option value="low">Low trust</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div class="mb-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">Pin to workspace</div>
+                    <select :value="resourceDetail?.workspace_id || ''"
+                            @change="linkResourceToWorkspace(resourceDetail, $event.target.value || null)"
+                            class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-200 focus:border-blue-500 transition">
+                      <option value="">No workspace link</option>
+                      <template x-for="project in projects" :key="project.id">
+                        <option :value="project.id" x-text="project.name"></option>
+                      </template>
+                    </select>
+                  </div>
                 </div>
 
                 <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
@@ -3726,6 +3988,9 @@ function devbrain() {
       safe_mode: true,
       simulation_mode: false,
       external_mode: 'local_first',
+      external_provider_hint: '',
+      terminal_mode: false,
+      live_desktop_feed: false,
     },
     chatModelOpen: false,
     chatHints: [
@@ -3752,6 +4017,41 @@ function devbrain() {
       summary: '',
       tool: '',
       at: '',
+    },
+    connectionState: {
+      state: 'local_only',
+      label: 'Local Only',
+      connected: true,
+      local_only: true,
+      tunnel_active: false,
+      domain_active: false,
+      tunnel_url: '',
+      stable_domain: 'axon.edudashpro.org.za',
+      stable_domain_url: 'https://axon.edudashpro.org.za',
+      stable_domain_status: 'planned',
+    },
+    liveFeed: {
+      connected: false,
+      connecting: false,
+      reconnecting: false,
+      latest: null,
+      error: '',
+      controller: null,
+    },
+    terminal: {
+      panelOpen: false,
+      sessions: [],
+      activeSessionId: null,
+      sessionDetail: null,
+      loading: false,
+      detailLoading: false,
+      executing: false,
+      stopping: false,
+      mode: 'read_only',
+      command: '',
+      pendingCommand: '',
+      approvalRequired: false,
+      lastDetailLoadedAt: '',
     },
 
     // Model management
@@ -3863,6 +4163,9 @@ function devbrain() {
       resource_storage_path: '~/.devbrain/resources',
       resource_upload_max_mb: '20',
       resource_url_import_enabled: true,
+      live_feed_enabled: true,
+      terminal_default_mode: 'read_only',
+      terminal_command_timeout_seconds: '25',
       openai_api_key: '',
       openai_base_url: '',
       openai_api_model: '',
@@ -4013,7 +4316,8 @@ function devbrain() {
       await this.loadProjects();
       this.loadTasks();
       this.loadLatestDigest();
-      this.loadRuntimeStatus();
+      await this.loadRuntimeStatus();
+      this.connectLiveFeed();
       this.pollUsage();
       this.checkGithub();
       this.pollConnection();
@@ -4291,6 +4595,7 @@ function devbrain() {
           phases: status.phases || this.agentLifecycle,
           agents: status.agents || [],
         };
+        if (status.connection) this.connectionState = status.connection;
       } catch (e) {
         this.runtimeStatus = {
           ...this.runtimeStatus,
@@ -4757,6 +5062,7 @@ function devbrain() {
         { value: 'summarize', label: 'Summarize' },
         { value: 'explain', label: 'Explain' },
         { value: 'compare', label: 'Compare' },
+        { value: 'build_brief', label: 'Build Brief' },
       ];
     },
 
@@ -4765,9 +5071,11 @@ function devbrain() {
         { value: '', label: 'None' },
         { value: 'execute_task', label: 'Execute Task' },
         { value: 'fix_repair', label: 'Fix / Repair' },
-        { value: 'optimize', label: 'Optimize' },
         { value: 'generate', label: 'Generate' },
         { value: 'refactor', label: 'Refactor' },
+        { value: 'optimize', label: 'Optimize' },
+        { value: 'scan_workspace', label: 'Scan Workspace' },
+        { value: 'review_output', label: 'Review Output' },
       ];
     },
 
@@ -4779,6 +5087,7 @@ function devbrain() {
         { value: 'scanner', label: 'Scanner Mode' },
         { value: 'reviewer', label: 'Reviewer Mode' },
         { value: 'repair', label: 'Repair Mode' },
+        { value: 'multi_agent', label: 'Multi-Agent' },
       ];
     },
 
@@ -4821,6 +5130,9 @@ function devbrain() {
       if (raw.agent_role) normalized.agent_role = raw.agent_role;
       if (raw.require_approval) normalized.require_approval = true;
       if (raw.simulation_mode) normalized.simulation_mode = true;
+      if (raw.terminal_mode) normalized.terminal_mode = true;
+      if (raw.live_desktop_feed) normalized.live_desktop_feed = true;
+      if (raw.external_provider_hint) normalized.external_provider_hint = raw.external_provider_hint;
       if (researchPack) {
         normalized.research_pack_id = Number(researchPack.id);
         normalized.research_pack_title = researchPack.title;
@@ -4840,10 +5152,17 @@ function devbrain() {
       if (opts.pin_context) chips.push({ key: 'pin_context', label: 'pin context' });
       if (opts.require_approval) chips.push({ key: 'require_approval', label: 'approval' });
       if (opts.simulation_mode) chips.push({ key: 'simulation_mode', label: 'simulation' });
+      if (opts.terminal_mode) chips.push({ key: 'terminal_mode', label: 'terminal' });
+      if (opts.live_desktop_feed) chips.push({ key: 'live_desktop_feed', label: 'live desktop' });
       if (opts.use_workspace_memory === false) chips.push({ key: 'use_workspace_memory', label: 'workspace memory off' });
       if (opts.safe_mode === false) chips.push({ key: 'safe_mode', label: 'safe mode off' });
       if (opts.external_mode && opts.external_mode !== 'local_first') {
-        chips.push({ key: 'external_mode', label: opts.external_mode.replace(/_/g, ' ') });
+        const labelMap = {
+          disable_external_calls: 'local only',
+          cloud_assist: opts.external_provider_hint ? opts.external_provider_hint.replace(/_/g, ' ') : 'cloud assist',
+          external_agent: 'external agent',
+        };
+        chips.push({ key: 'external_mode', label: labelMap[opts.external_mode] || opts.external_mode.replace(/_/g, ' ') });
       }
       if (opts.research_pack_title) chips.push({ key: 'research_pack_id', label: `pack: ${opts.research_pack_title}` });
       return chips;
@@ -4856,6 +5175,7 @@ function devbrain() {
       else if (key === 'agent_role') this.composerOptions.agent_role = '';
       else if (key === 'external_mode') this.composerOptions.external_mode = 'local_first';
       else if (key === 'research_pack_id') this.selectedResearchPackId = null;
+      else if (key === 'terminal_mode') { this.composerOptions.terminal_mode = false; this.terminal.panelOpen = false; }
       else if (key === 'use_workspace_memory' || key === 'safe_mode') this.composerOptions[key] = true;
       else this.composerOptions[key] = false;
     },
@@ -4878,6 +5198,7 @@ function devbrain() {
         return this.shouldAutoUseAgent(msg) ? 'agent' : 'chat';
       }
       if (opts.intelligence_mode === 'deep_research') return 'chat';
+      if (opts.intelligence_mode === 'build_brief') return 'chat';
       if (opts.action_mode === 'generate') return 'chat';
       return '';
     },
@@ -5176,6 +5497,274 @@ function devbrain() {
       });
     },
 
+    connectionBadgeClass(state) {
+      const tone = String(state || '').toLowerCase();
+      if (tone === 'offline') return 'border-rose-500/20 bg-rose-500/10 text-rose-200';
+      if (tone === 'reconnecting') return 'border-amber-500/20 bg-amber-500/10 text-amber-200';
+      if (tone === 'domain_active') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
+      if (tone === 'tunnel_active') return 'border-blue-500/20 bg-blue-500/10 text-blue-200';
+      return 'border-slate-700 bg-slate-950/60 text-slate-300';
+    },
+
+    connectionStatusBadges() {
+      const badges = [];
+      if (!this.serverConnected) {
+        badges.push({ key: 'offline', label: 'Offline', state: 'offline' });
+        return badges;
+      }
+      badges.push({ key: 'connected', label: 'Connected', state: 'domain_active' });
+      if (this.liveFeed.reconnecting) badges.push({ key: 'reconnecting', label: 'Reconnecting', state: 'reconnecting' });
+      const state = this.connectionState || {};
+      if (state.domain_active) badges.push({ key: 'domain', label: 'Domain Active', state: 'domain_active' });
+      else if (state.tunnel_active) badges.push({ key: 'tunnel', label: 'Tunnel Active', state: 'tunnel_active' });
+      else badges.push({ key: 'local', label: 'Local Only', state: 'local_only' });
+      return badges;
+    },
+
+    terminalModeOptions() {
+      return [
+        { value: 'read_only', label: 'Read-only' },
+        { value: 'approval_required', label: 'Approval required' },
+        { value: 'simulation', label: 'Simulation' },
+      ];
+    },
+
+    terminalStatusClass(status) {
+      const value = String(status || '').toLowerCase();
+      if (value === 'running') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
+      if (value === 'pending_approval') return 'border-amber-500/20 bg-amber-500/10 text-amber-200';
+      if (value === 'failed' || value === 'stopped') return 'border-rose-500/20 bg-rose-500/10 text-rose-200';
+      return 'border-slate-700 bg-slate-950/60 text-slate-300';
+    },
+
+    setExternalProviderHint(value = '') {
+      this.composerOptions.external_provider_hint = value || '';
+      this.composerOptions.external_mode = value ? 'cloud_assist' : 'local_first';
+    },
+
+    setLocalOnly(enabled = true) {
+      this.composerOptions.external_provider_hint = '';
+      this.composerOptions.external_mode = enabled ? 'disable_external_calls' : 'local_first';
+    },
+
+    async toggleTerminalMode(force = null) {
+      const enabled = typeof force === 'boolean' ? force : !this.composerOptions.terminal_mode;
+      this.composerOptions.terminal_mode = enabled;
+      this.terminal.panelOpen = enabled;
+      if (!enabled) return;
+      await this.loadTerminalSessions();
+      await this.ensureTerminalSession();
+    },
+
+    toggleLiveDesktopFeed(force = null) {
+      const enabled = typeof force === 'boolean' ? force : !this.composerOptions.live_desktop_feed;
+      this.composerOptions.live_desktop_feed = enabled;
+      this.desktopPreview.enabled = enabled;
+      if (enabled) {
+        this.refreshDesktopPreview(true);
+        this.scheduleDesktopPreview();
+      } else {
+        this.stopDesktopPreview();
+      }
+    },
+
+    currentTerminalSession() {
+      const sessionId = Number(this.terminal.activeSessionId || 0);
+      return (this.terminal.sessions || []).find(item => Number(item.id) === sessionId) || this.terminal.sessionDetail || null;
+    },
+
+    async loadTerminalSessions(selectId = null) {
+      this.terminal.loading = true;
+      try {
+        const query = this.chatProjectId ? `?workspace_id=${encodeURIComponent(this.chatProjectId)}` : '';
+        const rows = await this.api('GET', `/api/terminal/sessions${query}`);
+        this.terminal.sessions = rows || [];
+        const wanted = selectId || this.terminal.activeSessionId || rows?.[0]?.id || null;
+        if (wanted) {
+          this.terminal.activeSessionId = Number(wanted);
+        }
+      } catch (e) {
+        this.showToast(`Terminal sessions failed: ${e.message}`);
+      }
+      this.terminal.loading = false;
+    },
+
+    async ensureTerminalSession() {
+      if (this.terminal.activeSessionId) {
+        await this.loadTerminalSessionDetail(this.terminal.activeSessionId, { silent: true });
+        return;
+      }
+      await this.createTerminalSession();
+    },
+
+    async createTerminalSession() {
+      this.terminal.loading = true;
+      try {
+        const created = await this.api('POST', '/api/terminal/sessions', {
+          title: this.chatProject?.name ? `${this.chatProject.name} Terminal` : 'Console Terminal',
+          workspace_id: this.chatProjectId ? parseInt(this.chatProjectId, 10) : null,
+          mode: this.terminal.mode,
+          cwd: this.chatProject?.path || null,
+        });
+        this.terminal.sessions = [created, ...(this.terminal.sessions || []).filter(item => Number(item.id) !== Number(created.id))];
+        this.terminal.activeSessionId = Number(created.id);
+        await this.loadTerminalSessionDetail(created.id);
+      } catch (e) {
+        this.showToast(`Terminal session failed: ${e.message}`);
+      }
+      this.terminal.loading = false;
+    },
+
+    async loadTerminalSessionDetail(sessionId, { silent = false } = {}) {
+      if (!sessionId) return;
+      if (!silent) this.terminal.detailLoading = true;
+      try {
+        const detail = await this.api('GET', `/api/terminal/sessions/${sessionId}`);
+        this.terminal.sessionDetail = detail;
+        this.terminal.activeSessionId = Number(detail.id);
+        this.terminal.mode = detail.mode || this.terminal.mode;
+        this.terminal.lastDetailLoadedAt = new Date().toISOString();
+        const nextSessions = [...(this.terminal.sessions || [])];
+        const idx = nextSessions.findIndex(item => Number(item.id) === Number(detail.id));
+        if (idx >= 0) nextSessions[idx] = { ...nextSessions[idx], ...detail };
+        else nextSessions.unshift(detail);
+        this.terminal.sessions = nextSessions;
+      } catch (e) {
+        if (!silent) this.showToast(`Terminal detail failed: ${e.message}`);
+      }
+      if (!silent) this.terminal.detailLoading = false;
+    },
+
+    async executeTerminalCommand(approved = false) {
+      const command = String(approved ? (this.terminal.pendingCommand || this.terminal.command) : this.terminal.command || '').trim();
+      if (!command || this.terminal.executing) return;
+      await this.ensureTerminalSession();
+      if (!this.terminal.activeSessionId) return;
+      this.terminal.executing = true;
+      try {
+        const endpoint = approved
+          ? `/api/terminal/sessions/${this.terminal.activeSessionId}/approve`
+          : `/api/terminal/sessions/${this.terminal.activeSessionId}/execute`;
+        const result = await this.api('POST', endpoint, {
+          command,
+          mode: this.terminal.mode,
+        });
+        if (result.status === 'approval_required') {
+          this.terminal.pendingCommand = result.command || command;
+          this.terminal.approvalRequired = true;
+          this.showToast('Approval required before Axon runs this command');
+        } else if (result.status === 'blocked') {
+          this.terminal.pendingCommand = '';
+          this.terminal.approvalRequired = false;
+          this.showToast(result.message || 'That command is blocked in read-only mode');
+        } else if (result.status === 'simulation') {
+          this.terminal.pendingCommand = '';
+          this.terminal.approvalRequired = false;
+          this.terminal.command = '';
+          this.showToast(result.message || 'Simulation only');
+        } else {
+          this.terminal.pendingCommand = '';
+          this.terminal.approvalRequired = false;
+          this.terminal.command = '';
+          this.showToast('Terminal command started');
+        }
+        await this.loadTerminalSessionDetail(this.terminal.activeSessionId, { silent: true });
+      } catch (e) {
+        this.showToast(`Terminal run failed: ${e.message}`);
+      }
+      this.terminal.executing = false;
+    },
+
+    async stopTerminalCommand() {
+      if (!this.terminal.activeSessionId || this.terminal.stopping) return;
+      this.terminal.stopping = true;
+      try {
+        const res = await this.api('POST', `/api/terminal/sessions/${this.terminal.activeSessionId}/stop`);
+        this.showToast(res.message || 'Command stopped');
+        await this.loadTerminalSessionDetail(this.terminal.activeSessionId, { silent: true });
+      } catch (e) {
+        this.showToast(`Stop failed: ${e.message}`);
+      }
+      this.terminal.stopping = false;
+    },
+
+    async connectLiveFeed() {
+      if (!this.settingsForm.live_feed_enabled) {
+        this.liveFeed.connected = false;
+        this.liveFeed.connecting = false;
+        this.liveFeed.reconnecting = false;
+        this.liveFeed.error = '';
+        return;
+      }
+      if (!this.authenticated || this.liveFeed.connecting) return;
+      if (this.liveFeed.controller) {
+        try { this.liveFeed.controller.abort(); } catch (_) {}
+      }
+      this.liveFeed.connecting = true;
+      const controller = new AbortController();
+      this.liveFeed.controller = controller;
+      try {
+        const resp = await fetch('/api/live/feed', {
+          headers: this.authHeaders(),
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (resp.status === 401) {
+          this.handleAuthRequired();
+          return;
+        }
+        if (!resp.ok || !resp.body) {
+          throw new Error(resp.statusText || 'Live feed unavailable');
+        }
+        this.liveFeed.connected = true;
+        this.liveFeed.connecting = false;
+        this.liveFeed.reconnecting = false;
+        this.liveFeed.error = '';
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const payload = JSON.parse(line.slice(6));
+              this.handleLiveFeedSnapshot(payload);
+            } catch (_) {}
+          }
+        }
+        throw new Error('Live feed disconnected');
+      } catch (e) {
+        if (controller.signal.aborted) return;
+        this.liveFeed.connected = false;
+        this.liveFeed.connecting = false;
+        this.liveFeed.reconnecting = true;
+        this.liveFeed.error = e.message || 'Live feed unavailable';
+        setTimeout(() => this.connectLiveFeed(), 3000);
+      }
+    },
+
+    handleLiveFeedSnapshot(payload) {
+      this.liveFeed.latest = payload;
+      this.liveFeed.connected = true;
+      this.liveFeed.reconnecting = false;
+      if (payload?.connection) this.connectionState = payload.connection;
+      if (Array.isArray(payload?.terminal?.sessions)) {
+        this.terminal.sessions = payload.terminal.sessions;
+      }
+      const activeTerminalId = payload?.terminal?.active_session_id;
+      if (activeTerminalId && Number(activeTerminalId) === Number(this.terminal.activeSessionId || 0)) {
+        this.loadTerminalSessionDetail(activeTerminalId, { silent: true });
+      }
+      if (!this.dashRecentActivity.length && Array.isArray(payload?.activity) && payload.activity.length) {
+        this.dashRecentActivity = payload.activity;
+      }
+    },
+
     async openResourcePicker() {
       this.showResourcePicker = !this.showResourcePicker;
       if (this.showResourcePicker) this.showComposerMenu = false;
@@ -5223,6 +5812,20 @@ function devbrain() {
       if (value === 'processing') return 'border-blue-500/20 bg-blue-500/10 text-blue-200';
       if (value === 'failed') return 'border-rose-500/20 bg-rose-500/10 text-rose-300';
       return 'border-slate-700 bg-slate-950/60 text-slate-400';
+    },
+
+    resourceTrustClass(level) {
+      const value = String(level || 'medium').toLowerCase();
+      if (value === 'high') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300';
+      if (value === 'low') return 'border-rose-500/20 bg-rose-500/10 text-rose-300';
+      return 'border-amber-500/20 bg-amber-500/10 text-amber-300';
+    },
+
+    workspaceLabel(workspaceId) {
+      const id = Number(workspaceId || 0);
+      if (!id) return '';
+      const match = (this.projects || []).find(project => Number(project.id) === id);
+      return match?.name || '';
     },
 
     parseStoredChatMessage(content) {
@@ -5349,6 +5952,63 @@ function devbrain() {
       this.activeTab = 'chat';
       this.showResourcePicker = false;
       this.showToast('Resource attached to the console');
+    },
+
+    async useResourceInDeepResearch(resource) {
+      if (!resource?.id) return;
+      this.setComposerOption('intelligence_mode', 'deep_research');
+      this.mergeSelectedResources([resource]);
+      this.activeTab = 'chat';
+      this.showToast('Resource attached for Deep Research');
+    },
+
+    async updateResourceMetadata(resourceId, payload, successMessage = 'Resource updated') {
+      const updated = await this.api('PATCH', `/api/resources/${resourceId}`, payload);
+      this.resources = this.resources.map(resource => Number(resource.id) === Number(updated.id) ? updated : resource);
+      if (Number(this.resourceDetail?.id) === Number(updated.id)) {
+        this.resourceDetail = { ...this.resourceDetail, ...updated };
+      }
+      this.selectedResources = this.selectedResources.map(resource => Number(resource.id) === Number(updated.id) ? { ...resource, ...updated } : resource);
+      this.showToast(successMessage);
+      return updated;
+    },
+
+    async setResourcePinned(resource, value) {
+      if (!resource?.id) return;
+      try {
+        await this.updateResourceMetadata(resource.id, { pinned: !!value }, value ? 'Resource pinned' : 'Resource unpinned');
+      } catch (e) {
+        this.showToast(`Pin failed: ${e.message}`);
+      }
+    },
+
+    async setResourceTrust(resource, value) {
+      if (!resource?.id) return;
+      try {
+        await this.updateResourceMetadata(resource.id, { trust_level: value }, `Trust set to ${value}`);
+      } catch (e) {
+        this.showToast(`Trust update failed: ${e.message}`);
+      }
+    },
+
+    async linkResourceToWorkspace(resource, workspaceId) {
+      if (!resource?.id) return;
+      const normalized = workspaceId ? Number(workspaceId) : null;
+      try {
+        const updated = await this.updateResourceMetadata(
+          resource.id,
+          { workspace_id: normalized },
+          normalized ? 'Resource linked to workspace' : 'Workspace link removed'
+        );
+        if (normalized && !updated.workspace_name) {
+          const label = this.workspaceLabel(normalized);
+          if (label && Number(this.resourceDetail?.id) === Number(updated.id)) {
+            this.resourceDetail.workspace_name = label;
+          }
+        }
+      } catch (e) {
+        this.showToast(`Workspace link failed: ${e.message}`);
+      }
     },
 
     async reprocessResource(resource) {
@@ -6350,6 +7010,9 @@ function devbrain() {
           resource_storage_path: s.resource_storage_path || '~/.devbrain/resources',
           resource_upload_max_mb: s.resource_upload_max_mb || '20',
           resource_url_import_enabled: this.settingEnabled(s.resource_url_import_enabled ?? true),
+          live_feed_enabled: this.settingEnabled(s.live_feed_enabled ?? true),
+          terminal_default_mode: s.terminal_default_mode || 'read_only',
+          terminal_command_timeout_seconds: s.terminal_command_timeout_seconds || '25',
           cloud_agents_enabled: this.settingEnabled(s.cloud_agents_enabled),
           openai_gpts_enabled: this.settingEnabled(s.openai_gpts_enabled),
           gemini_gems_enabled: this.settingEnabled(s.gemini_gems_enabled),
@@ -6388,6 +7051,14 @@ function devbrain() {
         } else {
           this.settingsForm._githubTokenHint = '';
         }
+        if (!this.settingsForm.live_feed_enabled && this.liveFeed.controller) {
+          try { this.liveFeed.controller.abort(); } catch (_) {}
+          this.liveFeed.connected = false;
+          this.liveFeed.reconnecting = false;
+          this.liveFeed.connecting = false;
+        } else if (this.settingsForm.live_feed_enabled && this.authenticated) {
+          this.connectLiveFeed();
+        }
         this.loadTtsVoices(true);
         this.refreshVoiceCapability();
       } catch(e) {}
@@ -6417,6 +7088,9 @@ function devbrain() {
       payload.resource_storage_path = this.settingsForm.resource_storage_path || '~/.devbrain/resources';
       payload.resource_upload_max_mb = String(this.settingsForm.resource_upload_max_mb || '20');
       payload.resource_url_import_enabled = !!this.settingsForm.resource_url_import_enabled;
+      payload.live_feed_enabled = !!this.settingsForm.live_feed_enabled;
+      payload.terminal_default_mode = this.settingsForm.terminal_default_mode || 'read_only';
+      payload.terminal_command_timeout_seconds = String(this.settingsForm.terminal_command_timeout_seconds || '25');
       payload.cloud_agents_enabled = !!this.settingsForm.cloud_agents_enabled;
       payload.openai_gpts_enabled = !!this.settingsForm.openai_gpts_enabled;
       payload.gemini_gems_enabled = !!this.settingsForm.gemini_gems_enabled;
@@ -6457,7 +7131,15 @@ function devbrain() {
         this.syncChatModel(this.settingsForm.code_model || this.settingsForm.ollama_model || this.selectedChatModel);
         await this.loadTtsVoices(true);
         this.settingsSaved = true;
-        this.loadRuntimeStatus();
+        await this.loadRuntimeStatus();
+        if (this.settingsForm.live_feed_enabled) {
+          this.connectLiveFeed();
+        } else if (this.liveFeed.controller) {
+          try { this.liveFeed.controller.abort(); } catch (_) {}
+          this.liveFeed.connected = false;
+          this.liveFeed.reconnecting = false;
+          this.liveFeed.connecting = false;
+        }
         setTimeout(() => this.settingsSaved = false, 3000);
       } catch(e) { this.showToast('Failed to save'); }
       this.settingsSaving = false;
@@ -6657,6 +7339,8 @@ function devbrain() {
           // Reload data after reconnect
           this.loadProjects();
           this.loadTasks();
+          this.loadRuntimeStatus();
+          this.connectLiveFeed();
           if (this.activeTab === 'chat') this.loadChatHistory();
         } else {
           this.showToast('Server not reachable');

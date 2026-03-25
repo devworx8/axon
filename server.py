@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import time as _time
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -55,6 +56,146 @@ SYSTEM_ACTION_CONFIRMATIONS = {
     "restart_ollama": "RESTART OLLAMA",
     "reboot_machine": "REBOOT MACHINE",
 }
+
+SAFE_TERMINAL_PREFIXES = (
+    "pwd",
+    "ls",
+    "tree",
+    "find",
+    "rg",
+    "cat",
+    "head",
+    "tail",
+    "grep",
+    "wc",
+    "env",
+    "printenv",
+    "git status",
+    "git branch",
+    "git diff",
+    "git log",
+    "git show",
+    "python --version",
+    "python3 --version",
+    "node -v",
+    "npm -v",
+)
+
+BLOCKED_TERMINAL_PATTERNS = (
+    "rm -rf",
+    "mkfs",
+    "dd if=",
+    "shutdown",
+    "reboot",
+    "poweroff",
+    "halt",
+    ":(){",
+    "chmod -r 777 /",
+)
+
+_live_operator_snapshot = {
+    "active": False,
+    "mode": "idle",
+    "phase": "observe",
+    "title": "Standing by",
+    "detail": "Axon is ready for the next request.",
+    "tool": "",
+    "summary": "",
+    "workspace_id": None,
+    "started_at": "",
+    "updated_at": "",
+}
+_terminal_processes: dict[int, dict] = {}
+
+
+def _now_iso() -> str:
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _set_live_operator(
+    *,
+    active: bool,
+    mode: str,
+    phase: str,
+    title: str,
+    detail: str = "",
+    tool: str = "",
+    summary: str = "",
+    workspace_id: Optional[int] = None,
+    preserve_started: bool = False,
+):
+    started_at = _live_operator_snapshot.get("started_at") if preserve_started else _now_iso()
+    if not started_at:
+        started_at = _now_iso()
+    _live_operator_snapshot.update(
+        {
+            "active": active,
+            "mode": mode,
+            "phase": phase,
+            "title": title,
+            "detail": detail,
+            "tool": tool,
+            "summary": summary or _live_operator_snapshot.get("summary", ""),
+            "workspace_id": workspace_id,
+            "started_at": started_at if active else "",
+            "updated_at": _now_iso(),
+        }
+    )
+
+
+def _connection_snapshot() -> dict:
+    tunnel_url = _read_tunnel_url()
+    stable_domain = "axon.edudashpro.org.za"
+    domain_active = False
+    if domain_active:
+        state = "domain_active"
+        label = "Domain Active"
+    elif tunnel_url:
+        state = "tunnel_active"
+        label = "Tunnel Active"
+    else:
+        state = "local_only"
+        label = "Local Only"
+    return {
+        "connected": True,
+        "state": state,
+        "label": label,
+        "local_only": not bool(tunnel_url) and not domain_active,
+        "tunnel_active": bool(tunnel_url),
+        "tunnel_url": tunnel_url,
+        "domain_active": domain_active,
+        "stable_domain": stable_domain,
+        "stable_domain_url": f"https://{stable_domain}",
+        "stable_domain_status": "planned",
+    }
+
+
+def _terminal_mode_value(raw: str | None, fallback: str = "read_only") -> str:
+    value = str(raw or fallback).strip().lower()
+    return value if value in {"read_only", "approval_required", "simulation"} else fallback
+
+
+def _command_is_blocked(command: str) -> bool:
+    lowered = f" {str(command or '').strip().lower()} "
+    return any(pattern in lowered for pattern in BLOCKED_TERMINAL_PATTERNS)
+
+
+def _command_is_read_only(command: str) -> bool:
+    lowered = str(command or "").strip().lower()
+    if not lowered:
+        return False
+    return any(lowered == prefix or lowered.startswith(prefix + " ") for prefix in SAFE_TERMINAL_PREFIXES)
+
+
+def _serialize_terminal_session(row, *, running: bool = False, recent_events: Optional[list[dict]] = None) -> dict:
+    item = dict(row)
+    item["running"] = bool(running)
+    item["recent_events"] = recent_events or []
+    return item
+
+
+def _serialize_terminal_event(row) -> dict:
+    return dict(row)
 
 
 # ─── Lifespan ────────────────────────────────────────────────────────────────
@@ -105,7 +246,6 @@ app.add_middleware(
 
 import hashlib
 import secrets as _secrets
-from datetime import datetime, timedelta
 
 # In-memory session store: { token_str: expiry_datetime }
 _auth_sessions: dict[str, datetime] = {}
@@ -533,13 +673,18 @@ def _composer_instruction_block(options: dict) -> str:
     action = options.get("action_mode") or ""
     agent_role = options.get("agent_role") or ""
     external_mode = options.get("external_mode") or "local_first"
+    external_provider_hint = options.get("external_provider_hint") or ""
     research_pack_title = options.get("research_pack_title") or ""
+    terminal_mode = _terminal_mode_value(options.get("terminal_mode"), "read_only") if options.get("terminal_mode") else ""
 
     lines.append(f"- Intelligence mode: {str(intelligence).replace('_', ' ').title()}")
     if action:
         lines.append(f"- Action mode: {str(action).replace('_', ' ').title()}")
     if agent_role:
-        lines.append(f"- Agent role: {str(agent_role).replace('_', ' ').title()} Agent")
+        if str(agent_role).lower() == "multi_agent":
+            lines.append("- Agent mode: Multi-Agent orchestration is preferred for planning, execution, and verification.")
+        else:
+            lines.append(f"- Agent role: {str(agent_role).replace('_', ' ').title()} Agent")
     if options.get("use_workspace_memory", True):
         lines.append("- Use workspace memory when it is relevant.")
     if options.get("include_timeline_history"):
@@ -552,15 +697,27 @@ def _composer_instruction_block(options: dict) -> str:
         lines.append("- Simulation mode is on: plan and simulate, do not make changes.")
     if research_pack_title:
         lines.append(f"- Use the selected Research Pack: {research_pack_title}.")
+    if options.get("live_desktop_feed"):
+        lines.append("- Keep the live desktop and operator feed updated with visible progress while working.")
+    if terminal_mode:
+        if terminal_mode == "read_only":
+            lines.append("- Terminal mode is read-only. Limit commands to safe inspection, logs, tests, and status checks.")
+        elif terminal_mode == "approval_required":
+            lines.append("- Terminal mode requires approval before executing commands that change the system.")
+        elif terminal_mode == "simulation":
+            lines.append("- Terminal mode is simulation-only. Explain the command plan instead of running it.")
     if external_mode == "disable_external_calls":
         lines.append("- Do not use cloud or external services. Stay fully local-first.")
     elif external_mode == "cloud_assist":
         lines.append("- Cloud assist is allowed when it materially improves the answer.")
     elif external_mode == "external_agent":
         lines.append("- External specialist agents are allowed if enabled, but local-first remains preferred.")
+    if external_provider_hint:
+        lines.append(f"- If cloud help is needed, prefer this provider family: {str(external_provider_hint).replace('_', ' ').title()}.")
 
     if intelligence == "deep_research":
         lines.append("- Perform multi-step retrieval and synthesis. Return summary, key findings, supporting context, and gaps.")
+        lines.append("- Search local memory first, then attached resources, then workspace memory, and only use cloud help if allowed and truly necessary.")
     elif intelligence == "summarize":
         lines.append("- Compress the input and memory into a concise summary with minimal repetition.")
     elif intelligence == "explain":
@@ -569,6 +726,8 @@ def _composer_instruction_block(options: dict) -> str:
         lines.append("- Compare options with pros, trade-offs, and a recommendation.")
     elif intelligence == "analyze":
         lines.append("- Inspect the available context carefully before concluding.")
+    elif intelligence == "build_brief":
+        lines.append("- Produce a structured brief with a clear summary, core goals, supporting context, and next actions.")
 
     return "\n".join(lines)
 
@@ -878,6 +1037,12 @@ class ResourceImportRequest(BaseModel):
     title: Optional[str] = None
 
 
+class ResourceUpdate(BaseModel):
+    trust_level: Optional[str] = None
+    pinned: Optional[bool] = None
+    workspace_id: Optional[int] = None
+
+
 @app.get("/api/resources")
 async def list_resources(
     search: str = "",
@@ -952,6 +1117,33 @@ async def get_resource(resource_id: int):
     data = resource_bank.serialize_resource(row)
     data["chunk_count"] = len(chunks)
     return data
+
+
+@app.patch("/api/resources/{resource_id}")
+async def update_resource(resource_id: int, body: ResourceUpdate):
+    if body.trust_level not in (None, "high", "medium", "low"):
+        raise HTTPException(400, "Invalid trust level")
+    fields = body.model_dump(exclude_unset=True)
+    async with devdb.get_db() as conn:
+        row = await devdb.get_resource(conn, resource_id)
+        if not row:
+            raise HTTPException(404, "Resource not found")
+        if fields:
+            await devdb.update_resource(conn, resource_id, **fields)
+            changes = []
+            if "pinned" in fields:
+                changes.append("pinned" if fields["pinned"] else "unpinned")
+            if "trust_level" in fields:
+                changes.append(f"trust={fields['trust_level']}")
+            if "workspace_id" in fields:
+                changes.append("workspace link updated")
+            await devdb.log_event(
+                conn,
+                "resource_updated",
+                f"Resource updated: {dict(row).get('title', 'resource')} ({', '.join(changes) or 'metadata'})",
+            )
+        updated = await devdb.get_resource(conn, resource_id)
+    return resource_bank.serialize_resource(updated)
 
 
 @app.get("/api/resources/{resource_id}/content")
@@ -1204,6 +1396,14 @@ async def chat(body: ChatMessage):
         # Call AI with timeout handling
         try:
             import asyncio as _aio
+            _set_live_operator(
+                active=True,
+                mode="chat",
+                phase="plan",
+                title="Preparing the reply",
+                detail=body.message[:180],
+                workspace_id=body.project_id,
+            )
             result = await _aio.wait_for(
                 brain.chat(
                     body.message,
@@ -1217,7 +1417,25 @@ async def chat(body: ChatMessage):
                 ),
                 timeout=90.0,
             )
+            _set_live_operator(
+                active=False,
+                mode="chat",
+                phase="verify",
+                title="Reply complete",
+                detail="Axon finished the response.",
+                summary=result["content"][:180],
+                workspace_id=body.project_id,
+            )
         except (_aio.TimeoutError, TimeoutError, RuntimeError) as exc:
+            _set_live_operator(
+                active=False,
+                mode="chat",
+                phase="recover",
+                title="Reply interrupted",
+                detail=str(exc),
+                summary=body.message[:120],
+                workspace_id=body.project_id,
+            )
             raise HTTPException(504, f"AI backend timed out — try a shorter message or check Ollama. ({exc})")
 
         # Persist messages
@@ -1292,9 +1510,27 @@ async def chat_stream(body: ChatMessage, request: Request):
             block for block in (context_block, memory_bundle["context_block"], composer_block) if block
         )
 
+    _set_live_operator(
+        active=True,
+        mode="chat",
+        phase="observe",
+        title="Understanding the request",
+        detail=body.message[:180],
+        workspace_id=body.project_id,
+    )
+
     if backend != "ollama":
         # Fall back to non-streaming for API/CLI — emit single SSE event
         try:
+            _set_live_operator(
+                active=True,
+                mode="chat",
+                phase="plan",
+                title="Preparing the reply",
+                detail="Axon is using the configured non-local stream path.",
+                workspace_id=body.project_id,
+                preserve_started=True,
+            )
             result = await brain.chat(
                 body.message,
                 history,
@@ -1309,9 +1545,27 @@ async def chat_stream(body: ChatMessage, request: Request):
                 for warning in resource_bundle["warnings"]:
                     yield {"data": _json.dumps({"chunk": f"⚠️ {warning}\n\n"})}
                 yield {"data": _json.dumps({"chunk": result["content"]})}
+                _set_live_operator(
+                    active=False,
+                    mode="chat",
+                    phase="verify",
+                    title="Reply complete",
+                    detail="Axon finished the response.",
+                    summary=result["content"][:180],
+                    workspace_id=body.project_id,
+                )
                 yield {"data": _json.dumps({"done": True, "tokens": result["tokens"]})}
             return EventSourceResponse(_buffered())
         except Exception as exc:
+            _set_live_operator(
+                active=False,
+                mode="chat",
+                phase="recover",
+                title="Reply interrupted",
+                detail=str(exc),
+                summary=body.message[:120],
+                workspace_id=body.project_id,
+            )
             async def _err():
                 yield {"data": _json.dumps({"error": str(exc)})}
             return EventSourceResponse(_err())
@@ -1323,6 +1577,7 @@ async def chat_stream(body: ChatMessage, request: Request):
 
     async def generate():
         try:
+            started_stream = False
             for warning in resource_bundle["warnings"]:
                 full_content.append(f"⚠️ {warning}\n\n")
                 yield {"data": _json.dumps({"chunk": f"⚠️ {warning}\n\n"})}
@@ -1336,6 +1591,17 @@ async def chat_stream(body: ChatMessage, request: Request):
                 vision_model=resource_bundle["vision_model"],
                 ollama_url=ollama_url, ollama_model=ollama_model,
             ):
+                if not started_stream:
+                    _set_live_operator(
+                        active=True,
+                        mode="chat",
+                        phase="execute",
+                        title="Writing the reply",
+                        detail="Axon is streaming the answer live.",
+                        workspace_id=body.project_id,
+                        preserve_started=True,
+                    )
+                    started_stream = True
                 full_content.append(chunk)
                 if await request.is_disconnected():
                     return
@@ -1349,8 +1615,26 @@ async def chat_stream(body: ChatMessage, request: Request):
                                           project_id=body.project_id, tokens=0)
                 await devdb.log_event(conn, "chat", body.message[:100],
                                        project_id=body.project_id)
+            _set_live_operator(
+                active=False,
+                mode="chat",
+                phase="verify",
+                title="Reply complete",
+                detail="Axon finished streaming the answer.",
+                summary="".join(full_content)[:180],
+                workspace_id=body.project_id,
+            )
             yield {"data": _json.dumps({"done": True, "tokens": 0})}
         except Exception as exc:
+            _set_live_operator(
+                active=False,
+                mode="chat",
+                phase="recover",
+                title="Reply interrupted",
+                detail=str(exc),
+                summary=body.message[:120],
+                workspace_id=body.project_id,
+            )
             yield {"data": _json.dumps({"error": str(exc)})}
 
     return EventSourceResponse(generate())
@@ -1414,6 +1698,14 @@ async def agent_endpoint(body: AgentRequest, request: Request):
     ollama_url = ai.get("ollama_url", settings.get("ollama_url", ""))
     ollama_model = ai.get("ollama_model") or resource_bundle["vision_model"] or settings.get("ollama_model", "")
     collected_text: list[str] = []
+    _set_live_operator(
+        active=True,
+        mode="agent",
+        phase="observe",
+        title="Inspecting the task",
+        detail=body.message[:180],
+        workspace_id=body.project_id,
+    )
 
     async def generate():
         try:
@@ -1434,6 +1726,57 @@ async def agent_endpoint(body: AgentRequest, request: Request):
             ):
                 if event.get("type") == "text":
                     collected_text.append(event["chunk"])
+                    _set_live_operator(
+                        active=True,
+                        mode="agent",
+                        phase="plan",
+                        title="Planning the next step",
+                        detail="Axon is reasoning through the task.",
+                        workspace_id=body.project_id,
+                        preserve_started=True,
+                    )
+                elif event.get("type") == "tool_call":
+                    _set_live_operator(
+                        active=True,
+                        mode="agent",
+                        phase="execute",
+                        title=f"Running {str(event.get('name') or 'tool').replace('_', ' ')}",
+                        detail=_json.dumps(event.get("args") or {})[:180],
+                        tool=event.get("name", ""),
+                        workspace_id=body.project_id,
+                        preserve_started=True,
+                    )
+                elif event.get("type") == "tool_result":
+                    _set_live_operator(
+                        active=True,
+                        mode="agent",
+                        phase="verify",
+                        title=f"Checking {str(event.get('name') or 'tool').replace('_', ' ')}",
+                        detail=str(event.get("result") or "Axon is reviewing the tool output.")[:180],
+                        tool=event.get("name", ""),
+                        workspace_id=body.project_id,
+                        preserve_started=True,
+                    )
+                elif event.get("type") == "done":
+                    _set_live_operator(
+                        active=False,
+                        mode="agent",
+                        phase="verify",
+                        title="Task complete",
+                        detail="Axon finished the operator pass.",
+                        summary="".join(collected_text)[:180],
+                        workspace_id=body.project_id,
+                    )
+                elif event.get("type") == "error":
+                    _set_live_operator(
+                        active=False,
+                        mode="agent",
+                        phase="recover",
+                        title="Needs attention",
+                        detail=str(event.get("message") or "Axon hit an error and stopped safely.")[:180],
+                        summary=body.message[:120],
+                        workspace_id=body.project_id,
+                    )
                 if await request.is_disconnected():
                     return
                 yield {"data": _json.dumps(event)}
@@ -1450,6 +1793,15 @@ async def agent_endpoint(body: AgentRequest, request: Request):
                     await devdb.log_event(conn, "agent", body.message[:100],
                                            project_id=body.project_id)
         except Exception as exc:
+            _set_live_operator(
+                active=False,
+                mode="agent",
+                phase="recover",
+                title="Needs attention",
+                detail=str(exc),
+                summary=body.message[:120],
+                workspace_id=body.project_id,
+            )
             yield {"data": _json.dumps({"type": "error", "message": str(exc)})}
 
     return EventSourceResponse(generate())
@@ -1499,6 +1851,7 @@ async def get_settings():
             "gemini_gems_enabled",
             "generic_api_enabled",
             "resource_url_import_enabled",
+            "live_feed_enabled",
             "alerts_enabled",
             "alerts_desktop",
             "alerts_mobile",
@@ -1557,6 +1910,9 @@ class SettingsUpdate(BaseModel):
     resource_storage_path: Optional[str] = None
     resource_upload_max_mb: Optional[str] = None
     resource_url_import_enabled: Optional[bool] = None
+    live_feed_enabled: Optional[bool] = None
+    terminal_default_mode: Optional[str] = None
+    terminal_command_timeout_seconds: Optional[str] = None
     cloud_agents_enabled: Optional[bool] = None
     openai_gpts_enabled: Optional[bool] = None
     gemini_gems_enabled: Optional[bool] = None
@@ -1899,6 +2255,7 @@ async def runtime_status():
         projects = await devdb.get_projects(conn, status="active")
         resources = await devdb.list_resources(conn)
         memory_overview = await memory_engine.sync_memory_layers(conn, settings)
+        terminal_sessions = await devdb.list_terminal_sessions(conn, limit=6)
 
     available_models = await brain.ollama_list_models(settings.get("ollama_url", ""))
     ollama_service = _ollama_service_status()
@@ -1914,7 +2271,63 @@ async def runtime_status():
     )
     status["ollama_service"] = ollama_service
     status["ollama_runtime_mode"] = _stored_ollama_runtime_mode(settings)
+    status["connection"] = _connection_snapshot()
+    status["live_operator"] = dict(_live_operator_snapshot)
+    status["terminal"] = {
+        "active_session_id": next((row["id"] for row in terminal_sessions if row["id"] in _terminal_processes), None),
+        "session_count": len(terminal_sessions),
+        "running_count": sum(1 for row in terminal_sessions if row["id"] in _terminal_processes),
+    }
     return status
+
+
+async def _build_live_snapshot() -> dict:
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+        terminal_rows = await devdb.list_terminal_sessions(conn, limit=6)
+        activity_rows = await devdb.get_activity(conn, limit=6)
+    running_session_id = next((row["id"] for row in terminal_rows if row["id"] in _terminal_processes), None)
+    return {
+        "type": "snapshot",
+        "at": _now_iso(),
+        "connection": _connection_snapshot(),
+        "operator": dict(_live_operator_snapshot),
+        "runtime": {
+            "runtime_label": (
+                "Local Ollama" if settings.get("ai_backend", "ollama") == "ollama"
+                else "External API" if settings.get("ai_backend") == "api"
+                else "CLI Agent" if settings.get("ai_backend") == "cli"
+                else "Runtime offline"
+            ),
+            "active_model": settings.get("code_model") or settings.get("ollama_model") or settings.get("general_model") or "Saved default",
+        },
+        "terminal": {
+            "active_session_id": running_session_id,
+            "sessions": [
+                _serialize_terminal_session(row, running=row["id"] in _terminal_processes)
+                for row in terminal_rows
+            ],
+        },
+        "activity": [dict(row) for row in activity_rows],
+    }
+
+
+@app.get("/api/connection/status")
+async def connection_status():
+    return _connection_snapshot()
+
+
+@app.get("/api/live/feed")
+async def live_feed(request: Request):
+    async def generate():
+        while True:
+            if await request.is_disconnected():
+                return
+            snapshot = await _build_live_snapshot()
+            yield {"data": _json.dumps(snapshot)}
+            await asyncio.sleep(2)
+
+    return EventSourceResponse(generate())
 
 
 # ─── Mobile info ──────────────────────────────────────────────────────────────
@@ -2355,6 +2768,389 @@ async def files_write(body: FileWriteBody):
     except PermissionError:
         raise HTTPException(403, "Permission denied")
     return {"path": str(p), "rel": str(p.relative_to(_HOME)), "size": len(body.content.encode()), "written": True}
+
+
+# ─── Terminal control ────────────────────────────────────────────────────────
+
+class TerminalSessionCreate(BaseModel):
+    title: Optional[str] = None
+    workspace_id: Optional[int] = None
+    mode: Optional[str] = "read_only"
+    cwd: Optional[str] = None
+
+
+class TerminalCommandBody(BaseModel):
+    command: str
+    cwd: Optional[str] = None
+    timeout_seconds: Optional[int] = None
+    mode: Optional[str] = None
+    approved: Optional[bool] = False
+
+
+async def _resolve_terminal_cwd(conn, session_row, requested_cwd: Optional[str] = None) -> Path:
+    if requested_cwd:
+        return _safe_path(requested_cwd)
+    session_cwd = (session_row.get("cwd") or "").strip()
+    if session_cwd:
+        return _safe_path(session_cwd)
+    workspace_id = session_row.get("workspace_id")
+    if workspace_id:
+        proj = await devdb.get_project(conn, int(workspace_id))
+        if proj and proj.get("path"):
+            return _safe_path(proj["path"])
+    return _HOME
+
+
+def _terminal_timeout_seconds(settings: dict, requested: Optional[int]) -> int:
+    base = settings.get("terminal_command_timeout_seconds") or "25"
+    try:
+        default = int(str(base).strip())
+    except Exception:
+        default = 25
+    if requested is None:
+        return max(5, min(300, default))
+    return max(5, min(300, int(requested)))
+
+
+async def _terminal_capture(session_id: int, process, command: str, timeout_seconds: int):
+    info = _terminal_processes.get(session_id, {})
+    timed_out = False
+    deadline = _time.monotonic() + timeout_seconds
+    try:
+        while True:
+            if _time.monotonic() >= deadline and process.returncode is None:
+                timed_out = True
+                process.terminate()
+                await asyncio.sleep(0.5)
+                if process.returncode is None:
+                    process.kill()
+            if process.stdout is None:
+                break
+            try:
+                line = await asyncio.wait_for(process.stdout.readline(), timeout=0.8)
+            except asyncio.TimeoutError:
+                if process.returncode is not None:
+                    break
+                continue
+            if not line:
+                if process.returncode is not None:
+                    break
+                continue
+            text = line.decode("utf-8", errors="replace").rstrip()
+            if not text:
+                continue
+            async with devdb.get_db() as conn:
+                await devdb.add_terminal_event(
+                    conn,
+                    session_id=session_id,
+                    event_type="output",
+                    content=text[:4000],
+                )
+            _set_live_operator(
+                active=True,
+                mode="terminal",
+                phase="execute",
+                title="Streaming terminal output",
+                detail=text[:180],
+                summary=f"Running: {command}",
+                preserve_started=True,
+            )
+
+        return_code = await process.wait()
+        status = "completed" if return_code == 0 and not timed_out else "failed"
+        final_message = "Command completed successfully." if status == "completed" else (
+            "Command timed out and was stopped safely." if timed_out else "Command finished with an error."
+        )
+        async with devdb.get_db() as conn:
+            await devdb.update_terminal_session(
+                conn,
+                session_id,
+                status=status,
+                pending_command="",
+                active_command="",
+                pid=0,
+            )
+            await devdb.add_terminal_event(
+                conn,
+                session_id=session_id,
+                event_type="status",
+                content=final_message,
+                exit_code=return_code,
+            )
+        _set_live_operator(
+            active=False,
+            mode="terminal",
+            phase="verify" if status == "completed" else "recover",
+            title="Terminal command finished",
+            detail=final_message,
+            summary=f"{command} · exit {return_code}",
+            preserve_started=False,
+        )
+    except Exception as exc:
+        async with devdb.get_db() as conn:
+            await devdb.update_terminal_session(
+                conn,
+                session_id,
+                status="failed",
+                pending_command="",
+                active_command="",
+                pid=0,
+            )
+            await devdb.add_terminal_event(
+                conn,
+                session_id=session_id,
+                event_type="error",
+                content=str(exc),
+            )
+        _set_live_operator(
+            active=False,
+            mode="terminal",
+            phase="recover",
+            title="Terminal command failed",
+            detail=str(exc),
+            summary=command,
+        )
+    finally:
+        _terminal_processes.pop(session_id, None)
+
+
+async def _start_terminal_command(
+    *,
+    session_id: int,
+    command: str,
+    cwd: Path,
+    timeout_seconds: int,
+):
+    process = await asyncio.create_subprocess_shell(
+        command,
+        cwd=str(cwd),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        env=os.environ.copy(),
+    )
+    _terminal_processes[session_id] = {
+        "process": process,
+        "command": command,
+        "cwd": str(cwd),
+        "started_at": _now_iso(),
+    }
+    async with devdb.get_db() as conn:
+        await devdb.update_terminal_session(
+            conn,
+            session_id,
+            status="running",
+            active_command=command,
+            pending_command="",
+            cwd=str(cwd),
+            pid=process.pid or 0,
+        )
+        await devdb.add_terminal_event(
+            conn,
+            session_id=session_id,
+            event_type="command",
+            content=f"$ {command}",
+        )
+    _set_live_operator(
+        active=True,
+        mode="terminal",
+        phase="execute",
+        title="Running terminal command",
+        detail=f"{command} · {cwd}",
+        summary=f"Running: {command}",
+    )
+    asyncio.create_task(_terminal_capture(session_id, process, command, timeout_seconds))
+    return {
+        "status": "running",
+        "command": command,
+        "cwd": str(cwd),
+        "pid": process.pid or 0,
+        "timeout_seconds": timeout_seconds,
+    }
+
+
+async def _terminal_execute_request(session_id: int, body: TerminalCommandBody, *, approved: bool = False):
+    command = (body.command or "").strip()
+    if not command:
+        raise HTTPException(400, "Command is required")
+    if _command_is_blocked(command):
+        raise HTTPException(400, "That command is blocked in Axon terminal mode.")
+
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+        session_row = await devdb.get_terminal_session(conn, session_id)
+        if not session_row:
+            raise HTTPException(404, "Terminal session not found")
+        if session_row["status"] == "running" and session_id in _terminal_processes:
+            raise HTTPException(409, "A command is already running in this session.")
+
+        mode = _terminal_mode_value(body.mode, session_row["mode"] or settings.get("terminal_default_mode", "read_only"))
+        cwd = await _resolve_terminal_cwd(conn, session_row, body.cwd)
+        timeout_seconds = _terminal_timeout_seconds(settings, body.timeout_seconds)
+
+        if mode == "simulation":
+            await devdb.update_terminal_session(conn, session_id, mode=mode, cwd=str(cwd), status="idle", pending_command="")
+            await devdb.add_terminal_event(
+                conn,
+                session_id=session_id,
+                event_type="status",
+                content=f"Simulation only: {command}",
+            )
+            return {
+                "status": "simulation",
+                "mode": mode,
+                "command": command,
+                "cwd": str(cwd),
+                "message": "Simulation mode is on. Axon planned the command but did not run it.",
+            }
+
+        if mode == "read_only" and not _command_is_read_only(command):
+            await devdb.add_terminal_event(
+                conn,
+                session_id=session_id,
+                event_type="approval",
+                content=f"Read-only mode blocked: {command}",
+            )
+            return {
+                "status": "blocked",
+                "mode": mode,
+                "command": command,
+                "cwd": str(cwd),
+                "message": "Read-only mode only allows inspection commands like ls, pwd, rg, cat, and git status.",
+            }
+
+        if mode == "approval_required" and not approved:
+            await devdb.update_terminal_session(
+                conn,
+                session_id,
+                mode=mode,
+                cwd=str(cwd),
+                status="pending_approval",
+                pending_command=command,
+            )
+            await devdb.add_terminal_event(
+                conn,
+                session_id=session_id,
+                event_type="approval",
+                content=f"Approval requested for: {command}",
+            )
+            return {
+                "status": "approval_required",
+                "mode": mode,
+                "command": command,
+                "cwd": str(cwd),
+                "message": "Approval is required before Axon runs this command.",
+            }
+
+        await devdb.update_terminal_session(conn, session_id, mode=mode, cwd=str(cwd), status="idle")
+    return await _start_terminal_command(
+        session_id=session_id,
+        command=command,
+        cwd=cwd,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+@app.get("/api/terminal/sessions")
+async def list_terminal_sessions(workspace_id: Optional[int] = None, limit: int = 20):
+    async with devdb.get_db() as conn:
+        rows = await devdb.list_terminal_sessions(conn, workspace_id=workspace_id, limit=limit)
+    return [
+        _serialize_terminal_session(
+            row,
+            running=row["id"] in _terminal_processes,
+        )
+        for row in rows
+    ]
+
+
+@app.post("/api/terminal/sessions")
+async def create_terminal_session(body: TerminalSessionCreate):
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+        mode = _terminal_mode_value(body.mode, settings.get("terminal_default_mode", "read_only"))
+        cwd = str(await _resolve_terminal_cwd(conn, {"cwd": body.cwd or "", "workspace_id": body.workspace_id}))
+        title = (body.title or "").strip() or f"Terminal {datetime.now().strftime('%H:%M')}"
+        session_id = await devdb.create_terminal_session(
+            conn,
+            title=title,
+            workspace_id=body.workspace_id,
+            mode=mode,
+            cwd=cwd,
+        )
+        session = await devdb.get_terminal_session(conn, session_id)
+        await devdb.add_terminal_event(
+            conn,
+            session_id=session_id,
+            event_type="status",
+            content=f"Session ready in {cwd}",
+        )
+    return _serialize_terminal_session(session, running=False)
+
+
+@app.get("/api/terminal/sessions/{session_id}")
+async def get_terminal_session(session_id: int, limit: int = 160):
+    async with devdb.get_db() as conn:
+        row = await devdb.get_terminal_session(conn, session_id)
+        if not row:
+            raise HTTPException(404, "Terminal session not found")
+        events = await devdb.list_terminal_events(conn, session_id, limit=limit)
+    return _serialize_terminal_session(
+        row,
+        running=session_id in _terminal_processes,
+        recent_events=[_serialize_terminal_event(event) for event in events],
+    )
+
+
+@app.post("/api/terminal/sessions/{session_id}/execute")
+async def terminal_execute(session_id: int, body: TerminalCommandBody):
+    return await _terminal_execute_request(session_id, body, approved=bool(body.approved))
+
+
+@app.post("/api/terminal/sessions/{session_id}/approve")
+async def terminal_approve(session_id: int, body: TerminalCommandBody):
+    return await _terminal_execute_request(session_id, body, approved=True)
+
+
+@app.post("/api/terminal/sessions/{session_id}/stop")
+async def terminal_stop(session_id: int):
+    entry = _terminal_processes.get(session_id)
+    if not entry:
+        async with devdb.get_db() as conn:
+            row = await devdb.get_terminal_session(conn, session_id)
+            if not row:
+                raise HTTPException(404, "Terminal session not found")
+        return {"status": "idle", "message": "No running command to stop."}
+
+    process = entry.get("process")
+    if process and process.returncode is None:
+        process.terminate()
+        await asyncio.sleep(0.5)
+        if process.returncode is None:
+            process.kill()
+    async with devdb.get_db() as conn:
+        await devdb.update_terminal_session(
+            conn,
+            session_id,
+            status="stopped",
+            active_command="",
+            pending_command="",
+            pid=0,
+        )
+        await devdb.add_terminal_event(
+            conn,
+            session_id=session_id,
+            event_type="status",
+            content="Command stopped by the user.",
+        )
+    _set_live_operator(
+        active=False,
+        mode="terminal",
+        phase="recover",
+        title="Terminal command stopped",
+        detail="Axon stopped the running command safely.",
+        summary=str(entry.get("command") or ""),
+    )
+    return {"status": "stopped", "message": "Command stopped."}
 
 
 # ─── Ollama endpoints ─────────────────────────────────────────────────────────
