@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Axon v2</title>
+<style>
+body { margin:0; font-family: Inter, sans-serif; background:#0b0f14; color:#e6edf3; }
+.app { display:flex; height:100vh; }
+.sidebar { width:240px; background:#0f1620; padding:20px; }
+.main { flex:1; display:flex; }
+.center { flex:2; padding:20px; }
+.right { width:340px; background:#0f1620; padding:20px; border-left:1px solid #1f2933; }
+.card { background:#121a24; padding:16px; border-radius:10px; margin-bottom:16px; }
+.title { font-size:14px; opacity:0.6; }
+.big { font-size:20px; margin-top:5px; }
+</style>
+</head>
+<body>
+<div class="app">
+<div class="sidebar">
+<h2>AXON</h2>
+<p class="title">Operator System</p>
+</div>
+<div class="main">
+<div class="center">
+<div class="card">
+<div class="title">Command Center</div>
+<div class="big">System Ready</div>
+</div>
+<div class="card">
+<div class="title">Active Workspace</div>
+<div class="big">dashpro</div>
+</div>
+</div>
+<div class="right">
+<div class="card">
+<div class="title">Axon Live</div>
+<div class="big">Observe</div>
+</div>
+<div class="card">
+<div class="title">Current Action</div>
+<div class="big">Scanning files...</div>
+</div>
+<div class="card">
+<div class="title">Recent Activity</div>
+<ul>
+<li>Scan started</li>
+<li>Workspace loaded</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>
