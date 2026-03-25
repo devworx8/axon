@@ -4481,6 +4481,7 @@ function devbrain() {
       error: '',
       lastUpdated: '',
       timer: null,
+      intervalMs: 8000,
     },
     serverConnected: true,
     reconnecting: false,
@@ -5715,7 +5716,7 @@ function devbrain() {
       this.desktopPreview.timer = setTimeout(async () => {
         await this.refreshDesktopPreview();
         this.scheduleDesktopPreview();
-      }, 3000);
+      }, this.desktopPreview.intervalMs || 8000);
     },
 
     stopDesktopPreview() {

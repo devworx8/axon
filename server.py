@@ -2502,7 +2502,7 @@ async def desktop_preview(w: int = 960, h: int = 540):
 
     width = max(320, min(int(w), 1600))
     height = max(180, min(int(h), 900))
-    cmd = ["import", "-window", "root", "-resize", f"{width}x{height}", "png:-"]
+    cmd = ["import", "-silent", "-window", "root", "-resize", f"{width}x{height}", "png:-"]
     env = os.environ.copy()
 
     try:

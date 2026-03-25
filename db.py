@@ -878,7 +878,9 @@ async def list_memory_items_filtered(
         FROM memory_items mi
         LEFT JOIN projects p ON mi.workspace_id = p.id
         {where}
-        ORDER BY pinned DESC, COALESCE(last_accessed_at, updated_at) DESC, updated_at DESC
+        ORDER BY mi.pinned DESC,
+                 COALESCE(mi.last_accessed_at, mi.updated_at) DESC,
+                 mi.updated_at DESC
         LIMIT ?
         """,
         (*params, limit),
