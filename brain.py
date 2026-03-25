@@ -545,6 +545,12 @@ def _normalize_tool_args(name: str, args: dict) -> dict:
     normalized = dict(args or {})
 
     if name == "shell_cmd":
+        raw_cmd = str(normalized.get("cmd") or "").strip()
+        if raw_cmd and not normalized.get("cwd"):
+            cd_prefix = _re.match(r"""^\s*cd\s+(['"]?)(.+?)\1\s*&&\s*(.+)$""", raw_cmd)
+            if cd_prefix:
+                normalized["cwd"] = cd_prefix.group(2).strip()
+                normalized["cmd"] = cd_prefix.group(3).strip()
         if not normalized.get("cwd"):
             for alias in ("dir", "directory", "workdir", "working_dir", "path"):
                 if normalized.get(alias):

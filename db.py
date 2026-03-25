@@ -227,6 +227,79 @@ async def init_db():
                 created_at      TEXT DEFAULT (datetime('now'))
             );
 
+            -- ── User / Account foundations ─────────────────────────────────
+            CREATE TABLE IF NOT EXISTS users (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                name            TEXT NOT NULL,
+                email           TEXT DEFAULT '',
+                username        TEXT DEFAULT '',
+                avatar_url      TEXT DEFAULT '',
+                role            TEXT DEFAULT 'operator',  -- operator|admin|viewer
+                status          TEXT DEFAULT 'active',    -- active|inactive|suspended
+                is_active       INTEGER DEFAULT 1,
+                created_at      TEXT DEFAULT (datetime('now')),
+                updated_at      TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS user_profiles (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id              INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                display_name         TEXT DEFAULT '',
+                bio                  TEXT DEFAULT '',
+                preferences_json     TEXT DEFAULT '{}',
+                timezone             TEXT DEFAULT 'UTC',
+                default_workspace_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+                created_at           TEXT DEFAULT (datetime('now')),
+                updated_at           TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS teams (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                name            TEXT NOT NULL,
+                slug            TEXT DEFAULT '',
+                description     TEXT DEFAULT '',
+                created_at      TEXT DEFAULT (datetime('now')),
+                updated_at      TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS team_members (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id         INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+                user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                role            TEXT DEFAULT 'member',  -- owner|admin|member
+                created_at      TEXT DEFAULT (datetime('now')),
+                UNIQUE(team_id, user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS workspace_members (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                role            TEXT DEFAULT 'member',  -- owner|editor|viewer
+                created_at      TEXT DEFAULT (datetime('now')),
+                UNIQUE(workspace_id, user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS devices (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                name            TEXT NOT NULL,
+                kind            TEXT DEFAULT 'desktop',  -- desktop|laptop|server|mobile
+                host            TEXT DEFAULT '',
+                runtime_state   TEXT DEFAULT 'unknown',  -- online|offline|unknown
+                last_seen_at    TEXT,
+                created_at      TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id         INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                token_hash      TEXT NOT NULL,
+                device_id       INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+                expires_at      TEXT NOT NULL,
+                created_at      TEXT DEFAULT (datetime('now'))
+            );
+
             -- Default settings
             INSERT OR IGNORE INTO settings (key, value) VALUES
                 ('anthropic_api_key', ''),
@@ -275,6 +348,14 @@ async def init_db():
         await ensure_column("memory_items", "mission_id", "INTEGER REFERENCES tasks(id) ON DELETE SET NULL")
         await ensure_column("memory_items", "last_used_at", "TEXT")
         await ensure_column("research_packs", "workspace_id", "INTEGER REFERENCES projects(id) ON DELETE SET NULL")
+        # User/account extension columns on existing tables
+        await ensure_column("projects", "owner_user_id", "INTEGER REFERENCES users(id) ON DELETE SET NULL")
+        await ensure_column("projects", "team_id", "INTEGER REFERENCES teams(id) ON DELETE SET NULL")
+        await ensure_column("projects", "visibility", "TEXT DEFAULT 'personal'")  # personal|shared|team
+        await ensure_column("tasks", "assigned_user_id", "INTEGER REFERENCES users(id) ON DELETE SET NULL")
+        await ensure_column("tasks", "created_by_user_id", "INTEGER REFERENCES users(id) ON DELETE SET NULL")
+        await ensure_column("tasks", "owner_user_id", "INTEGER REFERENCES users(id) ON DELETE SET NULL")
+        await ensure_column("tasks", "due_at", "TEXT")
         await db.commit()
     print(f"[Axon] Database initialised at {DB_PATH}")
 
@@ -878,7 +959,9 @@ async def list_memory_items_filtered(
         FROM memory_items mi
         LEFT JOIN projects p ON mi.workspace_id = p.id
         {where}
-        ORDER BY pinned DESC, COALESCE(last_accessed_at, updated_at) DESC, updated_at DESC
+        ORDER BY mi.pinned DESC,
+                 COALESCE(mi.last_accessed_at, mi.updated_at) DESC,
+                 mi.updated_at DESC
         LIMIT ?
         """,
         (*params, limit),
