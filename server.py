@@ -10,12 +10,14 @@ import os
 import platform as _platform
 import shlex as _shlex
 import shutil
+import sqlite3 as _sqlite3
 import subprocess
 import time as _time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+from urllib import error as _urlerror, request as _urlrequest
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -106,10 +108,115 @@ _live_operator_snapshot = {
     "updated_at": "",
 }
 _terminal_processes: dict[int, dict] = {}
+_domain_probe_cache = {
+    "url": "",
+    "active": False,
+    "status": "planned",
+    "detail": "",
+    "checked_at": 0.0,
+}
 
 
 def _now_iso() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _setting_truthy(value) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _read_settings_sync() -> dict[str, str]:
+    try:
+        conn = _sqlite3.connect(devdb.DB_PATH)
+        cur = conn.execute("SELECT key, value FROM settings")
+        rows = cur.fetchall()
+        conn.close()
+        return {row[0]: row[1] for row in rows}
+    except Exception:
+        return {}
+
+
+def _normalize_domain(raw: str | None) -> str:
+    value = str(raw or "").strip().lower()
+    if not value:
+        return "axon.edudashpro.org.za"
+    if value.startswith("http://") or value.startswith("https://"):
+        value = value.split("://", 1)[1]
+    value = value.split("/", 1)[0].strip()
+    return value or "axon.edudashpro.org.za"
+
+
+def _normalize_public_base_url(raw: str | None, domain: str) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return f"https://{domain}" if domain else ""
+    if not value.startswith(("http://", "https://")):
+        value = f"https://{value}"
+    return value.rstrip("/")
+
+
+def _connection_config(settings: Optional[dict[str, str]] = None) -> dict:
+    settings = settings or _read_settings_sync()
+    stable_domain = _normalize_domain(settings.get("stable_domain"))
+    public_base_url = _normalize_public_base_url(settings.get("public_base_url"), stable_domain)
+    tunnel_mode = str(settings.get("tunnel_mode") or "trycloudflare").strip().lower()
+    if tunnel_mode not in {"trycloudflare", "named", "external"}:
+        tunnel_mode = "trycloudflare"
+    stable_domain_enabled = _setting_truthy(settings.get("stable_domain_enabled"))
+    cloudflare_tunnel_token = str(settings.get("cloudflare_tunnel_token") or "").strip()
+    return {
+        "stable_domain": stable_domain,
+        "public_base_url": public_base_url,
+        "stable_domain_enabled": stable_domain_enabled,
+        "tunnel_mode": tunnel_mode,
+        "cloudflare_tunnel_token": cloudflare_tunnel_token,
+        "named_tunnel_ready": tunnel_mode == "named" and bool(cloudflare_tunnel_token),
+    }
+
+
+def _probe_public_origin(public_base_url: str, enabled: bool) -> dict:
+    if not enabled or not public_base_url:
+        return {
+            "active": False,
+            "status": "planned",
+            "detail": "Stable domain is not enabled yet.",
+        }
+    now = _time.time()
+    if (
+        _domain_probe_cache.get("url") == public_base_url
+        and now - float(_domain_probe_cache.get("checked_at") or 0) < 20
+    ):
+        return {
+            "active": bool(_domain_probe_cache.get("active")),
+            "status": str(_domain_probe_cache.get("status") or "configured"),
+            "detail": str(_domain_probe_cache.get("detail") or ""),
+        }
+    probe_url = f"{public_base_url.rstrip('/')}/api/health"
+    active = False
+    status = "configured"
+    detail = "Stable domain is configured, but Axon has not answered on /api/health yet."
+    try:
+        req = _urlrequest.Request(probe_url, headers={"Accept": "application/json"})
+        with _urlrequest.urlopen(req, timeout=3) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            payload = _json.loads(raw)
+            active = payload.get("status") == "ok"
+            status = "active" if active else "configured"
+            detail = "Stable domain reaches Axon successfully." if active else "Stable domain responded, but Axon health was not OK."
+    except _urlerror.HTTPError as exc:
+        detail = f"Stable domain responded with HTTP {exc.code}. It is not pointing at Axon yet."
+    except Exception as exc:
+        detail = f"Stable domain is configured, but Axon could not confirm it yet: {exc}"
+    _domain_probe_cache.update(
+        {
+            "url": public_base_url,
+            "active": active,
+            "status": status,
+            "detail": detail,
+            "checked_at": now,
+        }
+    )
+    return {"active": active, "status": status, "detail": detail}
 
 
 def _set_live_operator(
@@ -144,9 +251,10 @@ def _set_live_operator(
 
 
 def _connection_snapshot() -> dict:
-    tunnel_url = _read_tunnel_url()
-    stable_domain = "axon.edudashpro.org.za"
-    domain_active = False
+    config = _connection_config()
+    probe = _probe_public_origin(config["public_base_url"], config["stable_domain_enabled"])
+    tunnel_url = _read_tunnel_url(config)
+    domain_active = bool(probe["active"])
     if domain_active:
         state = "domain_active"
         label = "Domain Active"
@@ -164,9 +272,13 @@ def _connection_snapshot() -> dict:
         "tunnel_active": bool(tunnel_url),
         "tunnel_url": tunnel_url,
         "domain_active": domain_active,
-        "stable_domain": stable_domain,
-        "stable_domain_url": f"https://{stable_domain}",
-        "stable_domain_status": "planned",
+        "stable_domain": config["stable_domain"],
+        "stable_domain_url": config["public_base_url"],
+        "stable_domain_enabled": config["stable_domain_enabled"],
+        "stable_domain_status": probe["status"],
+        "stable_domain_detail": probe["detail"],
+        "tunnel_mode": config["tunnel_mode"],
+        "named_tunnel_ready": config["named_tunnel_ready"],
     }
 
 
@@ -1852,6 +1964,7 @@ async def get_settings():
             "generic_api_enabled",
             "resource_url_import_enabled",
             "live_feed_enabled",
+            "stable_domain_enabled",
             "alerts_enabled",
             "alerts_desktop",
             "alerts_mobile",
@@ -1868,6 +1981,7 @@ async def get_settings():
             "gemini_api_key",
             "generic_api_key",
             "azure_speech_key",
+            "cloudflare_tunnel_token",
         ):
             raw = s.get(key_name, "")
             s[f"{key_name}_set"] = bool(raw)
@@ -1911,6 +2025,11 @@ class SettingsUpdate(BaseModel):
     resource_upload_max_mb: Optional[str] = None
     resource_url_import_enabled: Optional[bool] = None
     live_feed_enabled: Optional[bool] = None
+    stable_domain_enabled: Optional[bool] = None
+    stable_domain: Optional[str] = None
+    public_base_url: Optional[str] = None
+    tunnel_mode: Optional[str] = None
+    cloudflare_tunnel_token: Optional[str] = None
     terminal_default_mode: Optional[str] = None
     terminal_command_timeout_seconds: Optional[str] = None
     cloud_agents_enabled: Optional[bool] = None
@@ -2336,8 +2455,9 @@ async def live_feed(request: Request):
 async def mobile_info():
     """Return local IP, Tailscale IP + QR code for mobile access."""
     import socket, io, base64
-    stable_domain = "axon.edudashpro.org.za"
-    stable_domain_url = f"https://{stable_domain}"
+    config = _connection_config()
+    probe = _probe_public_origin(config["public_base_url"], config["stable_domain_enabled"])
+    tunnel_running = _tunnel_running()
 
     # LAN IP (default route)
     try:
@@ -2384,7 +2504,9 @@ async def mobile_info():
         pass
 
     # Prefer cloudflared (HTTPS) > Tailscale > LAN for QR code
-    if cloudflared_url:
+    if probe["active"] and config["public_base_url"]:
+        qr_url = config["public_base_url"]
+    elif cloudflared_url:
         qr_url = cloudflared_url
     elif tailscale_ip:
         qr_url = f"http://{tailscale_ip}:{PORT}"
@@ -2412,9 +2534,14 @@ async def mobile_info():
         "tailscale_ip": tailscale_ip,
         "tailscale_url": f"http://{tailscale_ip}:{PORT}" if tailscale_ip else "",
         "cloudflared_url": cloudflared_url,
-        "stable_domain": stable_domain,
-        "stable_domain_url": stable_domain_url,
-        "stable_domain_status": "planned",
+        "tunnel_running": tunnel_running,
+        "stable_domain": config["stable_domain"],
+        "stable_domain_url": config["public_base_url"],
+        "stable_domain_enabled": config["stable_domain_enabled"],
+        "stable_domain_status": probe["status"],
+        "stable_domain_detail": probe["detail"],
+        "tunnel_mode": config["tunnel_mode"],
+        "named_tunnel_ready": config["named_tunnel_ready"],
         "qr_url": qr_url,
         "port": PORT,
         "qr_data_uri": qr_data_uri,
@@ -2465,8 +2592,11 @@ TUNNEL_BIN = Path.home() / ".devbrain" / "cloudflared"
 TUNNEL_SH  = Path.home() / ".devbrain" / "tunnel.sh"
 
 
-def _read_tunnel_url() -> str:
+def _read_tunnel_url(config: Optional[dict] = None) -> str:
+    config = config or _connection_config()
     try:
+        if config.get("tunnel_mode") == "named" and _tunnel_running():
+            return config.get("public_base_url") or ""
         if TUNNEL_LOG.exists():
             m = _re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", TUNNEL_LOG.read_text())
             return m.group(0) if m else ""
@@ -2488,37 +2618,66 @@ def _tunnel_running() -> bool:
 
 @app.get("/api/tunnel/status")
 async def tunnel_status():
+    config = _connection_config()
     running = _tunnel_running()
-    url = _read_tunnel_url() if running else ""
-    return {"running": running, "url": url}
+    url = _read_tunnel_url(config) if running else ""
+    return {
+        "running": running,
+        "url": url,
+        "mode": config["tunnel_mode"],
+        "named_tunnel_ready": config["named_tunnel_ready"],
+    }
 
 
 @app.post("/api/tunnel/start")
 async def tunnel_start():
+    config = _connection_config()
     if _tunnel_running():
-        return {"running": True, "url": _read_tunnel_url(), "msg": "Already running"}
+        return {
+            "running": True,
+            "url": _read_tunnel_url(config),
+            "mode": config["tunnel_mode"],
+            "msg": "Already running",
+        }
     if not TUNNEL_BIN.exists():
         raise HTTPException(400, "cloudflared binary not found")
+    if config["tunnel_mode"] == "external":
+        raise HTTPException(400, "External domain mode does not start a local tunnel.")
+    if config["tunnel_mode"] == "named" and not config["named_tunnel_ready"]:
+        raise HTTPException(400, "Named tunnel mode needs a saved Cloudflare tunnel token.")
     # Clear old log
     TUNNEL_LOG.write_text("")
-    proc = _subprocess.Popen(
-        [str(TUNNEL_BIN), "tunnel", "--url", f"http://localhost:{PORT}", "--no-autoupdate"],
-        stdout=open(str(TUNNEL_LOG), "a"),
-        stderr=_subprocess.STDOUT,
-    )
+    cmd = [str(TUNNEL_BIN)]
+    expected_url = ""
+    if config["tunnel_mode"] == "named":
+        cmd.extend(["--no-autoupdate", "tunnel", "run", "--token", config["cloudflare_tunnel_token"]])
+        expected_url = config["public_base_url"]
+    else:
+        cmd.extend(["tunnel", "--url", f"http://localhost:{PORT}", "--no-autoupdate"])
+    proc = _subprocess.Popen(cmd, stdout=open(str(TUNNEL_LOG), "a"), stderr=_subprocess.STDOUT)
     TUNNEL_PID.write_text(str(proc.pid))
     # Wait up to 12s for URL
     import asyncio as _aio
     for _ in range(24):
         await _aio.sleep(0.5)
-        url = _read_tunnel_url()
-        if url:
-            return {"running": True, "url": url, "msg": "Tunnel started"}
-    return {"running": True, "url": "", "msg": "Started — URL not yet ready"}
+        if config["tunnel_mode"] == "named":
+            if _tunnel_running():
+                return {"running": True, "url": expected_url, "mode": "named", "msg": "Named tunnel started"}
+        else:
+            url = _read_tunnel_url(config)
+            if url:
+                return {"running": True, "url": url, "mode": "trycloudflare", "msg": "Tunnel started"}
+    return {
+        "running": True,
+        "url": expected_url if config["tunnel_mode"] == "named" else "",
+        "mode": config["tunnel_mode"],
+        "msg": "Started — URL not yet ready",
+    }
 
 
 @app.post("/api/tunnel/stop")
 async def tunnel_stop():
+    config = _connection_config()
     if TUNNEL_PID.exists():
         try:
             pid = int(TUNNEL_PID.read_text().strip())
@@ -2527,7 +2686,7 @@ async def tunnel_stop():
             pass
         TUNNEL_PID.unlink(missing_ok=True)
     TUNNEL_LOG.write_text("")
-    return {"running": False, "url": "", "msg": "Tunnel stopped"}
+    return {"running": False, "url": "", "mode": config["tunnel_mode"], "msg": "Tunnel stopped"}
 
 
 # ─── GitHub integration ───────────────────────────────────────────────────────
