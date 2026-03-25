@@ -858,18 +858,177 @@
         </div>
       </section>
 
+      <!-- ── 14. Dashboard as a Control Room ── -->
+      <section id="dashboard-control-room" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">14. Dashboard — your control room</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">The Dashboard is not just a summary page. It is Axon's control room — showing you what Axon is doing, what needs attention, and proof that real work happened.</p>
+        </div>
+        <div class="grid gap-4 xl:grid-cols-2">
+          <div class="soft-card p-5 space-y-3">
+            <div class="text-sm font-bold text-white">Hierarchy of the Dashboard</div>
+            <div class="text-sm text-slate-400 space-y-2">
+              <p><span class="text-white font-semibold">Operator Console</span> — the hero card. Shows your current focus, phase, and quick actions. This is where you understand what Axon is doing right now.</p>
+              <p><span class="text-white font-semibold">Proof of Work</span> — the second most important section. Shows the current phase, active workspace, last action, and a verified result summary. You should never wonder "is Axon actually doing anything?" — this section answers that.</p>
+              <p><span class="text-white font-semibold">Axon Live</span> — the right-hand rail. A compact status strip: operator status, recent steps, desktop preview, runtime/connection, and pending approvals. It is purposeful and tight, not a competing hero.</p>
+            </div>
+          </div>
+          <div class="soft-card p-5 space-y-3">
+            <div class="text-sm font-bold text-white">What you can see at a glance</div>
+            <div class="text-sm text-slate-400 space-y-2">
+              <p>✅ What Axon is doing (current phase chip + title)</p>
+              <p>✅ Which workspace is active</p>
+              <p>✅ What the last verified result was</p>
+              <p>✅ Which missions need attention</p>
+              <p>✅ Workspace health, sorted worst-first</p>
+              <p>✅ Live feed connection state</p>
+              <p>✅ Whether approval is waiting</p>
+              <p>✅ Who is signed in</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── 15. Local Tools / Machine Access ── -->
+      <section id="local-tools" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">15. Local Tools — safe machine access</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">Axon can work on your local machine — not just in the cloud. It can browse files, read content, write approved changes, capture a live desktop preview, and run guarded terminal commands. This is called <strong class="text-white">Local Tools</strong>.</p>
+        </div>
+        <div class="panel p-6">
+          <div class="text-sm font-bold text-white mb-4">What Axon can do on your machine</div>
+          <div class="grid gap-4 sm:grid-cols-2 text-sm text-slate-400">
+            <div>
+              <div class="text-white font-semibold mb-1">🗂️ Browse Files</div>
+              <p>Axon can list files inside your home directory. It will not look outside safe allowed paths without explicit permission.</p>
+            </div>
+            <div>
+              <div class="text-white font-semibold mb-1">📖 Read File</div>
+              <p>Axon can read the content of files to answer questions or use them in reasoning. Files stay local — they are never sent anywhere unless you explicitly ask.</p>
+            </div>
+            <div>
+              <div class="text-white font-semibold mb-1">✏️ Write File</div>
+              <p>Axon can write files. In safe mode it tells you what it would write before doing so. In approval mode, it waits for your confirmation before touching the file.</p>
+            </div>
+            <div>
+              <div class="text-white font-semibold mb-1">🖥️ Desktop Preview</div>
+              <p>Axon can take a screenshot of your desktop so you can see proof that work is happening in real time — even when the app is on another device.</p>
+            </div>
+            <div>
+              <div class="text-white font-semibold mb-1">⌨️ Terminal (Guarded)</div>
+              <p>Axon can run terminal commands in three modes: <strong class="text-white">read_only</strong> (safe inspection only), <strong class="text-white">approval_required</strong> (shows exact command before running), and <strong class="text-white">simulation</strong> (plans but never executes).</p>
+            </div>
+            <div>
+              <div class="text-white font-semibold mb-1">🔍 Scan Workspace</div>
+              <p>Axon can scan all your tracked projects and update their health scores, git status, TODO count, and staleness rating.</p>
+            </div>
+          </div>
+        </div>
+        <div class="soft-card p-5">
+          <div class="text-sm font-bold text-white mb-2">Safety boundaries you can trust</div>
+          <div class="text-sm text-slate-400 space-y-2">
+            <p>Axon is <strong class="text-white">sandboxed to your home directory</strong> by default. It will not browse system directories, other users' files, or arbitrary external locations.</p>
+            <p>Dangerous shell patterns (like <code class="mono text-amber-300">rm -rf</code>, <code class="mono text-amber-300">dd if=</code>, or <code class="mono text-amber-300">mkfs</code>) are permanently blocked regardless of terminal mode.</p>
+            <p>You control the default terminal mode in Settings. Most users should leave it at <strong class="text-white">read_only</strong> for day-to-day use and switch to <strong class="text-white">approval_required</strong> when doing active work.</p>
+          </div>
+        </div>
+        <div class="soft-card p-5">
+          <div class="text-sm font-bold text-white mb-2">Where to find Local Tools</div>
+          <div class="text-sm text-slate-400 space-y-2">
+            <p>On the <strong class="text-white">Dashboard</strong>: look for the "Local Tools — Machine Access" section. Click any tool tile to jump into the Console with it activated.</p>
+            <p>In the <strong class="text-white">Console</strong>: look for the "Local Tools" chip bar just below the lifecycle phases row in the composer. Click any chip to inject a ready-to-use prompt or activate the Terminal panel.</p>
+            <p>In the <strong class="text-white">Sidebar</strong>: the "Local Tools" button in the bottom nav takes you directly to the Console with the Terminal panel open.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── 16. Proof of Work ── -->
+      <section id="proof-of-work" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">16. Proof of Work</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">Axon is designed to show its work — not just give you an answer and disappear. The Proof of Work section shows you what Axon just did, what it verified, and what file or workspace was involved.</p>
+        </div>
+        <div class="grid gap-4 xl:grid-cols-3">
+          <div class="soft-card p-5">
+            <div class="text-sm font-bold text-white mb-2">Current step</div>
+            <p class="text-sm text-slate-400">Shows the active phase (Observe / Plan / Execute / Verify / Recover), the title of the current action, and a short detail. Updates live while Axon is working.</p>
+          </div>
+          <div class="soft-card p-5">
+            <div class="text-sm font-bold text-white mb-2">Last verified result</div>
+            <p class="text-sm text-slate-400">After Axon finishes a step, the verified result is stored here. You see which tool was used, which workspace was involved, and a summary of what happened.</p>
+          </div>
+          <div class="soft-card p-5">
+            <div class="text-sm font-bold text-white mb-2">Desktop Preview</div>
+            <p class="text-sm text-slate-400">A live screenshot of your desktop that you can refresh at any time. If Axon is working on your machine, you can see it. This is the most direct form of proof of work.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── 17. Approvals ── -->
+      <section id="approvals" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">17. Approvals — controlled actions</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">When Axon is in <strong class="text-white">approval_required</strong> terminal mode — or when a risky action is detected — it stops and shows you exactly what it wants to do before proceeding.</p>
+        </div>
+        <div class="panel p-6">
+          <div class="text-sm font-bold text-white mb-4">What an approval prompt shows you</div>
+          <div class="text-sm text-slate-400 space-y-3">
+            <div class="flex gap-3"><span class="text-amber-400 shrink-0">⚠️</span><div><strong class="text-white">The exact command</strong> — not a vague description. You see precisely what would run.</div></div>
+            <div class="flex gap-3"><span class="text-blue-400 shrink-0">ℹ️</span><div><strong class="text-white">Why approval is needed</strong> — the reason the action is flagged as risky or non-trivial.</div></div>
+            <div class="flex gap-3"><span class="text-emerald-400 shrink-0">✅</span><div><strong class="text-white">Approve</strong> — the command runs exactly as shown.</div></div>
+            <div class="flex gap-3"><span class="text-rose-400 shrink-0">✕</span><div><strong class="text-white">Reject</strong> — the command is cancelled. Axon stops that branch of work.</div></div>
+            <div class="flex gap-3"><span class="text-slate-400 shrink-0">🔍</span><div><strong class="text-white">Inspect</strong> — jump to the Terminal panel to review the session history and context before deciding.</div></div>
+          </div>
+        </div>
+        <p class="text-sm text-slate-400 max-w-2xl">Approvals appear in the Axon Live right rail on the Dashboard, and in the Console's Terminal panel. You will never miss a pending approval because it is surfaced in both places.</p>
+      </section>
+
+      <!-- ── 18. User Accounts Foundation ── -->
+      <section id="user-accounts" class="space-y-5">
+        <div>
+          <h2 class="text-3xl font-black text-white">18. Users, workspaces, and the future of multi-user Axon</h2>
+          <p class="mt-3 max-w-3xl text-slate-300">Axon is being built to understand who owns what, who is working on what, and which machine is doing the work. This section explains the foundation being laid now.</p>
+        </div>
+        <div class="grid gap-4 xl:grid-cols-2">
+          <div class="soft-card p-5 space-y-3">
+            <div class="text-sm font-bold text-white">What exists today</div>
+            <div class="text-sm text-slate-400 space-y-2">
+              <p>✅ A <strong class="text-white">current user</strong> is loaded at startup and shown in the sidebar and Dashboard header.</p>
+              <p>✅ <strong class="text-white">Workspaces</strong> can have an owner user and a visibility setting (personal / shared / team).</p>
+              <p>✅ <strong class="text-white">Missions (tasks)</strong> support assigned_user, created_by_user, and owner_user fields.</p>
+              <p>✅ Assignee chips appear on priority missions when a task is assigned.</p>
+              <p>✅ The database has tables for users, teams, devices, and sessions — ready for the multi-user era.</p>
+            </div>
+          </div>
+          <div class="soft-card p-5 space-y-3">
+            <div class="text-sm font-bold text-white">What is coming</div>
+            <div class="text-sm text-slate-400 space-y-2">
+              <p>🔜 A proper user profile page where you can set your name, role, and default workspace.</p>
+              <p>🔜 Team workspaces — one Axon instance shared by a small team, each with their own missions.</p>
+              <p>🔜 Per-user device records — so Axon knows which machine is doing the work for whom.</p>
+              <p>🔜 "My Missions" and "Assigned to Me" views so each team member sees their own queue.</p>
+              <p>🔜 Device-aware runtime — Axon will know whether it is running on your desktop, a server, or a remote node.</p>
+            </div>
+          </div>
+        </div>
+        <div class="soft-card p-5">
+          <div class="text-sm font-bold text-white mb-2">The vision: a computer for every user</div>
+          <p class="text-sm text-slate-400 max-w-2xl">The long-term design of Axon supports either one Axon serving many users, or each user having their own dedicated Axon runtime. The data model supports both. Start with one machine. Grow naturally.</p>
+        </div>
+      </section>
+
       <section class="panel p-6">
         <div class="text-sm font-semibold text-white">Screenshot checklist for the next manual pass</div>
         <ul class="mt-3 space-y-2 text-sm text-slate-400">
-          <li>Dashboard with the full-width operator layout and Axon Live rail</li>
-          <li>Dashboard Desktop Preview / proof-of-work card</li>
-          <li>Console with phase chips, live work panel, and provider/model pill</li>
-          <li>Workspaces list with Inspect and Open Console</li>
-          <li>Timeline with Morning Brief and alerts</li>
-          <li>Resources view with Research Packs and trust state</li>
-          <li>Memory view with pinned/high-trust examples</li>
-          <li>Mobile connect modal with QR code and stable-domain card</li>
-          <li>Guarded Terminal panel with approval mode</li>
+          <li>Dashboard with upgraded hierarchy — Operator Console hero, Proof of Work, Axon Live rail</li>
+          <li>Dashboard Local Tools section with machine access tiles</li>
+          <li>Console Local Tools chip bar in composer</li>
+          <li>Console live work strip with phase chip, current step, and recent activity</li>
+          <li>Axon Live rail — pending approval card</li>
+          <li>Desktop Preview with state indicator (Live / Refreshing / Ready)</li>
+          <li>Priority Missions with assignee chip</li>
+          <li>Sidebar with user identity block (avatar + name + role)</li>
+          <li>Mobile guarded terminal with approval flow</li>
         </ul>
       </section>
     </div>

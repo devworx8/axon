@@ -473,6 +473,91 @@ async def serve_manual():
 
 # ─── Projects ────────────────────────────────────────────────────────────────
 
+# ─── Users / Account foundations ─────────────────────────────────────────────
+
+class UserCreate(BaseModel):
+    name: str
+    email: Optional[str] = ''
+    username: Optional[str] = ''
+    role: Optional[str] = 'operator'
+
+
+@app.get("/api/users")
+async def list_users():
+    async with devdb.get_db() as conn:
+        cur = await conn.execute(
+            "SELECT id, name, email, username, avatar_url, role, status, is_active, created_at FROM users ORDER BY id"
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.post("/api/users")
+async def create_user(body: UserCreate):
+    async with devdb.get_db() as conn:
+        cur = await conn.execute(
+            "INSERT INTO users (name, email, username, role) VALUES (?, ?, ?, ?)",
+            (body.name, body.email or '', body.username or '', body.role or 'operator')
+        )
+        await conn.commit()
+        uid = cur.lastrowid
+        await conn.execute(
+            "INSERT OR IGNORE INTO user_profiles (user_id) VALUES (?)", (uid,)
+        )
+        await conn.commit()
+        row = await (await conn.execute("SELECT * FROM users WHERE id = ?", (uid,))).fetchone()
+        return dict(row)
+
+
+@app.get("/api/users/me")
+async def get_current_user():
+    """Return the primary local user, creating a default one if needed."""
+    async with devdb.get_db() as conn:
+        row = await (await conn.execute(
+            "SELECT * FROM users WHERE is_active = 1 ORDER BY id LIMIT 1"
+        )).fetchone()
+        if row:
+            return dict(row)
+        # Auto-create a default local user on first use
+        import socket
+        hostname = socket.gethostname()
+        cur = await conn.execute(
+            "INSERT INTO users (name, email, username, role) VALUES (?, ?, ?, 'operator')",
+            ('Local Operator', '', hostname.lower())
+        )
+        await conn.commit()
+        uid = cur.lastrowid
+        await conn.execute("INSERT OR IGNORE INTO user_profiles (user_id) VALUES (?)", (uid,))
+        await conn.commit()
+        row = await (await conn.execute("SELECT * FROM users WHERE id = ?", (uid,))).fetchone()
+        return dict(row)
+
+
+@app.patch("/api/users/{user_id}")
+async def update_user(user_id: int, body: dict):
+    allowed = {'name', 'email', 'username', 'avatar_url', 'role', 'status'}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if not updates:
+        raise HTTPException(400, "No valid fields to update")
+    async with devdb.get_db() as conn:
+        sets = ", ".join(f"{k} = ?" for k in updates)
+        vals = list(updates.values()) + [user_id]
+        await conn.execute(f"UPDATE users SET {sets}, updated_at = datetime('now') WHERE id = ?", vals)
+        await conn.commit()
+        row = await (await conn.execute("SELECT * FROM users WHERE id = ?", (user_id,))).fetchone()
+        return dict(row) if row else {}
+
+
+@app.get("/api/teams")
+async def list_teams():
+    async with devdb.get_db() as conn:
+        cur = await conn.execute("SELECT * FROM teams ORDER BY id")
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+# ─── Projects ─────────────────────────────────────────────────────────────────
+
 @app.get("/api/projects")
 async def list_projects(status: Optional[str] = None):
     async with devdb.get_db() as conn:
