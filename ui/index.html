@@ -945,13 +945,19 @@
               ></textarea>
             </div>
 
-            <button @click="sendChat()" :disabled="chatLoading || !chatInput.trim()"
+            <!-- Send / Stop button -->
+            <button x-show="!chatLoading" @click="sendChat()" :disabled="!chatInput.trim()"
                     :class="resolveChatMode(chatInput) === 'agent' ? 'bg-amber-500 hover:bg-amber-400 shadow-amber-500/20 text-slate-950' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-500/20 text-white'"
                     class="w-9 h-9 flex-none rounded-xl disabled:opacity-30 disabled:bg-slate-700 disabled:text-white text-white transition flex items-center justify-center shadow-lg press-scale">
-              <svg class="w-4 h-4" :class="chatLoading ? 'hidden' : ''" viewBox="0 0 24 24" fill="currentColor">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
               </svg>
-              <div x-show="chatLoading" class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+            </button>
+            <button x-show="chatLoading" @click="stopGeneration()" x-cloak
+                    class="w-9 h-9 flex-none rounded-xl bg-red-500 hover:bg-red-400 text-white transition flex items-center justify-center shadow-lg shadow-red-500/20 press-scale" title="Stop generating">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2"/>
+              </svg>
             </button>
         </div>
         <div class="flex items-center gap-1.5 px-1 pt-1.5 text-[10px] text-slate-500">
@@ -1084,61 +1090,52 @@
                     class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-blue-200 hover:border-blue-500/30 transition press-scale">
               🔍 Scan Workspace
             </button>
+            <button @click="chatInput = 'Create slides for '; $nextTick(() => $refs.chatComposer?.focus())"
+                    class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-violet-200 hover:border-violet-500/30 transition press-scale">
+              📊 Create Slides
+            </button>
             <span class="ml-auto rounded-full border border-emerald-500/20 bg-emerald-500/8 px-2 py-0.5 text-[9px] text-emerald-400 uppercase tracking-wider"
                   x-text="'Sandboxed · ' + (settingsForm.terminal_default_mode || 'read_only').replace(/_/g,' ')"></span>
           </div>
 
+          <!-- Live Work Status — shown while Axon is active -->
           <div class="hidden md:block mt-2" x-show="chatLoading || liveOperator.active">
-            <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
-              <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0">
-                  <div class="flex items-center gap-2">
-                    <span class="h-2 w-2 rounded-full animate-pulse" :class="liveOperator.phase === 'recover' ? 'bg-amber-400' : 'bg-emerald-400'"></span>
-                    <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em]"
-                          :class="phaseChipClass(liveOperator.phase || agentProgressState)"
-                          x-text="phaseLabel(liveOperator.phase || agentProgressState)"></span>
-                    <span class="truncate text-xs font-semibold text-slate-100" x-text="liveOperator.title || 'Axon is working…'"></span>
-                  </div>
-                  <div class="mt-1 text-[11px] text-slate-400" x-text="liveOperator.detail || 'Axon is actively working through the request.'"></div>
-                </div>
-                <div class="shrink-0 text-right">
-                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Live Work Log</div>
-                  <div class="mt-1 text-[10px] text-slate-500" x-text="liveOperator.startedAt ? 'Started ' + timeAgo(liveOperator.startedAt) : ''"></div>
+            <div class="rounded-2xl border border-slate-800/80 bg-slate-950/70 overflow-hidden">
+              <!-- Header bar -->
+              <div class="flex items-center gap-2 px-3 py-2.5 border-b border-slate-800/60">
+                <span class="h-2 w-2 rounded-full animate-pulse shrink-0"
+                      :class="liveOperator.phase === 'recover' ? 'bg-amber-400' : 'bg-emerald-400'"></span>
+                <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] shrink-0"
+                      :class="phaseChipClass(liveOperator.phase || agentProgressState)"
+                      x-text="phaseLabel(liveOperator.phase || agentProgressState)"></span>
+                <span class="flex-1 truncate text-[11px] font-semibold text-slate-100"
+                      x-text="liveOperator.title || 'Axon is working…'"></span>
+                <span class="shrink-0 text-[10px] text-slate-500"
+                      x-text="liveOperator.startedAt ? timeAgo(liveOperator.startedAt) : ''"></span>
+              </div>
+              <!-- Detail + progress -->
+              <div class="px-3 py-2.5 space-y-2.5">
+                <div class="text-[11px] leading-5 text-slate-400"
+                     x-text="liveOperator.detail || 'Axon is working through the request…'"></div>
+                <div class="h-1 rounded-full bg-slate-900 overflow-hidden">
+                  <div class="h-full rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-cyan-300 transition-all duration-300"
+                       :style="`width:${operatorProgressWidth()}`"></div>
                 </div>
               </div>
-              <div class="mt-3 h-1.5 rounded-full bg-slate-900/80 overflow-hidden">
-                <div class="h-full rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-cyan-300 transition-all duration-300"
-                     :style="`width:${operatorProgressWidth()}`"></div>
-              </div>
-              <div class="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,0.92fr)_minmax(320px,1.08fr)]">
-                <div class="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2">
-                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Current step</div>
-                  <div class="mt-1 text-sm font-medium text-slate-100" x-text="liveOperator.title || 'Waiting for the next step'"></div>
-                  <div class="mt-1 text-[11px] leading-5 text-slate-400" x-text="liveOperator.detail || 'Axon will show the next action here.'"></div>
-                </div>
-                <div class="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2">
-                  <div class="flex items-center justify-between gap-2">
-                    <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Recent activity</div>
-                    <div class="text-[10px] text-slate-500" x-text="`${liveOperatorFeed.length} step(s)`"></div>
+              <!-- Recent steps feed — scrollable, compact -->
+              <div x-show="liveOperatorFeed.length" class="border-t border-slate-800/60 px-3 py-2 max-h-32 overflow-y-auto space-y-1.5 no-scrollbar">
+                <template x-for="entry in [...liveOperatorFeed].slice(-5).reverse()" :key="entry.id">
+                  <div class="flex items-start gap-2">
+                    <span class="mt-0.5 rounded-full border px-1.5 py-0.5 text-[8px] uppercase tracking-[0.14em] shrink-0"
+                          :class="phaseChipClass(entry.phase)"
+                          x-text="phaseLabel(entry.phase)"></span>
+                    <div class="min-w-0 flex-1">
+                      <div class="truncate text-[10px] font-medium text-slate-200" x-text="entry.title"></div>
+                      <div x-show="entry.detail" class="text-[9px] text-slate-500 line-clamp-1" x-text="entry.detail"></div>
+                    </div>
+                    <span class="shrink-0 text-[9px] text-slate-600" x-text="timeAgo(entry.at)"></span>
                   </div>
-                  <div class="mt-2 space-y-2 max-h-28 overflow-y-auto pr-1">
-                    <template x-if="!liveOperatorFeed.length">
-                      <div class="text-[11px] text-slate-500">Axon will stream the plan, tool use, and verification steps here.</div>
-                    </template>
-                    <template x-for="entry in liveOperatorFeed" :key="entry.id">
-                      <div class="rounded-lg border border-slate-800 bg-slate-950/70 px-2.5 py-2">
-                        <div class="flex items-center justify-between gap-2">
-                          <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.16em]"
-                                :class="phaseChipClass(entry.phase)"
-                                x-text="phaseLabel(entry.phase)"></span>
-                          <span class="text-[10px] text-slate-500" x-text="timeAgo(entry.at)"></span>
-                        </div>
-                        <div class="mt-1 text-[11px] font-medium text-slate-100" x-text="entry.title"></div>
-                        <div class="mt-0.5 text-[10px] leading-5 text-slate-400" x-text="entry.detail"></div>
-                      </div>
-                    </template>
-                  </div>
-                </div>
+                </template>
               </div>
             </div>
           </div>
@@ -1187,32 +1184,19 @@
             </div>
           </div>
 
+          <!-- Runtime status — compact single row -->
           <div class="mt-2 rounded-2xl border border-slate-800 bg-slate-950/55 px-3 py-2.5">
-            <div class="flex flex-wrap items-center gap-2">
+            <div class="flex items-center gap-2 flex-wrap">
               <template x-for="badge in connectionStatusBadges()" :key="badge.key">
-                <span class="rounded-full border px-2.5 py-1 text-[10px]"
+                <span class="rounded-full border px-2 py-0.5 text-[10px]"
                       :class="connectionBadgeClass(badge.state)"
                       x-text="badge.label"></span>
               </template>
-              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-300"
-                    x-text="runtimeStatus.runtime_label || 'Local-first'"></span>
-              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-300"
+              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400"
                     x-text="runtimeStatus.active_model || composerModelSummary() || 'Saved default'"></span>
-              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-300"
-                    x-text="phaseLabel((liveFeed.latest?.operator?.phase || liveOperator.phase || agentProgressState || 'observe'))"></span>
             </div>
-            <div class="mt-2 flex flex-wrap items-start justify-between gap-3 text-[11px]">
-              <div class="min-w-0 flex-1">
-                <div class="font-medium text-slate-100"
-                     x-text="liveFeed.latest?.operator?.title || liveOperator.title || 'Axon is ready'"></div>
-                <div class="mt-0.5 text-slate-400"
-                     x-text="liveFeed.latest?.operator?.detail || liveOperator.detail || 'Live status will appear here while Axon works.'"></div>
-              </div>
-              <div class="shrink-0 text-right text-[10px] text-slate-500">
-                <div x-text="liveFeed.connected ? 'Live feed connected' : (liveFeed.reconnecting ? 'Live feed reconnecting…' : 'Live feed idle')"></div>
-                <div x-text="liveFeed.latest?.at ? 'Updated ' + timeAgo(liveFeed.latest.at) : ''"></div>
-              </div>
-            </div>
+            <div class="mt-1.5 text-[10px] text-slate-500"
+                 x-text="liveFeed.connected ? 'Live · ' + (liveFeed.latest?.at ? timeAgo(liveFeed.latest.at) : 'connected') : (liveFeed.reconnecting ? 'Reconnecting…' : 'Idle')"></div>
           </div>
 
           <div x-show="terminal.panelOpen || composerOptions.terminal_mode" class="mt-3 rounded-2xl border border-amber-500/20 bg-slate-950/70 p-3">
@@ -4379,6 +4363,7 @@ function devbrain() {
     chatInput: '',
     chatMessages: [],
     chatLoading: false,
+    _chatAbortController: null,
     chatProjectId: '',
     chatProject: null,
     agentMode: false,

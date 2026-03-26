@@ -356,6 +356,20 @@ function axonChatMixin() {
       };
     },
 
+    stopGeneration() {
+      if (this._chatAbortController) {
+        this._chatAbortController.abort();
+        this._chatAbortController = null;
+      }
+      // Mark all streaming messages as done
+      this.chatMessages.forEach(m => {
+        if (m.streaming) m.streaming = false;
+      });
+      this.chatLoading = false;
+      this.clearLiveOperator(400);
+      this.showToast('Generation stopped');
+    },
+
     async streamChatMessage(msg, mode, respId, resourceIds = []) {
       const endpoint = mode === 'agent' ? '/api/agent' : '/api/chat/stream';
       const payload = {
@@ -366,10 +380,12 @@ function axonChatMixin() {
       };
       if (this.usesOllamaBackend()) payload.model = this.activeChatModel() || '';
 
+      this._chatAbortController = new AbortController();
       const resp = await fetch(endpoint, {
         method: 'POST',
         headers: this.authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
+        signal: this._chatAbortController.signal,
       });
 
       if (resp.status === 401) {
@@ -459,6 +475,7 @@ function axonChatMixin() {
         }
       }
 
+      this._chatAbortController = null;
       const idx = this.chatMessages.findIndex(m => m.id === respId);
       if (idx >= 0) {
         this.chatMessages[idx].streaming = false;
@@ -535,6 +552,12 @@ function axonChatMixin() {
       try {
         await this.streamChatMessage(msg, mode, respId, attachedResourceIds);
       } catch(e) {
+        if (e.name === 'AbortError') {
+          // User clicked stop — not an error
+          this.chatLoading = false;
+          this.scrollChat();
+          return;
+        }
         const idx = this.chatMessages.findIndex(m => m.id === respId);
         if (idx >= 0) {
           const isFetch = e.message === 'Failed to fetch' || e.message.includes('NetworkError');
@@ -572,6 +595,11 @@ function axonChatMixin() {
       try {
         await this.streamChatMessage(msg, mode, respId, resourceIds);
       } catch(e) {
+        if (e.name === 'AbortError') {
+          this.chatLoading = false;
+          this.scrollChat();
+          return;
+        }
         const idx = this.chatMessages.findIndex(m => m.id === respId);
         const isFetch = e.message === 'Failed to fetch' || e.message.includes('NetworkError');
         if (isFetch) this.serverConnected = false;
