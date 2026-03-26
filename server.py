@@ -1654,9 +1654,18 @@ async def chat(body: ChatMessage):
                 from pptx_engine import prompt_to_deck_json, deck_from_dict, build_deck
                 import httpx as _httpx
 
+                # Pick the best model for structured JSON output
+                _pptx_model_ns = (
+                    settings.get("reasoning_model")
+                    or settings.get("general_model")
+                    or settings.get("code_model")
+                    or settings.get("ollama_model")
+                    or "qwen2.5-coder:1.5b"
+                )
+
                 def _model_fn(system: str, user: str) -> str:
                     payload = {
-                        "model": settings.get("code_model") or settings.get("ollama_model") or "qwen2.5-coder:1.5b",
+                        "model": _pptx_model_ns,
                         "messages": [
                             {"role": "system", "content": system},
                             {"role": "user", "content": user},
@@ -1664,7 +1673,10 @@ async def chat(body: ChatMessage):
                         "stream": False,
                         "options": {"temperature": 0.3},
                     }
-                    r = _httpx.post("http://localhost:11434/api/chat", json=payload, timeout=120)
+                    r = _httpx.post(
+                        f"{settings.get('ollama_url', 'http://localhost:11434')}/api/chat",
+                        json=payload, timeout=120,
+                    )
                     r.raise_for_status()
                     return r.json()["message"]["content"]
 
@@ -1677,11 +1689,15 @@ async def chat(body: ChatMessage):
                 spec = deck_from_dict(deck_json)
                 out_path = build_deck(spec)
 
+                slide_titles = [s.title for s in spec.slides if s.title]
                 reply = (
                     f"✅ **Slides ready** — {len(spec.slides)} slides generated.\n\n"
                     f"**Title:** {spec.title}\n"
+                    f"**Theme:** {spec.theme}\n"
                     f"**Saved to:** `{out_path}`\n\n"
-                    f"[Download slides](/api/generate/pptx/download?path={str(out_path)})\n\n"
+                    f"**Slide outline:**\n" +
+                    "\n".join(f"  {i+1}. {t}" for i, t in enumerate(slide_titles)) +
+                    f"\n\n[Download slides](/api/generate/pptx/download?path={str(out_path)})\n\n"
                     f"Open with LibreOffice Impress or upload to Google Slides."
                 )
 
@@ -1693,8 +1709,39 @@ async def chat(body: ChatMessage):
                 await devdb.save_message(conn, "assistant", reply, project_id=body.project_id, tokens=0)
                 await devdb.log_event(conn, "pptx_generate", body.message[:100], project_id=body.project_id)
 
+                # Save to memory for future context
+                _mem_content_ns = (
+                    f"Generated presentation: {spec.title}\n"
+                    f"Slides: {len(spec.slides)}\n"
+                    f"Outline: {', '.join(slide_titles)}\n"
+                    f"Theme: {spec.theme}\n"
+                    f"File: {out_path.name}\n"
+                    f"User request: {body.message[:300]}"
+                )
+                await devdb.upsert_memory_item(
+                    conn,
+                    memory_key=f"mission:pptx:{out_path.stem}",
+                    layer="mission",
+                    title=f"Presentation: {spec.title}",
+                    content=_mem_content_ns,
+                    summary=f"Generated {len(spec.slides)}-slide deck: {spec.title}",
+                    source="pptx_generate",
+                    source_id=str(out_path),
+                    workspace_id=body.project_id,
+                    trust_level="high",
+                    relevance_score=0.8,
+                    meta_json=_json.dumps({
+                        "slide_count": len(spec.slides),
+                        "theme": spec.theme,
+                        "file_path": str(out_path),
+                        "slide_titles": slide_titles,
+                    }),
+                )
+
                 return {"response": reply, "tokens": 0}
             except Exception as _pptx_err:
+                import traceback as _tb_ns
+                _tb_ns.print_exc()
                 # Fall through to normal chat if PPTX generation fails
                 pass
         # ── end PPTX intent interception ─────────────────────────────────────
@@ -1824,6 +1871,115 @@ async def chat_stream(body: ChatMessage, request: Request):
         detail=body.message[:180],
         workspace_id=body.project_id,
     )
+
+    # ── PPTX intent interception (streaming) ──────────────────────────────
+    import re as _re_s
+    _pptx_triggers_s = _re_s.compile(
+        r'\b(create|make|generate|build|produce|prepare)\b.{0,40}'
+        r'\b(slides?|presentation|pptx|powerpoint|deck)\b',
+        _re_s.IGNORECASE,
+    )
+    if _pptx_triggers_s.search(body.message):
+        try:
+            from pptx_engine import prompt_to_deck_json, deck_from_dict, build_deck
+            import httpx as _httpx_s
+
+            # Pick the best model for structured JSON output
+            _pptx_model = (
+                settings.get("reasoning_model")
+                or settings.get("general_model")
+                or settings.get("code_model")
+                or settings.get("ollama_model")
+                or "qwen2.5-coder:1.5b"
+            )
+
+            def _model_fn_s(system: str, user: str) -> str:
+                payload = {
+                    "model": _pptx_model,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    "stream": False,
+                    "options": {"temperature": 0.3},
+                }
+                r = _httpx_s.post(
+                    f"{settings.get('ollama_url', 'http://localhost:11434')}/api/chat",
+                    json=payload, timeout=120,
+                )
+                r.raise_for_status()
+                return r.json()["message"]["content"]
+
+            _set_live_operator(active=True, mode="chat", phase="execute",
+                               title="Generating slides…", detail=body.message[:120],
+                               workspace_id=body.project_id, preserve_started=True)
+
+            context_for_deck = f"{merged_context_block}\n\nUser request: {body.message}"
+            deck_json = prompt_to_deck_json(body.message, context_for_deck, _model_fn_s)
+            spec = deck_from_dict(deck_json)
+            out_path = build_deck(spec)
+
+            slide_titles = [s.title for s in spec.slides if s.title]
+            reply = (
+                f"✅ **Slides ready** — {len(spec.slides)} slides generated.\n\n"
+                f"**Title:** {spec.title}\n"
+                f"**Theme:** {spec.theme}\n"
+                f"**Saved to:** `{out_path}`\n\n"
+                f"**Slide outline:**\n" +
+                "\n".join(f"  {i+1}. {t}" for i, t in enumerate(slide_titles)) +
+                f"\n\n[Download slides](/api/generate/pptx/download?path={str(out_path)})\n\n"
+                f"Open with LibreOffice Impress or upload to Google Slides."
+            )
+
+            _set_live_operator(active=False, mode="chat", phase="verify",
+                               title="Slides ready", detail=f"{len(spec.slides)} slides · {out_path.name}",
+                               summary=reply[:180], workspace_id=body.project_id)
+
+            async def _pptx_stream():
+                yield {"data": _json.dumps({"chunk": reply})}
+                yield {"data": _json.dumps({"done": True, "tokens": 0})}
+                # Persist chat messages
+                async with devdb.get_db() as _pconn:
+                    stored_user_message = _stored_message_with_resources(body.message, resource_bundle["resources"])
+                    await devdb.save_message(_pconn, "user", stored_user_message, project_id=body.project_id)
+                    await devdb.save_message(_pconn, "assistant", reply, project_id=body.project_id, tokens=0)
+                    await devdb.log_event(_pconn, "pptx_generate", body.message[:100], project_id=body.project_id)
+                    # Save to memory for future context
+                    _mem_content = (
+                        f"Generated presentation: {spec.title}\n"
+                        f"Slides: {len(spec.slides)}\n"
+                        f"Outline: {', '.join(slide_titles)}\n"
+                        f"Theme: {spec.theme}\n"
+                        f"File: {out_path.name}\n"
+                        f"User request: {body.message[:300]}"
+                    )
+                    await devdb.upsert_memory_item(
+                        _pconn,
+                        memory_key=f"mission:pptx:{out_path.stem}",
+                        layer="mission",
+                        title=f"Presentation: {spec.title}",
+                        content=_mem_content,
+                        summary=f"Generated {len(spec.slides)}-slide deck: {spec.title}",
+                        source="pptx_generate",
+                        source_id=str(out_path),
+                        workspace_id=body.project_id,
+                        trust_level="high",
+                        relevance_score=0.8,
+                        meta_json=_json.dumps({
+                            "slide_count": len(spec.slides),
+                            "theme": spec.theme,
+                            "file_path": str(out_path),
+                            "slide_titles": slide_titles,
+                        }),
+                    )
+
+            return EventSourceResponse(_pptx_stream())
+        except Exception as _pptx_stream_err:
+            import traceback as _tb_s
+            _tb_s.print_exc()
+            # Fall through to normal chat if PPTX generation fails
+            pass
+    # ── end PPTX intent interception (streaming) ─────────────────────────
 
     if backend != "ollama":
         # Fall back to non-streaming for API/CLI — emit single SSE event
