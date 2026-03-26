@@ -1642,6 +1642,63 @@ async def chat(body: ChatMessage):
             block for block in (context_block, memory_bundle["context_block"], composer_block) if block
         )
 
+        # ── PPTX intent interception ──────────────────────────────────────────
+        import re as _re
+        _pptx_triggers = _re.compile(
+            r'\b(create|make|generate|build|produce|prepare)\b.{0,40}'
+            r'\b(slides?|presentation|pptx|powerpoint|deck)\b',
+            _re.IGNORECASE,
+        )
+        if _pptx_triggers.search(body.message):
+            try:
+                from pptx_engine import prompt_to_deck_json, deck_from_dict, build_deck
+                import httpx as _httpx
+
+                def _model_fn(system: str, user: str) -> str:
+                    payload = {
+                        "model": settings.get("code_model") or settings.get("ollama_model") or "qwen2.5-coder:1.5b",
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user},
+                        ],
+                        "stream": False,
+                        "options": {"temperature": 0.3},
+                    }
+                    r = _httpx.post("http://localhost:11434/api/chat", json=payload, timeout=120)
+                    r.raise_for_status()
+                    return r.json()["message"]["content"]
+
+                _set_live_operator(active=True, mode="chat", phase="execute",
+                                   title="Generating slides…", detail=body.message[:120],
+                                   workspace_id=body.project_id)
+
+                context_for_deck = f"{merged_context_block}\n\nUser request: {body.message}"
+                deck_json = prompt_to_deck_json(body.message, context_for_deck, _model_fn)
+                spec = deck_from_dict(deck_json)
+                out_path = build_deck(spec)
+
+                reply = (
+                    f"✅ **Slides ready** — {len(spec.slides)} slides generated.\n\n"
+                    f"**Title:** {spec.title}\n"
+                    f"**Saved to:** `{out_path}`\n\n"
+                    f"[Download slides](/api/generate/pptx/download?path={str(out_path)})\n\n"
+                    f"Open with LibreOffice Impress or upload to Google Slides."
+                )
+
+                _set_live_operator(active=False, mode="chat", phase="verify",
+                                   title="Slides ready", detail=f"{len(spec.slides)} slides · {out_path.name}",
+                                   summary=reply[:180], workspace_id=body.project_id)
+
+                await devdb.save_message(conn, "user", body.message, project_id=body.project_id)
+                await devdb.save_message(conn, "assistant", reply, project_id=body.project_id, tokens=0)
+                await devdb.log_event(conn, "pptx_generate", body.message[:100], project_id=body.project_id)
+
+                return {"response": reply, "tokens": 0}
+            except Exception as _pptx_err:
+                # Fall through to normal chat if PPTX generation fails
+                pass
+        # ── end PPTX intent interception ─────────────────────────────────────
+
         # Call AI with timeout handling
         try:
             import asyncio as _aio
@@ -4011,6 +4068,121 @@ async def system_action_execute(body: SystemActionExecute, background_tasks: Bac
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "port": PORT}
+
+
+# ─── PPTX Generation ──────────────────────────────────────────────────────────
+
+class _PptxFromPromptRequest(BaseModel):
+    prompt: str
+    context: str = ""
+    theme: str = "dark"
+    output_path: str = ""
+
+class _PptxFromDataRequest(BaseModel):
+    deck: dict
+    output_path: str = ""
+
+@app.post("/api/generate/pptx/ai")
+async def generate_pptx_ai(body: _PptxFromPromptRequest):
+    """Generate a PPTX deck from a natural-language prompt using the AI model."""
+    try:
+        from pptx_engine import prompt_to_deck_json, deck_from_dict, build_deck
+    except ImportError as e:
+        return JSONResponse({"error": f"pptx_engine not available: {e}"}, status_code=500)
+
+    try:
+        # Build a simple model_fn using Ollama or provider
+        import httpx
+
+        def model_fn(system: str, user: str) -> str:
+            settings = {}
+            try:
+                import sqlite3
+                conn = sqlite3.connect(str(DB_PATH))
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("SELECT key, value FROM settings").fetchall()
+                settings = {r["key"]: r["value"] for r in rows}
+                conn.close()
+            except Exception:
+                pass
+
+            ollama_model = settings.get("code_model") or settings.get("ollama_model") or "qwen2.5-coder:1.5b"
+            payload = {
+                "model": ollama_model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "stream": False,
+                "options": {"temperature": 0.3},
+            }
+            resp = httpx.post("http://localhost:11434/api/chat", json=payload, timeout=120)
+            resp.raise_for_status()
+            return resp.json()["message"]["content"]
+
+        deck_json = prompt_to_deck_json(body.prompt, body.context, model_fn)
+        if body.output_path:
+            deck_json["output_path"] = body.output_path
+        if body.theme:
+            deck_json["theme"] = body.theme
+
+        spec = deck_from_dict(deck_json)
+        out_path = build_deck(spec)
+
+        return JSONResponse({
+            "ok": True,
+            "path": str(out_path),
+            "filename": out_path.name,
+            "slides": len(spec.slides),
+            "title": spec.title,
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/generate/pptx")
+async def generate_pptx_from_data(body: _PptxFromDataRequest):
+    """Generate a PPTX deck from a pre-structured deck JSON object."""
+    try:
+        from pptx_engine import deck_from_dict, build_deck
+    except ImportError as e:
+        return JSONResponse({"error": f"pptx_engine not available: {e}"}, status_code=500)
+    try:
+        data = body.deck
+        if body.output_path:
+            data["output_path"] = body.output_path
+        spec = deck_from_dict(data)
+        out_path = build_deck(spec)
+        return JSONResponse({
+            "ok": True,
+            "path": str(out_path),
+            "filename": out_path.name,
+            "slides": len(spec.slides),
+            "title": spec.title,
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/generate/pptx/download")
+async def download_pptx(path: str):
+    """Stream a generated PPTX file to the browser."""
+    from fastapi.responses import FileResponse
+    import urllib.parse
+    file_path = Path(urllib.parse.unquote(path))
+    if not file_path.exists() or file_path.suffix != ".pptx":
+        raise HTTPException(404, "File not found")
+    # Safety: must be within home directory
+    home = Path.home()
+    try:
+        file_path.relative_to(home)
+    except ValueError:
+        raise HTTPException(403, "Access denied")
+    return FileResponse(
+        str(file_path),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=file_path.name,
+    )
 
 
 # ─── PWA — manifest + service worker ─────────────────────────────────────────
