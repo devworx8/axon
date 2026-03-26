@@ -1724,6 +1724,124 @@
             </div>
           </div>
 
+          <!-- Mode strip -->
+          <div class="flex flex-wrap items-center gap-2 px-1 pb-2 border-b border-slate-800/70">
+            <button
+              @click="businessMode = false; agentMode = false"
+              class="rounded-full px-3 py-1.5 text-[11px] transition"
+              :class="!businessMode && !agentMode ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'">
+              Ask
+            </button>
+
+            <button
+              @click="toggleAgentMode(true); businessMode = false"
+              class="rounded-full px-3 py-1.5 text-[11px] transition"
+              :class="agentMode && !businessMode ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'">
+              Agent
+            </button>
+
+            <button
+              @click="businessMode = false; composerOptions.action_mode = 'generate'; composerOptions.intelligence_mode = 'analyze'"
+              class="rounded-full px-3 py-1.5 text-[11px] transition bg-slate-800 text-slate-300 hover:bg-slate-700">
+              Code
+            </button>
+
+            <button
+              @click="toggleBusinessMode(true)"
+              class="rounded-full px-3 py-1.5 text-[11px] transition"
+              :class="businessMode ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'">
+              &#x1F4BC; Business
+            </button>
+
+            <button
+              @click="businessMode = false; composerOptions.intelligence_mode = 'deep_research'"
+              class="rounded-full px-3 py-1.5 text-[11px] transition bg-slate-800 text-slate-300 hover:bg-slate-700">
+              Research
+            </button>
+          </div>
+
+          <!-- Business panel -->
+          <div x-show="businessMode" class="mt-2 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+            <div class="flex flex-wrap items-center gap-2 mb-3">
+              <span class="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-300">Business Dock</span>
+
+              <template x-for="action in businessQuickActions" :key="action.id">
+                <button
+                  @click="setBusinessView(action.id)"
+                  class="rounded-full px-3 py-1.5 text-[11px] transition"
+                  :class="businessView === action.id ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'">
+                  <span x-text="action.icon"></span>
+                  <span x-text="action.label"></span>
+                </button>
+              </template>
+            </div>
+
+            <div class="flex flex-wrap gap-2 mb-3">
+              <button @click="injectBusinessPrompt('invoice')" class="rounded-xl bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700">Generate Invoice</button>
+              <button @click="injectBusinessPrompt('quote')" class="rounded-xl bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700">Generate Quote</button>
+              <button @click="addBusinessItem()" class="rounded-xl bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700">Add Line Item</button>
+              <button @click="businessDraft.discountValue = 0" class="rounded-xl bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700">Reset Discount</button>
+            </div>
+
+            <div class="space-y-3 rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+              <div class="grid gap-3 md:grid-cols-2">
+                <input x-model="businessDraft.client.name" placeholder="Client name"
+                       class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 placeholder-slate-500" />
+
+                <input x-model="businessDraft.client.email" placeholder="Client email"
+                       class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 placeholder-slate-500" />
+
+                <input x-model="businessDraft.issueDate" type="date"
+                       class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" />
+
+                <input x-model="businessDraft.dueDate" type="date"
+                       class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" />
+              </div>
+
+              <div class="space-y-2">
+                <template x-for="(item, index) in businessDraft.items" :key="index">
+                  <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_90px_120px_auto]">
+                    <input x-model="item.description" placeholder="Description"
+                           class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 placeholder-slate-500" />
+
+                    <input x-model="item.qty" type="number" min="1" placeholder="Qty"
+                           class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" />
+
+                    <input x-model="item.rate" type="number" min="0" step="0.01" placeholder="Rate"
+                           class="w-full rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" />
+
+                    <button @click="removeBusinessItem(index)"
+                            class="rounded-xl bg-rose-500/10 px-3 py-2 text-xs text-rose-300 hover:bg-rose-500/15">
+                      Remove
+                    </button>
+                  </div>
+                </template>
+              </div>
+
+              <div class="grid gap-3 md:grid-cols-3">
+                <select x-model="businessDraft.discountType"
+                        class="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100">
+                  <option value="fixed">Fixed Discount</option>
+                  <option value="percent">Percent Discount</option>
+                </select>
+
+                <input x-model="businessDraft.discountValue" type="number" min="0" step="0.01" placeholder="Discount"
+                       class="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" />
+
+                <input x-model="businessDraft.currency" placeholder="Currency"
+                       class="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" />
+              </div>
+
+              <div class="rounded-2xl border border-emerald-500/15 bg-emerald-500/5 px-4 py-3">
+                <div class="flex flex-wrap gap-4 text-sm">
+                  <div>Subtotal: <span class="font-semibold" x-text="formatMoney(businessSubtotal())"></span></div>
+                  <div>Discount: <span class="font-semibold" x-text="formatMoney(businessDiscountAmount())"></span></div>
+                  <div>Total: <span class="font-semibold text-emerald-300" x-text="formatMoney(businessTotal())"></span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div class="mt-2 flex gap-1.5 md:gap-2 items-end">
             <button x-show="voiceInputAvailable()" @click="startVoice()"
                     :class="voiceActive ? 'bg-red-500 text-white shadow-lg shadow-red-500/30' : 'bg-slate-800 text-slate-400'"
@@ -4479,11 +4597,46 @@ function devbrain() {
     },
     chatModelOpen: false,
     chatHints: [
-      'What should Axon focus on first today?',
-      'Which workspaces are going stale?',
-      'Show me my priority missions',
-      'Inspect the weakest workspace and tell me what to do next',
+      'Create an invoice for Khanyisa with a discount and final total',
+      'Draft a quote for a website and backend integration project',
+      'Write a client payment follow-up email',
+      'Summarize outstanding business tasks for today',
     ],
+    businessMode: false,
+    businessView: 'invoice',
+    businessQuickActions: [
+      { id: 'invoice', label: 'Invoice', icon: '🧾' },
+      { id: 'quote', label: 'Quote', icon: '💼' },
+      { id: 'client', label: 'Client', icon: '👤' },
+      { id: 'receipt', label: 'Receipt', icon: '📄' },
+    ],
+    businessDraft: {
+      docType: 'invoice',
+      currency: 'ZAR',
+      status: 'draft',
+      invoiceNumber: 'INV-001',
+      quoteNumber: 'Q-001',
+      receiptNumber: 'RCPT-001',
+      issueDate: '',
+      dueDate: '',
+      client: {
+        name: '',
+        email: '',
+        phone: '',
+        address: '',
+      },
+      company: {
+        name: 'Axon Business',
+        email: '',
+        phone: '',
+      },
+      items: [
+        { description: 'Website design', qty: 1, rate: 1500 },
+      ],
+      discountType: 'fixed',
+      discountValue: 0,
+      notes: '',
+    },
     agentLifecycle: ['observe', 'plan', 'execute', 'verify', 'recover'],
     agentProgressState: 'observe',
     liveOperator: {
@@ -5763,6 +5916,12 @@ function devbrain() {
     },
 
     chatComposerPlaceholder() {
+      if (this.businessMode) {
+        if (this.businessView === 'quote') return 'Create a quote for Khanyisa with line items, discount, and total...';
+        if (this.businessView === 'client') return 'Draft a client profile, follow-up email, or billing summary...';
+        if (this.businessView === 'receipt') return 'Create a receipt with payment confirmation details...';
+        return 'Create an invoice with line items, discount, due date, and client details...';
+      }
       const agent = this.resolveChatMode(this.chatInput) === 'agent';
       const opts = this.normalizedComposerOptions();
       if (!agent) {
@@ -5773,6 +5932,101 @@ function devbrain() {
       return this.isMobile
         ? 'Give Axon a goal, task, or command...'
         : 'Give Axon a goal, task, or command...';
+    },
+
+    toggleBusinessMode(force = null) {
+      this.businessMode = typeof force === 'boolean' ? force : !this.businessMode;
+      if (this.businessMode) {
+        this.agentMode = false;
+        this.composerOptions.intelligence_mode = 'build_brief';
+        this.composerOptions.action_mode = 'generate';
+      }
+    },
+
+    setBusinessView(view) {
+      this.businessView = view;
+      this.businessDraft.docType =
+        view === 'quote' ? 'quote'
+        : view === 'receipt' ? 'receipt'
+        : view === 'client' ? 'client'
+        : 'invoice';
+    },
+
+    addBusinessItem() {
+      this.businessDraft.items.push({
+        description: '',
+        qty: 1,
+        rate: 0,
+      });
+    },
+
+    removeBusinessItem(index) {
+      this.businessDraft.items.splice(index, 1);
+    },
+
+    businessSubtotal() {
+      return (this.businessDraft.items || []).reduce((sum, item) => {
+        const qty = Number(item.qty || 0);
+        const rate = Number(item.rate || 0);
+        return sum + (qty * rate);
+      }, 0);
+    },
+
+    businessDiscountAmount() {
+      const subtotal = this.businessSubtotal();
+      const value = Number(this.businessDraft.discountValue || 0);
+      if (this.businessDraft.discountType === 'percent') {
+        return subtotal * (value / 100);
+      }
+      return value;
+    },
+
+    businessTotal() {
+      return Math.max(0, this.businessSubtotal() - this.businessDiscountAmount());
+    },
+
+    formatMoney(amount) {
+      const value = Number(amount || 0);
+      return new Intl.NumberFormat('en-ZA', {
+        style: 'currency',
+        currency: this.businessDraft.currency || 'ZAR',
+      }).format(value);
+    },
+
+    businessComposerPrompt(type = 'invoice') {
+      const client = this.businessDraft.client.name || 'the client';
+      const subtotal = this.businessSubtotal();
+      const discount = this.businessDiscountAmount();
+      const total = this.businessTotal();
+      const lines = (this.businessDraft.items || [])
+        .map(i => `- ${i.description || 'Item'} | qty ${i.qty || 1} | rate ${i.rate || 0}`)
+        .join('\n');
+
+      return [
+        `Create a professional ${type} for ${client}.`,
+        `Currency: ${this.businessDraft.currency}.`,
+        `Issue date: ${this.businessDraft.issueDate || 'not set'}.`,
+        `Due date: ${this.businessDraft.dueDate || 'not set'}.`,
+        `Client email: ${this.businessDraft.client.email || 'not provided'}.`,
+        `Line items:`,
+        lines || '- No items yet',
+        `Subtotal: ${subtotal}`,
+        `Discount: ${discount}`,
+        `Total: ${total}`,
+        `Include a clean client-ready breakdown, summary, and payment wording.`,
+      ].join('\n');
+    },
+
+    injectBusinessPrompt(type = 'invoice') {
+      this.setBusinessView(type);
+      this.businessMode = true;
+      this.chatInput = this.businessComposerPrompt(type);
+      if (typeof this.resetChatComposerHeight === 'function') {
+        this.resetChatComposerHeight();
+      }
+      if (typeof this.showToast === 'function') {
+        this.showToast(`${type.charAt(0).toUpperCase() + type.slice(1)} draft loaded into composer`);
+      }
     },
 
     phaseChipClass(phase) {
@@ -6764,6 +7018,12 @@ function devbrain() {
     },
 
     async sendChat() {
+      if (this.businessMode && !this.chatInput?.trim()) {
+        this.chatInput = this.businessComposerPrompt(this.businessView || 'invoice');
+      }
+      if (this.businessMode) {
+        this.agentMode = false;
+      }
       const msg = this.chatInput.trim();
       if (!msg || this.chatLoading) return;
       const mode = this.resolveChatMode(msg);
