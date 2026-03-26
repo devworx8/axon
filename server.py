@@ -450,7 +450,7 @@ def _valid_session(token: str) -> bool:
 # Paths that don't require auth
 _AUTH_EXEMPT = {"/", "/sw.js", "/manifest.json", "/manual", "/manual.html",
                 "/api/health", "/api/tunnel/status", "/api/tunnel/start", "/api/tunnel/stop"}
-_AUTH_EXEMPT_PREFIXES = ("/api/auth/", "/icons/")
+_AUTH_EXEMPT_PREFIXES = ("/api/auth/", "/icons/", "/js/", "/styles.css")
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -4053,6 +4053,23 @@ async def pwa_manifest():
         ]
     })
 
+
+@app.get("/styles.css")
+async def serve_styles():
+    css_path = UI_DIR / "styles.css"
+    if not css_path.exists():
+        return Response("/* not found */", media_type="text/css", status_code=404)
+    return FileResponse(css_path, media_type="text/css", headers={"Cache-Control": "public, max-age=60"})
+
+@app.get("/js/{filename:path}")
+async def serve_js(filename: str):
+    import re as _re
+    if not _re.match(r'^[a-zA-Z0-9_\-]+\.js$', filename):
+        return Response("// not found", media_type="application/javascript", status_code=404)
+    js_path = UI_DIR / "js" / filename
+    if not js_path.exists():
+        return Response("// not found", media_type="application/javascript", status_code=404)
+    return FileResponse(js_path, media_type="application/javascript", headers={"Cache-Control": "public, max-age=60"})
 
 @app.get("/icons/{filename}")
 async def serve_icon(filename: str):

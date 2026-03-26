@@ -57,3 +57,6 @@ if is_devbrain_pid "$LIVE_PID"; then
 else
   echo "Axon is not running"
 fi
+
+# Stop tunnel
+"$DEVBRAIN_DIR/tunnel.sh" stop 2>/dev/null || true

@@ -79,6 +79,10 @@ for i in {1..16}; do
   sleep 0.5
 done
 
+# ── Start tunnel (named mode → axon.edudashpro.org.za) ───────────
+"$DEVBRAIN_DIR/tunnel.sh" start 2>/dev/null || true
+
 # Open browser
 xdg-open "http://localhost:$PORT" 2>/dev/null || \
   echo "→ Open in browser: http://localhost:$PORT"
+echo "🌐 Public PWA: https://axon.edudashpro.org.za"
