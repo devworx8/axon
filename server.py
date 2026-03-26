@@ -277,8 +277,8 @@ def _connection_snapshot() -> dict:
         "stable_domain_enabled": config["stable_domain_enabled"],
         "stable_domain_status": probe["status"],
         "stable_domain_detail": probe["detail"],
-        "tunnel_mode": config["tunnel_mode"],
-        "named_tunnel_ready": config["named_tunnel_ready"],
+        "tunnel_mode": config.get("tunnel_mode", "trycloudflare"),
+        "named_tunnel_ready": config.get("named_tunnel_ready", False),
     }
 
 
@@ -2159,6 +2159,18 @@ async def agent_endpoint(body: AgentRequest, request: Request):
     ai = await _effective_ai_params(settings, composer_options, agent_request=True, requested_model=body.model or "")
     ollama_url = ai.get("ollama_url", settings.get("ollama_url", ""))
     ollama_model = ai.get("ollama_model") or resource_bundle["vision_model"] or settings.get("ollama_model", "")
+
+    # Agent tool-calling needs a capable model — upgrade tiny models automatically
+    _AGENT_MIN_SIZES = {"qwen2.5-coder": "7b", "llama3.2": "3b", "phi4-mini": "latest"}
+    _model_lower = ollama_model.lower()
+    for family, min_tag in _AGENT_MIN_SIZES.items():
+        if _model_lower.startswith(family) and min_tag not in _model_lower:
+            available = await brain.ollama_list_models(ollama_url)
+            upgrade = next((m for m in available if m.lower().startswith(family) and min_tag in m.lower()), None)
+            if upgrade:
+                ollama_model = upgrade
+            break
+
     collected_text: list[str] = []
     _set_live_operator(
         active=True,
@@ -2882,8 +2894,8 @@ async def mobile_info():
         "stable_domain_enabled": config["stable_domain_enabled"],
         "stable_domain_status": probe["status"],
         "stable_domain_detail": probe["detail"],
-        "tunnel_mode": config["tunnel_mode"],
-        "named_tunnel_ready": config["named_tunnel_ready"],
+        "tunnel_mode": config.get("tunnel_mode", "trycloudflare"),
+        "named_tunnel_ready": config.get("named_tunnel_ready", False),
         "qr_url": qr_url,
         "port": PORT,
         "qr_data_uri": qr_data_uri,
@@ -2966,8 +2978,8 @@ async def tunnel_status():
     return {
         "running": running,
         "url": url,
-        "mode": config["tunnel_mode"],
-        "named_tunnel_ready": config["named_tunnel_ready"],
+        "mode": config.get("tunnel_mode", "trycloudflare"),
+        "named_tunnel_ready": config.get("named_tunnel_ready", False),
     }
 
 
@@ -2985,7 +2997,7 @@ async def tunnel_start():
         raise HTTPException(400, "cloudflared binary not found")
     if config["tunnel_mode"] == "external":
         raise HTTPException(400, "External domain mode does not start a local tunnel.")
-    if config["tunnel_mode"] == "named" and not config["named_tunnel_ready"]:
+    if config.get("tunnel_mode") == "named" and not config.get("named_tunnel_ready"):
         raise HTTPException(400, "Named tunnel mode needs a saved Cloudflare tunnel token.")
     # Clear old log
     TUNNEL_LOG.write_text("")

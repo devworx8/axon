@@ -1010,10 +1010,11 @@ When you have the final answer, output EXACTLY:
 ANSWER: your response here
 
 Rules:
-- Use tools when you need real data (file contents, git status, directory listings, etc.)
-- When the user asks you to inspect, list, read, search, check, or run something you can access with tools, do it yourself first.
+- ALWAYS use tools for: find, locate, search, where is, list, read, check, run, show me, open, what files, what is in, scan, look for, get, fetch — do NOT describe how the user could do it themselves.
+- Use tools when you need real data (file contents, git status, directory listings, search results, etc.)
+- If the user asks you to find/locate/search for ANYTHING on the filesystem — do it yourself with search_files or list_dir. Never tell the user to open Finder or File Explorer.
 - Do not give the user shell instructions for tasks you can complete with the available tools.
-- For pure planning, writing, brainstorming, or business requests that do not require local data, do not use tools. Answer directly.
+- Only skip tools for pure creative writing, brainstorming, or math that requires NO local data.
 - After seeing tool results, either use another tool or give ANSWER
 - Be concise in ANSWER — use markdown
 - Never make up file contents or command output
