@@ -996,7 +996,11 @@
         <button @click="chatProjectId=''; updateChatProject()" class="text-[10px] text-slate-500 hover:text-slate-300">✕ Clear</button>
       </div>
 
-      <!-- Messages -->
+      <!-- Desktop: side-by-side | Mobile: stacked -->
+      <div class="flex-1 flex flex-col md:flex-row min-h-0">
+
+      <!-- Canvas: messages + input bar -->
+      <div class="flex-1 flex flex-col min-w-0 min-h-0">
       <div class="flex-1 overflow-y-auto px-3 md:px-5 py-4 space-y-3" id="chat-messages">
         <!-- Empty state -->
         <div x-show="chatMessages.length === 0" class="flex flex-col items-center justify-center h-full text-center px-4">
@@ -1117,10 +1121,77 @@
         </div>
       </div>
 
-      <!-- Input bar — operator console -->
-      <div class="px-2.5 md:px-5 py-2.5 md:py-3 border-t border-slate-800 bg-slate-900/60 backdrop-blur shrink-0">
-        <div class="composer-shell rounded-[26px] md:rounded-[30px] p-2 md:p-3 transition-all duration-200"
-             :class="resolveChatMode(chatInput) === 'agent' ? 'agent' : ''">
+      <!-- Input bar (bottom of canvas) -->
+      <div class="shrink-0 px-3 md:px-5 py-2.5 border-t border-slate-800 bg-slate-950/80 backdrop-blur">
+        <div class="flex gap-1.5 items-end">
+            <button x-show="voiceInputAvailable()" @click="startVoice()"
+                    :class="voiceActive ? 'bg-red-500 text-white shadow-lg shadow-red-500/30' : 'bg-slate-800 text-slate-400'"
+                    class="w-9 h-9 flex-none rounded-xl transition flex items-center justify-center press-scale" title="Voice input">
+              <svg class="w-4 h-4" :class="voiceActive ? 'animate-pulse' : ''" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="2" y="9" width="2.5" height="6" rx="1.25"/>
+                <rect x="6" y="5" width="2.5" height="14" rx="1.25"/>
+                <rect x="10" y="2" width="2.5" height="20" rx="1.25"/>
+                <rect x="14" y="5" width="2.5" height="14" rx="1.25"/>
+                <rect x="18" y="9" width="2.5" height="6" rx="1.25"/>
+              </svg>
+            </button>
+
+            <button @click="openComposerMenu()"
+                    :class="showComposerMenu || composerSummaryChips().length ? 'bg-violet-500/15 text-violet-200 shadow-lg shadow-violet-500/10' : 'bg-slate-800 text-slate-400'"
+                    class="w-9 h-9 flex-none rounded-xl transition flex items-center justify-center press-scale" title="Composer controls">
+              <span class="text-lg leading-none">+</span>
+            </button>
+
+            <button @click="openResourcePicker()"
+                    :class="selectedResources.length ? 'bg-sky-500/15 text-sky-200 shadow-lg shadow-sky-500/10' : 'bg-slate-800 text-slate-400'"
+                    class="w-9 h-9 flex-none rounded-xl transition flex items-center justify-center press-scale" title="Attach resources">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21.44 11.05l-8.49 8.49a6 6 0 0 1-8.49-8.49l8.49-8.49a4 4 0 1 1 5.66 5.66l-8.5 8.49a2 2 0 1 1-2.82-2.83l7.78-7.78"/>
+              </svg>
+            </button>
+
+            <div class="flex-1 relative">
+              <textarea
+                x-ref="chatComposer"
+                x-model="chatInput"
+                @keydown.enter="handleComposerEnter($event)"
+                @focus="scrollChat()"
+                x-init="resetChatComposerHeight()"
+                :placeholder="chatComposerPlaceholder()"
+                rows="1"
+                style="min-height:42px; max-height:160px; resize:none; overflow-y:auto;"
+                :class="resolveChatMode(chatInput) === 'agent' ? 'border-amber-500/40 focus:border-amber-300/70' : 'border-slate-700/80 focus:border-blue-500/60'"
+                class="w-full rounded-2xl border bg-slate-950/90 px-3.5 py-2.5 text-sm leading-5 text-slate-100 placeholder-slate-500 transition block"
+                @input="resetChatComposerHeight()"
+              ></textarea>
+            </div>
+
+            <button @click="sendChat()" :disabled="chatLoading || !chatInput.trim()"
+                    :class="resolveChatMode(chatInput) === 'agent' ? 'bg-amber-500 hover:bg-amber-400 shadow-amber-500/20 text-slate-950' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-500/20 text-white'"
+                    class="w-9 h-9 flex-none rounded-xl disabled:opacity-30 disabled:bg-slate-700 disabled:text-white text-white transition flex items-center justify-center shadow-lg press-scale">
+              <svg class="w-4 h-4" :class="chatLoading ? 'hidden' : ''" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+              </svg>
+              <div x-show="chatLoading" class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+            </button>
+        </div>
+        <div class="flex items-center gap-1.5 px-1 pt-1.5 text-[10px] text-slate-500">
+          <span x-text="runtimeStatus.runtime_label || 'Local-first'"></span>
+          <span>·</span>
+          <span x-text="activeChatModel() || runtimeStatus.active_model || 'Saved default'"></span>
+          <span>·</span>
+          <span x-text="phaseLabel(liveOperator.phase || agentProgressState || 'observe')"></span>
+          <span>·</span>
+          <span x-text="liveFeed.connected ? 'Live' : (liveFeed.reconnecting ? 'Reconnecting' : 'Idle')"></span>
+          <span class="ml-auto hidden md:inline">Enter to send · Shift+Enter for newline</span>
+        </div>
+      </div>
+      </div><!-- /canvas -->
+
+      <!-- Composer sidebar — controls panel -->
+      <div class="md:w-[380px] lg:w-[420px] md:border-l md:border-t-0 border-t border-slate-800 bg-slate-900/40 shrink-0 overflow-y-auto max-h-[35vh] md:max-h-full">
+      <div class="px-3 py-3">
+        <div class="space-y-3">
           <div class="flex flex-col gap-1.5 px-0.5 pb-2 border-b border-slate-800/70 md:gap-2 md:flex-row md:items-center">
             <button @click="toggleAgentMode()"
                     :class="agentMode ? 'border-amber-400/40 bg-amber-500/12 text-amber-200' : 'border-slate-700/80 bg-slate-900/70 text-slate-300 hover:border-slate-500'"
@@ -1209,15 +1280,15 @@
           <!-- ── Local Tools bar ──────────────────────────────────── -->
           <div class="hidden md:flex flex-wrap items-center gap-1.5 px-1 pt-2">
             <span class="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300/70 mr-1">Local Tools</span>
-            <button @click="chatInput = 'Browse my files in ~/'; $nextTick(() => $el.closest('.composer-shell').querySelector('textarea')?.focus())"
+            <button @click="chatInput = 'Browse my files in ~/'; $nextTick(() => $refs.chatComposer?.focus())"
                     class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-amber-200 hover:border-amber-500/30 transition press-scale">
               🗂️ Browse Files
             </button>
-            <button @click="chatInput = 'Read the file at path: '; $nextTick(() => $el.closest('.composer-shell').querySelector('textarea')?.focus())"
+            <button @click="chatInput = 'Read the file at path: '; $nextTick(() => $refs.chatComposer?.focus())"
                     class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-amber-200 hover:border-amber-500/30 transition press-scale">
               📖 Read File
             </button>
-            <button @click="chatInput = 'Write to file: '; $nextTick(() => $el.closest('.composer-shell').querySelector('textarea')?.focus())"
+            <button @click="chatInput = 'Write to file: '; $nextTick(() => $refs.chatComposer?.focus())"
                     class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-amber-200 hover:border-amber-500/30 transition press-scale">
               ✏️ Write File
             </button>
@@ -1764,6 +1835,8 @@
           <div x-show="businessMode" class="mt-2 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-3">
             <div class="flex flex-wrap items-center gap-2 mb-3">
               <span class="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-300">Business Dock</span>
+              <button @click="businessExpanded = !businessExpanded" class="md:hidden ml-auto rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[10px] text-emerald-300 transition hover:bg-emerald-500/15"
+                      x-text="businessExpanded ? '▲ Collapse' : '▼ Expand'"></button>
 
               <template x-for="action in businessQuickActions" :key="action.id">
                 <button
@@ -1776,6 +1849,14 @@
               </template>
             </div>
 
+            <!-- Mobile compact summary: always visible -->
+            <div class="md:hidden flex flex-wrap gap-3 text-[11px] text-slate-300" x-show="!businessExpanded">
+              <span>Subtotal: <span class="font-semibold" x-text="formatMoney(businessSubtotal())"></span></span>
+              <span>Total: <span class="font-semibold text-emerald-300" x-text="formatMoney(businessTotal())"></span></span>
+              <button @click="injectBusinessPrompt(businessView || 'invoice')" class="rounded-lg bg-emerald-600 px-2.5 py-1 text-[10px] text-white">Generate</button>
+            </div>
+
+            <div :class="{ 'hidden': !businessExpanded && isMobile }" class="md:block">
             <div class="flex flex-wrap gap-2 mb-3">
               <button @click="injectBusinessPrompt('invoice')" class="rounded-xl bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700">Generate Invoice</button>
               <button @click="injectBusinessPrompt('quote')" class="rounded-xl bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700">Generate Quote</button>
@@ -1840,76 +1921,14 @@
                 </div>
               </div>
             </div>
+            </div><!-- /expandable section -->
           </div>
 
-          <div class="mt-2 flex gap-1.5 md:gap-2 items-end">
-            <button x-show="voiceInputAvailable()" @click="startVoice()"
-                    :class="voiceActive ? 'bg-red-500 text-white shadow-lg shadow-red-500/30' : 'bg-slate-800 text-slate-400'"
-                    class="w-9 h-9 md:w-11 md:h-11 flex-none rounded-[16px] md:rounded-2xl transition flex items-center justify-center press-scale" title="Voice input">
-              <svg class="w-4 h-4" :class="voiceActive ? 'animate-pulse' : ''" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="2" y="9" width="2.5" height="6" rx="1.25"/>
-                <rect x="6" y="5" width="2.5" height="14" rx="1.25"/>
-                <rect x="10" y="2" width="2.5" height="20" rx="1.25"/>
-                <rect x="14" y="5" width="2.5" height="14" rx="1.25"/>
-                <rect x="18" y="9" width="2.5" height="6" rx="1.25"/>
-              </svg>
-            </button>
 
-            <button @click="openComposerMenu()"
-                    :class="showComposerMenu || composerSummaryChips().length ? 'bg-violet-500/15 text-violet-200 shadow-lg shadow-violet-500/10' : 'bg-slate-800 text-slate-400'"
-                    class="w-9 h-9 md:w-11 md:h-11 flex-none rounded-[16px] md:rounded-2xl transition flex items-center justify-center press-scale" title="Composer controls">
-              <span class="text-lg leading-none">+</span>
-            </button>
-
-            <button @click="openResourcePicker()"
-                    :class="selectedResources.length ? 'bg-sky-500/15 text-sky-200 shadow-lg shadow-sky-500/10' : 'bg-slate-800 text-slate-400'"
-                    class="w-9 h-9 md:w-11 md:h-11 flex-none rounded-[16px] md:rounded-2xl transition flex items-center justify-center press-scale" title="Attach resources">
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21.44 11.05l-8.49 8.49a6 6 0 0 1-8.49-8.49l8.49-8.49a4 4 0 1 1 5.66 5.66l-8.5 8.49a2 2 0 1 1-2.82-2.83l7.78-7.78"/>
-              </svg>
-            </button>
-
-            <div class="flex-1 relative">
-              <textarea
-                x-ref="chatComposer"
-                x-model="chatInput"
-                @keydown.enter="handleComposerEnter($event)"
-                @focus="scrollChat()"
-                x-init="resetChatComposerHeight()"
-                :placeholder="chatComposerPlaceholder()"
-                rows="1"
-                style="min-height:44px; max-height:220px; resize:none; overflow-y:auto;"
-                :class="resolveChatMode(chatInput) === 'agent' ? 'border-amber-500/40 focus:border-amber-300/70' : 'border-slate-700/80 focus:border-blue-500/60'"
-                class="w-full rounded-[20px] md:rounded-[24px] border bg-slate-950/85 px-3.5 py-2.5 text-[15px] md:text-sm leading-6 md:leading-5 text-slate-100 placeholder-slate-500 transition block"
-                @input="resetChatComposerHeight()"
-              ></textarea>
-            </div>
-
-            <button @click="sendChat()" :disabled="chatLoading || !chatInput.trim()"
-                    :class="resolveChatMode(chatInput) === 'agent' ? 'bg-amber-500 hover:bg-amber-400 shadow-amber-500/20 text-slate-950' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-500/20 text-white'"
-                    class="w-9 h-9 md:w-11 md:h-11 flex-none rounded-[16px] md:rounded-2xl disabled:opacity-30 disabled:bg-slate-700 disabled:text-white text-white transition flex items-center justify-center shadow-lg press-scale">
-              <svg class="w-4 h-4" :class="chatLoading ? 'hidden' : ''" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-              </svg>
-              <div x-show="chatLoading" class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-            </button>
-          </div>
-
-          <div class="flex flex-wrap items-center justify-between gap-3 px-1 pt-2 text-[10px] text-slate-500">
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-300"
-                    x-text="runtimeStatus.runtime_label || 'Local-first'"></span>
-              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-300"
-                    x-text="activeChatModel() || runtimeStatus.active_model || 'Saved default'"></span>
-              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-300"
-                    x-text="phaseLabel(liveOperator.phase || agentProgressState || 'observe')"></span>
-              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-400"
-                    x-text="liveFeed.connected ? 'Live' : (liveFeed.reconnecting ? 'Reconnecting' : 'Idle')"></span>
-            </div>
-            <span class="hidden md:inline">Enter to send · Shift+Enter for newline</span>
-          </div>
         </div>
       </div>
+      </div><!-- /composer sidebar -->
+      </div><!-- /side-by-side wrapper -->
     </div>
 
     <!-- ════════════════════════════════════════════════════════════
@@ -4603,6 +4622,7 @@ function devbrain() {
       'Summarize outstanding business tasks for today',
     ],
     businessMode: false,
+    businessExpanded: false,
     businessView: 'invoice',
     businessQuickActions: [
       { id: 'invoice', label: 'Invoice', icon: '🧾' },
