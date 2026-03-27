@@ -91,7 +91,19 @@ function axonSettingsMixin() {
         }
         this.loadTtsVoices(true);
         this.refreshVoiceCapability();
+        this.refreshVaultProviderKeys();
       } catch(e) {}
+    },
+
+    async refreshVaultProviderKeys() {
+      try {
+        const r = await this.api('GET', '/api/vault/provider-keys');
+        this.vaultUnlocked = !!r.unlocked;
+        this.vaultProviderKeys = r.resolved || {};
+      } catch(e) {
+        this.vaultUnlocked = false;
+        this.vaultProviderKeys = {};
+      }
     },
 
     async saveSettings() {

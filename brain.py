@@ -14,6 +14,7 @@ import subprocess
 import shlex
 import json
 import sqlite3
+import time
 from pathlib import Path
 from typing import Optional, AsyncGenerator
 import re as _re
@@ -169,7 +170,7 @@ async def _call_api_messages(
         _track_usage(tokens, backend="api")
         return resp.content[0].text, tokens
 
-    if provider in {"openai_gpts", "generic_api"}:
+    if provider in {"openai_gpts", "generic_api", "deepseek"}:
         model_name = (api_model or "").strip()
         if not model_name:
             raise ValueError("API model not set. Configure it in Settings → Cloud Agents.")
@@ -280,12 +281,19 @@ def _call_ollama_sync(
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    try:
-        with _urlreq.urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read())
-    except _urlerr.URLError as exc:
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            with _urlreq.urlopen(req, timeout=120) as resp:
+                data = json.loads(resp.read())
+            break
+        except (_urlerr.URLError, OSError, TimeoutError) as exc:
+            last_exc = exc
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+    else:
         raise RuntimeError(
-            f"Ollama not reachable at {base}. Start it with: ollama serve\n{exc}"
+            f"Ollama not reachable at {base} after 3 attempts. Start it with: ollama serve\n{last_exc}"
         )
 
     content = data.get("message", {}).get("content", "")
@@ -333,24 +341,30 @@ async def _stream_ollama_chat(
         "stream": True,
         "options": {"num_predict": max_tokens, "num_ctx": execution["num_ctx"]},
     }
-    try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            async with client.stream("POST", f"{base}/api/chat", json=payload) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    content = data.get("message", {}).get("content", "")
-                    if content:
-                        yield content
-                    if data.get("done"):
-                        return
-    except httpx.RequestError as exc:
-        raise RuntimeError(f"Ollama not reachable at {base}: {exc}")
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                async with client.stream("POST", f"{base}/api/chat", json=payload) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        content = data.get("message", {}).get("content", "")
+                        if content:
+                            yield content
+                        if data.get("done"):
+                            return
+            return  # stream completed successfully
+        except (httpx.RequestError, httpx.HTTPStatusError, OSError) as exc:
+            last_exc = exc
+            if attempt < 2:
+                await asyncio.sleep(1.5 * (attempt + 1))
+    raise RuntimeError(f"Ollama not reachable at {base} after 3 attempts: {last_exc}")
 
 
 def _ollama_message_with_images(content: str, image_paths: list[str] | None = None) -> dict:

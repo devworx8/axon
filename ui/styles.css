@@ -180,11 +180,13 @@ button, [role="button"], a {
 .voice-stage__content {
   position: relative;
   z-index: 1;
-  width: min(100%, 760px);
+  width: 100%;
+  max-width: 1280px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 18px;
+  padding: 0 16px;
 }
 .voice-stage__eyebrow {
   font-size: 12px;
@@ -384,41 +386,152 @@ button, [role="button"], a {
   font-size: 11px;
   color: #64748b;
 }
-.voice-stage__panel-grid {
-  width: min(100%, 920px);
+/* ── Voice Arena: 3-column desktop layout ── */
+.voice-arena {
   display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  max-width: 1280px;
+  position: relative;
 }
-.voice-panel {
-  border: 1px solid rgba(148, 163, 184, 0.15);
-  background: rgba(2, 6, 23, 0.7);
-  border-radius: 20px;
-  padding: 20px;
-  backdrop-filter: blur(14px);
+.voice-arena__center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  z-index: 2;
 }
-.voice-panel:last-child {
-  border-color: rgba(34, 211, 238, 0.22);
-  background: rgba(2, 6, 23, 0.78);
+
+/* ── Floating holographic panels ── */
+.voice-float {
+  position: relative;
+  min-width: 0;
+  padding: 0 20px;
+  opacity: 0.85;
+  transition: opacity 0.4s ease, transform 0.4s ease;
 }
-.voice-panel__label {
-  font-size: 11px;
-  letter-spacing: 0.2em;
+.voice-float:hover {
+  opacity: 1;
+}
+.voice-float--active {
+  opacity: 1 !important;
+}
+.voice-float__edge {
+  position: absolute;
+  top: 12%;
+  bottom: 12%;
+  width: 2px;
+  background: linear-gradient(180deg, transparent, rgba(125, 211, 252, 0.5), transparent);
+  pointer-events: none;
+}
+.voice-float--left .voice-float__edge {
+  right: 0;
+}
+.voice-float--right .voice-float__edge {
+  left: 0;
+}
+.voice-float__scanline {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.voice-float__scanline::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  width: 3px;
+  height: 40px;
+  background: linear-gradient(180deg, transparent, #22d3ee, transparent);
+  animation: voice-scanline 2.8s ease-in-out infinite;
+  border-radius: 2px;
+  box-shadow: 0 0 12px 3px rgba(34, 211, 238, 0.4);
+}
+@keyframes voice-scanline {
+  0%   { top: -40px; opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 1; }
+  100% { top: calc(100% + 40px); opacity: 0; }
+}
+.voice-float__inner {
+  background: rgba(2, 6, 23, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 18px;
+  padding: 22px 20px;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  position: relative;
+  overflow: hidden;
+}
+.voice-float--right .voice-float__inner {
+  border-color: rgba(34, 211, 238, 0.16);
+  background: rgba(2, 6, 23, 0.62);
+}
+.voice-float--right .voice-float__inner::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 80px;
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.06), transparent);
+  pointer-events: none;
+}
+.voice-float--active .voice-float__inner {
+  border-color: rgba(34, 211, 238, 0.28);
+  box-shadow: 0 0 40px -8px rgba(34, 211, 238, 0.12), inset 0 0 30px rgba(34, 211, 238, 0.03);
+}
+.voice-float__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  letter-spacing: 0.25em;
   text-transform: uppercase;
-  color: #7dd3fc;
-  margin-bottom: 2px;
+  color: #94a3b8;
+  font-weight: 600;
 }
-.voice-panel__body {
-  margin-top: 10px;
-  min-height: 76px;
-  max-height: 260px;
+.voice-float--right .voice-float__label {
+  color: #7dd3fc;
+}
+.voice-float__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #475569;
+  flex-shrink: 0;
+}
+.voice-float__dot--cyan {
+  background: #22d3ee;
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.6);
+  animation: voice-dot-pulse 2s ease-in-out infinite;
+}
+@keyframes voice-dot-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+.voice-float__body {
+  margin-top: 14px;
+  min-height: 60px;
+  max-height: 320px;
   overflow-y: auto;
+  color: #cbd5e1;
+  font-size: 14px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(125, 211, 252, 0.2) transparent;
+}
+.voice-float__body--response {
   color: #e2e8f0;
   font-size: 15px;
-  line-height: 1.7;
-  white-space: pre-wrap;
 }
-.voice-panel__body--transcript {
+.voice-float--active .voice-float__body--response {
   color: #f1f5f9;
 }
 .voice-stage__actions {
@@ -465,8 +578,31 @@ button, [role="button"], a {
   100% { filter: hue-rotate(18deg); }
 }
 @media (max-width: 768px) {
-  .voice-stage__panel-grid {
+  .voice-arena {
     grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .voice-arena__center {
+    order: -1;
+  }
+  .voice-float {
+    padding: 0;
+    opacity: 1;
+  }
+  .voice-float__edge {
+    display: none;
+  }
+  .voice-float__scanline {
+    display: none;
+  }
+  .voice-float__inner {
+    border-radius: 14px;
+    padding: 16px;
+  }
+  .voice-float__body {
+    min-height: 44px;
+    max-height: 160px;
+    font-size: 14px;
   }
   .voice-stage__state-label {
     font-size: clamp(34px, 11vw, 56px);
@@ -478,10 +614,13 @@ button, [role="button"], a {
     width: min(88vw, 360px);
     height: min(88vw, 360px);
   }
-  .voice-panel__body {
-    min-height: 56px;
-    max-height: 180px;
-    font-size: 14px;
+}
+@media (min-width: 769px) {
+  .voice-visual-wrap {
+    width: min(100%, 400px);
+  }
+  .voice-float__body {
+    max-height: 380px;
   }
 }
 .voice-action--recording {

@@ -932,7 +932,7 @@ async def update_project(project_id: int, body: ProjectUpdate):
 async def analyse_project(project_id: int):
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
-        ai = _ai_params(settings)
+        ai = await _ai_params(settings, conn)
 
         project = dict(await devdb.get_project(conn, project_id))
         if not project:
@@ -954,7 +954,7 @@ async def suggest_project_tasks(project_id: int):
         if not project:
             raise HTTPException(404, "Project not found")
         settings = await devdb.get_all_settings(conn)
-        ai = _ai_params(settings)
+        ai = await _ai_params(settings, conn)
         open_tasks = [dict(r) for r in await devdb.get_tasks(conn, project_id=project_id, status="open")]
         try:
             suggestions = await brain.suggest_tasks_for_project(dict(project), open_tasks, **ai)
@@ -1061,7 +1061,7 @@ class EnhanceRequest(BaseModel):
 async def enhance_prompt(body: EnhanceRequest):
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
-        ai = _ai_params(settings)
+        ai = await _ai_params(settings, conn)
         enhanced = await brain.enhance_prompt(body.content, body.project_context, **ai)
         return {"enhanced": enhanced}
 
@@ -1149,7 +1149,7 @@ async def delete_task(task_id: int):
 async def suggest_tasks():
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
-        ai = _ai_params(settings)
+        ai = await _ai_params(settings, conn)
         projects = [dict(r) for r in await devdb.get_projects(conn)]
         tasks = [dict(r) for r in await devdb.get_tasks(conn, status="open")]
         suggestions = await brain.suggest_tasks(
@@ -1160,22 +1160,36 @@ async def suggest_tasks():
 
 # ─── AI backend helper ────────────────────────────────────────────────────────
 
-def _ai_params(settings: dict) -> dict:
-    """Extract AI backend params from settings dict."""
+async def _ai_params(settings: dict, conn=None) -> dict:
+    """Extract AI backend params from settings dict, resolving keys from vault when available."""
     backend = settings.get("ai_backend", "ollama")
     api_runtime = provider_registry.runtime_api_config(settings)
     api_key = api_runtime.get("api_key", "")
+    provider_id = api_runtime.get("provider_id", "anthropic")
+
+    # Resolve API key from vault when unlocked
+    if devvault.VaultSession.is_unlocked() and (not api_key or api_key == "set"):
+        async def _resolve(db):
+            return await devvault.vault_resolve_provider_key(db, provider_id)
+        if conn:
+            vault_key = await _resolve(conn)
+        else:
+            async with devdb.get_db() as _conn:
+                vault_key = await _resolve(_conn)
+        if vault_key:
+            api_key = vault_key
+
     cli_path = settings.get("claude_cli_path", "")
     ollama_url = settings.get("ollama_url", "")
     ollama_model = settings.get("ollama_model", "")
     if backend == "api" and not api_key:
         provider_label = api_runtime.get("provider_label", "External API")
-        raise HTTPException(400, f"{provider_label} key not set. Go to Settings → Runtime.")
+        raise HTTPException(400, f"{provider_label} key not set. Add it to the Secure Vault or Settings → Runtime.")
     if backend == "cli" and not cli_path and not brain._find_cli():
         raise HTTPException(400, "CLI agent not found. Set the path in Settings.")
     return {
         "api_key": api_key,
-        "api_provider": api_runtime.get("provider_id", "anthropic"),
+        "api_provider": provider_id,
         "api_base_url": api_runtime.get("api_base_url", ""),
         "api_model": api_runtime.get("api_model", ""),
         "backend": backend, "cli_path": cli_path,
@@ -1334,8 +1348,8 @@ def _local_role_for_composer(options: dict, agent_request: bool = False) -> str:
     return "general"
 
 
-async def _effective_ai_params(settings: dict, composer_options: dict, *, agent_request: bool = False, requested_model: str = "") -> dict:
-    ai = dict(_ai_params(settings))
+async def _effective_ai_params(settings: dict, composer_options: dict, *, conn=None, agent_request: bool = False, requested_model: str = "") -> dict:
+    ai = dict(await _ai_params(settings, conn))
     external_mode = str(composer_options.get("external_mode") or "local_first").lower()
 
     if not agent_request:
@@ -1343,12 +1357,21 @@ async def _effective_ai_params(settings: dict, composer_options: dict, *, agent_
             ai["backend"] = "ollama"
         elif external_mode in {"cloud_assist", "external_agent"} and ai.get("backend") == "ollama":
             api_runtime = provider_registry.runtime_api_config(settings)
-            if api_runtime.get("api_key"):
+            provider_id = api_runtime.get("provider_id", "anthropic")
+            api_key = api_runtime.get("api_key", "")
+            # Resolve from vault if no key in settings
+            if not api_key and devvault.VaultSession.is_unlocked():
+                if conn:
+                    api_key = await devvault.vault_resolve_provider_key(conn, provider_id)
+                else:
+                    async with devdb.get_db() as _conn:
+                        api_key = await devvault.vault_resolve_provider_key(_conn, provider_id)
+            if api_key:
                 ai.update(
                     {
                         "backend": "api",
-                        "api_key": api_runtime.get("api_key", ""),
-                        "api_provider": api_runtime.get("provider_id", "anthropic"),
+                        "api_key": api_key,
+                        "api_provider": provider_id,
                         "api_base_url": api_runtime.get("api_base_url", ""),
                         "api_model": api_runtime.get("api_model", ""),
                     }
@@ -1883,7 +1906,7 @@ async def chat(body: ChatMessage):
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
         composer_options = _composer_options_dict(body.composer_options)
-        ai = await _effective_ai_params(settings, composer_options, requested_model=body.model or "")
+        ai = await _effective_ai_params(settings, composer_options, conn=conn, requested_model=body.model or "")
 
         # Build rich context
         projects = [dict(r) for r in await devdb.get_projects(conn, status="active")]
@@ -2105,7 +2128,7 @@ async def chat_stream(body: ChatMessage, request: Request):
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
         composer_options = _composer_options_dict(body.composer_options)
-        ai = await _effective_ai_params(settings, composer_options, requested_model=body.model or "")
+        ai = await _effective_ai_params(settings, composer_options, conn=conn, requested_model=body.model or "")
         settings = {**settings, "ai_backend": ai.get("backend", settings.get("ai_backend", "ollama"))}
         if ai.get("ollama_model"):
             settings["ollama_model"] = ai["ollama_model"]
@@ -2813,6 +2836,18 @@ async def vault_status():
         "is_setup": is_setup,
         "is_unlocked": devvault.VaultSession.is_unlocked(),
     }
+
+
+@app.get("/api/vault/provider-keys")
+async def vault_provider_keys():
+    """Check which providers have keys resolvable from the vault."""
+    result = {}
+    if devvault.VaultSession.is_unlocked():
+        async with devdb.get_db() as conn:
+            resolved = await devvault.vault_resolve_all_provider_keys(conn)
+            for pid in resolved:
+                result[pid] = True
+    return {"unlocked": devvault.VaultSession.is_unlocked(), "resolved": result}
 
 
 @app.post("/api/vault/setup")

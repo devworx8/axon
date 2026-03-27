@@ -1816,6 +1816,11 @@
                           :class="composerOptions.external_provider_hint === 'gemini_gems' ? 'border border-blue-500/30 bg-blue-500/10 text-blue-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
                     Gemini Gems
                   </button>
+                  <button @click="setExternalProviderHint('deepseek')"
+                          class="rounded-xl px-3 py-2 text-[11px] transition"
+                          :class="composerOptions.external_provider_hint === 'deepseek' ? 'border border-blue-500/30 bg-blue-500/10 text-blue-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                    DeepSeek
+                  </button>
                   <button @click="setExternalProviderHint('api_models')"
                           class="rounded-xl px-3 py-2 text-[11px] transition"
                           :class="composerOptions.external_provider_hint === 'api_models' ? 'border border-blue-500/30 bg-blue-500/10 text-blue-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
@@ -3055,22 +3060,32 @@
               <div>
                 <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">API Key</label>
                 <div class="flex flex-col gap-2 sm:flex-row">
-                  <input
-                    :value="providerValue(settingsForm.api_provider, 'api_key')"
-                    @input="setProviderValue(settingsForm.api_provider, 'api_key', $event.target.value)"
-                    :placeholder="providerKeyPlaceholder(settingsForm.api_provider)"
-                    type="password"
-                    class="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono"
-                  />
+                  <div class="flex-1 relative">
+                    <input
+                      :value="providerValue(settingsForm.api_provider, 'api_key')"
+                      @input="setProviderValue(settingsForm.api_provider, 'api_key', $event.target.value)"
+                      :placeholder="vaultProviderKeys[settingsForm.api_provider] ? '🔐 Key loaded from Vault' : providerKeyPlaceholder(settingsForm.api_provider)"
+                      type="password"
+                      :disabled="!!vaultProviderKeys[settingsForm.api_provider]"
+                      class="w-full bg-slate-800 border rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono"
+                      :class="vaultProviderKeys[settingsForm.api_provider] ? 'border-emerald-600/50 opacity-60' : 'border-slate-700'"
+                    />
+                    <span x-show="vaultProviderKeys[settingsForm.api_provider]" class="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-400 text-xs">🔐 Vault</span>
+                  </div>
                   <button @click="testCloudProvider(settingsForm.api_provider)"
                           class="w-full sm:w-auto px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs rounded-xl transition">
                     Test
                   </button>
                 </div>
-                <p x-show="providerSavedHint(settingsForm.api_provider)" class="text-[10px] text-emerald-400 mt-1">
-                  Saved securely as <span x-text="providerSavedHint(settingsForm.api_provider)"></span>.
+                <p x-show="vaultProviderKeys[settingsForm.api_provider]" class="text-[10px] text-emerald-400 mt-1">
+                  Key resolved from Secure Vault. Manage keys in the <button @click="activeTab='vault'" class="underline hover:text-emerald-300">Vault</button>.
                 </p>
-                <p class="text-[10px] text-slate-500 mt-1" x-text="providerRuntimeHint(settingsForm.api_provider)"></p>
+                <p x-show="!vaultProviderKeys[settingsForm.api_provider] && vaultUnlocked" class="text-[10px] text-amber-400 mt-1">
+                  No matching key in Vault. Add one in the <button @click="activeTab='vault'" class="underline hover:text-amber-300">Vault</button> or enter manually above.
+                </p>
+                <p x-show="!vaultUnlocked" class="text-[10px] text-slate-500 mt-1">
+                  Unlock the <button @click="activeTab='vault'" class="underline hover:text-slate-400">Vault</button> to auto-load API keys.
+                </p>
                 <p x-show="cloudProviderTests[settingsForm.api_provider]?.message"
                    :class="cloudProviderTests[settingsForm.api_provider]?.ok ? 'text-emerald-400' : 'text-amber-300'"
                    class="text-[10px] mt-1"
@@ -3528,24 +3543,30 @@
                   <div class="mt-3">
                     <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">API Key</label>
                     <div class="flex flex-col gap-2 sm:flex-row">
-                      <input
-                        :value="providerValue(adapter.id, 'api_key')"
-                        @input="setProviderValue(adapter.id, 'api_key', $event.target.value)"
-                        :placeholder="providerKeyPlaceholder(adapter.id)"
-                        type="password"
-                        :disabled="!settingsForm.cloud_agents_enabled"
-                        class="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono disabled:opacity-50"
-                      />
+                      <div class="flex-1 relative">
+                        <input
+                          :value="providerValue(adapter.id, 'api_key')"
+                          @input="setProviderValue(adapter.id, 'api_key', $event.target.value)"
+                          :placeholder="vaultProviderKeys[adapter.id] ? '🔐 Key loaded from Vault' : providerKeyPlaceholder(adapter.id)"
+                          type="password"
+                          :disabled="!settingsForm.cloud_agents_enabled || !!vaultProviderKeys[adapter.id]"
+                          class="w-full bg-slate-800 border rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono disabled:opacity-50"
+                          :class="vaultProviderKeys[adapter.id] ? 'border-emerald-600/50' : 'border-slate-700'"
+                        />
+                        <span x-show="vaultProviderKeys[adapter.id]" class="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-400 text-xs">🔐 Vault</span>
+                      </div>
                       <button @click="testCloudProvider(adapter.id)"
                               :disabled="!settingsForm.cloud_agents_enabled"
                               class="w-full sm:w-auto px-3 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-slate-200 text-xs rounded-xl transition">
                         Test
                       </button>
                     </div>
-                    <p x-show="providerSavedHint(adapter.id)" class="text-[10px] text-emerald-400 mt-1">
-                      Saved securely as <span x-text="providerSavedHint(adapter.id)"></span>.
+                    <p x-show="vaultProviderKeys[adapter.id]" class="text-[10px] text-emerald-400 mt-1">
+                      Key resolved from Secure Vault.
                     </p>
-                    <p class="text-[10px] text-slate-500 mt-1" x-text="providerRuntimeHint(adapter.id)"></p>
+                    <p x-show="!vaultProviderKeys[adapter.id] && vaultUnlocked" class="text-[10px] text-amber-400 mt-1">
+                      No matching key in Vault for this provider.
+                    </p>
                     <p x-show="cloudProviderTests[adapter.id]?.message"
                        :class="cloudProviderTests[adapter.id]?.ok ? 'text-emerald-400' : 'text-amber-300'"
                        class="text-[10px] mt-1"
@@ -4497,7 +4518,23 @@
           </div>
         </div>
 
-        <div class="voice-visual-wrap">
+        <!-- ── Arena: 3-column on desktop, stacked on mobile ── -->
+        <div class="voice-arena">
+          <!-- Left float: Transcript -->
+          <div class="voice-float voice-float--left">
+            <div class="voice-float__edge"></div>
+            <div class="voice-float__inner">
+              <div class="voice-float__label">
+                <span class="voice-float__dot"></span>
+                Transcript
+              </div>
+              <div class="voice-float__body" x-text="voiceDisplayTranscript()"></div>
+            </div>
+          </div>
+
+          <!-- Center: Reactor + Status -->
+          <div class="voice-arena__center">
+            <div class="voice-visual-wrap">
           <div class="voice-hud voice-hud--left"></div>
           <div class="voice-hud voice-hud--right"></div>
           <svg class="axon-reactor" viewBox="0 0 420 420" role="img" aria-label="Axon voice reactor" :data-state="voiceVisualState()">
@@ -4573,17 +4610,21 @@
           <div class="voice-stage__state-hint" x-text="voiceStatusHint()"></div>
           <div x-show="voiceSessionStartedAt" class="voice-stage__started" x-text="'Started ' + timeAgo(voiceSessionStartedAt)"></div>
         </div>
+          </div><!-- /voice-arena__center -->
 
-        <div class="voice-stage__panel-grid">
-          <div class="voice-panel">
-            <div class="voice-panel__label">Transcript</div>
-            <div class="voice-panel__body voice-panel__body--transcript" x-text="voiceDisplayTranscript()"></div>
+          <!-- Right float: Response -->
+          <div class="voice-float voice-float--right" :class="voice.responseText ? 'voice-float--active' : ''">
+            <div class="voice-float__edge"></div>
+            <div class="voice-float__scanline"></div>
+            <div class="voice-float__inner">
+              <div class="voice-float__label">
+                <span class="voice-float__dot voice-float__dot--cyan"></span>
+                Response
+              </div>
+              <div class="voice-float__body voice-float__body--response" x-text="voiceDisplayResponse()"></div>
+            </div>
           </div>
-          <div class="voice-panel">
-            <div class="voice-panel__label">Response</div>
-            <div class="voice-panel__body" x-text="voiceDisplayResponse()"></div>
-          </div>
-        </div>
+        </div><!-- /voice-arena -->
 
         <div class="voice-stage__actions">
           <button @click="startVoiceListening()" class="voice-action voice-action--primary"
@@ -5333,6 +5374,8 @@ function devbrain() {
       _cloudflareTunnelTokenHint: '',
     },
     cloudProviderTests: {},
+    vaultUnlocked: false,
+    vaultProviderKeys: {},
     settingsSaving: false,
     settingsSaved: false,
     ollamaStatus: { running: false, models: [], url: '', runtime_mode: 'gpu_default', service_detail: '', service_mode: '' },

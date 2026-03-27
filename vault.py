@@ -288,3 +288,75 @@ async def vault_update_secret(db, key: bytes, secret_id: int,
 async def vault_delete_secret(db, secret_id: int):
     await db.execute("DELETE FROM vault_secrets WHERE id = ?", (secret_id,))
     await db.commit()
+
+
+# ─── Provider key resolution ─────────────────────────────────────────────────
+
+# Maps provider_id → vault secret name(s) to search for (case-insensitive)
+PROVIDER_VAULT_NAMES: dict[str, list[str]] = {
+    "anthropic": ["anthropic", "claude"],
+    "openai_gpts": ["openai", "openai gpts", "gpt"],
+    "gemini_gems": ["gemini", "google ai", "gemini gems"],
+    "deepseek": ["deepseek"],
+    "generic_api": ["api key", "generic api"],
+}
+
+
+async def vault_resolve_provider_key(db, provider_id: str) -> str:
+    """
+    Look up a provider's API key from the vault.
+    Returns the decrypted password/secret if found, empty string otherwise.
+    Requires the vault to be unlocked.
+    """
+    key = VaultSession.get_key()
+    if key is None:
+        return ""
+
+    names = PROVIDER_VAULT_NAMES.get(provider_id, [provider_id])
+
+    cur = await db.execute(
+        "SELECT id, name, category FROM vault_secrets ORDER BY name"
+    )
+    rows = await cur.fetchall()
+
+    for row in rows:
+        secret_name = (row["name"] or "").strip().lower()
+        for candidate in names:
+            if candidate.lower() in secret_name:
+                secret = await vault_get_secret(db, row["id"], key)
+                if secret and secret.get("password"):
+                    return secret["password"]
+
+    return ""
+
+
+async def vault_resolve_all_provider_keys(db) -> dict[str, str]:
+    """
+    Resolve API keys for all known providers from the vault.
+    Returns {provider_id: api_key} for providers that have a matching secret.
+    """
+    key = VaultSession.get_key()
+    if key is None:
+        return {}
+
+    cur = await db.execute(
+        "SELECT id, name, category FROM vault_secrets ORDER BY name"
+    )
+    rows = await cur.fetchall()
+
+    resolved: dict[str, str] = {}
+    for provider_id, names in PROVIDER_VAULT_NAMES.items():
+        if provider_id in resolved:
+            continue
+        for row in rows:
+            secret_name = (row["name"] or "").strip().lower()
+            for candidate in names:
+                if candidate.lower() in secret_name:
+                    secret = await vault_get_secret(db, row["id"], key)
+                    if secret and secret.get("password"):
+                        resolved[provider_id] = secret["password"]
+                        break
+            if provider_id in resolved:
+                break
+
+    return resolved
