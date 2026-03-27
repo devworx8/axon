@@ -508,6 +508,25 @@ async def update_task_status(db: aiosqlite.Connection, task_id: int, status: str
     await db.commit()
 
 
+async def update_task(db: aiosqlite.Connection, task_id: int, **fields):
+    allowed = {"title", "detail", "priority", "status", "due_date", "project_id"}
+    updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if not updates:
+        return
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    params = list(updates.values()) + [task_id]
+    await db.execute(
+        f"UPDATE tasks SET {set_clause}, updated_at = datetime('now') WHERE id = ?",
+        params
+    )
+    await db.commit()
+
+
+async def delete_task(db: aiosqlite.Connection, task_id: int):
+    await db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    await db.commit()
+
+
 # ─── Activity Log ─────────────────────────────────────────────────────────────
 
 async def log_event(db: aiosqlite.Connection, event_type: str, summary: str,

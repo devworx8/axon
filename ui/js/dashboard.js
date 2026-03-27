@@ -23,6 +23,24 @@ function axonDashboardMixin() {
       }
     },
 
+    async loadLatestDigest() {
+      try {
+        const res = await this.api('GET', '/api/digest/latest');
+        this.latestDigest = res.digest || null;
+      } catch (e) {
+        // non-critical
+      }
+    },
+
+    async loadActivity() {
+      try {
+        const data = await this.api('GET', '/api/activity?limit=50');
+        this.activity = data || [];
+      } catch (e) {
+        console.error('Failed to load activity', e);
+      }
+    },
+
     async loadDashboard() {
       if (this.dashLoading) return;
       this.dashLoading = true;
@@ -82,7 +100,16 @@ function axonDashboardMixin() {
           phases: status.phases || this.agentLifecycle,
           agents: status.agents || [],
         };
-        if (status.connection) this.connectionState = status.connection;
+        if (status.browser_actions) {
+          this.browserActions = {
+            ...this.browserActions,
+            ...status.browser_actions,
+          };
+        }
+        if (status.connection) {
+          this.connectionState = status.connection;
+          this.connectionState.domain_checked_at = new Date().toISOString();
+        }
       } catch (e) {
         this.runtimeStatus = {
           ...this.runtimeStatus,
@@ -178,6 +205,71 @@ function axonDashboardMixin() {
 
     activeChatModel() {
       return this.selectedChatModel || this.settingsForm?.code_model || this.settingsForm?.ollama_model || '';
+    },
+
+    providerIdentityIcon(providerId = '') {
+      const icons = {
+        ollama: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M7 15c0-3.314 2.239-6 5-6s5 2.686 5 6-2.239 4-5 4-5-.686-5-4z"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 10c-.333-2 1-5 3-5 1.48 0 2.44 1.12 3 2.5M10 14h.01M14 14h.01"/></svg>`,
+        cli: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6.75h16v10.5H4z"/><path stroke-linecap="round" stroke-linejoin="round" d="m8 10 2 2-2 2m5 0h3"/></svg>`,
+        anthropic: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="m6 18 6-12 6 12"/><path stroke-linecap="round" stroke-linejoin="round" d="M8.5 13h7"/></svg>`,
+        openai_gpts: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3.5 17.5 6v6L12 15.5 6.5 12V6L12 3.5z"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v8M8.5 10 15.5 14M15.5 10 8.5 14"/></svg>`,
+        gemini_gems: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="m12 2 2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2L12 2Z"/></svg>`,
+        generic_api: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 12h16M12 4a9 9 0 0 1 0 16M12 4a9 9 0 0 0 0 16"/></svg>`,
+      };
+      return icons[providerId] || icons.generic_api;
+    },
+
+    providerIdentityTone(providerId = '') {
+      if (providerId === 'ollama') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
+      if (providerId === 'cli') return 'border-green-500/20 bg-green-500/10 text-green-200';
+      if (providerId === 'anthropic') return 'border-orange-500/20 bg-orange-500/10 text-orange-200';
+      if (providerId === 'openai_gpts') return 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200';
+      if (providerId === 'gemini_gems') return 'border-indigo-500/20 bg-indigo-500/10 text-indigo-200';
+      return 'border-blue-500/20 bg-blue-500/10 text-blue-200';
+    },
+
+    consoleProviderIdentity() {
+      const backend = (this.settingsForm?.ai_backend || 'ollama').toLowerCase();
+      if (backend === 'ollama') {
+        return {
+          providerId: 'ollama',
+          providerLabel: 'Ollama',
+          modelLabel: this.activeChatModel() || this.settingsForm?.code_model || this.settingsForm?.ollama_model || this.runtimeStatus?.active_model || 'Saved default',
+          transportLabel: 'Local runtime',
+        };
+      }
+      if (backend === 'api') {
+        return {
+          providerId: this.runtimeStatus?.selected_api_provider?.provider_id || this.settingsForm?.api_provider || 'generic_api',
+          providerLabel: this.selectedApiProviderLabel(),
+          modelLabel: this.selectedApiProviderModel() || this.runtimeStatus?.active_model || 'Model pending',
+          transportLabel: this.selectedApiProviderTransportLabel(),
+        };
+      }
+      return {
+        providerId: 'cli',
+        providerLabel: 'CLI Agent',
+        modelLabel: this.runtimeStatus?.active_model || this.settingsForm?.code_model || this.settingsForm?.ollama_model || 'Saved default',
+        transportLabel: 'Local bridge',
+      };
+    },
+
+    assistantProviderIdentity() {
+      const identity = this.consoleProviderIdentity();
+      return {
+        providerId: identity.providerId,
+        providerLabel: identity.providerLabel,
+        modelLabel: identity.modelLabel,
+        transportLabel: identity.transportLabel,
+      };
+    },
+
+    messageProviderIdentity(message) {
+      const identity = message?.providerIdentity || {};
+      if (identity.providerId || identity.providerLabel || identity.modelLabel) {
+        return identity;
+      }
+      return this.consoleProviderIdentity();
     },
 
     syncChatModel(preferred = '') {
@@ -283,6 +375,79 @@ function axonDashboardMixin() {
         return model ? `${provider} · ${model}` : provider;
       }
       return 'CLI Agent';
+    },
+
+    browserActionRiskClass(risk) {
+      const value = String(risk || 'medium').toLowerCase();
+      if (value === 'high') return 'border-rose-500/20 bg-rose-500/10 text-rose-200';
+      if (value === 'low') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
+      return 'border-amber-500/20 bg-amber-500/10 text-amber-200';
+    },
+
+    browserActionScopeLabel(scope) {
+      const value = String(scope || 'browser_act').toLowerCase();
+      if (value === 'browser_inspect') return 'Inspect';
+      if (value === 'browser_act') return 'Act';
+      return value.replace(/_/g, ' ');
+    },
+
+    browserActionIcon(actionType) {
+      const value = String(actionType || '').toLowerCase();
+      if (value.includes('navigate') || value.includes('open')) return '↗';
+      if (value.includes('click') || value.includes('press')) return '⌖';
+      if (value.includes('type') || value.includes('fill')) return '⌨';
+      if (value.includes('inspect') || value.includes('snapshot')) return '◫';
+      if (value.includes('submit')) return '⤴';
+      return '◦';
+    },
+
+    async loadBrowserActions() {
+      this.browserActions.loading = true;
+      try {
+        const state = await this.api('GET', '/api/browser/actions');
+        this.browserActions = {
+          ...this.browserActions,
+          ...state,
+          loading: false,
+        };
+      } catch (e) {
+        this.browserActions.loading = false;
+        this.showToast(`Browser actions unavailable: ${e.message || e}`);
+      }
+    },
+
+    async approveBrowserAction(id) {
+      if (!id) return;
+      this.browserActions.loading = true;
+      try {
+        const state = await this.api('POST', `/api/browser/actions/${id}/approve`);
+        this.browserActions = {
+          ...this.browserActions,
+          ...state,
+          loading: false,
+        };
+        this.showToast('Browser action approved');
+      } catch (e) {
+        this.browserActions.loading = false;
+        this.showToast(`Approval failed: ${e.message || e}`);
+      }
+    },
+
+    async rejectBrowserAction(id) {
+      if (!id) return;
+      this.browserActions.loading = true;
+      try {
+        const state = await this.api('POST', `/api/browser/actions/${id}/reject`);
+        this.browserActions = {
+          ...this.browserActions,
+          ...state,
+          loading: false,
+        };
+        this.showToast('Browser action rejected');
+      } catch (e) {
+        this.browserActions.loading = false;
+        this.showToast(`Reject failed: ${e.message || e}`);
+      }
     },
 
     runtimeProviderBadges() {
@@ -1044,6 +1209,15 @@ function axonDashboardMixin() {
           this.handleAuthRequired();
           throw new Error('Session expired');
         }
+        // Handle structured JSON error responses (no_display / capture_failed)
+        const ct = resp.headers.get('content-type') || '';
+        if (ct.includes('application/json')) {
+          const body = await resp.json();
+          const msg = body.message || body.detail || 'Desktop preview unavailable';
+          throw new Error(body.status === 'no_display'
+            ? '🖥️ Screen capture unavailable in this environment'
+            : msg);
+        }
         if (!resp.ok) {
           const detail = await resp.text().catch(() => '');
           throw new Error(detail || 'Desktop preview unavailable');
@@ -1370,6 +1544,12 @@ function axonDashboardMixin() {
       this.liveFeed.connected = true;
       this.liveFeed.reconnecting = false;
       if (payload?.connection) this.connectionState = payload.connection;
+      if (payload?.browser_actions) {
+        this.browserActions = {
+          ...this.browserActions,
+          ...payload.browser_actions,
+        };
+      }
       if (Array.isArray(payload?.terminal?.sessions)) {
         this.terminal.sessions = payload.terminal.sessions;
       }
@@ -1566,6 +1746,9 @@ function axonDashboardMixin() {
     async useResourceInConsole(resource) {
       if (!resource?.id) return;
       this.mergeSelectedResources([resource]);
+      if (String(resource.kind || '').toLowerCase() === 'image') {
+        this.visionWarningDismissed = false;
+      }
       this.activeTab = 'chat';
       this.showResourcePicker = false;
       this.showToast('Resource attached to the console');
@@ -1575,8 +1758,20 @@ function axonDashboardMixin() {
       if (!resource?.id) return;
       this.setComposerOption('intelligence_mode', 'deep_research');
       this.mergeSelectedResources([resource]);
+      if (String(resource.kind || '').toLowerCase() === 'image') {
+        this.visionWarningDismissed = false;
+      }
       this.activeTab = 'chat';
       this.showToast('Resource attached for Deep Research');
+    },
+
+    consoleHasImageAttachmentWithoutVision() {
+      const hasImage = (this.selectedResources || []).some(resource => {
+        const kind = String(resource?.kind || '').toLowerCase();
+        const mime = String(resource?.mime_type || '').toLowerCase();
+        return kind === 'image' || mime.startsWith('image/');
+      });
+      return hasImage && !this.runtimeStatus?.vision_status?.ready && !this.visionWarningDismissed;
     },
 
     async updateResourceMetadata(resourceId, payload, successMessage = 'Resource updated') {

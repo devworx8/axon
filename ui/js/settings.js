@@ -57,6 +57,10 @@ function axonSettingsMixin() {
           azure_speech_key: '',  // never pre-fill secrets
           azure_speech_region: s.azure_speech_region || 'eastus',
           azure_voice: s.azure_voice || 'en-ZA-LeahNeural',
+          local_stt_model: s.local_stt_model || 'base',
+          local_stt_language: s.local_stt_language || 'en',
+          local_tts_model_path: s.local_tts_model_path || '',
+          local_tts_config_path: s.local_tts_config_path || '',
           _azureSpeechKeyHint: '',
           _cloudflareTunnelTokenHint: '',
         };
@@ -142,6 +146,10 @@ function axonSettingsMixin() {
       if (this.settingsForm.azure_speech_key) payload.azure_speech_key = this.settingsForm.azure_speech_key;
       payload.azure_speech_region = this.settingsForm.azure_speech_region || 'eastus';
       payload.azure_voice = this.settingsForm.azure_voice || 'en-ZA-LeahNeural';
+      payload.local_stt_model = this.settingsForm.local_stt_model || 'base';
+      payload.local_stt_language = this.settingsForm.local_stt_language || 'en';
+      payload.local_tts_model_path = this.settingsForm.local_tts_model_path || '';
+      payload.local_tts_config_path = this.settingsForm.local_tts_config_path || '';
       try {
         await this.api('POST', '/api/settings', payload);
         this.updateProviderKeyHint('anthropic');
@@ -164,6 +172,7 @@ function axonSettingsMixin() {
           this.settingsForm.github_token = '';
         }
         this.refreshVoiceCapability();
+        await this.loadVoiceStatus(true);
         this.syncChatModel(this.settingsForm.code_model || this.settingsForm.ollama_model || this.selectedChatModel);
         await this.loadTtsVoices(true);
         this.settingsSaved = true;

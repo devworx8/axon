@@ -54,7 +54,32 @@
           }
         }
       }
-    }
+        mode: 'browser',
+        speakingAudioUrl: '',
+        wakeLocked: false,
+        recording: false,
+        mediaRecorder: null,
+        recordedChunks: [],
+        stream: null,
+        audioContext: null,
+        sourceNode: null,
+        analyser: null,
+        dataArray: null,
+        playbackAudioContext: null,
+        playbackSourceNode: null,
+        playbackAnalyser: null,
+        playbackDataArray: null,
+        analysisSource: '',
+        levelRaf: null,
+        statusLoading: false,
+        server: {
+          available: false,
+          preferred_mode: 'browser',
+          transcription_available: false,
+          synthesis_available: false,
+          detail: '',
+        },
+        supported: {
   </script>
 </head>
 <body class="h-full bg-slate-950 text-slate-100" x-cloak>
@@ -196,7 +221,7 @@
   </aside>
 
   <!-- ── Main content ──────────────────────────────────────────────── -->
-  <main class="flex-1 flex flex-col overflow-hidden pb-safe md:pb-0 pt-14 md:pt-0">
+  <main class="flex-1 flex flex-col overflow-hidden pb-safe md:pb-0 pt-14 md:pt-0 page-content">
     <input x-ref="resourceUploadInput"
            type="file"
            multiple
@@ -222,8 +247,27 @@
                 x-text="liveFeed.connected ? '⬤ Live' : '◯ Idle'"></span>
         </div>
       </div>
-      <div class="flex-1 overflow-y-auto">
-        <div class="w-full max-w-[1600px] mx-auto px-4 py-4 md:px-6 md:py-6 xl:px-8 2xl:px-10">
+      <div class="flex-1 overflow-y-auto page-content">
+        <div x-show="dashLoading" class="w-full max-w-[1600px] mx-auto px-4 py-4 md:px-6 md:py-6 xl:px-8 2xl:px-10 space-y-3">
+          <template x-for="i in 3" :key="`dash-skeleton-${i}`">
+            <div class="bg-slate-900 rounded-2xl p-4 border border-slate-800 space-y-3">
+              <div class="flex items-center gap-3">
+                <div class="skeleton w-10 h-10 rounded-xl"></div>
+                <div class="flex-1 space-y-2">
+                  <div class="skeleton skeleton-text-lg w-2/3"></div>
+                  <div class="skeleton skeleton-text w-1/2"></div>
+                </div>
+              </div>
+              <div class="skeleton h-2 rounded-full w-full"></div>
+              <div class="flex gap-2">
+                <div class="skeleton skeleton-btn flex-1"></div>
+                <div class="skeleton skeleton-btn flex-1"></div>
+                <div class="skeleton w-11 h-11 rounded-xl"></div>
+              </div>
+            </div>
+          </template>
+        </div>
+        <div x-show="!dashLoading" class="w-full max-w-[1600px] mx-auto px-4 py-4 md:px-6 md:py-6 xl:px-8 2xl:px-10">
           <div class="xl:grid xl:grid-cols-[minmax(0,1fr)_360px] xl:gap-6 xl:items-start">
             <div class="min-w-0 space-y-4 md:space-y-5">
 
@@ -378,7 +422,9 @@
                           <div class="truncate text-sm font-medium text-slate-100" x-text="p.name"></div>
                           <div class="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
                             <span x-text="p.stack || 'unknown stack'"></span>
-                            <span x-show="p.todo_count > 0" class="text-amber-400" x-text="`${p.todo_count} TODOs`"></span>
+                                <span x-show="p.todo_count > 0" class="text-amber-400"
+                                  :title="`${p.todo_count} code markers found across scanned files. Includes TODO / FIXME / HACK / XXX comments.`"
+                                  x-text="`${p.todo_count} TODOs`"></span>
                           </div>
                         </div>
                         <svg class="h-4 w-4 shrink-0 text-slate-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
@@ -450,9 +496,9 @@
                       <div class="flex items-center gap-3 rounded-2xl border border-slate-800 bg-slate-950/60 px-4 py-3">
                         <span class="text-sm shrink-0" x-text="eventIcon(a.event_type)"></span>
                         <div class="min-w-0 flex-1">
-                          <div class="truncate text-sm text-slate-100" x-text="a.summary || a.event_type"></div>
+                          <div class="truncate text-sm text-slate-100" x-text="a.event_type === 'scan' ? scanTriggerLabel(a.summary) : (a.summary || a.event_type)"></div>
                           <div class="mt-1 text-[11px] text-slate-500">
-                            <span x-text="a.project_name || 'General'"></span>
+                            <span x-text="a.event_type === 'scan' ? (a.summary || 'Scan complete') : (a.project_name || 'General')"></span>
                           </div>
                         </div>
                         <span class="shrink-0 text-[10px] text-slate-500" x-text="timeAgo(a.created_at)"></span>
@@ -770,15 +816,15 @@
 
       <!-- Canvas: messages + input bar -->
       <div class="flex-1 flex flex-col min-w-0 min-h-0 relative" :class="{ 'agent-canvas-glow': agentMode && chatLoading }">
-      <div class="flex-1 overflow-y-auto px-3 md:px-5 py-4 space-y-3" id="chat-messages">
+      <div class="flex-1 overflow-y-auto page-content px-3 md:px-5 py-4 space-y-3" id="chat-messages">
         <!-- Empty state -->
         <div x-show="chatMessages.length === 0" class="flex flex-col items-center justify-center h-full text-center px-4">
           <!-- Axon ORB -->
-          <div @click="toggleVoiceMode()" class="axon-orb mb-4 cursor-pointer" :class="orbState()" title="Click to toggle voice mode">
+          <div @click="openVoiceCommandCenter()" class="axon-orb mb-4 cursor-pointer" :class="orbState()" title="Open voice mode">
             <div class="axon-orb-inner">✦</div>
           </div>
           <div class="text-white font-semibold text-lg mb-1">Axon Console</div>
-          <div x-show="voiceMode" class="voice-mode-badge text-[10px] text-red-300 mb-1">Voice Mode Active</div>
+          <div x-show="voice.open" class="voice-mode-badge text-[10px] text-cyan-300 mb-1">Voice Mode Active</div>
           <div class="text-slate-400 text-sm mb-6 max-w-xs">Local operator console for your workspaces, missions, files, and runtime. Give Axon a goal and let it observe, plan, execute, verify, and recover.</div>
           <div class="grid grid-cols-1 gap-2 w-full max-w-xs">
             <template x-for="hint in chatHints" :key="hint">
@@ -810,8 +856,50 @@
               </template>
             </div>
             <div class="chat-bubble" style="max-width:85%">
-              <!-- Agent tool events (collapsible) -->
-              <div x-show="msg.agentEvents && msg.agentEvents.length" class="mb-2 space-y-1">
+              <div x-show="msg.role === 'assistant'" class="mb-2 flex flex-wrap items-center gap-2">
+                <span class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px]"
+                      :class="providerIdentityTone(messageProviderIdentity(msg).providerId)">
+                  <span class="w-3.5 h-3.5" x-html="providerIdentityIcon(messageProviderIdentity(msg).providerId)"></span>
+                  <span x-text="messageProviderIdentity(msg).providerLabel || 'Runtime'"></span>
+                </span>
+                <span class="max-w-[180px] truncate rounded-full border border-slate-700/70 bg-slate-900/70 px-2.5 py-1 text-[10px] text-slate-300"
+                      x-text="messageProviderIdentity(msg).modelLabel || 'Saved default'"></span>
+                <span class="rounded-full border border-slate-800 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-500"
+                      x-text="messageProviderIdentity(msg).transportLabel || 'Runtime'"></span>
+              </div>
+
+              <div x-show="msg.thinkingBlocks && msg.thinkingBlocks.length" class="mb-2 space-y-2">
+                <template x-for="block in (msg.thinkingBlocks || [])" :key="block.id">
+                  <div class="rounded-2xl border border-violet-500/20 bg-violet-500/8 px-3 py-2.5">
+                    <div class="flex items-center gap-2">
+                      <span class="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] text-violet-200"
+                            x-text="block.title || 'Thinking'"></span>
+                      <span class="text-[10px] text-slate-500" x-text="block.updatedAt ? timeAgo(block.updatedAt) : ''"></span>
+                    </div>
+                    <div class="mt-2 text-[12px] leading-5 text-violet-50/90 whitespace-pre-wrap" x-text="block.content"></div>
+                  </div>
+                </template>
+              </div>
+
+              <div x-show="msg.workingBlocks && msg.workingBlocks.length" class="mb-2 space-y-2">
+                <template x-for="block in (msg.workingBlocks || [])" :key="block.id">
+                  <div class="rounded-2xl border px-3 py-2.5"
+                       :class="block.status === 'running' ? 'border-amber-500/20 bg-amber-500/10' : 'border-slate-700/60 bg-slate-900/60'">
+                    <div class="flex items-center gap-2">
+                      <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.16em]"
+                            :class="block.status === 'running' ? 'border-amber-500/20 bg-amber-500/10 text-amber-200' : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200'"
+                            x-text="block.status === 'running' ? 'Working' : 'Worked'"></span>
+                      <span class="text-[11px] font-medium text-slate-100" x-text="block.title"></span>
+                      <span class="ml-auto text-[10px] text-slate-500" x-text="block.updatedAt ? timeAgo(block.updatedAt) : ''"></span>
+                    </div>
+                    <div x-show="Object.keys(block.args || {}).length" class="mt-2 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 font-mono text-[10px] text-slate-400 break-all"
+                         x-text="JSON.stringify(block.args)"></div>
+                    <div x-show="block.result" class="mt-2 text-[11px] leading-5 text-slate-400 whitespace-pre-wrap" x-text="block.result.slice(0, 240)"></div>
+                  </div>
+                </template>
+              </div>
+
+              <div x-show="msg.agentEvents && msg.agentEvents.length && !(msg.workingBlocks && msg.workingBlocks.length)" class="mb-2 space-y-1">
                 <template x-for="(ev, idx) in (msg.agentEvents || [])" :key="idx">
                   <div :class="ev.type === 'tool_call' ? 'border-amber-700/40 bg-amber-900/20 text-amber-300' : 'border-slate-700/40 bg-slate-800/50 text-slate-400'"
                        class="rounded-lg border px-3 py-1.5 text-[11px] font-mono">
@@ -851,17 +939,17 @@
                       class="max-w-[140px] truncate text-[10px] px-2 py-0.5 rounded-full border border-slate-700/70 bg-slate-900/70 text-slate-400"
                       x-text="msg.modelLabel"></span>
                 <button x-show="msg.role === 'assistant' && voiceOutputAvailable() && !msg.streaming"
-                        @click="speakMessage(msg.content)"
-                        class="text-[10px] text-slate-600 hover:text-blue-400 transition" title="Read aloud">🔊</button>
+                  @click="speakMessage(msg.content)"
+                  class="px-2 py-1 rounded-lg text-[10px] text-slate-600 hover:text-blue-400 hover:bg-slate-800/70 transition" title="Read aloud">🔊</button>
                 <button x-show="msg.role === 'assistant' && !msg.streaming"
                         @click="openCanvas(msg)"
-                        class="text-[10px] text-slate-600 hover:text-sky-300 transition" title="Open document canvas">Canvas</button>
+                  class="px-2 py-1 rounded-lg text-[10px] text-slate-600 hover:text-sky-300 hover:bg-slate-800/70 transition" title="Open document canvas">Canvas</button>
                 <button x-show="msg.role === 'assistant' && !msg.streaming"
                         @click="copyToClipboard(msg.content, 'Markdown')"
-                        class="text-[10px] text-slate-600 hover:text-slate-300 transition" title="Copy markdown">Copy</button>
+                  class="px-2 py-1 rounded-lg text-[10px] text-slate-600 hover:text-slate-300 hover:bg-slate-800/70 transition" title="Copy markdown">Copy</button>
                 <button x-show="msg.error"
                         @click="retryChat(msg)"
-                        class="text-[10px] px-2 py-0.5 bg-amber-600/30 hover:bg-amber-600/50 text-amber-300 rounded-full transition" title="Retry this message">🔄 Retry</button>
+                  class="px-2 py-1 bg-amber-600/30 hover:bg-amber-600/50 text-amber-300 rounded-lg transition" title="Retry this message">🔄 Retry</button>
               </div>
             </div>
           </div>
@@ -896,37 +984,89 @@
 
       <!-- Input bar (bottom of canvas) -->
       <div class="shrink-0 px-3 md:px-5 py-2.5 border-t border-slate-800 bg-slate-950/80 backdrop-blur">
+        <div x-show="consoleHasImageAttachmentWithoutVision()" class="mb-2 rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2.5">
+          <div class="flex items-start gap-3">
+            <div class="text-amber-300 text-sm">⚠️</div>
+            <div class="flex-1 min-w-0">
+              <div class="text-xs font-medium text-amber-200">No vision model configured</div>
+              <div class="mt-0.5 text-[11px] text-amber-100/80">Image attached, but visual reasoning is disabled.</div>
+              <button @click="switchTab('settings')"
+                      class="mt-2 text-[11px] text-amber-200 underline underline-offset-2 hover:text-white transition">
+                Configure vision model →
+              </button>
+            </div>
+            <button @click="visionWarningDismissed = true" class="text-amber-300/70 hover:text-white text-xs">✕</button>
+          </div>
+        </div>
         <!-- Mini ORB (when messages present) -->
         <div x-show="chatMessages.length > 0" class="flex justify-center -mt-5 mb-1 pointer-events-none">
-          <div @click="toggleVoiceMode()" class="axon-orb mini pointer-events-auto cursor-pointer" :class="orbState()" title="Toggle voice mode">
+          <div @click="openVoiceCommandCenter()" class="axon-orb mini pointer-events-auto cursor-pointer" :class="orbState()" title="Open voice mode">
             <div class="axon-orb-inner text-xs">✦</div>
           </div>
         </div>
+
+        <!-- Generation status pill (visible above input when generating) -->
+        <div x-show="chatLoading" x-transition class="flex justify-center mb-2">
+          <button @click="stopGeneration()"
+                  class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-red-500/15 border border-red-500/25 text-red-300 text-xs hover:bg-red-500/25 transition press-scale">
+            <span class="w-2 h-2 rounded-full bg-red-400 animate-pulse"></span>
+            <span x-text="liveOperator.active ? 'Agent working… Tap to stop' : 'Generating… Tap to stop'"></span>
+          </button>
+        </div>
+
+        <!-- Mobile: expanded mini toolbar (above input) -->
+        <div x-show="isMobile && showMobileToolbar" x-transition
+             class="md:hidden flex items-center gap-2 px-1 pb-2 overflow-x-auto">
+          <button x-show="voiceInputAvailable()" @click="openVoiceCommandCenter(true); showMobileToolbar = false"
+                  class="shrink-0 h-8 px-3 rounded-xl bg-cyan-500/20 text-cyan-300 text-[11px] flex items-center gap-1.5 transition press-scale">
+            <span class="text-sm leading-none">🎤</span>
+            Voice
+          </button>
+          <button @click="openResourcePicker(); showMobileToolbar = false"
+                  :class="selectedResources.length ? 'bg-sky-500/15 text-sky-200' : 'bg-slate-800 text-slate-400'"
+                  class="shrink-0 h-8 px-3 rounded-xl text-[11px] flex items-center gap-1.5 transition press-scale">
+            📎 Attach
+          </button>
+          <button @click="openComposerMenu(); showMobileToolbar = false"
+                  :class="composerSummaryChips().length ? 'bg-violet-500/15 text-violet-200' : 'bg-slate-800 text-slate-400'"
+                  class="shrink-0 h-8 px-3 rounded-xl text-[11px] flex items-center gap-1.5 transition press-scale">
+            ⚙ Controls
+          </button>
+          <button @click="toggleAgentMode(); showMobileToolbar = false"
+                  :class="agentMode ? 'bg-amber-500/15 text-amber-200' : 'bg-slate-800 text-slate-400'"
+                  class="shrink-0 h-8 px-3 rounded-xl text-[11px] flex items-center gap-1.5 transition press-scale"
+                  x-text="agentMode ? '⚡ Agent ON' : '⚡ Agent'">
+          </button>
+        </div>
+
         <div class="flex gap-1.5 items-end">
-            <button x-show="voiceInputAvailable()" @click="startVoice()"
-                    :class="voiceActive ? 'bg-red-500 text-white shadow-lg shadow-red-500/30' : 'bg-slate-800 text-slate-400'"
-                    class="w-9 h-9 flex-none rounded-xl transition flex items-center justify-center press-scale" title="Voice input">
-              <svg class="w-4 h-4" :class="voiceActive ? 'animate-pulse' : ''" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="2" y="9" width="2.5" height="6" rx="1.25"/>
-                <rect x="6" y="5" width="2.5" height="14" rx="1.25"/>
-                <rect x="10" y="2" width="2.5" height="20" rx="1.25"/>
-                <rect x="14" y="5" width="2.5" height="14" rx="1.25"/>
-                <rect x="18" y="9" width="2.5" height="6" rx="1.25"/>
-              </svg>
+            <!-- Desktop: voice button -->
+            <button x-show="!isMobile && voiceInputAvailable()" @click="openVoiceCommandCenter(true)"
+                    class="h-9 flex-none rounded-xl bg-cyan-500/20 px-3 text-xs font-medium text-cyan-300 transition hover:bg-cyan-500/25 press-scale" title="Open voice mode">
+              🎤 Voice
             </button>
 
-            <button @click="openComposerMenu()"
+            <!-- Desktop: composer menu button -->
+            <button x-show="!isMobile" @click="openComposerMenu()"
                     :class="showComposerMenu || composerSummaryChips().length ? 'bg-violet-500/15 text-violet-200 shadow-lg shadow-violet-500/10' : 'bg-slate-800 text-slate-400'"
                     class="w-9 h-9 flex-none rounded-xl transition flex items-center justify-center press-scale" title="Composer controls">
               <span class="text-lg leading-none">+</span>
             </button>
 
-            <button @click="openResourcePicker()"
+            <!-- Desktop: resource picker button -->
+            <button x-show="!isMobile" @click="openResourcePicker()"
                     :class="selectedResources.length ? 'bg-sky-500/15 text-sky-200 shadow-lg shadow-sky-500/10' : 'bg-slate-800 text-slate-400'"
                     class="w-9 h-9 flex-none rounded-xl transition flex items-center justify-center press-scale" title="Attach resources">
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21.44 11.05l-8.49 8.49a6 6 0 0 1-8.49-8.49l8.49-8.49a4 4 0 1 1 5.66 5.66l-8.5 8.49a2 2 0 1 1-2.82-2.83l7.78-7.78"/>
               </svg>
+            </button>
+
+            <!-- Mobile: toolbar toggle button (replaces voice/attach/menu) -->
+            <button x-show="isMobile" @click="showMobileToolbar = !showMobileToolbar"
+                    :class="showMobileToolbar ? 'bg-violet-500/15 text-violet-200' : 'bg-slate-800 text-slate-400'"
+                    class="md:hidden w-9 h-9 flex-none rounded-xl transition flex items-center justify-center press-scale" title="Tools">
+              <span class="text-lg leading-none" x-text="showMobileToolbar ? '×' : '+'"></span>
             </button>
 
             <div class="flex-1 relative">
@@ -945,13 +1085,22 @@
               ></textarea>
             </div>
 
-            <!-- Send / Stop button -->
-            <button x-show="!chatLoading" @click="sendChat()" :disabled="!chatInput.trim()"
-                    :class="resolveChatMode(chatInput) === 'agent' ? 'bg-amber-500 hover:bg-amber-400 shadow-amber-500/20 text-slate-950' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-500/20 text-white'"
-                    class="w-9 h-9 flex-none rounded-xl disabled:opacity-30 disabled:bg-slate-700 disabled:text-white text-white transition flex items-center justify-center shadow-lg press-scale">
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-              </svg>
+            <!-- Send / Voice / Stop button -->
+            <button x-show="!chatLoading" @click="handleComposerPrimaryAction()"
+                    :disabled="composerPrimaryAction() === 'send' && !chatInput.trim()"
+                    :class="composerPrimaryAction() === 'voice'
+                      ? 'bg-blue-600 hover:bg-blue-500 shadow-blue-500/20 text-white'
+                      : (resolveChatMode(chatInput) === 'agent' ? 'bg-amber-500 hover:bg-amber-400 shadow-amber-500/20 text-slate-950' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-500/20 text-white')"
+                    class="w-9 h-9 flex-none rounded-xl disabled:opacity-30 disabled:bg-slate-700 disabled:text-white text-white transition flex items-center justify-center shadow-lg press-scale"
+                    :title="composerPrimaryAction() === 'voice' ? 'Open voice command center' : 'Send message'">
+              <template x-if="composerPrimaryAction() === 'voice'">
+                <span class="text-base leading-none">✦</span>
+              </template>
+              <template x-if="composerPrimaryAction() !== 'voice'">
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                </svg>
+              </template>
             </button>
             <button x-show="chatLoading" @click="stopGeneration()" x-cloak
                     class="w-9 h-9 flex-none rounded-xl bg-red-500 hover:bg-red-400 text-white transition flex items-center justify-center shadow-lg shadow-red-500/20 press-scale" title="Stop generating">
@@ -960,7 +1109,8 @@
               </svg>
             </button>
         </div>
-        <div class="flex items-center gap-1.5 px-1 pt-1.5 text-[10px] text-slate-500">
+        <!-- Desktop: full status -->
+        <div class="hidden md:flex items-center gap-1.5 px-1 pt-1.5 text-[10px] text-slate-500">
           <span x-text="runtimeStatus.runtime_label || 'Local-first'"></span>
           <span>·</span>
           <span x-text="activeChatModel() || runtimeStatus.active_model || 'Saved default'"></span>
@@ -968,15 +1118,25 @@
           <span x-text="phaseLabel(liveOperator.phase || agentProgressState || 'observe')"></span>
           <span>·</span>
           <span x-text="liveFeed.connected ? 'Live' : (liveFeed.reconnecting ? 'Reconnecting' : 'Idle')"></span>
-          <span class="ml-auto hidden md:inline">Enter to send · Shift+Enter for newline</span>
+          <span class="ml-auto">Enter to send · Shift+Enter for newline</span>
         </div>
       </div>
       </div><!-- /canvas -->
 
       <!-- Composer sidebar — controls panel -->
-      <div class="md:w-[380px] lg:w-[420px] md:border-l md:border-t-0 border-t border-slate-800 bg-slate-900/40 shrink-0 overflow-y-auto max-h-[35vh] md:max-h-full">
-      <div class="px-3 py-3">
+      <div class="md:w-[380px] lg:w-[420px] md:border-l md:border-t-0 border-t border-slate-800 bg-slate-900/40 shrink-0 md:overflow-y-auto max-h-[35vh] md:max-h-full">
+      <div class="px-3 py-3" :class="isMobile && !showConsoleDetails ? 'hidden' : ''">
         <div class="space-y-3">
+          <div class="md:hidden flex items-center justify-between gap-3 border-b border-slate-800/70 px-0.5 pb-2">
+            <div>
+              <div class="text-[11px] font-semibold text-slate-100">Console controls</div>
+              <div class="text-[10px] text-slate-500" x-text="consoleProviderIdentity().providerLabel + ' · ' + consoleProviderIdentity().modelLabel"></div>
+            </div>
+            <button @click="showConsoleDetails = false"
+                    class="btn-icon border border-slate-700 bg-slate-900/70 text-slate-400">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
           <div class="flex flex-col gap-1.5 px-0.5 pb-2 border-b border-slate-800/70 md:gap-2 md:flex-row md:items-center">
             <button @click="toggleAgentMode()"
                     :class="agentMode ? 'border-amber-400/40 bg-amber-500/12 text-amber-200' : 'border-slate-700/80 bg-slate-900/70 text-slate-300 hover:border-slate-500'"
@@ -1054,19 +1214,58 @@
             <span class="text-[10px] text-slate-500">External runtime is active for this console session.</span>
           </div>
 
-          <div class="hidden md:flex flex-wrap items-center gap-2 px-1 pt-2">
-            <template x-for="phase in agentLifecycle" :key="phase">
-              <span class="rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.18em]"
-                    :class="phaseChipClass(phase)"
-                    x-text="phase"></span>
-            </template>
+          <div class="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2.5">
+            <div class="flex items-center gap-3">
+              <span class="inline-flex h-9 w-9 items-center justify-center rounded-2xl border"
+                    :class="providerIdentityTone(consoleProviderIdentity().providerId)">
+                <span class="w-4 h-4" x-html="providerIdentityIcon(consoleProviderIdentity().providerId)"></span>
+              </span>
+              <div class="min-w-0 flex-1">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Provider</span>
+                  <span class="truncate text-sm font-medium text-slate-100" x-text="consoleProviderIdentity().providerLabel"></span>
+                </div>
+                <div class="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                  <span class="truncate max-w-[200px]" x-text="consoleProviderIdentity().modelLabel"></span>
+                  <span class="text-slate-600">•</span>
+                  <span x-text="consoleProviderIdentity().transportLabel"></span>
+                </div>
+              </div>
+              <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] text-slate-400"
+                    x-text="agentMode ? 'Agent' : 'Chat'"></span>
+            </div>
           </div>
 
-          <!-- ── Local Tools bar ──────────────────────────────────── -->
-          <div class="hidden md:flex flex-wrap items-center gap-1.5 px-1 pt-2">
-            <span class="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300/70 mr-1">Local Tools</span>
+          <!-- ▾ Agent Steps (collapsible) -->
+          <div class="hidden md:block pt-2">
+            <button @click="panelStepsOpen = !panelStepsOpen" class="flex items-center gap-1.5 px-1 w-full text-left group">
+              <span class="text-[9px] text-slate-600 transition" :class="panelStepsOpen ? 'rotate-0' : '-rotate-90'" style="display:inline-block">▾</span>
+              <span class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 group-hover:text-slate-300 transition">Agent Steps</span>
+              <span class="ml-auto rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.14em] shrink-0"
+                    :class="phaseChipClass(liveOperator.phase || agentProgressState || 'observe')"
+                    x-text="phaseLabel(liveOperator.phase || agentProgressState || 'observe')"></span>
+            </button>
+            <div x-show="panelStepsOpen" x-transition class="flex flex-wrap items-center gap-2 px-1 pt-1.5">
+              <template x-for="phase in agentLifecycle" :key="phase">
+                <span class="rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] cursor-default"
+                      :class="phaseChipClass(phase)"
+                      x-text="phase"
+                      :title="phase === 'observe' ? 'Gather context and understand the task' : phase === 'plan' ? 'Break down approach into steps' : phase === 'execute' ? 'Carry out the plan' : phase === 'verify' ? 'Check results for correctness' : 'Handle errors and retry'"></span>
+              </template>
+            </div>
+          </div>
+
+          <!-- ▾ Local Tools bar (collapsible, default collapsed) -->
+          <div class="hidden md:block pt-2">
+            <button @click="panelToolsOpen = !panelToolsOpen" class="flex items-center gap-1.5 px-1 w-full text-left group">
+              <span class="text-[9px] text-slate-600 transition" :class="panelToolsOpen ? 'rotate-0' : '-rotate-90'" style="display:inline-block">▾</span>
+              <span class="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300/70 group-hover:text-amber-200 transition">Local Tools</span>
+              <span class="ml-auto rounded-full border border-emerald-500/20 bg-emerald-500/8 px-2 py-0.5 text-[9px] text-emerald-400 uppercase tracking-wider">Sandboxed</span>
+            </button>
+            <div x-show="panelToolsOpen" x-transition class="flex flex-wrap items-center gap-1.5 px-1 pt-1.5">
             <button @click="chatInput = 'Browse my files in ~/'; $nextTick(() => $refs.chatComposer?.focus())"
-                    class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-amber-200 hover:border-amber-500/30 transition press-scale">
+                    class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-amber-200 hover:border-amber-500/30 transition press-scale"
+                    title="Browse files in your home directory">
               🗂️ Browse Files
             </button>
             <button @click="chatInput = 'Read the file at path: '; $nextTick(() => $refs.chatComposer?.focus())"
@@ -1081,6 +1280,10 @@
                     class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-cyan-200 hover:border-cyan-500/30 transition press-scale">
               🖥️ Desktop Preview
             </button>
+                <button @click="loadBrowserActions(); showToast('Review live page actions below')"
+                  class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-sky-200 hover:border-sky-500/30 transition press-scale">
+                  🌐 Live Page
+                </button>
             <button @click="composerOptions.terminal_mode = !composerOptions.terminal_mode; if(composerOptions.terminal_mode && !terminal.sessions.length) createTerminalSession()"
                     class="rounded-full px-2.5 py-1 text-[10px] transition press-scale"
                     :class="composerOptions.terminal_mode ? 'border border-amber-500/30 bg-amber-500/10 text-amber-200' : 'tool-chip text-slate-300 hover:text-amber-200 hover:border-amber-500/30'">
@@ -1094,8 +1297,9 @@
                     class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-violet-200 hover:border-violet-500/30 transition press-scale">
               📊 Create Slides
             </button>
-            <span class="ml-auto rounded-full border border-emerald-500/20 bg-emerald-500/8 px-2 py-0.5 text-[9px] text-emerald-400 uppercase tracking-wider"
-                  x-text="'Sandboxed · ' + (settingsForm.terminal_default_mode || 'read_only').replace(/_/g,' ')"></span>
+            <span class="text-[9px] text-slate-500"
+                  x-text="'Terminal: ' + (settingsForm.terminal_default_mode || 'read_only').replace(/_/g,' ')"></span>
+            </div>
           </div>
 
           <!-- Live Work Status — shown while Axon is active -->
@@ -1197,6 +1401,70 @@
             </div>
             <div class="mt-1.5 text-[10px] text-slate-500"
                  x-text="liveFeed.connected ? 'Live · ' + (liveFeed.latest?.at ? timeAgo(liveFeed.latest.at) : 'connected') : (liveFeed.reconnecting ? 'Reconnecting…' : 'Idle')"></div>
+          </div>
+
+          <div class="mt-3 rounded-2xl border border-sky-500/20 bg-slate-950/70 p-3">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <div class="text-xs font-semibold text-white">Live Page Control</div>
+                <div class="mt-1 text-[10px] text-slate-500">Inspect can be continuous. Navigation, clicks, typing, and submit-like actions stay queued until approved.</div>
+              </div>
+              <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.16em]"
+                    :class="browserActions.pending_count ? 'border-amber-500/20 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
+                    x-text="browserActions.pending_count ? `${browserActions.pending_count} pending` : 'Approval-first'"></span>
+            </div>
+            <div class="mt-3 flex flex-wrap items-center gap-2">
+              <span class="rounded-full border px-2 py-0.5 text-[10px]"
+                    :class="browserActions.session?.connected ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
+                    x-text="browserActions.session?.connected ? 'Page attached' : 'No page attached'"></span>
+              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400"
+                    x-text="browserActions.session?.mode === 'inspect_auto' ? 'Inspect auto-approved' : 'Act requires approval'"></span>
+              <button @click="loadBrowserActions()"
+                      class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-300 hover:border-slate-500 transition">
+                Refresh
+              </button>
+            </div>
+            <div x-show="browserActions.session?.url" class="mt-2 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+              <div class="truncate text-[11px] text-slate-200" x-text="browserActions.session?.title || 'Live page'"></div>
+              <div class="mt-1 truncate text-[10px] text-sky-300" x-text="browserActions.session?.url"></div>
+              <div class="mt-1 text-[10px] text-slate-500" x-text="browserActions.session?.last_seen_at ? 'Seen ' + timeAgo(browserActions.session.last_seen_at) : ''"></div>
+            </div>
+            <div class="mt-3 space-y-2" x-show="browserActions.proposals?.length">
+              <template x-for="proposal in (browserActions.proposals || [])" :key="proposal.id">
+                <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5">
+                  <div class="flex items-start gap-2">
+                    <span class="mt-0.5 text-sky-300" x-text="browserActionIcon(proposal.action_type)"></span>
+                    <div class="min-w-0 flex-1">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span class="text-[11px] font-medium text-slate-100" x-text="proposal.summary"></span>
+                        <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.14em]"
+                              :class="browserActionRiskClass(proposal.risk)"
+                              x-text="proposal.risk"></span>
+                        <span class="rounded-full border border-slate-700 bg-slate-900/70 px-2 py-0.5 text-[9px] uppercase tracking-[0.14em] text-slate-400"
+                              x-text="browserActionScopeLabel(proposal.scope)"></span>
+                      </div>
+                      <div x-show="proposal.target || proposal.url" class="mt-1 text-[10px] text-slate-500 break-all"
+                           x-text="proposal.target || proposal.url"></div>
+                      <div x-show="proposal.value" class="mt-1 text-[10px] text-slate-400 break-all"
+                           x-text="proposal.value"></div>
+                    </div>
+                  </div>
+                  <div class="mt-2 flex items-center justify-end gap-2">
+                    <button @click="rejectBrowserAction(proposal.id)"
+                            class="rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-[11px] text-slate-300 hover:border-slate-500 transition">
+                      Reject
+                    </button>
+                    <button @click="approveBrowserAction(proposal.id)"
+                            class="rounded-xl border border-sky-500/20 bg-sky-500/10 px-3 py-1.5 text-[11px] text-sky-200 hover:bg-sky-500/15 transition">
+                      Approve
+                    </button>
+                  </div>
+                </div>
+              </template>
+            </div>
+            <div x-show="!browserActions.proposals?.length" class="mt-3 rounded-xl border border-dashed border-slate-800 px-3 py-3 text-[11px] text-slate-500">
+              Browser actions will appear here as a queue: inspect page state freely, but gate clicks, typing, navigation, and submits behind explicit approval.
+            </div>
           </div>
 
           <div x-show="terminal.panelOpen || composerOptions.terminal_mode" class="mt-3 rounded-2xl border border-amber-500/20 bg-slate-950/70 p-3">
@@ -1718,17 +1986,17 @@
       </div>
 
       <!-- Mobile filter pills -->
-      <div class="md:hidden flex gap-2 px-4 pt-3 pb-1 overflow-x-auto no-scrollbar shrink-0">
+      <div class="md:hidden flex gap-1.5 px-4 py-3 overflow-x-auto scrollbar-none shrink-0">
         <template x-for="f in [{v:'active',l:'Active'},{v:'',l:'All'},{v:'paused',l:'Paused'},{v:'done',l:'Done'}]" :key="f.v">
           <button @click="projectStatusFilter = f.v; loadProjects()"
-                  class="shrink-0 px-3 py-1 rounded-full text-xs font-medium transition"
-                  :class="projectStatusFilter === f.v ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'">
+                  class="flex-shrink-0 px-4 min-h-[44px] rounded-xl text-sm font-medium border transition-colors duration-150"
+                  :class="projectStatusFilter === f.v ? 'bg-blue-600 text-white border-blue-500' : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-200 hover:border-slate-600'">
             <span x-text="f.l"></span>
           </button>
         </template>
       </div>
 
-      <div class="flex-1 overflow-y-auto p-3 md:p-5">
+      <div class="flex-1 overflow-y-auto page-content p-3 md:p-5">
         <!-- Loading skeleton -->
         <div x-show="projectsLoading" class="grid gap-3">
           <template x-for="i in [1,2,3]" :key="i">
@@ -1776,9 +2044,10 @@
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2 mb-0.5">
                     <span class="font-semibold text-white text-sm truncate" x-text="p.name"></span>
-                    <span x-show="p.todo_count > 0"
+                      <span x-show="p.todo_count > 0"
                           class="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full font-bold"
                           :class="p.todo_count > 30 ? 'bg-orange-500/20 text-orange-400' : 'bg-slate-700 text-slate-400'"
+                        :title="`${p.todo_count} markers found. Includes TODO / FIXME / HACK / XXX comments from the latest scan.`"
                           x-text="p.todo_count + ' TODOs'"></span>
                   </div>
 
@@ -1818,21 +2087,42 @@
               <!-- Note -->
               <div x-show="p.note" class="mt-2.5 text-xs text-slate-400 bg-slate-800/60 rounded-xl px-3 py-2 italic" x-text="p.note"></div>
 
-              <!-- Action row (swipe-feel buttons) -->
-              <div class="flex gap-2 mt-3 pt-3 border-t border-slate-800/60" @click.stop>
-                <button @click="analyseProject(p)"
-                        class="flex-1 flex items-center justify-center gap-1 py-2 text-xs font-medium bg-blue-600/15 text-blue-400 rounded-xl press-scale">
-                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              <!-- Action row -->
+              <div class="flex items-center gap-2 mt-3 pt-3 border-t border-slate-800/60" @click.stop>
+                <button
+                  @click="inspectProject(p.id)"
+                  class="flex-1 flex items-center justify-center gap-1.5 min-h-[44px] rounded-xl bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-sm text-slate-200 font-medium border border-slate-700 transition-colors"
+                >
+                  <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 15.803 7.5 7.5 0 0015.803 15.803z"/>
+                  </svg>
                   Inspect
                 </button>
-                <button @click="openProjectChat(p)"
-                        class="flex-1 flex items-center justify-center gap-1 py-2 text-xs font-medium bg-slate-700/50 text-slate-300 rounded-xl press-scale">
-                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                  Open Console
+
+                <button
+                  @click="openConsoleForProject(p.id)"
+                  class="flex-1 flex items-center justify-center gap-1.5 min-h-[44px] rounded-xl bg-blue-600/20 hover:bg-blue-600/30 active:bg-blue-600/50 text-sm text-blue-300 font-medium border border-blue-600/30 transition-colors"
+                >
+                  <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"/>
+                  </svg>
+                  Console
                 </button>
-                <button @click="editProjectNote(p)"
-                        class="px-3 py-2 text-xs font-medium bg-slate-700/50 text-slate-400 rounded-xl press-scale">
-                  📝
+
+                <button
+                  @click="activeProjectMenu = activeProjectMenu === p.id ? null : p.id"
+                  aria-label="More options for this workspace"
+                  class="btn-icon border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-400"
+                >
+                  <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 24 24">
+                    <path fill-rule="evenodd" d="M4.5 12a1.5 1.5 0 113 0 1.5 1.5 0 01-3 0zm6 0a1.5 1.5 0 113 0 1.5 1.5 0 01-3 0zm6 0a1.5 1.5 0 113 0 1.5 1.5 0 01-3 0z" clip-rule="evenodd"/>
+                  </svg>
+                </button>
+              </div>
+              <div x-show="activeProjectMenu === p.id" class="mt-2 rounded-2xl border border-slate-800 bg-slate-950/70 p-2" @click.stop>
+                <button @click="editProjectNote(p); activeProjectMenu = null"
+                        class="w-full justify-start rounded-xl px-3 py-2 text-sm text-slate-300 hover:bg-slate-800 transition">
+                  📝 Workspace note
                 </button>
               </div>
             </div>
@@ -2053,7 +2343,7 @@
                     class="rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-2 text-xs text-slate-300 hover:border-slate-600">Close</button>
           </div>
         </div>
-        <div class="flex-1 overflow-y-auto px-4 py-4 md:px-8 md:py-6">
+        <div class="flex-1 overflow-y-auto page-content px-4 py-4 md:px-8 md:py-6">
           <div id="canvas-print-surface" class="print-surface mx-auto max-w-3xl rounded-[26px] border border-slate-800 bg-slate-950/90 px-5 py-6 md:px-10 md:py-10">
             <div class="mb-6 border-b border-slate-800 pb-4">
               <div class="text-[11px] uppercase tracking-[0.18em] text-sky-300/80">Axon Canvas</div>
@@ -2071,7 +2361,10 @@
     ════════════════════════════════════════════════════════════ -->
     <div x-show="activeTab === 'tasks'" class="flex flex-col h-full">
       <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/50">
-        <div class="font-semibold text-white">Missions <span class="text-slate-500 text-sm font-normal" x-text="'(' + tasks.length + ')'"></span></div>
+        <div>
+          <div class="font-semibold text-white">Missions <span class="text-slate-500 text-sm font-normal" x-text="'(' + tasks.length + ')'"></span></div>
+          <div class="text-[11px] text-slate-500 mt-0.5" x-text="missionSummaryText()"></div>
+        </div>
         <div class="flex gap-2">
           <button @click="showAddTask = true"
                   class="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition">
@@ -2084,7 +2377,7 @@
         </div>
       </div>
 
-      <div class="flex-1 overflow-y-auto p-3 md:p-5">
+      <div class="flex-1 overflow-y-auto page-content p-3 md:p-5">
         <!-- Add task form -->
         <div x-show="showAddTask" class="bg-slate-900 border border-blue-500/30 rounded-2xl p-4 mb-4">
           <div class="text-sm font-medium text-white mb-3">New Mission</div>
@@ -2145,23 +2438,67 @@
 
         <div class="space-y-2">
           <template x-for="t in tasks" :key="t.id">
-            <div class="flex items-start gap-3 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2.5 hover:border-slate-700 transition group">
-              <button @click="completeTask(t)"
-                      class="w-4 h-4 mt-0.5 rounded border-2 border-slate-600 hover:border-green-400 transition shrink-0 flex items-center justify-center group-hover:border-green-500">
-                <span class="text-green-400 text-[10px] opacity-0 group-hover:opacity-100">✓</span>
-              </button>
-              <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-2">
-                  <span class="text-sm text-slate-100" x-text="t.title"></span>
-                  <span class="text-[10px] rounded px-1.5 py-0.5 font-medium"
-                        :class="priorityBadge(t.priority)" x-text="t.priority"></span>
+            <div class="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2.5 hover:border-slate-700 transition group">
+              <!-- Edit mode -->
+              <div x-show="editingTaskId === t.id" class="space-y-2">
+                <input :value="t.title" x-ref="editTitle" @input="t.title = $event.target.value"
+                       class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:border-blue-500 transition" />
+                <textarea :value="t.detail" @input="t.detail = $event.target.value" rows="2"
+                          class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 resize-none focus:border-blue-500 transition"></textarea>
+                <div class="flex gap-2">
+                  <select :value="t.priority" @change="t.priority = $event.target.value"
+                          class="flex-1 bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-1.5">
+                    <option value="low">🟢 Low</option>
+                    <option value="medium">🟡 Medium</option>
+                    <option value="high">🟠 High</option>
+                    <option value="urgent">🔴 Urgent</option>
+                  </select>
+                  <input type="date" :value="t.due_date" @input="t.due_date = $event.target.value"
+                         class="flex-1 bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-1.5" />
                 </div>
-                <div class="flex gap-3 text-[11px] text-slate-500 mt-0.5">
-                  <span x-show="t.project_name" x-text="'📁 ' + t.project_name"></span>
-                  <span x-show="t.due_date" :class="isOverdue(t.due_date) ? 'text-red-400' : ''"
-                        x-text="'📅 ' + t.due_date"></span>
+                <div class="flex gap-2">
+                  <button @click="saveTaskEdit(t)" class="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition">Save</button>
+                  <button @click="editingTaskId = null" class="px-3 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition">Cancel</button>
                 </div>
-                <div x-show="t.detail" class="text-xs text-slate-500 mt-1 italic" x-text="t.detail"></div>
+              </div>
+              <!-- View mode -->
+              <div x-show="editingTaskId !== t.id" class="flex items-start gap-3">
+                <button @click="completeTask(t)"
+                        class="w-4 h-4 mt-0.5 rounded border-2 border-slate-600 hover:border-green-400 transition shrink-0 flex items-center justify-center group-hover:border-green-500">
+                  <span class="text-green-400 text-[10px] opacity-0 group-hover:opacity-100">✓</span>
+                </button>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="text-sm text-slate-100" x-text="t.title"></span>
+                    <span class="text-[10px] rounded px-1.5 py-0.5 font-medium"
+                          :class="priorityBadge(t.priority)" x-text="t.priority"></span>
+                    <span class="text-[10px] rounded-full border px-2 py-0.5 font-medium"
+                          :class="taskStatusClass(t.status)" x-text="taskStatusLabel(t.status)"></span>
+                  </div>
+                  <div class="flex flex-wrap gap-3 text-[11px] text-slate-500 mt-0.5">
+                    <span x-show="t.project_name" class="rounded-full border border-slate-800 bg-slate-950/70 px-2 py-0.5" x-text="'📁 ' + t.project_name"></span>
+                    <span x-show="t.due_date" :class="isOverdue(t.due_date) ? 'text-red-400' : ''"
+                          x-text="'📅 ' + t.due_date"></span>
+                    <span x-show="t.updated_at" x-text="'Updated ' + timeAgo(t.updated_at)"></span>
+                  </div>
+                  <div x-show="t.detail" class="text-xs text-slate-500 mt-1 italic" x-text="t.detail"></div>
+                  <div class="mt-2">
+                    <div class="h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                      <div class="h-full rounded-full transition-all"
+                           :class="t.status === 'done' ? 'bg-emerald-400' : t.status === 'in_progress' ? 'bg-blue-400' : t.status === 'cancelled' ? 'bg-rose-400' : 'bg-slate-500'"
+                           :style="`width:${missionProgressValue(t.status)}%`"></div>
+                    </div>
+                  </div>
+                </div>
+                <!-- Action buttons -->
+                <div class="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition">
+                  <button @click="runMission(t)" title="Run mission"
+                          class="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-blue-600/30 text-blue-400 transition text-sm">▶</button>
+                  <button @click="editingTaskId = t.id" title="Edit mission"
+                          class="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-slate-700 text-slate-400 transition text-sm">✏️</button>
+                  <button @click="deleteTask(t)" title="Delete mission"
+                          class="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-red-600/30 text-red-400 transition text-sm">🗑</button>
+                </div>
               </div>
             </div>
           </template>
@@ -2181,7 +2518,7 @@
         </button>
       </div>
 
-      <div class="flex-1 overflow-y-auto p-3 md:p-5">
+      <div class="flex-1 overflow-y-auto page-content p-3 md:p-5">
         <!-- Add prompt form -->
         <div x-show="showAddPrompt" class="bg-slate-900 border border-blue-500/30 rounded-2xl p-4 mb-4">
           <div class="text-sm font-medium text-white mb-3">Save Playbook</div>
@@ -2237,8 +2574,39 @@
         </div>
 
         <!-- Prompt list -->
-        <div x-show="!showAddPrompt && prompts.length === 0" class="text-slate-500 text-sm py-8 text-center">
-          Reusable instructions for Axon and connected agents
+        <div x-show="!showAddPrompt && prompts.length === 0" class="rounded-3xl border border-dashed border-slate-800 bg-slate-900/30 p-6 md:p-8 text-center">
+          <div class="text-4xl mb-3">📋</div>
+          <div class="text-lg font-semibold text-white">No playbooks yet</div>
+          <div class="mt-2 text-sm text-slate-400 max-w-2xl mx-auto">
+            Playbooks are reusable prompt templates you can attach to any Console session in one click.
+          </div>
+          <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
+            <button @click="showAddPrompt = true"
+                    class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm transition">
+              + Create your first playbook
+            </button>
+            <button @click="seedStarterPlaybook('code-review')"
+                    class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm transition">
+              See examples
+            </button>
+          </div>
+          <div class="mt-6 grid gap-2 md:grid-cols-3 text-left">
+            <button @click="seedStarterPlaybook('code-review')"
+                    class="rounded-2xl border border-slate-800 bg-slate-950/60 p-4 hover:border-blue-500/30 transition">
+              <div class="text-sm font-medium text-white">Code review</div>
+              <div class="mt-1 text-[11px] text-slate-500">Audit changes for bugs, regressions, and missing tests.</div>
+            </button>
+            <button @click="seedStarterPlaybook('write-tests')"
+                    class="rounded-2xl border border-slate-800 bg-slate-950/60 p-4 hover:border-violet-500/30 transition">
+              <div class="text-sm font-medium text-white">Write tests</div>
+              <div class="mt-1 text-[11px] text-slate-500">Generate focused, repo-consistent tests for a feature or module.</div>
+            </button>
+            <button @click="seedStarterPlaybook('summarise-workspace')"
+                    class="rounded-2xl border border-slate-800 bg-slate-950/60 p-4 hover:border-emerald-500/30 transition">
+              <div class="text-sm font-medium text-white">Summarise workspace</div>
+              <div class="mt-1 text-[11px] text-slate-500">Get a fast technical overview of the current codebase and risks.</div>
+            </button>
+          </div>
         </div>
 
         <div class="grid gap-3">
@@ -2324,9 +2692,9 @@
       <div class="px-5 pt-4">
         <div class="rounded-2xl border border-slate-800 bg-slate-900/45 p-4">
           <div class="text-xs font-semibold text-slate-300 mb-2">Runtime Signals</div>
-          <div class="flex flex-wrap gap-2">
+          <div class="flex gap-2 overflow-x-auto scrollbar-none pb-1">
             <template x-for="badge in timelineRuntimeBadges()" :key="badge.label">
-              <span class="rounded-full border px-2.5 py-1 text-[10px]"
+              <span class="flex-shrink-0 rounded-full border px-2.5 py-1 text-[10px] whitespace-nowrap"
                     :class="runtimeProviderBadgeClass(badge.tone)"
                     x-text="badge.label"></span>
             </template>
@@ -2334,17 +2702,20 @@
         </div>
       </div>
 
-      <div class="flex-1 overflow-y-auto px-5 py-4 space-y-2">
+      <div class="flex-1 overflow-y-auto page-content px-5 py-4 space-y-2">
         <template x-for="a in activity" :key="a.id">
           <div class="flex items-start gap-3 py-2 border-b border-slate-800/50">
             <span class="text-lg shrink-0" x-text="eventIcon(a.event_type)"></span>
             <div class="flex-1 min-w-0">
               <div class="text-xs text-slate-500 mb-0.5">
-                <span class="font-medium text-slate-400" x-text="timelineGroupLabel(a.event_type)"></span>
+                <span class="font-medium text-slate-400" x-text="a.event_type === 'scan' ? scanTriggerLabel(a.summary) : timelineGroupLabel(a.event_type)"></span>
                 <span x-show="a.project_name"> · <span class="text-blue-400" x-text="a.project_name"></span></span>
                 <span class="ml-2" x-text="formatTime(a.created_at)"></span>
               </div>
-              <div class="text-sm text-slate-300 truncate" x-text="a.summary || '—'"></div>
+              <p class="text-sm text-slate-300 truncate cursor-pointer"
+                 :class="expandedItem === a.id ? 'whitespace-normal' : 'truncate'"
+                 @click="expandedItem = expandedItem === a.id ? null : a.id"
+                 x-text="a.summary || '—'"></p>
             </div>
           </div>
         </template>
@@ -2371,7 +2742,7 @@
         </div>
       </div>
 
-      <div class="flex-1 overflow-y-auto p-3 md:p-5">
+      <div class="flex-1 overflow-y-auto page-content p-3 md:p-5">
 
         <!-- ── Not set up ── -->
         <div x-show="!vault.is_setup" class="max-w-md mx-auto pt-8">
@@ -2385,14 +2756,24 @@
           <div x-show="!vaultSetupResult" class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
             <div>
               <label class="block text-xs font-medium text-slate-400 mb-1.5">Master Password</label>
-              <input x-model="vaultSetupForm.master_password" type="password" placeholder="Choose a strong password"
-                     class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition" />
+              <div class="relative">
+                <input x-model="vaultSetupForm.master_password" :type="vaultSetupPasswordVisible ? 'text' : 'password'" placeholder="Choose a strong password"
+                       class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 pr-12 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition" />
+                <button type="button" @click="vaultSetupPasswordVisible = !vaultSetupPasswordVisible" class="btn-icon absolute right-1 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200" aria-label="Toggle master password visibility">
+                  <span x-text="vaultSetupPasswordVisible ? '🙈' : '👁️'"></span>
+                </button>
+              </div>
             </div>
             <div>
               <label class="block text-xs font-medium text-slate-400 mb-1.5">Confirm Password</label>
-              <input x-model="vaultSetupForm.confirm_password" type="password" placeholder="Repeat password"
-                     class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition"
-                     @keydown.enter="setupVault()" />
+              <div class="relative">
+                <input x-model="vaultSetupForm.confirm_password" :type="vaultSetupConfirmVisible ? 'text' : 'password'" placeholder="Repeat password"
+                       class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 pr-12 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition"
+                       @keydown.enter="setupVault()" />
+                <button type="button" @click="vaultSetupConfirmVisible = !vaultSetupConfirmVisible" class="btn-icon absolute right-1 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200" aria-label="Toggle confirm password visibility">
+                  <span x-text="vaultSetupConfirmVisible ? '🙈' : '👁️'"></span>
+                </button>
+              </div>
             </div>
             <p class="text-[11px] text-slate-500">Your master password is never stored — only an irreversible hash. If you forget it, vault data cannot be recovered.</p>
             <button @click="setupVault()" :disabled="vaultSubmitting || !vaultSetupForm.master_password"
@@ -2429,8 +2810,13 @@
           <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
             <div>
               <label class="block text-xs font-medium text-slate-400 mb-1.5">Master Password</label>
-              <input x-model="vaultUnlockForm.master_password" type="password" placeholder="Your master password"
-                     class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition" />
+              <div class="relative">
+                <input x-model="vaultUnlockForm.master_password" :type="vaultPasswordVisible ? 'text' : 'password'" placeholder="Your master password"
+                       class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 pr-12 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition" />
+                <button type="button" @click="vaultPasswordVisible = !vaultPasswordVisible" class="btn-icon absolute right-1 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200" aria-label="Toggle vault password visibility">
+                  <span x-text="vaultPasswordVisible ? '🙈' : '👁️'"></span>
+                </button>
+              </div>
             </div>
             <div>
               <label class="block text-xs font-medium text-slate-400 mb-1.5">2FA Code</label>
@@ -2442,6 +2828,10 @@
                     class="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-medium rounded-xl transition">
               <span x-text="vaultSubmitting ? 'Unlocking...' : '🔓 Unlock Vault'"></span>
             </button>
+            <div class="flex items-center justify-between gap-3 text-[11px] text-slate-500">
+              <span>Recovery requires resetting the vault.</span>
+              <button @click="forgotVaultPassword()" class="text-amber-300 hover:text-amber-200 underline underline-offset-2">Forgot password?</button>
+            </div>
           </div>
         </div>
 
@@ -2575,7 +2965,7 @@
       <div class="px-5 py-3 border-b border-slate-800 bg-slate-900/50">
         <div class="font-semibold text-white">Settings</div>
       </div>
-      <div class="flex-1 overflow-y-auto p-3 md:p-5">
+      <div class="flex-1 overflow-y-auto page-content p-3 md:p-5">
         <div class="max-w-lg space-y-5">
           <div>
             <div class="text-[11px] uppercase tracking-[0.24em] text-slate-500 mb-2">Runtime</div>
@@ -2820,6 +3210,13 @@
               <label class="block text-xs font-medium text-slate-400 mb-1.5">Scan interval (hours)</label>
               <input x-model="settingsForm.scan_interval_hours" type="number" min="1" max="24"
                      class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-blue-500 transition" />
+              <div class="mt-1.5 flex items-center justify-between gap-2 text-[10px] text-slate-500">
+                <span x-text="latestAutoScanAt() ? 'Last auto-scan ' + timeAgo(latestAutoScanAt()) : 'No auto-scan recorded yet'"></span>
+                <button @click="runScan()"
+                        class="rounded-lg border border-slate-700 bg-slate-900/70 px-2.5 py-1 text-[10px] text-slate-300 hover:border-slate-500 transition">
+                  Run scan now
+                </button>
+              </div>
             </div>
             <div>
               <label class="block text-xs font-medium text-slate-400 mb-1.5">Morning brief hour (0–23)</label>
@@ -3030,9 +3427,44 @@
                   </p>
                 </div>
               </div>
-              <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-[10px] text-slate-400">
-                <div class="font-medium text-slate-300">Current domain check</div>
-                <div class="mt-1" x-text="connectionState.stable_domain_detail || 'Axon probes /api/health on the public base URL so it can tell the difference between a real Axon domain and a generic hosted page.'"></div>
+              <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-[11px]">
+                <div class="font-medium text-slate-300 mb-2">Domain health check</div>
+                <!-- Connected state -->
+                <div x-show="connectionState.stable_domain_status === 'active'" class="flex items-start gap-2 text-emerald-400">
+                  <span>✓</span>
+                  <span>Domain active and pointing at this Axon instance.</span>
+                </div>
+                <!-- 403 / not-pointing state -->
+                <div x-show="connectionState.stable_domain_status === 'configured' && connectionState.stable_domain_detail && connectionState.stable_domain_detail.includes('403')" class="space-y-2">
+                  <div class="flex items-start gap-2 text-amber-400">
+                    <span>✗</span>
+                    <span>Domain reachable but returning HTTP 403 — not pointing at Axon.</span>
+                  </div>
+                  <div class="text-slate-500 pl-4 space-y-1">
+                    <div class="font-medium text-slate-400">Likely cause:</div>
+                    <div>Cloudflare tunnel token not yet active, or tunnel not running.</div>
+                    <div class="font-medium text-slate-400 mt-1.5">Next steps:</div>
+                    <div>1. Ensure the Cloudflare tunnel is running (check Mobile → Tunnel)</div>
+                    <div>2. Verify the tunnel routes to this machine's Axon port (default: 7734)</div>
+                    <div>3. Click "Re-check" after starting the tunnel</div>
+                  </div>
+                </div>
+                <!-- Other configured state (non-403) -->
+                <div x-show="connectionState.stable_domain_status === 'configured' && !(connectionState.stable_domain_detail && connectionState.stable_domain_detail.includes('403'))" class="text-amber-400">
+                  <span x-text="connectionState.stable_domain_detail || 'Domain set but not verified yet.'"></span>
+                </div>
+                <!-- Planned / not configured -->
+                <div x-show="connectionState.stable_domain_status === 'planned'" class="text-slate-500">
+                  Configure a stable domain above to enable public access and PWA install.
+                </div>
+                <!-- Re-check button + last-checked timestamp -->
+                <div class="flex items-center gap-3 mt-3 pt-2 border-t border-slate-800/50">
+                  <button @click="loadRuntimeStatus(); showToast('Rechecking domain…')"
+                          class="text-[10px] px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition">
+                    ↻ Re-check now
+                  </button>
+                  <span x-show="connectionState.domain_checked_at" class="text-[10px] text-slate-600" x-text="'Checked ' + timeAgo(connectionState.domain_checked_at)"></span>
+                </div>
               </div>
               <div class="flex flex-wrap gap-2 text-[10px] text-slate-500">
                 <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1" x-text="`Mode: ${String(settingsForm.tunnel_mode || 'trycloudflare').replace(/_/g, ' ')}`"></span>
@@ -3257,6 +3689,62 @@
                 Get a free key at <a href="https://azure.microsoft.com/free" target="_blank" class="text-blue-400 hover:underline">azure.microsoft.com/free</a> (5 hours free/month). Save your key and region to load the live Azure catalog, including newer multilingual voices. Leave it blank to use browser built-in voice.
               </p>
             </div>
+
+            <div class="mb-4 border-t border-slate-800 pt-4">
+              <div class="flex items-center justify-between gap-3 mb-3">
+                <label class="block text-xs font-semibold text-slate-300">🧪 Local Voice Runtime</label>
+                <button @click="loadVoiceStatus(true)"
+                        class="text-[10px] text-slate-500 hover:text-slate-300 transition">
+                  <span x-text="voice.statusLoading ? 'Refreshing…' : '↻ Refresh runtime'"></span>
+                </button>
+              </div>
+              <div class="grid grid-cols-2 gap-2 mb-2">
+                <div>
+                  <label class="block text-[10px] text-slate-500 mb-1">Whisper Model</label>
+                  <input x-model="settingsForm.local_stt_model" type="text"
+                         placeholder="base"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono" />
+                </div>
+                <div>
+                  <label class="block text-[10px] text-slate-500 mb-1">Language</label>
+                  <input x-model="settingsForm.local_stt_language" type="text"
+                         placeholder="en"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono" />
+                </div>
+              </div>
+              <div class="space-y-2">
+                <div>
+                  <label class="block text-[10px] text-slate-500 mb-1">Piper Model Path</label>
+                  <input x-model="settingsForm.local_tts_model_path" type="text"
+                         placeholder="/path/to/voice.onnx"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono" />
+                </div>
+                <div>
+                  <label class="block text-[10px] text-slate-500 mb-1">Piper Config Path</label>
+                  <input x-model="settingsForm.local_tts_config_path" type="text"
+                         placeholder="Optional /path/to/voice.onnx.json"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono" />
+                </div>
+              </div>
+              <div class="mt-3 flex flex-wrap gap-2 text-[10px]">
+                <span class="rounded-full border px-2 py-1"
+                      :class="voice.server?.transcription_available ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
+                      x-text="voice.server?.transcription_available ? 'Local STT ready' : 'Local STT pending'"></span>
+                <span class="rounded-full border px-2 py-1"
+                      :class="voice.server?.synthesis_available ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
+                      x-text="voice.server?.synthesis_available ? 'Local TTS ready' : 'Local TTS pending'"></span>
+                <span class="rounded-full border px-2 py-1"
+                      :class="voice.server?.ffmpeg_available ? 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
+                      x-text="voice.server?.ffmpeg_available ? 'ffmpeg resolved' : 'ffmpeg missing'"></span>
+                <span class="rounded-full border px-2 py-1"
+                      :class="voice.server?.piper_available ? 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
+                      x-text="voice.server?.piper_available ? `Piper ${voice.server?.piper_engine || ''}`.trim() : 'Piper missing'"></span>
+              </div>
+              <p class="text-[10px] text-slate-500 mt-2" x-text="voice.server?.detail || 'Local voice status will appear here after refresh.'"></p>
+              <p class="text-[10px] text-slate-500 mt-1">
+                Local transcription uses bundled ffmpeg when available. Local synthesis requires a valid Piper ONNX model path, with config optional unless your model package requires it.
+              </p>
+            </div>
           </div>
 
           <button @click="saveSettings()" :disabled="settingsSaving"
@@ -3383,7 +3871,7 @@
       <div class="px-5 py-3 border-b border-slate-800 bg-slate-900/50">
         <div class="font-semibold text-white">Memory</div>
       </div>
-      <div class="flex-1 overflow-y-auto p-3 md:p-5">
+      <div class="flex-1 overflow-y-auto page-content p-3 md:p-5">
         <div class="max-w-6xl mx-auto space-y-4">
           <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 space-y-3">
             <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -3433,14 +3921,25 @@
             </template>
           </div>
 
-          <div x-show="!memoryLoading && filteredMemoryItems.length === 0" class="rounded-2xl border border-dashed border-slate-800 px-4 py-10 text-center">
-            <div class="text-4xl mb-3">🧠</div>
+          <!-- Filter result counter -->
+          <div x-show="!memoryLoading && memoryItems.length > 0" class="text-[10px] text-slate-500 px-1">
+            Showing <span x-text="filteredMemoryItems().length"></span> of <span x-text="memoryItems.length"></span> items
+          </div>
+
+          <div x-show="!memoryLoading && filteredMemoryItems().length === 0 && memoryItems.length > 0" class="rounded-2xl border border-dashed border-slate-800 px-4 py-10 text-center">
+            <div class="text-4xl mb-3">🔍</div>
             <div class="text-sm text-slate-200">No memory items matched</div>
-            <div class="mt-1 text-[11px] text-slate-500">Refresh memory or loosen the filters to inspect what Axon has learned.</div>
+            <div class="mt-1 text-[11px] text-slate-500">Loosen the filters to see all <span x-text="memoryItems.length"></span> items.</div>
+          </div>
+
+          <div x-show="!memoryLoading && memoryItems.length === 0" class="rounded-2xl border border-dashed border-slate-800 px-4 py-10 text-center">
+            <div class="text-4xl mb-3">🧠</div>
+            <div class="text-sm text-slate-200">No memory items yet</div>
+            <div class="mt-1 text-[11px] text-slate-500">Axon will populate memory as you chat, scan workspaces, and add resources.</div>
           </div>
 
           <div class="grid gap-3">
-            <template x-for="item in filteredMemoryItems" :key="item.id">
+            <template x-for="item in filteredMemoryItems()" :key="item.id">
               <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
                 <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div class="min-w-0">
@@ -3487,7 +3986,7 @@
       <div class="px-5 py-3 border-b border-slate-800 bg-slate-900/50">
         <div class="font-semibold text-white">Resources</div>
       </div>
-      <div class="flex-1 overflow-y-auto p-3 md:p-5">
+      <div class="flex-1 overflow-y-auto page-content p-3 md:p-5">
         <div class="max-w-6xl mx-auto grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
           <div class="space-y-4">
             <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 space-y-3">
@@ -3805,7 +4304,7 @@
       </div>
 
       <!-- File list -->
-      <div class="flex-1 overflow-y-auto" x-show="!fileLoading && !fileViewMode">
+      <div class="flex-1 overflow-y-auto page-content" x-show="!fileLoading && !fileViewMode">
         <template x-if="fileItems.length === 0">
           <div class="text-center text-slate-500 text-sm py-10">Empty directory</div>
         </template>
@@ -3827,7 +4326,7 @@
       <!-- Loading skeleton -->
       <div x-show="fileLoading" class="flex-1 p-4 space-y-2">
         <template x-for="i in 8" :key="i">
-          <div class="h-10 rounded-lg bg-slate-800 animate-pulse"></div>
+          <div class="skeleton h-10 rounded-lg"></div>
         </template>
       </div>
 
@@ -3873,7 +4372,13 @@
       <template x-if="activeTab === 'chat' && chatProject">
         <div>
           <div class="font-semibold text-white text-sm truncate" x-text="chatProject.name"></div>
-          <div class="text-[10px] text-slate-500">Workspace console</div>
+          <div class="flex items-center gap-1.5 mt-0.5 overflow-x-auto scrollbar-none">
+            <span class="shrink-0 rounded-full border px-2 py-0.5 text-[9px]"
+                  :class="liveFeed.connected ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-rose-500/30 bg-rose-500/10 text-rose-300'"
+                  x-text="liveFeed.connected ? 'Connected' : 'Offline'"></span>
+            <span x-show="connectionState.stable_domain_status === 'active'" class="shrink-0 rounded-full border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[9px] text-blue-300">Domain live</span>
+            <span x-show="connectionState.stable_domain_status === 'configured'" class="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[9px] text-amber-300">Domain set</span>
+          </div>
         </div>
       </template>
       <template x-if="!(activeTab === 'chat' && chatProject)">
@@ -3886,6 +4391,55 @@
 
     <!-- Right: contextual actions -->
     <div class="flex items-center gap-1.5 shrink-0">
+      <div x-show="activeTab === 'chat'" class="relative" x-data>
+        <button @click="chatModelOpen = !chatModelOpen; if(chatModelOpen && ollamaModels.length===0) loadOllamaModels()"
+                class="flex max-w-[138px] items-center gap-1.5 rounded-xl border border-slate-700/60 bg-slate-900/80 px-2.5 py-2 text-[10px] text-slate-200">
+          <span class="w-3.5 h-3.5 shrink-0" x-html="providerIdentityIcon(consoleProviderIdentity().providerId)"></span>
+          <span class="truncate" x-text="consoleProviderIdentity().modelLabel"></span>
+          <svg class="w-3 h-3 shrink-0 text-slate-500" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
+        </button>
+        <div x-show="chatModelOpen" @click.away="chatModelOpen = false"
+             x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 -translate-y-1" x-transition:enter-end="opacity-100 translate-y-0"
+             class="absolute right-0 top-full mt-1.5 w-[260px] overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-900 shadow-2xl z-50">
+          <div class="border-b border-slate-800/80 px-3 py-2">
+            <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Runtime</div>
+            <div class="mt-1 flex items-center gap-2">
+              <span class="w-4 h-4" x-html="providerIdentityIcon(consoleProviderIdentity().providerId)"></span>
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-[11px] text-slate-100" x-text="consoleProviderIdentity().providerLabel"></div>
+                <div class="truncate text-[10px] text-slate-500" x-text="consoleProviderIdentity().transportLabel"></div>
+              </div>
+            </div>
+          </div>
+          <div x-show="usesOllamaBackend()">
+            <div class="flex items-center justify-between border-b border-slate-800/80 px-3 py-1.5 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+              <span>Ollama models</span>
+              <button @click.stop="loadOllamaModels()" class="text-slate-600 hover:text-slate-400 transition">↻</button>
+            </div>
+            <template x-for="m in ollamaModels" :key="m.name">
+              <button @click="selectedChatModel = m.name; settingsForm.ollama_model = m.name; settingsForm.code_model = m.name; api('POST', '/api/settings', {ollama_model: m.name, code_model: m.name}).catch(()=>{}); chatModelOpen=false"
+                      :class="activeChatModel() === m.name ? 'bg-blue-600/15 text-blue-300' : 'text-slate-300 hover:bg-slate-800/80'"
+                      class="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition">
+                <div class="w-1.5 h-1.5 rounded-full shrink-0" :class="activeChatModel() === m.name ? 'bg-blue-400' : 'bg-slate-700'"></div>
+                <span class="flex-1 truncate" x-text="m.name"></span>
+                <span class="shrink-0 text-xs text-slate-500" x-text="m.size_gb + ' GB'"></span>
+              </button>
+            </template>
+            <div x-show="ollamaModels.length === 0" class="px-3 py-3 text-center text-xs text-slate-500">No models — Settings → Ollama</div>
+          </div>
+          <div x-show="!usesOllamaBackend()" class="px-3 py-3 text-xs text-slate-400">
+            <div class="truncate text-slate-200" x-text="consoleProviderIdentity().providerLabel"></div>
+            <div class="mt-1 truncate" x-text="consoleProviderIdentity().modelLabel"></div>
+          </div>
+        </div>
+      </div>
+      <button x-show="activeTab === 'chat'"
+              @click="showConsoleDetails = !showConsoleDetails"
+              class="btn-icon bg-slate-800 text-slate-400 press-scale"
+              :aria-expanded="showConsoleDetails"
+              aria-label="Toggle console controls">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+      </button>
       <!-- Connection status indicator -->
       <button x-show="!serverConnected" @click="reconnect()" :disabled="reconnecting"
               class="flex items-center gap-1 px-2 py-1 bg-red-600/20 border border-red-500/40 rounded-lg text-[10px] text-red-400 font-medium press-scale">
@@ -3906,62 +4460,215 @@
         🔄
       </button>
       <!-- Add task (in tasks tab) -->
-      <button x-show="activeTab === 'tasks'" @click="showAddTask = !showAddTask"
-              class="w-8 h-8 flex items-center justify-center rounded-xl bg-blue-600 text-white press-scale shadow-lg shadow-blue-500/30">
+            <button x-show="activeTab === 'tasks'" @click="showAddTask = !showAddTask"
+              class="btn-icon bg-blue-600 text-white press-scale shadow-lg shadow-blue-500/30" aria-label="Create mission">
         <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
       </button>
       <!-- Clear chat -->
       <button x-show="activeTab === 'chat' && chatMessages.length > 0"
               @click="clearHistory()"
-              class="w-8 h-8 flex items-center justify-center rounded-xl bg-slate-800 text-slate-400 press-scale text-sm">
+              class="btn-icon bg-slate-800 text-slate-400 press-scale text-sm" aria-label="Clear chat history">
         🗑
       </button>
     </div>
   </header>
 
+  <!-- ── Voice ORB Fullscreen Overlay ──────────────────────────────── -->
+  <div x-show="voice.open" x-transition:enter="transition ease-out duration-300"
+       x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-200"
+       x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
+       class="fixed inset-0 z-[999] bg-slate-950/95 backdrop-blur-xl voice-command-center overflow-hidden"
+       x-cloak>
+    <button @click="closeVoiceCommandCenter(true)"
+            class="absolute right-5 top-5 z-10 w-10 h-10 rounded-full bg-slate-900/70 text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center transition">
+      <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>
+
+    <div class="voice-stage min-h-full w-full px-6 py-12 md:px-10">
+      <div class="voice-stage__backdrop"></div>
+
+      <div class="voice-stage__content">
+        <div class="text-center">
+          <div class="voice-stage__eyebrow">Axon Voice Mode</div>
+          <div class="voice-stage__provider">
+            <span class="voice-stage__provider-chip" x-text="consoleProviderIdentity().providerLabel"></span>
+            <span class="voice-stage__provider-chip voice-stage__provider-chip--muted" x-text="consoleProviderIdentity().modelLabel"></span>
+          </div>
+        </div>
+
+        <div class="voice-visual-wrap">
+          <div class="voice-hud voice-hud--left"></div>
+          <div class="voice-hud voice-hud--right"></div>
+          <svg class="axon-reactor" viewBox="0 0 420 420" role="img" aria-label="Axon voice reactor" :data-state="voiceVisualState()">
+            <defs>
+              <radialGradient id="axon-orb-core" cx="50%" cy="50%" r="60%">
+                <stop offset="0%" stop-color="#ffffff"></stop>
+                <stop offset="22%" stop-color="#dff8ff"></stop>
+                <stop offset="58%" stop-color="#46dbff"></stop>
+                <stop offset="100%" stop-color="#0a1630"></stop>
+              </radialGradient>
+              <linearGradient id="blade-fill" x1="0%" x2="100%" y1="0%" y2="100%">
+                <stop offset="0%" stop-color="#f7fbff"></stop>
+                <stop offset="16%" stop-color="#b9dbf7"></stop>
+                <stop offset="52%" stop-color="#2f6396"></stop>
+                <stop offset="100%" stop-color="#030d1f"></stop>
+              </linearGradient>
+              <linearGradient id="blade-edge" x1="0%" x2="100%" y1="0%" y2="0%">
+                <stop offset="0%" stop-color="#ffffff" stop-opacity="0.7"></stop>
+                <stop offset="100%" stop-color="#7fdcff" stop-opacity="0.05"></stop>
+              </linearGradient>
+              <linearGradient id="beam-fill" x1="0%" x2="100%" y1="50%" y2="50%">
+                <stop offset="0%" stop-color="rgba(125,211,252,0)"></stop>
+                <stop offset="50%" stop-color="#8cf3ff"></stop>
+                <stop offset="100%" stop-color="rgba(125,211,252,0)"></stop>
+              </linearGradient>
+              <filter id="orb-glow" x="-200%" y="-200%" width="400%" height="400%">
+                <feGaussianBlur stdDeviation="18" result="blur"></feGaussianBlur>
+                <feMerge>
+                  <feMergeNode in="blur"></feMergeNode>
+                  <feMergeNode in="SourceGraphic"></feMergeNode>
+                </feMerge>
+              </filter>
+            </defs>
+
+            <g class="reactor-rings">
+              <circle class="reactor-ring" cx="210" cy="210" r="86" :style="voiceRingStyle(0)"></circle>
+              <circle class="reactor-ring" cx="210" cy="210" r="112" :style="voiceRingStyle(1)"></circle>
+              <circle class="reactor-ring" cx="210" cy="210" r="138" :style="voiceRingStyle(2)"></circle>
+            </g>
+
+            <g class="reactor-beams">
+              <rect class="reactor-beam beam-left" x="118" y="292" width="182" height="10" rx="5" fill="url(#beam-fill)" :style="voiceBeamStyle(1)"></rect>
+              <rect class="reactor-beam beam-right" x="118" y="292" width="182" height="10" rx="5" fill="url(#beam-fill)" :style="voiceBeamStyle(0.86)"></rect>
+            </g>
+
+            <g class="reactor-shell">
+              <g class="reactor-blade reactor-blade--top">
+                <path d="M210 38 L270 198 L210 286 L150 198 Z" fill="url(#blade-fill)"></path>
+                <path d="M210 38 L270 198" stroke="url(#blade-edge)" stroke-width="3" fill="none"></path>
+                <path d="M210 38 L150 198" stroke="rgba(255,255,255,0.42)" stroke-width="2" fill="none"></path>
+              </g>
+              <g class="reactor-blade reactor-blade--left">
+                <path d="M66 334 L186 208 L170 348 Z" fill="url(#blade-fill)"></path>
+                <path d="M66 334 L186 208" stroke="url(#blade-edge)" stroke-width="3" fill="none"></path>
+              </g>
+              <g class="reactor-blade reactor-blade--right">
+                <path d="M354 334 L234 208 L250 348 Z" fill="url(#blade-fill)"></path>
+                <path d="M354 334 L234 208" stroke="url(#blade-edge)" stroke-width="3" fill="none"></path>
+              </g>
+            </g>
+
+            <g class="reactor-core" filter="url(#orb-glow)">
+              <circle class="reactor-orb-glow" cx="210" cy="210" r="70" :style="voiceGlowStyle()"></circle>
+              <circle class="reactor-orb" cx="210" cy="210" r="52" fill="url(#axon-orb-core)"></circle>
+              <circle class="reactor-orb-outline" cx="210" cy="210" r="58"></circle>
+            </g>
+          </svg>
+        </div>
+
+        <div class="voice-stage__status text-center">
+          <div class="voice-stage__state-label" x-text="voiceStatusLabel()"></div>
+          <div class="voice-stage__state-caption" x-text="voiceStateCaption()"></div>
+          <div class="voice-stage__state-hint" x-text="voiceStatusHint()"></div>
+          <div x-show="voiceSessionStartedAt" class="voice-stage__started" x-text="'Started ' + timeAgo(voiceSessionStartedAt)"></div>
+        </div>
+
+        <div class="voice-stage__panel-grid">
+          <div class="voice-panel">
+            <div class="voice-panel__label">Transcript</div>
+            <div class="voice-panel__body voice-panel__body--transcript" x-text="voiceDisplayTranscript()"></div>
+          </div>
+          <div class="voice-panel">
+            <div class="voice-panel__label">Response</div>
+            <div class="voice-panel__body" x-text="voiceDisplayResponse()"></div>
+          </div>
+        </div>
+
+        <div class="voice-stage__actions">
+          <button @click="startVoiceListening()" class="voice-action voice-action--primary"
+                  :class="voice.recording ? 'voice-action--recording' : ''">
+            <span x-text="voice.recording ? '⏹ Stop & Send' : '🎙 Speak'"></span>
+          </button>
+          <button @click="clearVoiceTranscript()" class="voice-action voice-action--secondary" :disabled="!(voice.transcript || voice.responseText)">
+            Clear
+          </button>
+          <button @click="closeVoiceCommandCenter(true)" class="voice-action voice-action--ghost">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+    </div>
+  </div>
+
   <!-- ── Mobile bottom tab bar ────────────────────────────────────── -->
-  <nav class="md:hidden fixed bottom-0 left-0 right-0 z-40 tab-bar safe-bottom flex items-stretch">
-    <template x-for="item in mobileNavItems" :key="item.id">
-      <button
-        @click="item.id === 'more' ? (showMoreMenu = !showMoreMenu) : (showMoreMenu = false, switchTab(item.id))"
-        class="tab-btn flex-1 flex flex-col items-center justify-center gap-0.5 relative"
-        :class="(item.id === 'more' ? ['prompts','activity','resources','memory','vault','settings'].includes(activeTab) : activeTab === item.id) ? 'active' : 'text-slate-500'"
-      >
-        <!-- Badge -->
-        <span x-show="item.id === 'tasks' && urgentCount > 0"
-              class="absolute top-2 right-1/4 bg-red-500 text-white text-[8px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-1"
-              x-text="urgentCount"></span>
-        <!-- Icon -->
-        <span class="text-xl leading-none" x-text="item.icon"></span>
-        <!-- Label -->
-        <span class="text-[9px] font-medium" x-text="item.label"></span>
-        <!-- Active dot -->
-        <div class="tab-dot mt-0.5"></div>
-      </button>
-    </template>
+  <nav
+    class="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-900/95 backdrop-blur-md border-t border-slate-800"
+    style="padding-bottom: var(--safe-bottom);"
+    aria-label="Main navigation"
+  >
+    <div class="flex items-stretch h-16">
+      <template x-for="item in mobileNavItems" :key="item.id">
+        <button
+          @click="item.id === 'more' ? (showMoreMenu = !showMoreMenu) : (switchTab(item.id), showMoreMenu = false)"
+          :aria-current="((item.id === 'more' ? ['prompts','activity','resources','memory','vault','settings'].includes(activeTab) : activeTab === item.id) ? 'page' : false)"
+          :aria-label="item.label"
+          class="flex-1 flex flex-col items-center justify-center gap-0.5 min-h-[44px] relative transition-colors duration-150 active:bg-blue-600/20"
+          :class="(item.id === 'more' ? ['prompts','activity','resources','memory','vault','settings'].includes(activeTab) : activeTab === item.id) ? 'text-blue-400' : 'text-slate-400 hover:text-slate-200'"
+        >
+          <span class="w-5 h-5" x-html="iconSVG(item.id)" aria-hidden="true"></span>
+          <span class="text-[10px] font-medium tracking-wide leading-none" x-text="item.label"></span>
+          <span x-show="(item.id === 'more' ? ['prompts','activity','resources','memory','vault','settings'].includes(activeTab) : activeTab === item.id)" class="absolute bottom-1 w-1 h-1 rounded-full bg-blue-400"></span>
+          <span x-show="item.id === 'more' && urgentCount > 0"
+                x-text="urgentCount"
+                class="absolute top-1.5 right-[18%] min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center"></span>
+        </button>
+      </template>
+    </div>
   </nav>
 
-  <!-- ── More menu popup ──────────────────────────────────────────── -->
-  <div x-show="showMoreMenu" x-transition
-     class="md:hidden fixed inset-x-0 bottom-16 z-50 px-3 pb-1">
-    <div class="bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl p-2 max-w-sm mx-auto">
-      <template x-for="item in [
-        {id:'prompts',  icon:'📚', label:'Playbooks'},
-        {id:'activity', icon:'📊', label:'Timeline'},
-        {id:'resources', icon:'🗃️', label:'Resources'},
-        {id:'memory', icon:'🧠', label:'Memory'},
-        {id:'vault',    icon:'🔐', label:'Secure Vault'},
-        {id:'settings', icon:'⚙️', label:'Settings'},
-      ]" :key="item.id">
-        <button @click="switchTab(item.id); showMoreMenu = false"
-                class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-slate-300 hover:bg-slate-800 transition"
-                :class="activeTab === item.id ? 'bg-slate-800 text-white' : ''">
-          <span class="text-lg" x-text="item.icon"></span>
-          <span x-text="item.label"></span>
+  <div
+    x-show="showMoreMenu"
+    x-transition:enter="transition ease-out duration-200"
+    x-transition:enter-start="opacity-0 translate-y-4"
+    x-transition:enter-end="opacity-100 translate-y-0"
+    x-transition:leave="transition ease-in duration-150"
+    x-transition:leave-start="opacity-100 translate-y-0"
+    x-transition:leave-end="opacity-0 translate-y-4"
+    class="md:hidden fixed inset-x-0 z-40 bg-slate-900 border-t border-slate-700 rounded-t-2xl shadow-2xl"
+    style="bottom: calc(var(--nav-height) + var(--safe-bottom));"
+    @keydown.escape.window="showMoreMenu = false"
+  >
+    <div class="flex justify-center pt-3 pb-1">
+      <div class="w-10 h-1 rounded-full bg-slate-600"></div>
+    </div>
+
+    <div class="px-4 pb-4 grid grid-cols-1 divide-y divide-slate-800">
+      <template x-for="item in moreMenuItems" :key="item.id">
+        <button
+          @click="switchTab(item.id); showMoreMenu = false"
+          class="flex items-center gap-4 py-3.5 min-h-[var(--touch-target)] w-full text-left text-slate-200 hover:text-white active:bg-slate-800 rounded-xl px-2 transition-colors duration-100"
+        >
+          <span class="text-xl w-7 flex-shrink-0 text-center" aria-hidden="true" x-text="item.icon"></span>
+          <span class="text-[15px] font-medium" x-text="item.label"></span>
         </button>
       </template>
     </div>
   </div>
+
+  <div
+    x-show="showMoreMenu"
+    x-transition:enter="transition-opacity duration-200"
+    x-transition:enter-start="opacity-0"
+    x-transition:enter-end="opacity-100"
+    x-transition:leave="transition-opacity duration-150"
+    x-transition:leave-start="opacity-100"
+    x-transition:leave-end="opacity-0"
+    @click="showMoreMenu = false"
+    class="md:hidden fixed inset-0 z-30 bg-black/50 backdrop-blur-sm"
+    aria-hidden="true"
+  ></div>
 
 </div><!-- end app shell -->
 
@@ -4320,14 +5027,29 @@ function devbrain() {
       { id: 'vault',    icon: '🔐', label: 'Secure Vault' },
     ],
     mobileNavItems: [
-      { id: 'dashboard', icon: '🏠', label: 'Dashboard' },
-      { id: 'chat',      icon: '💬', label: 'Console' },
-      { id: 'projects',  icon: '📁', label: 'Workspaces' },
-      { id: 'files',     icon: '🗂️', label: 'Files'    },
-      { id: 'more',      icon: '☰', label: 'More'     },
+      { id: 'dashboard', icon: 'dashboard', label: 'Dashboard', badge: 0 },
+      { id: 'chat',      icon: 'chat', label: 'Console', badge: 0 },
+      { id: 'projects',  icon: 'projects', label: 'Workspaces', badge: 0 },
+      { id: 'files',     icon: 'files', label: 'Files', badge: 0 },
+      { id: 'more',      icon: 'more', label: 'More', badge: 0 },
+    ],
+    moreMenuItems: [
+      { id: 'tasks', icon: '✅', label: 'Missions' },
+      { id: 'prompts', icon: '📚', label: 'Playbooks' },
+      { id: 'activity', icon: '📊', label: 'Timeline' },
+      { id: 'resources', icon: '🗃️', label: 'Resources' },
+      { id: 'memory', icon: '🧠', label: 'Memory' },
+      { id: 'vault', icon: '🔐', label: 'Secure Vault' },
+      { id: 'settings', icon: '⚙️', label: 'Settings' },
     ],
     showMoreMenu: false,
     showLocalToolsPanel: false,
+    showConsoleDetails: false,
+    expandedItem: null,
+    activeProjectMenu: null,
+    vaultPasswordVisible: false,
+    vaultSetupPasswordVisible: false,
+    vaultSetupConfirmVisible: false,
 
     currentUser: {
       id: null, name: '', email: '', username: '', role: 'operator', status: 'active',
@@ -4370,6 +5092,13 @@ function devbrain() {
     selectedChatModel: '',
     showResourcePicker: false,
     showComposerMenu: false,
+    showMobileToolbar: false,
+    visionWarningDismissed: false,
+    panelRuntimeOpen: true,
+    panelStepsOpen: true,
+    panelToolsOpen: false,
+    panelConnectionOpen: false,
+    showVoiceOrb: false,
     selectedResources: [],
     composerOptions: {
       intelligence_mode: 'ask',
@@ -4454,6 +5183,14 @@ function devbrain() {
       command: '', pendingCommand: '', approvalRequired: false,
       lastDetailLoadedAt: '',
     },
+    browserActions: {
+      session: { connected: false, url: '', title: '', last_seen_at: '', mode: 'approval_required' },
+      proposals: [],
+      history: [],
+      pending_count: 0,
+      approval_mode: 'approval_required',
+      loading: false,
+    },
 
     // Model management
     ollamaModels: [],
@@ -4503,6 +5240,7 @@ function devbrain() {
     tasks: [],
     tasksLoading: false,
     showAddTask: false,
+    editingTaskId: null,
     newTask: { title:'', detail:'', priority:'medium', project_id:'', due_date:'' },
     suggestions: [],
     urgentCount: 0,
@@ -4582,6 +5320,10 @@ function devbrain() {
       azure_speech_key: '',
       azure_speech_region: 'eastus',
       azure_voice: 'en-ZA-LeahNeural',
+      local_stt_model: 'base',
+      local_stt_language: 'en',
+      local_tts_model_path: '',
+      local_tts_config_path: '',
       _anthropicKeyHint: '',
       _openaiKeyHint: '',
       _geminiKeyHint: '',
@@ -4625,7 +5367,22 @@ function devbrain() {
 
     // Voice
     voiceActive: false,
-    voiceMode: false,
+    voiceAutoSpeak: false,
+    voiceTranscript: '',
+    voiceSessionStartedAt: '',
+    _voiceStopRequested: false,
+    voiceRecognition: null,
+    voice: {
+      enabled: false,
+      open: false,
+      state: 'idle',
+      transcript: '',
+      responseText: '',
+      supported: {
+        recognition: 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window,
+        synthesis: 'speechSynthesis' in window,
+      },
+    },
     speechSupported: false,
     speechInputSupported: false,
     speechOutputSupported: false,
@@ -4698,6 +5455,7 @@ function devbrain() {
 
     async _bootApp() {
       this.refreshVoiceCapability();
+      this.loadVoiceStatus();
       if (!this.voiceCapabilityBound) {
         window.addEventListener('axon-speech-sdk-ready', () => this.refreshVoiceCapability());
         this.voiceCapabilityBound = true;
@@ -4724,8 +5482,23 @@ function devbrain() {
       this.pollConnection();
       this.loadCurrentUser();
       this.loadDashboard();
+      this.loadBrowserActions();
       this.$watch('activeTab', tab => {
+        this.showMoreMenu = false;
+        this.activeProjectMenu = null;
         if (tab === 'chat' && this.chatMessages.length === 0) this.loadChatHistory();
+      });
+      this.$watch('chatLoading', value => {
+        if (value) {
+          this.panelStepsOpen = true;
+          this.panelRuntimeOpen = true;
+        }
+      });
+      this.$watch('liveOperator.active', value => {
+        if (value) {
+          this.panelStepsOpen = true;
+          this.panelRuntimeOpen = true;
+        }
       });
     },
 

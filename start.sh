@@ -58,11 +58,18 @@ if [ -n "$LIVE_PID" ]; then
   exit 1
 fi
 
+# ── Resolve Python interpreter ────────────────────────────────────
+if [ -x "$DEVBRAIN_DIR/.venv/bin/python" ]; then
+  PYTHON="$DEVBRAIN_DIR/.venv/bin/python"
+else
+  PYTHON="python3"
+fi
+
 # ── Start server ──────────────────────────────────────────────────
-echo "✦ Starting Axon on http://localhost:$PORT"
+echo "✦ Starting Axon on http://localhost:$PORT  ($PYTHON)"
 
 cd "$DEVBRAIN_DIR"
-setsid python3 "$DEVBRAIN_DIR/server.py" >> "$LOGFILE" 2>&1 < /dev/null &
+setsid "$PYTHON" "$DEVBRAIN_DIR/server.py" >> "$LOGFILE" 2>&1 < /dev/null &
 SERVER_PID=$!
 echo $SERVER_PID > "$PIDFILE"
 

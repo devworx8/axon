@@ -340,9 +340,89 @@ function axonChatMixin() {
       };
     },
 
+    ensureAssistantMessageBlocks(message) {
+      if (!message) return;
+      if (!Array.isArray(message.thinkingBlocks)) message.thinkingBlocks = [];
+      if (!Array.isArray(message.workingBlocks)) message.workingBlocks = [];
+      if (!message.providerIdentity) message.providerIdentity = this.assistantProviderIdentity();
+    },
+
+    appendThinkingBlock(message, chunk) {
+      const text = String(chunk || '').trim();
+      if (!text) return;
+      this.ensureAssistantMessageBlocks(message);
+      const last = message.thinkingBlocks[message.thinkingBlocks.length - 1];
+      if (last && last.status === 'active') {
+        last.content = `${last.content}\n\n${text}`.trim();
+        last.updatedAt = new Date().toISOString();
+        return;
+      }
+      message.thinkingBlocks.push({
+        id: `think-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        title: 'Thinking',
+        content: text,
+        status: 'active',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    },
+
+    finalizeThinkingBlocks(message) {
+      this.ensureAssistantMessageBlocks(message);
+      message.thinkingBlocks.forEach(block => {
+        if (block.status === 'active') block.status = 'done';
+      });
+    },
+
+    appendWorkingBlock(message, event) {
+      this.ensureAssistantMessageBlocks(message);
+      message.workingBlocks.push({
+        id: `work-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: event.name || '',
+        title: `Working · ${this.prettyToolName(event.name)}`,
+        args: event.args || {},
+        result: '',
+        status: 'running',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    },
+
+    resolveWorkingBlock(message, event) {
+      this.ensureAssistantMessageBlocks(message);
+      const match = [...message.workingBlocks].reverse().find(block => block.name === event.name && block.status === 'running');
+      if (match) {
+        match.status = 'done';
+        match.result = String(event.result || '').trim();
+        match.updatedAt = new Date().toISOString();
+        return;
+      }
+      message.workingBlocks.push({
+        id: `work-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: event.name || '',
+        title: `Working · ${this.prettyToolName(event.name)}`,
+        args: {},
+        result: String(event.result || '').trim(),
+        status: 'done',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    },
+
+    finalizeWorkingBlocks(message) {
+      this.ensureAssistantMessageBlocks(message);
+      message.workingBlocks.forEach(block => {
+        if (block.status === 'running') {
+          block.status = 'done';
+          block.updatedAt = new Date().toISOString();
+        }
+      });
+    },
+
     /* ── Streaming ────────────────────────────────────────────── */
 
     createAssistantPlaceholder(respId, mode, retryResources = []) {
+      const providerIdentity = this.assistantProviderIdentity();
       return {
         id: respId,
         role: 'assistant',
@@ -350,7 +430,10 @@ function axonChatMixin() {
         streaming: true,
         created_at: new Date().toISOString(),
         mode,
-        modelLabel: this.assistantRuntimeLabel(),
+        modelLabel: providerIdentity.modelLabel || this.assistantRuntimeLabel(),
+        providerIdentity,
+        thinkingBlocks: [],
+        workingBlocks: [],
         agentEvents: mode === 'agent' ? [] : undefined,
         retryResources,
       };
@@ -421,9 +504,16 @@ function axonChatMixin() {
             const data = JSON.parse(line.slice(6));
             const idx = this.chatMessages.findIndex(m => m.id === respId);
             if (idx < 0) continue;
+            this.ensureAssistantMessageBlocks(this.chatMessages[idx]);
 
             if (mode === 'agent') {
-              if (data.type === 'text') {
+              if (data.type === 'thinking') {
+                this.setAgentStage('plan');
+                this.appendThinkingBlock(this.chatMessages[idx], data.chunk);
+                this.updateLiveOperator(mode, { type: 'text' });
+                this.scrollChat();
+              } else if (data.type === 'text') {
+                this.finalizeThinkingBlocks(this.chatMessages[idx]);
                 if (this.chatMessages[idx].agentEvents?.length) this.setAgentStage('verify');
                 this.chatMessages[idx].content += data.chunk;
                 this.updateLiveOperator(mode, data);
@@ -431,10 +521,18 @@ function axonChatMixin() {
               } else if (data.type === 'tool_call' || data.type === 'tool_result') {
                 this.setAgentStage(data.type === 'tool_call' ? 'execute' : 'verify');
                 this.chatMessages[idx].agentEvents.push(data);
+                if (data.type === 'tool_call') {
+                  this.finalizeThinkingBlocks(this.chatMessages[idx]);
+                  this.appendWorkingBlock(this.chatMessages[idx], data);
+                } else {
+                  this.resolveWorkingBlock(this.chatMessages[idx], data);
+                }
                 this.updateLiveOperator(mode, data);
                 this.scrollChat();
               } else if (data.type === 'done') {
                 this.setAgentStage('verify');
+                this.finalizeThinkingBlocks(this.chatMessages[idx]);
+                this.finalizeWorkingBlocks(this.chatMessages[idx]);
                 this.chatMessages[idx].streaming = false;
                 // Auto-speak response if voice mode is active
                 if (typeof this.autoSpeakResponse === 'function') {
@@ -443,6 +541,8 @@ function axonChatMixin() {
                 this.updateLiveOperator(mode, data);
               } else if (data.type === 'error') {
                 this.setAgentStage('recover');
+                this.finalizeThinkingBlocks(this.chatMessages[idx]);
+                this.finalizeWorkingBlocks(this.chatMessages[idx]);
                 this.chatMessages[idx].content += `\n⚠️ ${data.message}`;
                 this.chatMessages[idx].streaming = false;
                 this.chatMessages[idx].error = true;
@@ -478,6 +578,8 @@ function axonChatMixin() {
       this._chatAbortController = null;
       const idx = this.chatMessages.findIndex(m => m.id === respId);
       if (idx >= 0) {
+        this.finalizeThinkingBlocks(this.chatMessages[idx]);
+        this.finalizeWorkingBlocks(this.chatMessages[idx]);
         this.chatMessages[idx].streaming = false;
         this.rememberOperatorOutcome(mode, this.chatMessages[idx]);
       }

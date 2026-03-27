@@ -40,7 +40,7 @@ def notify(title: str, body: str, urgency: str = "normal"):
 
 # ─── Job: Project Health Scan ─────────────────────────────────────────────────
 
-async def job_scan_projects():
+async def job_scan_projects(trigger_type: str = "auto"):
     """Scan all registered project roots and update health scores in DB."""
     print(f"[Axon] Running workspace health scan at {datetime.now().strftime('%H:%M')}")
     try:
@@ -57,9 +57,14 @@ async def job_scan_projects():
             for proj_data in projects:
                 await devdb.upsert_project(conn, proj_data)
 
+            trigger_label = {
+                "auto": "Auto-scan (scheduled)",
+                "manual": "Manual scan",
+                "startup": "Triggered scan",
+            }.get(trigger_type, "Triggered scan")
             await devdb.log_event(
                 conn, "scan",
-                f"Scanned {len(projects)} projects from {', '.join(roots)}"
+                f"{trigger_label}: scanned {len(projects)} projects from {', '.join(roots)}"
             )
 
         # Notify about unhealthy projects
@@ -199,9 +204,9 @@ def setup_scheduler(
     return sched
 
 
-async def trigger_scan_now():
+async def trigger_scan_now(trigger_type: str = "manual"):
     """Run a scan immediately (called from API endpoint)."""
-    await job_scan_projects()
+    await job_scan_projects(trigger_type=trigger_type)
 
 
 async def trigger_digest_now():

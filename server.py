@@ -5,6 +5,8 @@ Access at:  http://localhost:7734
 """
 
 import asyncio
+import importlib.util
+import io
 import sys
 import os
 import platform as _platform
@@ -12,7 +14,9 @@ import shlex as _shlex
 import shutil
 import sqlite3 as _sqlite3
 import subprocess
+import tempfile
 import time as _time
+import wave
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -115,6 +119,26 @@ _domain_probe_cache = {
     "detail": "",
     "checked_at": 0.0,
 }
+_browser_action_state = {
+    "session": {
+        "connected": False,
+        "url": "",
+        "title": "",
+        "last_seen_at": "",
+        "mode": "approval_required",
+    },
+    "proposals": [],
+    "history": [],
+    "next_id": 1,
+}
+_local_voice_state = {
+    "speaking": False,
+    "last_engine": "",
+    "last_error": "",
+    "updated_at": "",
+}
+_whisper_model_cache: dict[str, object] = {}
+_piper_voice_cache: dict[str, object] = {}
 
 
 def _now_iso() -> str:
@@ -282,6 +306,221 @@ def _connection_snapshot() -> dict:
     }
 
 
+def _serialize_browser_action_state() -> dict:
+    proposals = sorted(
+        _browser_action_state["proposals"],
+        key=lambda item: item.get("created_at", ""),
+        reverse=True,
+    )
+    history = sorted(
+        _browser_action_state["history"],
+        key=lambda item: item.get("updated_at", item.get("created_at", "")),
+        reverse=True,
+    )
+    return {
+        "session": dict(_browser_action_state["session"]),
+        "pending_count": sum(1 for item in proposals if item.get("status") == "pending"),
+        "proposals": [dict(item) for item in proposals[:20]],
+        "history": [dict(item) for item in history[:20]],
+        "approval_mode": _browser_action_state["session"].get("mode", "approval_required"),
+    }
+
+
+def _next_browser_action_id() -> int:
+    current = int(_browser_action_state.get("next_id") or 1)
+    _browser_action_state["next_id"] = current + 1
+    return current
+
+
+def _python_module_available(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except Exception:
+        return False
+
+
+def _resolve_ffmpeg_path() -> str:
+    system_path = shutil.which("ffmpeg")
+    if system_path:
+        return system_path
+    if _python_module_available("imageio_ffmpeg"):
+        try:
+            import imageio_ffmpeg
+
+            bundled_path = str(imageio_ffmpeg.get_ffmpeg_exe() or "").strip()
+            if bundled_path and Path(bundled_path).exists():
+                return bundled_path
+        except Exception:
+            return ""
+    return ""
+
+
+def _piper_python_available() -> bool:
+    return _python_module_available("piper.voice")
+
+
+def _local_voice_paths(settings: Optional[dict] = None) -> dict:
+    settings = settings or _read_settings_sync()
+    return {
+        "piper_model_path": str(settings.get("local_tts_model_path") or os.environ.get("AXON_PIPER_MODEL_PATH") or "").strip(),
+        "piper_config_path": str(settings.get("local_tts_config_path") or os.environ.get("AXON_PIPER_CONFIG_PATH") or "").strip(),
+        "stt_model": str(settings.get("local_stt_model") or os.environ.get("AXON_WHISPER_MODEL") or "base").strip() or "base",
+        "language": str(settings.get("local_stt_language") or os.environ.get("AXON_WHISPER_LANGUAGE") or "en").strip() or "en",
+    }
+
+
+def _local_voice_status(settings: Optional[dict] = None) -> dict:
+    settings = settings or _read_settings_sync()
+    paths = _local_voice_paths(settings)
+    ffmpeg_path = _resolve_ffmpeg_path()
+    piper_path = shutil.which("piper") or ""
+    piper_python_available = _piper_python_available()
+    faster_whisper_available = _python_module_available("faster_whisper")
+    whisper_available = _python_module_available("whisper")
+    piper_model_ready = bool(paths["piper_model_path"] and Path(paths["piper_model_path"]).exists())
+    piper_config_ready = bool(not paths["piper_config_path"] or Path(paths["piper_config_path"]).exists())
+    transcription_available = bool(ffmpeg_path and (faster_whisper_available or whisper_available))
+    piper_engine = "binary" if piper_path else ("python" if piper_python_available else "")
+    synthesis_available = bool((piper_path or piper_python_available) and piper_model_ready and piper_config_ready)
+    available = transcription_available or synthesis_available
+    detail_parts: list[str] = []
+    if not ffmpeg_path:
+        detail_parts.append("ffmpeg missing")
+    if not (faster_whisper_available or whisper_available):
+        detail_parts.append("Whisper backend missing")
+    if not (piper_path or piper_python_available):
+        detail_parts.append("Piper runtime missing")
+    if (piper_path or piper_python_available) and not piper_model_ready:
+        detail_parts.append("Piper model not configured")
+    if (piper_path or piper_python_available) and not piper_config_ready:
+        detail_parts.append("Piper config path invalid")
+    ready_parts: list[str] = []
+    if transcription_available:
+        ready_parts.append("Local transcription ready")
+    if synthesis_available:
+        ready_parts.append("Local synthesis ready")
+    if ready_parts and detail_parts:
+        detail = f"{' • '.join(ready_parts)}; {'; '.join(detail_parts)}"
+    elif ready_parts:
+        detail = " • ".join(ready_parts)
+    else:
+        detail = "; ".join(detail_parts) or "Local voice dependencies not installed"
+    return {
+        "available": available,
+        "preferred_mode": "local" if available else "browser",
+        "transcription_available": transcription_available,
+        "synthesis_available": synthesis_available,
+        "ffmpeg_available": bool(ffmpeg_path),
+        "ffmpeg_path": ffmpeg_path,
+        "faster_whisper_available": faster_whisper_available,
+        "whisper_available": whisper_available,
+        "piper_available": bool(piper_path or piper_python_available),
+        "piper_binary_available": bool(piper_path),
+        "piper_python_available": piper_python_available,
+        "piper_engine": piper_engine,
+        "piper_model_ready": piper_model_ready,
+        "piper_config_ready": piper_config_ready,
+        "piper_model_path": paths["piper_model_path"],
+        "piper_config_path": paths["piper_config_path"],
+        "stt_model": paths["stt_model"],
+        "language": paths["language"],
+        "detail": detail,
+        "state": dict(_local_voice_state),
+    }
+
+
+def _run_ffmpeg_to_wav(input_path: str, output_path: str):
+    ffmpeg_path = _resolve_ffmpeg_path()
+    if not ffmpeg_path:
+        raise HTTPException(503, "Local voice transcription requires ffmpeg")
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        input_path,
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        output_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, check=False, timeout=90)
+    if result.returncode != 0:
+        stderr = (result.stderr or b"").decode("utf-8", errors="replace").strip()
+        raise HTTPException(502, f"ffmpeg conversion failed: {stderr[:240] or 'unknown error'}")
+
+
+def _transcribe_local_audio(wav_path: str, *, model_name: str, language: str) -> tuple[str, str]:
+    if _python_module_available("faster_whisper"):
+        from faster_whisper import WhisperModel
+
+        cache_key = f"faster:{model_name}"
+        model = _whisper_model_cache.get(cache_key)
+        if model is None:
+            model = WhisperModel(model_name, device="cpu", compute_type="int8")
+            _whisper_model_cache[cache_key] = model
+        segments, _info = model.transcribe(wav_path, language=language or None, vad_filter=False)
+        text = " ".join(segment.text.strip() for segment in segments if segment.text).strip()
+        return text, "faster-whisper"
+    if _python_module_available("whisper"):
+        import whisper
+
+        cache_key = f"whisper:{model_name}"
+        model = _whisper_model_cache.get(cache_key)
+        if model is None:
+            model = whisper.load_model(model_name)
+            _whisper_model_cache[cache_key] = model
+        result = model.transcribe(wav_path, language=language or None, fp16=False)
+        return str(result.get("text") or "").strip(), "whisper"
+    raise HTTPException(503, "Local transcription requires faster-whisper or whisper")
+
+
+def _speak_local_text(text: str, *, model_path: str, config_path: str = "") -> tuple[bytes, str]:
+    piper_path = shutil.which("piper")
+    if not model_path or not Path(model_path).exists():
+        raise HTTPException(503, "Local speech synthesis requires a configured Piper model path")
+    if config_path and not Path(config_path).exists():
+        raise HTTPException(503, "Local speech synthesis config path is invalid")
+    if piper_path:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as output_file:
+            wav_path = output_file.name
+        cmd = [piper_path, "--model", model_path, "--output_file", wav_path]
+        if config_path and Path(config_path).exists():
+            cmd.extend(["--config", config_path])
+        result = subprocess.run(
+            cmd,
+            input=text[:1200].encode("utf-8"),
+            capture_output=True,
+            check=False,
+            timeout=90,
+        )
+        if result.returncode != 0:
+            stderr = (result.stderr or b"").decode("utf-8", errors="replace").strip()
+            raise HTTPException(502, f"Piper synthesis failed: {stderr[:240] or 'unknown error'}")
+        try:
+            return Path(wav_path).read_bytes(), "piper"
+        finally:
+            Path(wav_path).unlink(missing_ok=True)
+    if _piper_python_available():
+        try:
+            from piper.voice import PiperVoice
+
+            cache_key = f"{model_path}:{config_path or ''}"
+            voice = _piper_voice_cache.get(cache_key)
+            if voice is None:
+                voice = PiperVoice.load(model_path, config_path=config_path or None, use_cuda=False)
+                _piper_voice_cache[cache_key] = voice
+            buffer = io.BytesIO()
+            with wave.open(buffer, "wb") as wav_file:
+                voice.synthesize_wav(text[:1200], wav_file)
+            return buffer.getvalue(), "piper-python"
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(502, f"Piper Python synthesis failed: {exc}")
+    raise HTTPException(503, "Local speech synthesis requires Piper or the piper Python package")
+
+
 def _read_settings_sync() -> dict:
     try:
         conn = _sqlite3.connect(devdb.DB_PATH)
@@ -318,12 +557,15 @@ def _connection_config(settings: Optional[dict] = None) -> dict:
     settings = settings or _read_settings_sync()
     stable_domain = _normalize_domain(settings.get("stable_domain"))
     public_base_url = _normalize_public_base_url(settings.get("public_base_url"), stable_domain)
+    tunnel_mode = str(settings.get("tunnel_mode") or "trycloudflare").strip() or "trycloudflare"
+    cloudflare_tunnel_token = str(settings.get("cloudflare_tunnel_token") or "").strip()
     return {
         "stable_domain": stable_domain,
         "public_base_url": public_base_url,
         "stable_domain_enabled": _setting_truthy(settings.get("stable_domain_enabled")),
-        "tunnel_mode": str(settings.get("tunnel_mode") or "trycloudflare").strip() or "trycloudflare",
-        "cloudflare_tunnel_token": str(settings.get("cloudflare_tunnel_token") or "").strip(),
+        "tunnel_mode": tunnel_mode,
+        "cloudflare_tunnel_token": cloudflare_tunnel_token,
+        "named_tunnel_ready": tunnel_mode == "named" and bool(cloudflare_tunnel_token),
     }
 
 
@@ -378,7 +620,7 @@ async def lifespan(app: FastAPI):
     print(f"[Axon] Scheduler running — scan every {scan_hours}h, digest at {digest_hour}:00")
 
     # Run initial scan on startup
-    asyncio.create_task(sched_module.trigger_scan_now())
+    asyncio.create_task(sched_module.trigger_scan_now(trigger_type="startup"))
 
     yield
 
@@ -726,7 +968,7 @@ async def suggest_project_tasks(project_id: int):
 @app.post("/api/scan")
 async def run_scan():
     """Trigger an immediate project scan."""
-    asyncio.create_task(sched_module.trigger_scan_now())
+    asyncio.create_task(sched_module.trigger_scan_now(trigger_type="manual"))
     return {"status": "scan started"}
 
 
@@ -856,14 +1098,51 @@ async def create_task(body: TaskCreate):
 
 
 class TaskUpdate(BaseModel):
-    status: str
+    title: Optional[str] = None
+    detail: Optional[str] = None
+    priority: Optional[str] = None
+    status: Optional[str] = None
+    due_date: Optional[str] = None
+    project_id: Optional[int] = None
+
+
+class BrowserSessionUpdate(BaseModel):
+    connected: Optional[bool] = None
+    url: Optional[str] = None
+    title: Optional[str] = None
+    mode: Optional[str] = None
+
+
+class BrowserActionProposalCreate(BaseModel):
+    action_type: str
+    summary: str
+    target: Optional[str] = None
+    value: Optional[str] = None
+    url: Optional[str] = None
+    risk: Optional[str] = "medium"
+    scope: Optional[str] = "browser_act"
+    requires_confirmation: Optional[bool] = True
+    metadata: Optional[dict] = None
 
 
 @app.patch("/api/tasks/{task_id}")
 async def update_task(task_id: int, body: TaskUpdate):
     async with devdb.get_db() as conn:
-        await devdb.update_task_status(conn, task_id, body.status)
+        fields = body.model_dump(exclude_none=True)
+        if not fields:
+            raise HTTPException(400, "No fields to update")
+        if "status" in fields and len(fields) == 1:
+            await devdb.update_task_status(conn, task_id, fields["status"])
+        else:
+            await devdb.update_task(conn, task_id, **fields)
         return {"updated": True}
+
+
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(task_id: int):
+    async with devdb.get_db() as conn:
+        await devdb.delete_task(conn, task_id)
+        return {"deleted": True}
 
 
 @app.post("/api/tasks/suggest")
@@ -2209,6 +2488,16 @@ async def agent_endpoint(body: AgentRequest, request: Request):
                         workspace_id=body.project_id,
                         preserve_started=True,
                     )
+                elif event.get("type") == "thinking":
+                    _set_live_operator(
+                        active=True,
+                        mode="agent",
+                        phase="plan",
+                        title="Thinking through the task",
+                        detail=str(event.get("chunk") or "Axon is reasoning through the task.")[:180],
+                        workspace_id=body.project_id,
+                        preserve_started=True,
+                    )
                 elif event.get("type") == "tool_call":
                     _set_live_operator(
                         active=True,
@@ -2414,6 +2703,10 @@ class SettingsUpdate(BaseModel):
     azure_speech_key: Optional[str] = None
     azure_speech_region: Optional[str] = None
     azure_voice: Optional[str] = None
+    local_stt_model: Optional[str] = None
+    local_stt_language: Optional[str] = None
+    local_tts_model_path: Optional[str] = None
+    local_tts_config_path: Optional[str] = None
     alerts_enabled: Optional[bool] = None
     alerts_desktop: Optional[bool] = None
     alerts_mobile: Optional[bool] = None
@@ -2759,6 +3052,7 @@ async def runtime_status():
         "session_count": len(terminal_sessions),
         "running_count": sum(1 for row in terminal_sessions if row["id"] in _terminal_processes),
     }
+    status["browser_actions"] = _serialize_browser_action_state()
     return status
 
 
@@ -2789,6 +3083,7 @@ async def _build_live_snapshot() -> dict:
                 for row in terminal_rows
             ],
         },
+        "browser_actions": _serialize_browser_action_state(),
         "activity": [dict(row) for row in activity_rows],
     }
 
@@ -2902,36 +3197,142 @@ async def mobile_info():
     }
 
 
+@app.get("/api/browser/actions")
+async def browser_actions_status():
+    return _serialize_browser_action_state()
+
+
+@app.post("/api/browser/session")
+async def update_browser_session(body: BrowserSessionUpdate):
+    session = dict(_browser_action_state["session"])
+    if body.connected is not None:
+        session["connected"] = bool(body.connected)
+    if body.url is not None:
+        session["url"] = str(body.url or "").strip()
+    if body.title is not None:
+        session["title"] = str(body.title or "").strip()
+    if body.mode is not None:
+        mode = str(body.mode or "approval_required").strip().lower()
+        session["mode"] = mode if mode in {"approval_required", "inspect_auto"} else "approval_required"
+    session["last_seen_at"] = _now_iso()
+    _browser_action_state["session"] = session
+    return _serialize_browser_action_state()
+
+
+@app.post("/api/browser/actions/propose")
+async def create_browser_action_proposal(body: BrowserActionProposalCreate):
+    created_at = _now_iso()
+    proposal = {
+        "id": _next_browser_action_id(),
+        "action_type": str(body.action_type or "inspect").strip().lower(),
+        "summary": str(body.summary or "Browser action requested").strip(),
+        "target": str(body.target or "").strip(),
+        "value": str(body.value or "").strip(),
+        "url": str(body.url or "").strip(),
+        "risk": str(body.risk or "medium").strip().lower(),
+        "scope": str(body.scope or "browser_act").strip().lower(),
+        "requires_confirmation": bool(body.requires_confirmation if body.requires_confirmation is not None else True),
+        "metadata": body.metadata or {},
+        "status": "pending",
+        "created_at": created_at,
+        "updated_at": created_at,
+    }
+    _browser_action_state["proposals"] = [proposal, *(_browser_action_state["proposals"] or [])]
+    return {"created": True, "proposal": proposal, **_serialize_browser_action_state()}
+
+
+@app.post("/api/browser/actions/{proposal_id}/approve")
+async def approve_browser_action(proposal_id: int):
+    proposals = list(_browser_action_state["proposals"] or [])
+    for idx, proposal in enumerate(proposals):
+        if int(proposal.get("id") or 0) != proposal_id:
+            continue
+        updated = {
+            **proposal,
+            "status": "approved",
+            "updated_at": _now_iso(),
+        }
+        proposals.pop(idx)
+        _browser_action_state["proposals"] = proposals
+        _browser_action_state["history"] = [updated, *(_browser_action_state["history"] or [])][:50]
+        return {"approved": True, "proposal": updated, **_serialize_browser_action_state()}
+    raise HTTPException(404, "Browser action proposal not found")
+
+
+@app.post("/api/browser/actions/{proposal_id}/reject")
+async def reject_browser_action(proposal_id: int):
+    proposals = list(_browser_action_state["proposals"] or [])
+    for idx, proposal in enumerate(proposals):
+        if int(proposal.get("id") or 0) != proposal_id:
+            continue
+        updated = {
+            **proposal,
+            "status": "rejected",
+            "updated_at": _now_iso(),
+        }
+        proposals.pop(idx)
+        _browser_action_state["proposals"] = proposals
+        _browser_action_state["history"] = [updated, *(_browser_action_state["history"] or [])][:50]
+        return {"rejected": True, "proposal": updated, **_serialize_browser_action_state()}
+    raise HTTPException(404, "Browser action proposal not found")
+
 @app.get("/api/desktop/preview")
 async def desktop_preview(w: int = 960, h: int = 540):
     """Return a lightweight PNG preview of the current desktop."""
-    if not shutil.which("import"):
-        raise HTTPException(503, "Desktop preview tool is not available on this host.")
-
     width = max(320, min(int(w), 1600))
     height = max(180, min(int(h), 900))
-    cmd = ["import", "-silent", "-window", "root", "-resize", f"{width}x{height}", "png:-"]
-    env = os.environ.copy()
+    display = os.environ.get("DISPLAY", "")
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            timeout=8,
-            check=False,
-            env=env,
+    # ── Fallback chain for screen capture ────────────────────────────────────
+    strategies: list[tuple[str, list[str]]] = []
+    if display:
+        if shutil.which("scrot"):
+            strategies.append(("scrot", ["scrot", "-z", "-o", "--quality", "70", "/dev/stdout"]))
+        if shutil.which("gnome-screenshot"):
+            strategies.append(("gnome-screenshot", ["gnome-screenshot", "-f", "/dev/stdout"]))
+        if shutil.which("import"):
+            strategies.append(("import", ["import", "-silent", "-window", "root", "-resize", f"{width}x{height}", "png:-"]))
+    if shutil.which("xvfb-run") and shutil.which("import"):
+        strategies.append(("xvfb-import", ["xvfb-run", "--auto-servernum", "import", "-silent", "-window", "root", "-resize", f"{width}x{height}", "png:-"]))
+
+    if not strategies:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "no_display",
+                "message": "No display server available for screen capture. Set DISPLAY or install scrot/xvfb.",
+            },
         )
-    except subprocess.TimeoutExpired:
-        raise HTTPException(504, "Desktop preview timed out.")
 
-    if result.returncode != 0 or not result.stdout:
-        detail = (result.stderr or b"").decode("utf-8", errors="replace").strip() or "Desktop preview failed."
-        raise HTTPException(500, detail[:240])
+    last_error = ""
+    for name, cmd in strategies:
+        env = os.environ.copy()
+        try:
+            result = subprocess.run(cmd, capture_output=True, timeout=8, check=False, env=env)
+        except subprocess.TimeoutExpired:
+            last_error = f"{name}: timed out"
+            continue
+        except Exception as exc:
+            last_error = f"{name}: {exc}"
+            continue
 
-    return Response(
-        content=result.stdout,
-        media_type="image/png",
-        headers={"Cache-Control": "no-store, max-age=0"},
+        if result.returncode != 0 or not result.stdout:
+            stderr = (result.stderr or b"").decode("utf-8", errors="replace").strip()
+            last_error = f"{name}: exit {result.returncode} — {stderr[:120]}"
+            continue
+
+        return Response(
+            content=result.stdout,
+            media_type="image/png",
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
+
+    return JSONResponse(
+        status_code=503,
+        content={
+            "status": "capture_failed",
+            "message": f"All capture strategies failed. Last: {last_error[:200]}",
+        },
     )
 
 
@@ -3055,6 +3456,11 @@ class TTSRequest(BaseModel):
     voice: str = "en-ZA-LeahNeural"   # South African English
 
 
+class VoiceSpeakRequest(BaseModel):
+    text: str
+    format: str = "wav"
+
+
 async def _issue_azure_speech_token(region: str, key: str) -> str:
     """Mint a short-lived Azure Speech auth token."""
     import aiohttp
@@ -3140,6 +3546,119 @@ async def list_tts_voices():
         {"id": "af-ZA-AdriNeural",   "name": "Adri (Afrikaans)",     "lang": "af-ZA", "gender": "Female"},
         {"id": "af-ZA-WillemNeural", "name": "Willem (Afrikaans)",   "lang": "af-ZA", "gender": "Male"},
     ]}
+
+
+@app.get("/api/voice/status")
+async def voice_status():
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+    return _local_voice_status(settings)
+
+
+@app.post("/api/voice/transcribe")
+async def voice_transcribe(file: UploadFile = File(...), language: str = Query(default="en")):
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+    status = _local_voice_status(settings)
+    if not status["transcription_available"]:
+        raise HTTPException(503, status["detail"])
+
+    suffix = Path(file.filename or "voice.webm").suffix or ".webm"
+    raw_bytes = await file.read()
+    if not raw_bytes:
+        raise HTTPException(400, "No audio payload received")
+
+    input_path = ""
+    wav_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as input_file:
+            input_file.write(raw_bytes)
+            input_path = input_file.name
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
+            wav_path = wav_file.name
+        _run_ffmpeg_to_wav(input_path, wav_path)
+        text, engine = _transcribe_local_audio(
+            wav_path,
+            model_name=status["stt_model"],
+            language=language or status["language"],
+        )
+        _local_voice_state.update({
+            "last_engine": engine,
+            "last_error": "",
+            "updated_at": _now_iso(),
+        })
+        return {
+            "text": text,
+            "engine": engine,
+            "language": language or status["language"],
+        }
+    except HTTPException as exc:
+        _local_voice_state.update({
+            "last_error": str(exc.detail),
+            "updated_at": _now_iso(),
+        })
+        raise
+    except Exception as exc:
+        _local_voice_state.update({
+            "last_error": str(exc),
+            "updated_at": _now_iso(),
+        })
+        raise HTTPException(502, f"Voice transcription failed: {exc}")
+    finally:
+        if input_path:
+            Path(input_path).unlink(missing_ok=True)
+        if wav_path:
+            Path(wav_path).unlink(missing_ok=True)
+
+
+@app.post("/api/voice/speak")
+async def voice_speak(body: VoiceSpeakRequest):
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+    status = _local_voice_status(settings)
+    if not status["synthesis_available"]:
+        raise HTTPException(503, status["detail"])
+    paths = _local_voice_paths(settings)
+    _local_voice_state.update({
+        "speaking": True,
+        "last_error": "",
+        "updated_at": _now_iso(),
+    })
+    try:
+        audio, engine = _speak_local_text(
+            body.text,
+            model_path=paths["piper_model_path"],
+            config_path=paths["piper_config_path"],
+        )
+        _local_voice_state.update({
+            "speaking": False,
+            "last_engine": engine,
+            "updated_at": _now_iso(),
+        })
+        return FastAPIResponse(content=audio, media_type="audio/wav")
+    except HTTPException as exc:
+        _local_voice_state.update({
+            "speaking": False,
+            "last_error": str(exc.detail),
+            "updated_at": _now_iso(),
+        })
+        raise
+    except Exception as exc:
+        _local_voice_state.update({
+            "speaking": False,
+            "last_error": str(exc),
+            "updated_at": _now_iso(),
+        })
+        raise HTTPException(502, f"Voice synthesis failed: {exc}")
+
+
+@app.post("/api/voice/stop")
+async def voice_stop():
+    _local_voice_state.update({
+        "speaking": False,
+        "updated_at": _now_iso(),
+    })
+    return {"stopped": True}
 
 
 @app.get("/api/github/status")

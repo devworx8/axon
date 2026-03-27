@@ -66,6 +66,35 @@ function axonResourcesMixin() {
       this.showToast('Composer setup copied into a new playbook draft');
     },
 
+    seedStarterPlaybook(kind = 'code-review') {
+      const starters = {
+        'code-review': {
+          title: 'Code review',
+          tags: 'review,quality',
+          content: 'Review the current workspace changes with a code review mindset. Focus on bugs, regressions, risks, and missing tests. List findings first in severity order with file references, then open questions, then a short summary.',
+        },
+        'write-tests': {
+          title: 'Write tests',
+          tags: 'tests,quality',
+          content: 'Inspect the current feature or module and add the smallest high-value automated tests that cover the main behavior, edge cases, and regressions. Keep test style consistent with the repo.',
+        },
+        'summarise-workspace': {
+          title: 'Summarise workspace',
+          tags: 'summary,workspace',
+          content: 'Scan the current workspace and produce a concise technical summary: architecture, key modules, active risks, recent changes, and recommended next steps.',
+        },
+      };
+      const preset = starters[kind] || starters['code-review'];
+      this.newPrompt = {
+        ...this.newPrompt,
+        title: preset.title,
+        content: preset.content,
+        tags: preset.tags,
+      };
+      this.showAddPrompt = true;
+      this.showToast('Starter playbook loaded');
+    },
+
     async applyPromptPreset(pr, { showToast = true } = {}) {
       const meta = pr?.meta || {};
       if (!this.promptIsComposerPreset(pr)) return;

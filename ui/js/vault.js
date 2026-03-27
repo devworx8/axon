@@ -65,6 +65,10 @@ function axonVaultMixin() {
       this.vaultSubmitting = false;
     },
 
+    forgotVaultPassword() {
+      this.showToast('Vault recovery is not available. Resetting the vault requires clearing encrypted vault data and setting it up again.');
+    },
+
     async lockVault() {
       try {
         await this.api('POST', '/api/vault/lock');

@@ -1190,7 +1190,7 @@ async def run_agent(
             think_text = full_text[:full_text.find("ACTION:")].strip()
             think_text = _sanitize_agent_text(think_text)
             if think_text:
-                yield {"type": "text", "chunk": f"*{think_text}*\n"}
+                yield {"type": "thinking", "chunk": think_text}
 
             yield {"type": "tool_call", "name": tool_name, "args": tool_args}
             result = await asyncio.to_thread(_execute_tool, tool_name, tool_args)

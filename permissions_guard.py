@@ -15,6 +15,8 @@ class PermissionScope(str, Enum):
     CLOUD_MODEL = "cloud_model"
     SYSTEM_ACTION = "system_action"
     VAULT = "vault"
+    BROWSER_INSPECT = "browser_inspect"
+    BROWSER_ACT = "browser_act"
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,8 @@ def default_permission_cards() -> list[dict]:
         {"scope": PermissionScope.LOCAL_READ.value, "label": "Local Read", "description": "Inspect files, directories, and repository state."},
         {"scope": PermissionScope.LOCAL_WRITE.value, "label": "Local Write", "description": "Write changes only after an explicit operator action."},
         {"scope": PermissionScope.NETWORK.value, "label": "Network", "description": "Used for optional integrations and tunnel connectivity."},
+        {"scope": PermissionScope.BROWSER_INSPECT.value, "label": "Browser Inspect", "description": "Read live page state, DOM summaries, and screenshots without mutating the page."},
+        {"scope": PermissionScope.BROWSER_ACT.value, "label": "Browser Actions", "description": "Navigation, typing, clicking, and submit-like actions require approval before execution."},
         {"scope": PermissionScope.CLOUD_MODEL.value, "label": "Cloud Models", "description": "External adapters remain disabled until enabled."},
         {"scope": PermissionScope.SYSTEM_ACTION.value, "label": "System Actions", "description": "Restart or reboot actions always require confirmation."},
         {"scope": PermissionScope.VAULT.value, "label": "Secure Vault", "description": "Secrets unlock only for approved actions."},
