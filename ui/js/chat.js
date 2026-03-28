@@ -587,6 +587,8 @@ function axonChatMixin() {
         this.finalizeWorkingBlocks(this.chatMessages[idx]);
         this.chatMessages[idx].streaming = false;
         this.rememberOperatorOutcome(mode, this.chatMessages[idx]);
+        // Detect mission creation in response and trigger notification
+        this._checkMissionNotification(this.chatMessages[idx].content);
       }
       this.clearLiveOperator(this.liveOperator.phase === 'recover' ? 4200 : 1400);
     },
@@ -614,6 +616,26 @@ function axonChatMixin() {
         });
       } catch(e) {
         this.chatMessages = [];
+      }
+    },
+
+    // ── Detect mission creation in AI response and trigger notification ──
+    _checkMissionNotification(content) {
+      if (!content) return;
+      // Match the mission creation confirmation pattern from server
+      const match = content.match(/✅\s*\*?\*?(\d+)\s*mission/i);
+      if (match) {
+        const count = parseInt(match[1], 10) || 1;
+        // Extract mission titles from bold text patterns
+        const titleMatches = [...content.matchAll(/[🔴🟠🔵⚪]\s*\*?\*?([^*\n]+?)\*?\*?\s*\(/g)];
+        const titles = titleMatches.map(m => m[1].trim()).filter(Boolean);
+        if (typeof this.notifyMissionsCreated === 'function') {
+          this.notifyMissionsCreated(count, titles);
+        }
+        // Refresh the tasks list so Missions tab is up to date
+        if (typeof this.loadTasks === 'function') {
+          this.loadTasks();
+        }
       }
     },
 

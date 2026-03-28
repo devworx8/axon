@@ -4975,6 +4975,53 @@
   <span x-text="toast.message"></span>
 </div>
 
+<!-- ── Sticky Notifications ──────────────────────────────────────── -->
+<div class="fixed top-4 right-4 z-[90] flex flex-col gap-3 max-w-sm w-full pointer-events-none" style="max-height: 80vh; overflow-y: auto;">
+  <template x-for="notif in stickyNotifications" :key="notif.id">
+    <div x-show="!notif.dismissing"
+         x-transition:enter="transition ease-out duration-300"
+         x-transition:enter-start="opacity-0 translate-x-8 scale-95"
+         x-transition:enter-end="opacity-100 translate-x-0 scale-100"
+         x-transition:leave="transition ease-in duration-200"
+         x-transition:leave-start="opacity-100 translate-x-0"
+         x-transition:leave-end="opacity-0 translate-x-8 scale-95"
+         class="pointer-events-auto rounded-2xl border shadow-2xl backdrop-blur-xl px-4 py-3.5"
+         :class="{
+           'bg-blue-950/90 border-blue-500/30 shadow-blue-900/30': notif.type === 'mission',
+           'bg-amber-950/90 border-amber-500/30 shadow-amber-900/30': notif.type === 'warning',
+           'bg-emerald-950/90 border-emerald-500/30 shadow-emerald-900/30': notif.type === 'success',
+           'bg-slate-900/90 border-slate-600/30 shadow-slate-900/30': notif.type === 'info',
+         }">
+      <div class="flex items-start gap-3">
+        <span class="text-xl mt-0.5 shrink-0" x-text="notif.icon"></span>
+        <div class="flex-1 min-w-0">
+          <div class="font-semibold text-sm text-white" x-text="notif.title"></div>
+          <div class="text-xs mt-0.5 opacity-80" x-text="notif.body"
+               :class="{
+                 'text-blue-200': notif.type === 'mission',
+                 'text-amber-200': notif.type === 'warning',
+                 'text-emerald-200': notif.type === 'success',
+                 'text-slate-300': notif.type === 'info',
+               }"></div>
+          <div x-show="notif.action" class="mt-2">
+            <button @click="switchTab(notif.action?.tab || 'tasks'); dismissNotification(notif.id)"
+                    class="text-xs font-medium px-3 py-1 rounded-lg transition-colors"
+                    :class="{
+                      'bg-blue-500/20 text-blue-300 hover:bg-blue-500/30': notif.type === 'mission',
+                      'bg-amber-500/20 text-amber-300 hover:bg-amber-500/30': notif.type === 'warning',
+                      'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30': notif.type === 'success',
+                      'bg-slate-500/20 text-slate-300 hover:bg-slate-500/30': notif.type === 'info',
+                    }"
+                    x-text="notif.action?.label || 'View'"></button>
+          </div>
+        </div>
+        <button @click="dismissNotification(notif.id)"
+                class="text-slate-400 hover:text-white text-lg leading-none mt-0.5 shrink-0 transition-colors">&times;</button>
+      </div>
+    </div>
+  </template>
+</div>
+
 <!-- ── Connection lost banner (mobile, above tab bar) ────────────── -->
 <div x-show="!serverConnected" x-transition.opacity
      class="md:hidden fixed inset-x-0 bottom-16 z-50 px-3 pb-1">
@@ -5005,7 +5052,8 @@
 <script src="/js/settings.js?v=20260328"></script>
 <script src="/js/resources.js?v=20260328"></script>
 <script src="/js/projects.js?v=20260328"></script>
-<script src="/js/tasks.js?v=20260328"></script>
+<script src="/js/tasks.js?v=20260328c"></script>
+<script src="/js/notifications.js?v=20260328"></script>
 <script src="/js/mobile.js?v=20260328"></script>
 <script src="/js/vault.js?v=20260328"></script>
 <script src="/js/files.js?v=20260328"></script>
@@ -5489,6 +5537,11 @@ function devbrain() {
     // Toast
     toast: { show: false, message: '' },
 
+    // Sticky Notifications
+    stickyNotifications: [],
+    _notifIdCounter: 0,
+    _notifSoundEnabled: true,
+
     // ── Init ───────────────────────────────────────────────────────
     async init() {
       await this.authCheck();
@@ -5517,6 +5570,11 @@ function devbrain() {
       await this.loadSettings();
       await this.loadProjects();
       this.loadTasks();
+      this._startMissionReminders();
+      // Request notification permission early
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
       this.loadLatestDigest();
       await this.loadRuntimeStatus();
       this.connectLiveFeed();
@@ -5590,6 +5648,7 @@ function devbrain() {
     axonResourcesMixin(),
     axonProjectsMixin(),
     axonTasksMixin(),
+    axonNotificationsMixin(),
     axonMobileMixin(),
     axonVaultMixin(),
     axonFilesMixin(),
