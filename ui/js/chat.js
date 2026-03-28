@@ -57,7 +57,12 @@ function axonChatMixin() {
     scrollChat() {
       this.$nextTick(() => {
         const el = document.getElementById('chat-messages');
-        if (el) el.scrollTop = el.scrollHeight;
+        if (!el) return;
+        el.scrollTop = el.scrollHeight;
+        // Retry after a short delay in case the panel just became visible
+        if (el.scrollHeight <= 0) {
+          setTimeout(() => { el.scrollTop = el.scrollHeight; }, 150);
+        }
       });
     },
 
@@ -603,7 +608,10 @@ function axonChatMixin() {
             resources: parsed.resources,
           };
         });
-        this.$nextTick(() => this.scrollChat());
+        // Use requestAnimationFrame to ensure DOM is rendered and visible before scrolling
+        this.$nextTick(() => {
+          requestAnimationFrame(() => this.scrollChat());
+        });
       } catch(e) {
         this.chatMessages = [];
       }

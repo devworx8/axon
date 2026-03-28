@@ -43,7 +43,7 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/microsoft-cognitiveservices-speech-sdk/distrib/browser/microsoft.cognitiveservices.speech.sdk.bundle-min.js"
           onload="window.dispatchEvent(new Event('axon-speech-sdk-ready'))"></script>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=20260328c">
   <style>[x-cloak] { display: none !important; }</style>
   <script>
     tailwind.config = {
@@ -54,32 +54,7 @@
           }
         }
       }
-        mode: 'browser',
-        speakingAudioUrl: '',
-        wakeLocked: false,
-        recording: false,
-        mediaRecorder: null,
-        recordedChunks: [],
-        stream: null,
-        audioContext: null,
-        sourceNode: null,
-        analyser: null,
-        dataArray: null,
-        playbackAudioContext: null,
-        playbackSourceNode: null,
-        playbackAnalyser: null,
-        playbackDataArray: null,
-        analysisSource: '',
-        levelRaf: null,
-        statusLoading: false,
-        server: {
-          available: false,
-          preferred_mode: 'browser',
-          transcription_available: false,
-          synthesis_available: false,
-          detail: '',
-        },
-        supported: {
+    }
   </script>
 </head>
 <body class="h-full bg-slate-950 text-slate-100" x-cloak>
@@ -233,7 +208,7 @@
          TAB: DASHBOARD
     ════════════════════════════════════════════════════════════ -->
     <div x-show="activeTab === 'dashboard'" class="flex flex-col h-full">
-      <div class="hidden md:flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/50">
+      <div class="hidden md:flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/50 desktop-header-glass">
         <div class="flex items-center gap-3">
           <div class="font-semibold text-white">Dashboard</div>
           <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400 uppercase tracking-wider">Control Room</span>
@@ -273,7 +248,7 @@
 
               <div class="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.95fr)]">
                 <!-- ── Operator Console hero ─────────────── -->
-                <section class="rounded-[28px] border border-blue-500/15 bg-gradient-to-br from-slate-900 via-slate-900/95 to-slate-900/80 p-5 shadow-[0_28px_90px_rgba(30,64,175,0.12)] backdrop-blur md:p-6">
+                <section class="hero-card rounded-[28px] border border-blue-500/15 bg-gradient-to-br from-slate-900 via-slate-900/95 to-slate-900/80 p-5 shadow-[0_28px_90px_rgba(30,64,175,0.12)] backdrop-blur md:p-6">
                   <div class="flex flex-wrap items-start justify-between gap-3">
                     <div class="min-w-0">
                       <div class="flex items-center gap-2">
@@ -315,7 +290,7 @@
                   </div>
                 </section>
 
-                <section class="rounded-[28px] border border-cyan-500/15 bg-gradient-to-br from-slate-950 via-slate-900/95 to-slate-900/80 p-5 shadow-[0_28px_90px_rgba(8,145,178,0.14)] md:p-6">
+                <section class="hero-card rounded-[28px] border border-cyan-500/15 bg-gradient-to-br from-slate-950 via-slate-900/95 to-slate-900/80 p-5 shadow-[0_28px_90px_rgba(8,145,178,0.14)] md:p-6">
                   <div class="flex items-center justify-between gap-3">
                     <div>
                       <div class="text-[10px] font-semibold uppercase tracking-[0.22em] text-cyan-300/80">Proof of Work</div>
@@ -358,7 +333,7 @@
               </div>
 
               <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
-                <div class="rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">
+                <div class="stat-card rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">
                   <div class="mb-2 flex items-center gap-2">
                     <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-blue-600/20 text-base text-blue-400">📁</div>
                     <span class="text-xs font-medium text-slate-400">Workspaces</span>
@@ -366,7 +341,7 @@
                   <div class="text-2xl font-bold text-white" x-text="dashStats.active"></div>
                   <div class="text-[11px] text-slate-500" x-text="'of ' + dashStats.projects + ' tracked'"></div>
                 </div>
-                <div class="rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">
+                <div class="stat-card rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">
                   <div class="mb-2 flex items-center gap-2">
                     <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-green-600/20 text-base text-green-400">✅</div>
                     <span class="text-xs font-medium text-slate-400">Missions</span>
@@ -374,7 +349,7 @@
                   <div class="text-2xl font-bold text-white" x-text="dashStats.tasks"></div>
                   <div class="text-[11px] text-slate-500"><span class="font-semibold text-amber-400" x-text="dashStats.urgent"></span> priority</div>
                 </div>
-                <div class="rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">
+                <div class="stat-card rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">
                   <div class="mb-2 flex items-center gap-2">
                     <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-600/20 text-base text-emerald-400">💚</div>
                     <span class="text-xs font-medium text-slate-400">System Health</span>
@@ -382,7 +357,7 @@
                   <div class="text-2xl font-bold" :class="dashStats.health_avg >= 70 ? 'text-green-400' : dashStats.health_avg >= 40 ? 'text-yellow-400' : 'text-red-400'" x-text="dashStats.health_avg + '%'"></div>
                   <div class="text-[11px] text-slate-500">across active workspaces</div>
                 </div>
-                <div class="rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">
+                <div class="stat-card rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">
                   <div class="mb-2 flex items-center gap-2">
                     <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-purple-600/20 text-base text-purple-400">🧠</div>
                     <span class="text-xs font-medium text-slate-400">AI Runtime</span>
@@ -598,7 +573,7 @@
               <div class="sticky top-6 space-y-3">
 
                 <!-- A. Operator Status -->
-                <section class="rounded-[24px] border border-cyan-500/18 bg-slate-900/80 p-4 shadow-[0_16px_60px_rgba(8,145,178,0.10)] backdrop-blur">
+                <section class="hero-card rounded-[24px] border border-cyan-500/18 bg-slate-900/80 p-4 shadow-[0_16px_60px_rgba(8,145,178,0.10)] backdrop-blur">
                   <div class="flex items-center justify-between gap-2">
                     <div class="text-[10px] font-semibold uppercase tracking-[0.22em] text-cyan-300/70">Axon Live</div>
                     <div class="flex items-center gap-1.5">
@@ -742,7 +717,7 @@
     ════════════════════════════════════════════════════════════ -->
     <div x-show="activeTab === 'chat'" class="flex flex-col h-full">
       <!-- Console header — desktop only -->
-      <div class="hidden md:flex items-center justify-between px-4 py-2.5 border-b border-slate-800 bg-slate-950/70 backdrop-blur shrink-0 gap-3">
+      <div class="hidden md:flex items-center justify-between px-4 py-2.5 border-b border-slate-800 bg-slate-950/70 backdrop-blur shrink-0 gap-3 desktop-header-glass">
         <!-- Left: back + title -->
         <div class="flex items-center gap-2 min-w-0">
           <button x-show="chatProject" @click="activeTab = 'projects'"
@@ -1069,7 +1044,7 @@
               <span class="text-lg leading-none" x-text="showMobileToolbar ? '×' : '+'"></span>
             </button>
 
-            <div class="flex-1 relative">
+            <div class="flex-1 relative input-glow-wrap" :class="resolveChatMode(chatInput) === 'agent' ? 'agent-mode' : ''">
               <textarea
                 x-ref="chatComposer"
                 x-model="chatInput"
@@ -2365,7 +2340,7 @@
          TAB: TASKS
     ════════════════════════════════════════════════════════════ -->
     <div x-show="activeTab === 'tasks'" class="flex flex-col h-full">
-      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/50">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/50 desktop-header-glass">
         <div>
           <div class="font-semibold text-white">Missions <span class="text-slate-500 text-sm font-normal" x-text="'(' + tasks.length + ')'"></span></div>
           <div class="text-[11px] text-slate-500 mt-0.5" x-text="missionSummaryText()"></div>
@@ -2515,7 +2490,7 @@
          TAB: PROMPTS
     ════════════════════════════════════════════════════════════ -->
     <div x-show="activeTab === 'prompts'" class="flex flex-col h-full">
-      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/50">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/50 desktop-header-glass">
         <div class="font-semibold text-white">Playbooks</div>
         <button @click="showAddPrompt = true"
                 class="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition">
@@ -2676,7 +2651,7 @@
          TAB: ACTIVITY
     ════════════════════════════════════════════════════════════ -->
     <div x-show="activeTab === 'activity'" class="flex flex-col h-full">
-      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/50">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/50 desktop-header-glass">
         <div class="font-semibold text-white">Timeline</div>
         <div class="flex gap-2">
           <button @click="runDigest()" :disabled="digestLoading"
@@ -2732,7 +2707,7 @@
          TAB: VAULT
     ════════════════════════════════════════════════════════════ -->
     <div x-show="activeTab === 'vault'" class="flex flex-col h-full">
-      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/50">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/50 desktop-header-glass">
         <div>
           <div class="font-semibold text-white">🔐 Secure Vault</div>
           <div class="text-xs text-slate-500">AES-256-GCM · TOTP 2FA · Local only</div>
@@ -2967,7 +2942,7 @@
          TAB: SETTINGS
     ════════════════════════════════════════════════════════════ -->
     <div x-show="activeTab === 'settings'" class="flex flex-col h-full">
-      <div class="px-5 py-3 border-b border-slate-800 bg-slate-900/50">
+      <div class="px-5 py-3 border-b border-slate-800 bg-slate-900/50 desktop-header-glass">
         <div class="font-semibold text-white">Settings</div>
       </div>
       <div class="flex-1 overflow-y-auto page-content p-3 md:p-5">
@@ -3889,7 +3864,7 @@
 
     <!-- ── Memory tab ────────────────────────────────────────────── -->
     <div x-show="activeTab === 'memory'" class="flex flex-col h-full">
-      <div class="px-5 py-3 border-b border-slate-800 bg-slate-900/50">
+      <div class="px-5 py-3 border-b border-slate-800 bg-slate-900/50 desktop-header-glass">
         <div class="font-semibold text-white">Memory</div>
       </div>
       <div class="flex-1 overflow-y-auto page-content p-3 md:p-5">
@@ -4004,7 +3979,7 @@
 
     <!-- ── Resources tab ─────────────────────────────────────────── -->
     <div x-show="activeTab === 'resources'" class="flex flex-col h-full">
-      <div class="px-5 py-3 border-b border-slate-800 bg-slate-900/50">
+      <div class="px-5 py-3 border-b border-slate-800 bg-slate-900/50 desktop-header-glass">
         <div class="font-semibold text-white">Resources</div>
       </div>
       <div class="flex-1 overflow-y-auto page-content p-3 md:p-5">
@@ -4301,7 +4276,7 @@
 
     <!-- ── Files tab ─────────────────────────────────────────────── -->
     <div x-show="activeTab === 'files'" class="flex flex-col h-full">
-      <div class="px-5 py-3 border-b border-slate-800 bg-slate-900/50 flex items-center gap-3">
+      <div class="px-5 py-3 border-b border-slate-800 bg-slate-900/50 desktop-header-glass flex items-center gap-3">
         <button x-show="filePath !== homeDir" @click="browseUp()" class="text-slate-400 hover:text-white press-scale">
           <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
         </button>
@@ -5022,19 +4997,19 @@
 </div>
 
 <!-- ── Axon Modules ── -->
-<script src="/js/helpers.js"></script>
-<script src="/js/auth.js"></script>
-<script src="/js/dashboard.js"></script>
-<script src="/js/chat.js"></script>
-<script src="/js/voice.js"></script>
-<script src="/js/settings.js"></script>
-<script src="/js/resources.js"></script>
-<script src="/js/projects.js"></script>
-<script src="/js/tasks.js"></script>
-<script src="/js/mobile.js"></script>
-<script src="/js/vault.js"></script>
-<script src="/js/files.js"></script>
-<script src="/js/models.js"></script>
+<script src="/js/helpers.js?v=20260328"></script>
+<script src="/js/auth.js?v=20260328"></script>
+<script src="/js/dashboard.js?v=20260328"></script>
+<script src="/js/chat.js?v=20260328b"></script>
+<script src="/js/voice.js?v=20260328"></script>
+<script src="/js/settings.js?v=20260328"></script>
+<script src="/js/resources.js?v=20260328"></script>
+<script src="/js/projects.js?v=20260328"></script>
+<script src="/js/tasks.js?v=20260328"></script>
+<script src="/js/mobile.js?v=20260328"></script>
+<script src="/js/vault.js?v=20260328"></script>
+<script src="/js/files.js?v=20260328"></script>
+<script src="/js/models.js?v=20260328"></script>
 
 <script>
 function devbrain() {
@@ -5416,6 +5391,31 @@ function devbrain() {
     _voiceStopRequested: false,
     voiceRecognition: null,
     voice: {
+      mode: 'browser',
+      speakingAudioUrl: '',
+      wakeLocked: false,
+      recording: false,
+      mediaRecorder: null,
+      recordedChunks: [],
+      stream: null,
+      audioContext: null,
+      sourceNode: null,
+      analyser: null,
+      dataArray: null,
+      playbackAudioContext: null,
+      playbackSourceNode: null,
+      playbackAnalyser: null,
+      playbackDataArray: null,
+      analysisSource: '',
+      levelRaf: null,
+      statusLoading: false,
+      server: {
+        available: false,
+        preferred_mode: 'browser',
+        transcription_available: false,
+        synthesis_available: false,
+        detail: '',
+      },
       enabled: false,
       open: false,
       state: 'idle',
@@ -5526,10 +5526,13 @@ function devbrain() {
       this.loadCurrentUser();
       this.loadDashboard();
       this.loadBrowserActions();
+      this.loadChatHistory();
       this.$watch('activeTab', tab => {
         this.showMoreMenu = false;
         this.activeProjectMenu = null;
-        if (tab === 'chat' && this.chatMessages.length === 0) this.loadChatHistory();
+        if (tab === 'chat') {
+          this.loadChatHistory();
+        }
       });
       this.$watch('chatLoading', value => {
         if (value) {

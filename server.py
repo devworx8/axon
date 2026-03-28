@@ -208,7 +208,7 @@ def _probe_public_origin(public_base_url: str, enabled: bool) -> dict:
     now = _time.time()
     if (
         _domain_probe_cache.get("url") == public_base_url
-        and now - float(_domain_probe_cache.get("checked_at") or 0) < 20
+        and now - float(_domain_probe_cache.get("checked_at") or 0) < 60
     ):
         return {
             "active": bool(_domain_probe_cache.get("active")),
@@ -1965,7 +1965,36 @@ async def chat(body: ChatMessage):
                     or "qwen2.5-coder:1.5b"
                 )
 
+                # Resolve cloud API config for fallback / direct use
+                _pptx_api_cfg = provider_registry.runtime_api_config(settings)
+                _pptx_api_key = _pptx_api_cfg.get("api_key", "")
+                if not _pptx_api_key and devvault.VaultSession.is_unlocked():
+                    _pptx_api_key = await devvault.vault_resolve_provider_key(conn, _pptx_api_cfg.get("provider_id", "deepseek"))
+                _pptx_api_base = _pptx_api_cfg.get("api_base_url", "https://api.deepseek.com/")
+                _pptx_api_model = _pptx_api_cfg.get("api_model", "deepseek-chat")
+
+                def _call_cloud_api(system: str, user: str) -> str:
+                    """Call cloud provider (DeepSeek etc.) for slide JSON."""
+                    headers = {"Authorization": f"Bearer {_pptx_api_key}", "Content-Type": "application/json"}
+                    base = _pptx_api_base.rstrip("/")
+                    payload = {
+                        "model": _pptx_api_model,
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user},
+                        ],
+                        "temperature": 0.3,
+                        "stream": False,
+                    }
+                    r = _httpx.post(f"{base}/chat/completions", json=payload, headers=headers, timeout=120)
+                    r.raise_for_status()
+                    return r.json()["choices"][0]["message"]["content"]
+
                 def _model_fn(system: str, user: str) -> str:
+                    # If cloud provider is configured, prefer it (faster, smarter)
+                    if _pptx_api_key:
+                        return _call_cloud_api(system, user)
+                    # Otherwise try Ollama
                     payload = {
                         "model": _pptx_model_ns,
                         "messages": [
@@ -2047,6 +2076,127 @@ async def chat(body: ChatMessage):
                 # Fall through to normal chat if PPTX generation fails
                 pass
         # ── end PPTX intent interception ─────────────────────────────────────
+
+        # ── Mission intent interception (non-streaming) ──────────────────────
+        import re as _re_mns
+        _mission_triggers_ns = _re_mns.compile(
+            r'\b(create|add|make|set\s*up|queue|schedule|track|start)\b.{0,40}'
+            r'\b(missions?|tasks?)\b',
+            _re_mns.IGNORECASE,
+        )
+        if _mission_triggers_ns.search(body.message):
+            try:
+                import httpx as _httpx_mns
+
+                _mns_api_cfg = provider_registry.runtime_api_config(settings)
+                _mns_api_key = _mns_api_cfg.get("api_key", "")
+                if not _mns_api_key and devvault.VaultSession.is_unlocked():
+                    _mns_api_key = await devvault.vault_resolve_provider_key(conn, _mns_api_cfg.get("provider_id", "deepseek"))
+                _mns_api_base = _mns_api_cfg.get("api_base_url", "https://api.deepseek.com/").rstrip("/")
+                _mns_api_model = _mns_api_cfg.get("api_model", "deepseek-chat")
+
+                _proj_names_ns = {str(p["id"]): p["name"] for p in projects}
+                _proj_list_ns = ", ".join(f'{pid}: {pn}' for pid, pn in _proj_names_ns.items()) or "none"
+
+                _extract_system_ns = (
+                    "You are a JSON extractor. Extract mission(s) from the user's message.\n"
+                    "Return ONLY a JSON array of mission objects. Each object has:\n"
+                    '  {"title": "string", "detail": "string", "priority": "low|medium|high|urgent", "project_id": null_or_int, "due_date": null_or_"YYYY-MM-DD"}\n'
+                    f"Available projects: {_proj_list_ns}\n"
+                    "If the user mentions a project name, match it to the project_id.\n"
+                    "If multiple missions are requested, return multiple objects.\n"
+                    "Return ONLY valid JSON array, no markdown fences."
+                )
+
+                def _extract_missions_ns(user_msg: str) -> list:
+                    if _mns_api_key:
+                        headers = {"Authorization": f"Bearer {_mns_api_key}", "Content-Type": "application/json"}
+                        payload = {
+                            "model": _mns_api_model,
+                            "messages": [
+                                {"role": "system", "content": _extract_system_ns},
+                                {"role": "user", "content": user_msg},
+                            ],
+                            "temperature": 0.1,
+                            "stream": False,
+                        }
+                        r = _httpx_mns.post(f"{_mns_api_base}/chat/completions", json=payload, headers=headers, timeout=30)
+                        r.raise_for_status()
+                        raw = r.json()["choices"][0]["message"]["content"]
+                    else:
+                        payload = {
+                            "model": settings.get("ollama_model", "qwen2.5-coder:1.5b"),
+                            "messages": [
+                                {"role": "system", "content": _extract_system_ns},
+                                {"role": "user", "content": user_msg},
+                            ],
+                            "stream": False,
+                            "options": {"temperature": 0.1},
+                        }
+                        r = _httpx_mns.post(
+                            f"{settings.get('ollama_url', 'http://localhost:11434')}/api/chat",
+                            json=payload, timeout=30,
+                        )
+                        r.raise_for_status()
+                        raw = r.json()["message"]["content"]
+                    raw = _re_mns.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=_re_mns.IGNORECASE)
+                    raw = _re_mns.sub(r"\s*```$", "", raw.strip())
+                    return _json.loads(raw)
+
+                _set_live_operator(active=True, mode="chat", phase="execute",
+                                   title="Creating missions…", detail=body.message[:120],
+                                   workspace_id=body.project_id, preserve_started=True)
+
+                mission_data_ns = await asyncio.to_thread(_extract_missions_ns, body.message)
+                if not isinstance(mission_data_ns, list):
+                    mission_data_ns = [mission_data_ns]
+
+                created_ns = []
+                for m in mission_data_ns:
+                    if not isinstance(m, dict) or not m.get("title"):
+                        continue
+                    mid = await devdb.add_task(
+                        conn,
+                        m.get("project_id"),
+                        m["title"].strip(),
+                        m.get("detail", "").strip(),
+                        m.get("priority", "medium"),
+                        m.get("due_date"),
+                    )
+                    await devdb.log_event(conn, "task_added", f"Mission created via chat: {m['title'].strip()}", project_id=m.get("project_id"))
+                    created_ns.append({"id": mid, **m})
+
+                if created_ns:
+                    reply_lines = [f"✅ **{len(created_ns)} mission(s) created:**\n"]
+                    for c in created_ns:
+                        p = c.get("priority", "medium")
+                        icon = {"urgent": "🔴", "high": "🟠", "medium": "🔵", "low": "⚪"}.get(p, "🔵")
+                        line = f"{icon} **{c['title']}** ({p})"
+                        if c.get("detail"):
+                            line += f"\n   {c['detail'][:150]}"
+                        if c.get("due_date"):
+                            line += f"\n   Due: {c['due_date']}"
+                        proj_name = _proj_names_ns.get(str(c.get("project_id")), "")
+                        if proj_name:
+                            line += f"\n   Workspace: {proj_name}"
+                        reply_lines.append(line)
+                    reply_lines.append("\nView them in the **Missions** tab.")
+                    reply_ns = "\n".join(reply_lines)
+
+                    _set_live_operator(active=False, mode="chat", phase="verify",
+                                       title="Missions created", detail=f"{len(created_ns)} mission(s)",
+                                       summary=reply_ns[:180], workspace_id=body.project_id)
+
+                    stored_user_msg = _stored_message_with_resources(body.message, resource_bundle["resources"])
+                    await devdb.save_message(conn, "user", stored_user_msg, project_id=body.project_id)
+                    await devdb.save_message(conn, "assistant", reply_ns, project_id=body.project_id, tokens=0)
+
+                    return {"role": "assistant", "content": reply_ns, "tokens": 0}
+            except Exception as _mission_err_ns:
+                import traceback as _tb_mns
+                _tb_mns.print_exc()
+                pass
+        # ── end Mission intent interception (non-streaming) ──────────────────
 
         # Call AI with timeout handling
         try:
@@ -2195,7 +2345,36 @@ async def chat_stream(body: ChatMessage, request: Request):
                 or "qwen2.5-coder:1.5b"
             )
 
+            # Resolve cloud API config for fallback / direct use
+            _pptx_api_cfg_s = provider_registry.runtime_api_config(settings)
+            _pptx_api_key_s = _pptx_api_cfg_s.get("api_key", "")
+            if not _pptx_api_key_s and devvault.VaultSession.is_unlocked():
+                _pptx_api_key_s = await devvault.vault_resolve_provider_key(conn, _pptx_api_cfg_s.get("provider_id", "deepseek"))
+            _pptx_api_base_s = _pptx_api_cfg_s.get("api_base_url", "https://api.deepseek.com/")
+            _pptx_api_model_s = _pptx_api_cfg_s.get("api_model", "deepseek-chat")
+
+            def _call_cloud_api_s(system: str, user: str) -> str:
+                """Call cloud provider (DeepSeek etc.) for slide JSON."""
+                headers = {"Authorization": f"Bearer {_pptx_api_key_s}", "Content-Type": "application/json"}
+                base = _pptx_api_base_s.rstrip("/")
+                payload = {
+                    "model": _pptx_api_model_s,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    "temperature": 0.3,
+                    "stream": False,
+                }
+                r = _httpx_s.post(f"{base}/chat/completions", json=payload, headers=headers, timeout=120)
+                r.raise_for_status()
+                return r.json()["choices"][0]["message"]["content"]
+
             def _model_fn_s(system: str, user: str) -> str:
+                # If cloud provider is configured, prefer it (faster, smarter)
+                if _pptx_api_key_s:
+                    return _call_cloud_api_s(system, user)
+                # Otherwise try Ollama
                 payload = {
                     "model": _pptx_model,
                     "messages": [
@@ -2283,6 +2462,138 @@ async def chat_stream(body: ChatMessage, request: Request):
             pass
     # ── end PPTX intent interception (streaming) ─────────────────────────
 
+    # ── Mission intent interception (streaming) ──────────────────────────
+    import re as _re_m
+    _mission_triggers = _re_m.compile(
+        r'\b(create|add|make|set\s*up|queue|schedule|track|start)\b.{0,40}'
+        r'\b(missions?|tasks?)\b',
+        _re_m.IGNORECASE,
+    )
+    if _mission_triggers.search(body.message):
+        try:
+            import httpx as _httpx_m
+
+            # Resolve cloud API for structured extraction
+            _m_api_cfg = provider_registry.runtime_api_config(settings)
+            _m_api_key = _m_api_cfg.get("api_key", "")
+            if not _m_api_key and devvault.VaultSession.is_unlocked():
+                async with devdb.get_db() as _m_conn:
+                    _m_api_key = await devvault.vault_resolve_provider_key(_m_conn, _m_api_cfg.get("provider_id", "deepseek"))
+            _m_api_base = _m_api_cfg.get("api_base_url", "https://api.deepseek.com/").rstrip("/")
+            _m_api_model = _m_api_cfg.get("api_model", "deepseek-chat")
+
+            # Build project list for context
+            _proj_names = {str(p["id"]): p["name"] for p in projects}
+            _proj_list = ", ".join(f'{pid}: {pn}' for pid, pn in _proj_names.items()) or "none"
+
+            _extract_system = (
+                "You are a JSON extractor. Extract mission(s) from the user's message.\n"
+                "Return ONLY a JSON array of mission objects. Each object has:\n"
+                '  {"title": "string", "detail": "string", "priority": "low|medium|high|urgent", "project_id": null_or_int, "due_date": null_or_"YYYY-MM-DD"}\n'
+                f"Available projects: {_proj_list}\n"
+                "If the user mentions a project name, match it to the project_id.\n"
+                "If multiple missions are requested, return multiple objects.\n"
+                "Return ONLY valid JSON array, no markdown fences."
+            )
+
+            def _extract_missions(user_msg: str) -> list:
+                if _m_api_key:
+                    headers = {"Authorization": f"Bearer {_m_api_key}", "Content-Type": "application/json"}
+                    payload = {
+                        "model": _m_api_model,
+                        "messages": [
+                            {"role": "system", "content": _extract_system},
+                            {"role": "user", "content": user_msg},
+                        ],
+                        "temperature": 0.1,
+                        "stream": False,
+                    }
+                    r = _httpx_m.post(f"{_m_api_base}/chat/completions", json=payload, headers=headers, timeout=30)
+                    r.raise_for_status()
+                    raw = r.json()["choices"][0]["message"]["content"]
+                else:
+                    # Ollama fallback
+                    payload = {
+                        "model": settings.get("ollama_model", "qwen2.5-coder:1.5b"),
+                        "messages": [
+                            {"role": "system", "content": _extract_system},
+                            {"role": "user", "content": user_msg},
+                        ],
+                        "stream": False,
+                        "options": {"temperature": 0.1},
+                    }
+                    r = _httpx_m.post(
+                        f"{settings.get('ollama_url', 'http://localhost:11434')}/api/chat",
+                        json=payload, timeout=30,
+                    )
+                    r.raise_for_status()
+                    raw = r.json()["message"]["content"]
+                raw = _re_m.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=_re_m.IGNORECASE)
+                raw = _re_m.sub(r"\s*```$", "", raw.strip())
+                return _json.loads(raw)
+
+            _set_live_operator(active=True, mode="chat", phase="execute",
+                               title="Creating missions…", detail=body.message[:120],
+                               workspace_id=body.project_id, preserve_started=True)
+
+            mission_data = await asyncio.to_thread(_extract_missions, body.message)
+            if not isinstance(mission_data, list):
+                mission_data = [mission_data]
+
+            created = []
+            async with devdb.get_db() as _m_db:
+                for m in mission_data:
+                    if not isinstance(m, dict) or not m.get("title"):
+                        continue
+                    mid = await devdb.add_task(
+                        _m_db,
+                        m.get("project_id"),
+                        m["title"].strip(),
+                        m.get("detail", "").strip(),
+                        m.get("priority", "medium"),
+                        m.get("due_date"),
+                    )
+                    await devdb.log_event(_m_db, "task_added", f"Mission created via chat: {m['title'].strip()}", project_id=m.get("project_id"))
+                    created.append({"id": mid, **m})
+
+            if created:
+                reply_lines = [f"✅ **{len(created)} mission(s) created:**\n"]
+                for c in created:
+                    p = c.get("priority", "medium")
+                    icon = {"urgent": "🔴", "high": "🟠", "medium": "🔵", "low": "⚪"}.get(p, "🔵")
+                    line = f"{icon} **{c['title']}** ({p})"
+                    if c.get("detail"):
+                        line += f"\n   {c['detail'][:150]}"
+                    if c.get("due_date"):
+                        line += f"\n   Due: {c['due_date']}"
+                    proj_name = _proj_names.get(str(c.get("project_id")), "")
+                    if proj_name:
+                        line += f"\n   Workspace: {proj_name}"
+                    reply_lines.append(line)
+                reply_lines.append("\nView them in the **Missions** tab.")
+                reply = "\n".join(reply_lines)
+
+                _set_live_operator(active=False, mode="chat", phase="verify",
+                                   title="Missions created", detail=f"{len(created)} mission(s)",
+                                   summary=reply[:180], workspace_id=body.project_id)
+
+                # Persist chat messages
+                async with devdb.get_db() as _m_db2:
+                    stored_user_msg = _stored_message_with_resources(body.message, resource_bundle["resources"])
+                    await devdb.save_message(_m_db2, "user", stored_user_msg, project_id=body.project_id)
+                    await devdb.save_message(_m_db2, "assistant", reply, project_id=body.project_id, tokens=0)
+
+                async def _mission_stream():
+                    yield {"data": _json.dumps({"chunk": reply})}
+                    yield {"data": _json.dumps({"done": True, "tokens": 0})}
+                return EventSourceResponse(_mission_stream())
+        except Exception as _mission_err:
+            import traceback as _tb_m
+            _tb_m.print_exc()
+            # Fall through to normal chat
+            pass
+    # ── end Mission intent interception (streaming) ──────────────────────
+
     if backend != "ollama":
         # Fall back to non-streaming for API/CLI — emit single SSE event
         try:
@@ -2305,6 +2616,13 @@ async def chat_stream(body: ChatMessage, request: Request):
                 vision_model=resource_bundle["vision_model"],
                 **ai,
             )
+            # Persist messages to DB (was missing — messages lost on refresh)
+            stored_user_message_api = _stored_message_with_resources(body.message, resource_bundle["resources"])
+            async with devdb.get_db() as _api_conn:
+                await devdb.save_message(_api_conn, "user", stored_user_message_api, project_id=body.project_id)
+                await devdb.save_message(_api_conn, "assistant", result["content"], project_id=body.project_id, tokens=result.get("tokens", 0))
+                await devdb.log_event(_api_conn, "chat", body.message[:100], project_id=body.project_id)
+
             async def _buffered():
                 for warning in resource_bundle["warnings"]:
                     yield {"data": _json.dumps({"chunk": f"⚠️ {warning}\n\n"})}
@@ -2321,17 +2639,18 @@ async def chat_stream(body: ChatMessage, request: Request):
                 yield {"data": _json.dumps({"done": True, "tokens": result["tokens"]})}
             return EventSourceResponse(_buffered())
         except Exception as exc:
+            _err_msg = str(exc)
             _set_live_operator(
                 active=False,
                 mode="chat",
                 phase="recover",
                 title="Reply interrupted",
-                detail=str(exc),
+                detail=_err_msg,
                 summary=body.message[:120],
                 workspace_id=body.project_id,
             )
             async def _err():
-                yield {"data": _json.dumps({"error": str(exc)})}
+                yield {"data": _json.dumps({"error": _err_msg})}
             return EventSourceResponse(_err())
 
     # Ollama: true streaming
@@ -3097,10 +3416,12 @@ async def _build_live_snapshot() -> dict:
         terminal_rows = await devdb.list_terminal_sessions(conn, limit=6)
         activity_rows = await devdb.get_activity(conn, limit=6)
     running_session_id = next((row["id"] for row in terminal_rows if row["id"] in _terminal_processes), None)
+    # Run the blocking domain probe in a thread to avoid stalling the event loop
+    connection = await asyncio.get_event_loop().run_in_executor(None, _connection_snapshot)
     return {
         "type": "snapshot",
         "at": _now_iso(),
-        "connection": _connection_snapshot(),
+        "connection": connection,
         "operator": dict(_live_operator_snapshot),
         "runtime": {
             "runtime_label": (
@@ -3131,12 +3452,23 @@ async def connection_status():
 @app.get("/api/live/feed")
 async def live_feed(request: Request):
     async def generate():
+        tick = 0
         while True:
             if await request.is_disconnected():
                 return
-            snapshot = await _build_live_snapshot()
-            yield {"data": _json.dumps(snapshot)}
-            await asyncio.sleep(2)
+            try:
+                snapshot = await _build_live_snapshot()
+                yield {"data": _json.dumps(snapshot)}
+            except Exception:
+                yield {"data": _json.dumps({"type": "heartbeat", "at": _now_iso()})}
+            await asyncio.sleep(4)
+            tick += 1
+            # Send lightweight heartbeat between full snapshots
+            if tick % 2 == 1:
+                if await request.is_disconnected():
+                    return
+                yield {"data": _json.dumps({"type": "heartbeat", "at": _now_iso()})}
+                await asyncio.sleep(4)
 
     return EventSourceResponse(generate())
 

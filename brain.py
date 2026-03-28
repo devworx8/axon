@@ -15,6 +15,7 @@ import shlex
 import json
 import sqlite3
 import time
+import logging
 from pathlib import Path
 from typing import Optional, AsyncGenerator
 import re as _re
@@ -22,6 +23,17 @@ import anthropic
 import httpx
 import gpu_guard
 import resource_bank
+
+# ─── Load .env (fallback API keys) ───────────────────────────────────────────
+_env_path = Path(__file__).parent / ".env"
+if _env_path.exists():
+    for _line in _env_path.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip())
+
+_log = logging.getLogger("axon.brain")
 
 # ─── Session usage tracker ───────────────────────────────────────────────────
 
@@ -422,14 +434,33 @@ async def stream_chat(
     if execution.get("note"):
         yield f"⚠️ {execution['note']}\n\n"
 
-    async for chunk in _stream_ollama_chat(
-        messages=messages,
-        model=execution["model"],
-        max_tokens=1500,
-        ollama_url=ollama_url,
-        purpose="chat",
-    ):
-        yield chunk
+    try:
+        async for chunk in _stream_ollama_chat(
+            messages=messages,
+            model=execution["model"],
+            max_tokens=1500,
+            ollama_url=ollama_url,
+            purpose="chat",
+        ):
+            yield chunk
+    except Exception as exc:
+        reason = f"{type(exc).__name__}: {exc}"
+        if _escalation_api_key():
+            _log.warning("Stream escalating to %s: %s", ESCALATION_PROVIDER, reason)
+            yield f"\n\n☁️ *Ollama failed — switching to {ESCALATION_MODEL}...*\n\n"
+            user_content = messages[-1].get("content", user_message) if messages else user_message
+            content, _ = await _call_api_messages(
+                [{"role": "user", "content": user_content}],
+                system=system,
+                api_key=_escalation_api_key(),
+                api_provider=ESCALATION_PROVIDER,
+                api_base_url=ESCALATION_BASE_URL,
+                api_model=ESCALATION_MODEL,
+                max_tokens=1500,
+            )
+            yield content
+        else:
+            yield f"\n\n⚠️ Ollama failed: {reason}"
 
 
 # ─── Agent tools ──────────────────────────────────────────────────────────────
@@ -617,7 +648,130 @@ def _normalize_tool_args(name: str, args: dict) -> dict:
             normalized.pop(alias, None)
         return {k: v for k, v in normalized.items() if k in {"path", "content"}}
 
+    if name == "create_mission":
+        if not normalized.get("title"):
+            for alias in ("name", "mission", "task", "label"):
+                if normalized.get(alias):
+                    normalized["title"] = normalized.pop(alias)
+                    break
+        for alias in ("description", "desc", "body"):
+            if normalized.get(alias) and not normalized.get("detail"):
+                normalized["detail"] = normalized.pop(alias)
+        return {k: v for k, v in normalized.items() if k in {"title", "detail", "priority", "project_id", "due_date"}}
+
+    if name == "update_mission":
+        if not normalized.get("mission_id"):
+            for alias in ("id", "task_id"):
+                if normalized.get(alias):
+                    normalized["mission_id"] = int(normalized.pop(alias))
+                    break
+        return {k: v for k, v in normalized.items() if k in {"mission_id", "status", "title", "detail", "priority", "due_date"}}
+
+    if name == "list_missions":
+        return {k: v for k, v in normalized.items() if k in {"status", "project_id"}}
+
     return normalized
+
+
+# ── Mission (Task) tools ──────────────────────────────────────────────────────
+
+def _run_async_from_sync(coro):
+    """Bridge to call async DB functions from synchronous tool context."""
+    import asyncio as _aio
+    try:
+        loop = _aio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            return pool.submit(lambda: _aio.run(coro)).result(timeout=10)
+    return _aio.run(coro)
+
+
+def _tool_mission_create(title: str, detail: str = "", priority: str = "medium",
+                         project_id: int = None, due_date: str = None, **_kw) -> str:
+    """Create a new mission (task)."""
+    if not title or not title.strip():
+        return "ERROR: Mission title is required."
+    priority = priority.lower() if priority else "medium"
+    if priority not in ("low", "medium", "high", "urgent"):
+        priority = "medium"
+    async def _do():
+        import db as devdb
+        async with devdb.get_db() as conn:
+            mid = await devdb.add_task(conn, project_id, title.strip(), detail.strip(), priority, due_date)
+            await devdb.log_event(conn, "task_added", f"Mission created by Axon: {title.strip()}", project_id=project_id)
+            return mid
+    mid = _run_async_from_sync(_do())
+    result = f"✅ Mission created (ID: {mid}): {title.strip()}"
+    if priority in ("high", "urgent"):
+        result += f" [{priority.upper()}]"
+    if due_date:
+        result += f" — due {due_date}"
+    return result
+
+
+def _tool_mission_update(mission_id: int = None, status: str = None, title: str = None,
+                         detail: str = None, priority: str = None, due_date: str = None, **_kw) -> str:
+    """Update an existing mission's status or fields."""
+    if mission_id is None:
+        return "ERROR: mission_id is required."
+    fields = {}
+    if status:
+        status = status.lower().replace(" ", "_")
+        if status in ("open", "in_progress", "done", "cancelled"):
+            fields["status"] = status
+        elif status in ("complete", "completed", "finish", "finished"):
+            fields["status"] = "done"
+        elif status in ("active", "working", "started"):
+            fields["status"] = "in_progress"
+        elif status in ("cancel", "drop", "remove"):
+            fields["status"] = "cancelled"
+    if title:
+        fields["title"] = title.strip()
+    if detail is not None and detail != "":
+        fields["detail"] = detail.strip()
+    if priority:
+        p = priority.lower()
+        if p in ("low", "medium", "high", "urgent"):
+            fields["priority"] = p
+    if due_date:
+        fields["due_date"] = due_date
+    if not fields:
+        return "ERROR: No valid fields to update. Provide status, title, detail, priority, or due_date."
+    async def _do():
+        import db as devdb
+        async with devdb.get_db() as conn:
+            await devdb.update_task(conn, int(mission_id), **fields)
+            return True
+    _run_async_from_sync(_do())
+    parts = [f"{k}={v}" for k, v in fields.items()]
+    return f"✅ Mission {mission_id} updated: {', '.join(parts)}"
+
+
+def _tool_mission_list(status: str = None, project_id: int = None, **_kw) -> str:
+    """List current missions."""
+    async def _do():
+        import db as devdb
+        async with devdb.get_db() as conn:
+            rows = await devdb.get_tasks(conn, project_id=project_id, status=status)
+            return [dict(r) for r in rows]
+    tasks = _run_async_from_sync(_do())
+    if not tasks:
+        return "No missions found" + (f" with status={status}" if status else "") + "."
+    lines = []
+    for t in tasks:
+        s = t.get("status", "open")
+        icon = {"open": "🔵", "in_progress": "🟡", "done": "✅", "cancelled": "⛔"}.get(s, "⚪")
+        p = t.get("priority", "medium")
+        line = f"{icon} [{t['id']}] {t['title']} ({p})"
+        if t.get("project_name"):
+            line += f" — {t['project_name']}"
+        if t.get("due_date"):
+            line += f" due:{t['due_date']}"
+        lines.append(line)
+    return f"{len(tasks)} mission(s):\n" + "\n".join(lines)
 
 
 _TOOL_REGISTRY = {
@@ -627,6 +781,9 @@ _TOOL_REGISTRY = {
     "git_status": _tool_git_status,
     "search_code": _tool_search_code,
     "write_file": _tool_write_file,
+    "create_mission": lambda **kw: _tool_mission_create(**kw),
+    "update_mission": lambda **kw: _tool_mission_update(**kw),
+    "list_missions": lambda **kw: _tool_mission_list(**kw),
 }
 
 AGENT_TOOL_DEFS = [
@@ -717,6 +874,58 @@ AGENT_TOOL_DEFS = [
                     "content": {"type": "string", "description": "Content to write"},
                 },
                 "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_mission",
+            "description": "Create a new mission (task) for tracking. Use this when the user asks to create, add, or queue a mission/task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Short mission title (e.g. 'Fix login page bug')"},
+                    "detail": {"type": "string", "description": "Detailed description of what needs to be done", "default": ""},
+                    "priority": {"type": "string", "enum": ["low", "medium", "high", "urgent"], "description": "Priority level", "default": "medium"},
+                    "project_id": {"type": "integer", "description": "Project ID to link to (optional)"},
+                    "due_date": {"type": "string", "description": "Due date in YYYY-MM-DD format (optional)"},
+                },
+                "required": ["title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_mission",
+            "description": "Update an existing mission's status or fields. Use this to mark missions as done, in_progress, or to change details.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mission_id": {"type": "integer", "description": "The mission ID to update"},
+                    "status": {"type": "string", "enum": ["open", "in_progress", "done", "cancelled"], "description": "New status"},
+                    "title": {"type": "string", "description": "Updated title"},
+                    "detail": {"type": "string", "description": "Updated description"},
+                    "priority": {"type": "string", "enum": ["low", "medium", "high", "urgent"], "description": "Updated priority"},
+                    "due_date": {"type": "string", "description": "Updated due date (YYYY-MM-DD)"},
+                },
+                "required": ["mission_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_missions",
+            "description": "List current missions/tasks, optionally filtered by status or project.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "enum": ["open", "in_progress", "done", "cancelled"], "description": "Filter by status (default: all open)"},
+                    "project_id": {"type": "integer", "description": "Filter by project ID"},
+                },
+                "required": [],
             },
         },
     },
@@ -1027,6 +1236,7 @@ Rules:
 - ALWAYS use tools for: find, locate, search, where is, list, read, check, run, show me, open, what files, what is in, scan, look for, get, fetch — do NOT describe how the user could do it themselves.
 - Use tools when you need real data (file contents, git status, directory listings, search results, etc.)
 - If the user asks you to find/locate/search for ANYTHING on the filesystem — do it yourself with search_files or list_dir. Never tell the user to open Finder or File Explorer.
+- When the user asks to create/add/track a mission or task, use create_mission immediately. When asked to complete/update a mission, use update_mission. Use list_missions to check current missions.
 - Do not give the user shell instructions for tasks you can complete with the available tools.
 - Only skip tools for pure creative writing, brainstorming, or math that requires NO local data.
 - After seeing tool results, either use another tool or give ANSWER
@@ -1402,6 +1612,44 @@ def _build_context_block(projects: list, tasks: list, prompts: list) -> str:
     return "\n".join(lines)
 
 
+# ─── Smart escalation: Ollama → cloud API fallback ────────────────────────────
+
+ESCALATION_PROVIDER = "deepseek"
+ESCALATION_BASE_URL = "https://api.deepseek.com/"
+ESCALATION_MODEL = "deepseek-chat"
+
+
+def _escalation_api_key() -> str:
+    """Resolve an API key for cloud escalation from env."""
+    return os.environ.get("DEEPSEEK_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
+
+
+async def _escalate_to_api(
+    prompt: str,
+    system: str = "",
+    max_tokens: int = MAX_TOKENS_CHAT,
+    reason: str = "",
+) -> tuple[str, int]:
+    """Fallback to cloud API when local Ollama fails."""
+    api_key = _escalation_api_key()
+    if not api_key:
+        raise RuntimeError(
+            f"Ollama failed ({reason}) and no cloud API key is configured for escalation. "
+            "Set DEEPSEEK_API_KEY in .env or add a key to the Vault."
+        )
+    _log.warning("Escalating to %s: %s", ESCALATION_PROVIDER, reason)
+    content, tokens = await _call_api_messages(
+        [{"role": "user", "content": prompt}],
+        system=system or SYSTEM_PROMPT,
+        api_key=api_key,
+        api_provider=ESCALATION_PROVIDER,
+        api_base_url=ESCALATION_BASE_URL,
+        api_model=ESCALATION_MODEL,
+        max_tokens=max_tokens,
+    )
+    return f"\u2601\ufe0f *[Cloud: {ESCALATION_MODEL}]*\n\n{content}", tokens
+
+
 # ─── Unified call dispatcher ─────────────────────────────────────────────────
 
 async def _call(
@@ -1418,16 +1666,27 @@ async def _call(
     ollama_url: str = "",
     ollama_model: str = "",
 ) -> tuple[str, int]:
-    """Route a call to the API, CLI, or local Ollama backend."""
+    """Route a call to the API, CLI, or local Ollama backend.
+    When backend='ollama' and the call fails, automatically escalates
+    to a cloud API if a key is available."""
     if backend == "cli":
         content, tokens = await _call_cli(prompt, system=system, cli_path=cli_path)
         return content, tokens
     elif backend == "ollama":
-        content, tokens = await _call_ollama(
-            prompt, system=system or SYSTEM_PROMPT,
-            model=ollama_model, max_tokens=max_tokens, ollama_url=ollama_url,
-        )
-        return content, tokens
+        try:
+            content, tokens = await _call_ollama(
+                prompt, system=system or SYSTEM_PROMPT,
+                model=ollama_model, max_tokens=max_tokens, ollama_url=ollama_url,
+            )
+            return content, tokens
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            if _escalation_api_key():
+                return await _escalate_to_api(
+                    prompt, system=system or SYSTEM_PROMPT,
+                    max_tokens=max_tokens, reason=reason,
+                )
+            raise
     else:
         return await _call_api_messages(
             [{"role": "user", "content": prompt}],
