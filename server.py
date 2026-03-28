@@ -2080,8 +2080,9 @@ async def chat(body: ChatMessage):
         # ── Mission intent interception (non-streaming) ──────────────────────
         import re as _re_mns
         _mission_triggers_ns = _re_mns.compile(
-            r'\b(create|add|make|set\s*up|queue|schedule|track|start)\b.{0,40}'
-            r'\b(missions?|tasks?)\b',
+            r'\b(create|add|make|set\s*up|queue|schedule|track|start|turn|convert|break\s*down|organize|log|plan)\b'
+            r'.{0,60}'
+            r'\b(missions?|tasks?|tracker)\b',
             _re_mns.IGNORECASE,
         )
         if _mission_triggers_ns.search(body.message):
@@ -2099,28 +2100,41 @@ async def chat(body: ChatMessage):
                 _proj_list_ns = ", ".join(f'{pid}: {pn}' for pid, pn in _proj_names_ns.items()) or "none"
 
                 _extract_system_ns = (
-                    "You are a JSON extractor. Extract mission(s) from the user's message.\n"
+                    "You are a JSON extractor. Extract mission(s) from the conversation.\n"
+                    "The user is asking to create missions/tasks. Look at the FULL conversation history "
+                    "(especially the last assistant message) to find all missions/tasks mentioned.\n"
                     "Return ONLY a JSON array of mission objects. Each object has:\n"
                     '  {"title": "string", "detail": "string", "priority": "low|medium|high|urgent", "project_id": null_or_int, "due_date": null_or_"YYYY-MM-DD"}\n'
                     f"Available projects: {_proj_list_ns}\n"
                     "If the user mentions a project name, match it to the project_id.\n"
                     "If multiple missions are requested, return multiple objects.\n"
+                    "Keep titles concise (under 80 chars). Put sub-tasks and details in the detail field.\n"
                     "Return ONLY valid JSON array, no markdown fences."
                 )
 
+                # Build context from recent history
+                _history_context_ns = ""
+                if history:
+                    _recent_ns = history[-6:]
+                    _history_lines_ns = []
+                    for h in _recent_ns:
+                        _history_lines_ns.append(f"{h['role'].upper()}: {h['content'][:2000]}")
+                    _history_context_ns = "\n---\n".join(_history_lines_ns) + "\n---\n"
+
                 def _extract_missions_ns(user_msg: str) -> list:
+                    _full_msg = _history_context_ns + "USER (current): " + user_msg if _history_context_ns else user_msg
                     if _mns_api_key:
                         headers = {"Authorization": f"Bearer {_mns_api_key}", "Content-Type": "application/json"}
                         payload = {
                             "model": _mns_api_model,
                             "messages": [
                                 {"role": "system", "content": _extract_system_ns},
-                                {"role": "user", "content": user_msg},
+                                {"role": "user", "content": _full_msg},
                             ],
                             "temperature": 0.1,
                             "stream": False,
                         }
-                        r = _httpx_mns.post(f"{_mns_api_base}/chat/completions", json=payload, headers=headers, timeout=30)
+                        r = _httpx_mns.post(f"{_mns_api_base}/chat/completions", json=payload, headers=headers, timeout=60)
                         r.raise_for_status()
                         raw = r.json()["choices"][0]["message"]["content"]
                     else:
@@ -2128,14 +2142,14 @@ async def chat(body: ChatMessage):
                             "model": settings.get("ollama_model", "qwen2.5-coder:1.5b"),
                             "messages": [
                                 {"role": "system", "content": _extract_system_ns},
-                                {"role": "user", "content": user_msg},
+                                {"role": "user", "content": _full_msg},
                             ],
                             "stream": False,
                             "options": {"temperature": 0.1},
                         }
                         r = _httpx_mns.post(
                             f"{settings.get('ollama_url', 'http://localhost:11434')}/api/chat",
-                            json=payload, timeout=30,
+                            json=payload, timeout=60,
                         )
                         r.raise_for_status()
                         raw = r.json()["message"]["content"]
@@ -2465,8 +2479,9 @@ async def chat_stream(body: ChatMessage, request: Request):
     # ── Mission intent interception (streaming) ──────────────────────────
     import re as _re_m
     _mission_triggers = _re_m.compile(
-        r'\b(create|add|make|set\s*up|queue|schedule|track|start)\b.{0,40}'
-        r'\b(missions?|tasks?)\b',
+        r'\b(create|add|make|set\s*up|queue|schedule|track|start|turn|convert|break\s*down|organize|log|plan)\b'
+        r'.{0,60}'
+        r'\b(missions?|tasks?|tracker)\b',
         _re_m.IGNORECASE,
     )
     if _mission_triggers.search(body.message):
@@ -2487,28 +2502,41 @@ async def chat_stream(body: ChatMessage, request: Request):
             _proj_list = ", ".join(f'{pid}: {pn}' for pid, pn in _proj_names.items()) or "none"
 
             _extract_system = (
-                "You are a JSON extractor. Extract mission(s) from the user's message.\n"
+                "You are a JSON extractor. Extract mission(s) from the conversation.\n"
+                "The user is asking to create missions/tasks. Look at the FULL conversation history "
+                "(especially the last assistant message) to find all missions/tasks mentioned.\n"
                 "Return ONLY a JSON array of mission objects. Each object has:\n"
                 '  {"title": "string", "detail": "string", "priority": "low|medium|high|urgent", "project_id": null_or_int, "due_date": null_or_"YYYY-MM-DD"}\n'
                 f"Available projects: {_proj_list}\n"
                 "If the user mentions a project name, match it to the project_id.\n"
                 "If multiple missions are requested, return multiple objects.\n"
+                "Keep titles concise (under 80 chars). Put sub-tasks and details in the detail field.\n"
                 "Return ONLY valid JSON array, no markdown fences."
             )
 
+            # Build context from recent history so extraction sees what "this" refers to
+            _history_context = ""
+            if history:
+                _recent = history[-6:]  # last 3 exchanges
+                _history_lines = []
+                for h in _recent:
+                    _history_lines.append(f"{h['role'].upper()}: {h['content'][:2000]}")
+                _history_context = "\n---\n".join(_history_lines) + "\n---\n"
+
             def _extract_missions(user_msg: str) -> list:
+                _full_msg = _history_context + "USER (current): " + user_msg if _history_context else user_msg
                 if _m_api_key:
                     headers = {"Authorization": f"Bearer {_m_api_key}", "Content-Type": "application/json"}
                     payload = {
                         "model": _m_api_model,
                         "messages": [
                             {"role": "system", "content": _extract_system},
-                            {"role": "user", "content": user_msg},
+                            {"role": "user", "content": _full_msg},
                         ],
                         "temperature": 0.1,
                         "stream": False,
                     }
-                    r = _httpx_m.post(f"{_m_api_base}/chat/completions", json=payload, headers=headers, timeout=30)
+                    r = _httpx_m.post(f"{_m_api_base}/chat/completions", json=payload, headers=headers, timeout=60)
                     r.raise_for_status()
                     raw = r.json()["choices"][0]["message"]["content"]
                 else:
@@ -2517,14 +2545,14 @@ async def chat_stream(body: ChatMessage, request: Request):
                         "model": settings.get("ollama_model", "qwen2.5-coder:1.5b"),
                         "messages": [
                             {"role": "system", "content": _extract_system},
-                            {"role": "user", "content": user_msg},
+                            {"role": "user", "content": _full_msg},
                         ],
                         "stream": False,
                         "options": {"temperature": 0.1},
                     }
                     r = _httpx_m.post(
                         f"{settings.get('ollama_url', 'http://localhost:11434')}/api/chat",
-                        json=payload, timeout=30,
+                        json=payload, timeout=60,
                     )
                     r.raise_for_status()
                     raw = r.json()["message"]["content"]
