@@ -1015,11 +1015,41 @@
         </div>
 
         <div class="flex gap-1.5 items-end">
-            <!-- Desktop: voice button -->
-            <button x-show="!isMobile && voiceInputAvailable()" @click="openVoiceCommandCenter(true)"
-                    class="h-9 flex-none rounded-xl bg-cyan-500/20 px-3 text-xs font-medium text-cyan-300 transition hover:bg-cyan-500/25 press-scale" title="Open voice mode">
-              🎤 Voice
-            </button>
+            <!-- Desktop: compact model picker (replaces voice button) -->
+            <div x-show="!isMobile" class="relative shrink-0" x-data="{ composerModelOpen: false }">
+              <button @click="composerModelOpen = !composerModelOpen; if(composerModelOpen && ollamaModels.length===0) loadOllamaModels()"
+                      class="h-9 flex items-center gap-1.5 rounded-xl px-2.5 text-xs font-medium transition press-scale select-none"
+                      :class="composerModelOpen ? 'bg-blue-500/15 text-blue-300 border border-blue-500/30' : 'bg-slate-800 text-slate-400 border border-slate-700/60 hover:border-slate-500/80'"
+                      :title="consoleRuntimeLabel()">
+                <div class="w-1.5 h-1.5 rounded-full shrink-0"
+                     :class="settingsForm.ai_backend === 'ollama' ? 'bg-green-400' : settingsForm.ai_backend === 'api' ? 'bg-blue-400' : 'bg-slate-500'"></div>
+                <span class="max-w-[100px] truncate" x-text="consoleRuntimeLabel()"></span>
+                <svg class="w-3 h-3 opacity-50" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
+              </button>
+              <div x-show="composerModelOpen" @click.away="composerModelOpen=false"
+                   x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 -translate-y-1"
+                   class="absolute bottom-full left-0 mb-1.5 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl z-50 min-w-[220px] py-1 overflow-hidden">
+                <div x-show="settingsForm.ai_backend === 'ollama'">
+                  <div class="px-3 py-1.5 text-[10px] text-slate-500 uppercase tracking-wider border-b border-slate-800/80 flex items-center justify-between">
+                    <span>Models</span>
+                    <button @click.stop="loadOllamaModels()" class="text-slate-600 hover:text-slate-400 transition">↻</button>
+                  </div>
+                  <template x-for="m in ollamaModels" :key="m.name">
+                    <button @click="selectedChatModel = m.name; settingsForm.ollama_model = m.name; settingsForm.code_model = m.name; api('POST', '/api/settings', {ollama_model: m.name, code_model: m.name}).catch(()=>{}); composerModelOpen=false"
+                            :class="activeChatModel() === m.name ? 'bg-blue-600/15 text-blue-300' : 'text-slate-300 hover:bg-slate-800/80'"
+                            class="w-full text-left px-3 py-2 text-xs flex items-center gap-2 transition">
+                      <div class="w-1.5 h-1.5 rounded-full shrink-0" :class="activeChatModel() === m.name ? 'bg-blue-400' : 'bg-slate-700'"></div>
+                      <span class="flex-1 truncate" x-text="m.name"></span>
+                      <span class="text-slate-500 text-[10px]" x-text="m.size_gb + 'GB'"></span>
+                    </button>
+                  </template>
+                  <div x-show="ollamaModels.length === 0" class="px-3 py-2.5 text-[11px] text-slate-500 text-center">No local models</div>
+                </div>
+                <div x-show="settingsForm.ai_backend !== 'ollama'" class="px-3 py-2.5 text-[11px] text-slate-400 text-center">
+                  <span x-text="consoleRuntimeLabel()"></span>
+                </div>
+              </div>
+            </div>
 
             <!-- Desktop: composer menu button -->
             <button x-show="!isMobile" @click="openComposerMenu()"
