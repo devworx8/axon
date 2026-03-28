@@ -379,6 +379,45 @@ async def _stream_ollama_chat(
     raise RuntimeError(f"Ollama not reachable at {base} after 3 attempts: {last_exc}")
 
 
+async def _stream_api_chat(
+    messages: list[dict],
+    api_key: str,
+    api_base_url: str = "",
+    api_model: str = "",
+    max_tokens: int = 1500,
+) -> AsyncGenerator[str, None]:
+    """Async generator yielding text chunks from an OpenAI-compatible streaming API."""
+    base = (api_base_url or "https://api.deepseek.com").rstrip("/")
+    if not base.endswith("/v1"):
+        base = base.rstrip("/") + "/v1" if "/v1" not in base else base
+    model = api_model or "deepseek-chat"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": 0.2,
+        "stream": True,
+    }
+    async with httpx.AsyncClient(timeout=120) as client:
+        async with client.stream("POST", f"{base}/chat/completions", json=payload, headers=headers) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line or not line.startswith("data: "):
+                    continue
+                data_str = line[6:].strip()
+                if data_str == "[DONE]":
+                    return
+                try:
+                    data = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                delta = data.get("choices", [{}])[0].get("delta", {})
+                content = delta.get("content", "")
+                if content:
+                    yield content
+
+
 def _ollama_message_with_images(content: str, image_paths: list[str] | None = None) -> dict:
     message = {"role": "user", "content": content}
     encoded_images: list[str] = []
@@ -1308,6 +1347,10 @@ async def run_agent(
     ollama_model: str = "",
     max_iterations: int = 6,
     force_tool_mode: bool = False,
+    api_key: str = "",
+    api_base_url: str = "",
+    api_model: str = "",
+    api_provider: str = "",
 ) -> AsyncGenerator[dict, None]:
     """
     Async generator yielding agent events (ReAct-style, streaming-compatible):
@@ -1322,6 +1365,8 @@ async def run_agent(
         t for t in tools if t in _TOOL_REGISTRY
     ]
 
+    use_api = bool(api_key and api_base_url)
+
     if not force_tool_mode and _is_general_planning_request(user_message):
         system = (
             "You are Axon, a calm and practical AI operator.\n"
@@ -1331,27 +1376,30 @@ async def run_agent(
         )
         if resource_context:
             system += f"\n\nUse these attached resources when they are relevant:\n{resource_context[:5000]}"
-        execution = await asyncio.to_thread(
-            _ollama_execution_profile_sync,
-            vision_model or ollama_model or OLLAMA_DEFAULT_MODEL,
-            ollama_url,
-            streaming=True,
-            purpose="chat",
-        )
         messages: list[dict] = [{"role": "system", "content": system}]
         messages.extend(_filtered_general_history(history))
-        messages.append(_ollama_message_with_images(user_message, resource_image_paths))
 
-        if execution.get("note"):
-            yield {"type": "text", "chunk": f"⚠️ {execution['note']}\n\n"}
-        async for chunk in _stream_ollama_chat(
-            messages=messages,
-            model=execution["model"],
-            max_tokens=1200,
-            ollama_url=ollama_url,
-            purpose="chat",
-        ):
-            yield {"type": "text", "chunk": chunk}
+        if use_api:
+            messages.append({"role": "user", "content": user_message})
+            async for chunk in _stream_api_chat(
+                messages=messages, api_key=api_key,
+                api_base_url=api_base_url, api_model=api_model, max_tokens=1200,
+            ):
+                yield {"type": "text", "chunk": chunk}
+        else:
+            execution = await asyncio.to_thread(
+                _ollama_execution_profile_sync,
+                vision_model or ollama_model or OLLAMA_DEFAULT_MODEL,
+                ollama_url, streaming=True, purpose="chat",
+            )
+            messages.append(_ollama_message_with_images(user_message, resource_image_paths))
+            if execution.get("note"):
+                yield {"type": "text", "chunk": f"⚠️ {execution['note']}\n\n"}
+            async for chunk in _stream_ollama_chat(
+                messages=messages, model=execution["model"],
+                max_tokens=1200, ollama_url=ollama_url, purpose="chat",
+            ):
+                yield {"type": "text", "chunk": chunk}
         yield {"type": "done", "iterations": 1}
         return
 
@@ -1368,35 +1416,42 @@ async def run_agent(
     if resource_context:
         system_context = f"{system_context}\n\n{resource_context}" if system_context else resource_context
     system = _build_react_system(system_context, project_name, active_tool_names)
-    execution = await asyncio.to_thread(
-        _ollama_execution_profile_sync,
-        vision_model or ollama_model or OLLAMA_AGENT_MODEL,
-        ollama_url,
-        streaming=True,
-        purpose="agent",
-    )
 
     messages: list[dict] = [{"role": "system", "content": system}]
     for h in history[-4:]:
         messages.append({"role": h["role"], "content": h["content"][:400]})
-    messages.append(_ollama_message_with_images(user_message, resource_image_paths))
+
+    if use_api:
+        messages.append({"role": "user", "content": user_message})
+    else:
+        execution = await asyncio.to_thread(
+            _ollama_execution_profile_sync,
+            vision_model or ollama_model or OLLAMA_AGENT_MODEL,
+            ollama_url, streaming=True, purpose="agent",
+        )
+        messages.append(_ollama_message_with_images(user_message, resource_image_paths))
 
     for iteration in range(max_iterations):
         # Collect streamed response
         full_text = ""
         try:
-            if iteration == 0 and execution.get("note"):
-                yield {"type": "text", "chunk": f"⚠️ {execution['note']}\n\n"}
-            async for chunk in _stream_ollama_chat(
-                messages=messages,
-                model=execution["model"],
-                max_tokens=800,
-                ollama_url=ollama_url,
-                purpose="agent",
-            ):
-                full_text += chunk
+            if use_api:
+                async for chunk in _stream_api_chat(
+                    messages=messages, api_key=api_key,
+                    api_base_url=api_base_url, api_model=api_model, max_tokens=800,
+                ):
+                    full_text += chunk
+            else:
+                if iteration == 0 and execution.get("note"):
+                    yield {"type": "text", "chunk": f"⚠️ {execution['note']}\n\n"}
+                async for chunk in _stream_ollama_chat(
+                    messages=messages, model=execution["model"],
+                    max_tokens=800, ollama_url=ollama_url, purpose="agent",
+                ):
+                    full_text += chunk
         except Exception as exc:
-            yield {"type": "text", "chunk": f"\n⚠️ Ollama error: {exc}"}
+            provider_label = api_provider or ("API" if use_api else "Ollama")
+            yield {"type": "text", "chunk": f"\n⚠️ {provider_label} error: {exc}"}
             break
 
         if not full_text.strip():
@@ -1617,6 +1672,11 @@ def _build_context_block(projects: list, tasks: list, prompts: list) -> str:
 ESCALATION_PROVIDER = "deepseek"
 ESCALATION_BASE_URL = "https://api.deepseek.com/"
 ESCALATION_MODEL = "deepseek-chat"
+
+# Model overrides by role for API backends
+API_MODEL_BY_ROLE: dict[str, dict[str, str]] = {
+    "deepseek": {"code": "deepseek-coder", "reasoning": "deepseek-reasoner"},
+}
 
 
 def _escalation_api_key() -> str:

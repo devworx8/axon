@@ -301,7 +301,11 @@ async def fetch_url_resource(url: str, settings: dict) -> dict:
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("Only http and https URLs are supported.")
     limit = upload_limit_bytes(settings)
-    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+    proxy_url = settings.get("resource_fetch_proxy", "").strip() or None
+    client_kwargs = {"timeout": 120, "follow_redirects": True}
+    if proxy_url:
+        client_kwargs["proxy"] = proxy_url
+    async with httpx.AsyncClient(**client_kwargs) as client:
         resp = await client.get(url, headers={"User-Agent": "Axon/1.0 Resource Import"})
         resp.raise_for_status()
         content = resp.content

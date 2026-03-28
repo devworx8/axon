@@ -1389,6 +1389,13 @@ async def _effective_ai_params(settings: dict, composer_options: dict, *, conn=N
         )
         if route.get("selected_model"):
             ai["ollama_model"] = route["selected_model"]
+    else:
+        # API backend: pick role-specific model when available
+        role = _local_role_for_composer(composer_options, agent_request=agent_request)
+        provider_id = ai.get("api_provider", "")
+        role_map = brain.API_MODEL_BY_ROLE.get(provider_id, {})
+        if role in role_map:
+            ai["api_model"] = role_map[role]
     return ai
 
 
@@ -3030,8 +3037,27 @@ async def agent_endpoint(body: AgentRequest, request: Request):
         if backend != "ollama" and str(composer_options.get("external_mode") or "").lower() == "disable_external_calls":
             backend = "ollama"
             settings["ai_backend"] = "ollama"
+
+        # Resolve API credentials for non-Ollama agent mode
+        _agent_api_key = ""
+        _agent_api_base = ""
+        _agent_api_model = ""
+        _agent_api_provider = ""
         if backend != "ollama":
-            raise HTTPException(400, "Agent mode requires the Ollama backend. Switch in Settings.")
+            _agent_api_cfg = provider_registry.runtime_api_config(settings)
+            _agent_api_key = _agent_api_cfg.get("api_key", "")
+            if not _agent_api_key and devvault.VaultSession.is_unlocked():
+                _agent_api_key = await devvault.vault_resolve_provider_key(conn, _agent_api_cfg.get("provider_id", "deepseek"))
+            _agent_api_base = _agent_api_cfg.get("api_base_url", "https://api.deepseek.com/")
+            _agent_api_model = _agent_api_cfg.get("api_model", "deepseek-chat")
+            _agent_api_provider = _agent_api_cfg.get("provider_id", "api")
+            # Use role-specific model for code tasks
+            _agent_role = _local_role_for_composer(composer_options)
+            _agent_role_map = brain.API_MODEL_BY_ROLE.get(_agent_api_provider, {})
+            if _agent_role in _agent_role_map:
+                _agent_api_model = _agent_role_map[_agent_role]
+            if not _agent_api_key:
+                raise HTTPException(400, "Agent mode with API backend requires a configured API key. Check Settings or Vault.")
 
         projects = [dict(r) for r in await devdb.get_projects(conn, status="active")]
         tasks = [dict(r) for r in await devdb.get_tasks(conn, status="open")]
@@ -3104,6 +3130,10 @@ async def agent_endpoint(body: AgentRequest, request: Request):
                 tools=body.tools,
                 ollama_url=ollama_url, ollama_model=ollama_model,
                 force_tool_mode=bool(composer_options.get("action_mode") or composer_options.get("agent_role")),
+                api_key=_agent_api_key,
+                api_base_url=_agent_api_base,
+                api_model=_agent_api_model,
+                api_provider=_agent_api_provider,
             ):
                 if event.get("type") == "text":
                     collected_text.append(event["chunk"])
@@ -3894,24 +3924,6 @@ async def create_browser_action_proposal(body: BrowserActionProposalCreate):
     return {"created": True, "proposal": proposal, **_serialize_browser_action_state()}
 
 
-@app.post("/api/browser/actions/{proposal_id}/approve")
-async def approve_browser_action(proposal_id: int):
-    proposals = list(_browser_action_state["proposals"] or [])
-    for idx, proposal in enumerate(proposals):
-        if int(proposal.get("id") or 0) != proposal_id:
-            continue
-        updated = {
-            **proposal,
-            "status": "approved",
-            "updated_at": _now_iso(),
-        }
-        proposals.pop(idx)
-        _browser_action_state["proposals"] = proposals
-        _browser_action_state["history"] = [updated, *(_browser_action_state["history"] or [])][:50]
-        return {"approved": True, "proposal": updated, **_serialize_browser_action_state()}
-    raise HTTPException(404, "Browser action proposal not found")
-
-
 @app.post("/api/browser/actions/{proposal_id}/reject")
 async def reject_browser_action(proposal_id: int):
     proposals = list(_browser_action_state["proposals"] or [])
@@ -3928,6 +3940,102 @@ async def reject_browser_action(proposal_id: int):
         _browser_action_state["history"] = [updated, *(_browser_action_state["history"] or [])][:50]
         return {"rejected": True, "proposal": updated, **_serialize_browser_action_state()}
     raise HTTPException(404, "Browser action proposal not found")
+
+
+# ── Browser Bridge (Playwright) ──────────────────────────────────────────────
+
+@app.post("/api/browser/bridge/start")
+async def browser_bridge_start(headless: bool = False):
+    """Start the Playwright browser bridge."""
+    try:
+        import browser_bridge
+        bridge = browser_bridge.get_bridge()
+        if bridge.is_running:
+            return {"status": "already_running", **bridge.status()}
+        proxy = None
+        async with devdb.get_db() as conn:
+            settings = await devdb.get_all_settings(conn)
+            proxy_url = settings.get("resource_fetch_proxy", "").strip()
+            if proxy_url:
+                proxy = {"server": proxy_url}
+        await bridge.start(headless=headless, proxy=proxy)
+        return {"status": "started", **bridge.status()}
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Failed to start browser bridge: {e}")
+
+
+@app.post("/api/browser/bridge/stop")
+async def browser_bridge_stop():
+    """Stop the Playwright browser bridge."""
+    try:
+        import browser_bridge
+        bridge = browser_bridge.get_bridge()
+        await bridge.stop()
+        return {"status": "stopped"}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to stop bridge: {e}")
+
+
+@app.get("/api/browser/bridge/status")
+async def browser_bridge_status():
+    """Get browser bridge status."""
+    try:
+        import browser_bridge
+        bridge = browser_bridge.get_bridge()
+        return bridge.status()
+    except Exception:
+        return {"running": False, "url": "", "title": ""}
+
+
+@app.post("/api/browser/bridge/execute")
+async def browser_bridge_execute(request: Request):
+    """Execute an approved browser action via the Playwright bridge."""
+    try:
+        import browser_bridge
+        bridge = browser_bridge.get_bridge()
+        if not bridge.is_running:
+            raise HTTPException(400, "Browser bridge is not running. Start it first.")
+        body = await request.json()
+        result = await bridge.execute_action(body)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Execution error: {e}")
+
+
+@app.post("/api/browser/actions/{proposal_id}/approve")
+async def approve_and_execute_browser_action(proposal_id: int):
+    """Approve a browser action AND execute it via the Playwright bridge if running."""
+    proposals = list(_browser_action_state["proposals"] or [])
+    for idx, proposal in enumerate(proposals):
+        if int(proposal.get("id") or 0) != proposal_id:
+            continue
+        updated = {
+            **proposal,
+            "status": "approved",
+            "updated_at": _now_iso(),
+        }
+        proposals.pop(idx)
+        _browser_action_state["proposals"] = proposals
+        _browser_action_state["history"] = [updated, *(_browser_action_state["history"] or [])][:50]
+
+        # Execute via bridge if running
+        execution_result = None
+        try:
+            import browser_bridge
+            bridge = browser_bridge.get_bridge()
+            if bridge.is_running:
+                execution_result = await bridge.execute_action(updated)
+                updated["execution_result"] = execution_result
+        except Exception:
+            pass
+
+        return {"approved": True, "proposal": updated, "execution": execution_result, **_serialize_browser_action_state()}
+    raise HTTPException(404, "Browser action proposal not found")
+
 
 @app.get("/api/desktop/preview")
 async def desktop_preview(w: int = 960, h: int = 540):

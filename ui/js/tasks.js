@@ -31,9 +31,18 @@ function axonTasksMixin() {
     async completeTask(t) {
       try {
         await this.api('PATCH', `/api/tasks/${t.id}`, { status: 'done' });
-        this.tasks = this.tasks.filter(x => x.id !== t.id);
+        t.status = 'done';
         this.urgentCount = this.tasks.filter(t => t.priority === 'urgent' || t.priority === 'high').length;
-        this.showToast('Mission completed');
+        this.showToast('Mission completed ✓');
+      } catch(e) { this.showToast('Failed'); }
+    },
+
+    async setTaskStatus(t, status) {
+      try {
+        await this.api('PATCH', `/api/tasks/${t.id}`, { status });
+        t.status = status;
+        this.urgentCount = this.tasks.filter(t => t.priority === 'urgent' || t.priority === 'high').length;
+        this.showToast(`Mission → ${this.taskStatusLabel(status)}`);
       } catch(e) { this.showToast('Failed'); }
     },
 

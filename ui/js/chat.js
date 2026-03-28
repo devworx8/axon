@@ -591,8 +591,53 @@ function axonChatMixin() {
         this._checkMissionNotification(this.chatMessages[idx].content);
         // Detect playbook creation in response and trigger notification
         this._checkPlaybookNotification(this.chatMessages[idx].content);
+        // Generate follow-up suggestion chips
+        this._generateFollowUpSuggestions(this.chatMessages[idx].content, msg);
       }
       this.clearLiveOperator(this.liveOperator.phase === 'recover' ? 4200 : 1400);
+    },
+
+    _generateFollowUpSuggestions(response, userMessage) {
+      const suggestions = [];
+      const lower = response.toLowerCase();
+      const userLower = (userMessage || '').toLowerCase();
+
+      // Context-aware suggestions based on response content
+      if (/\b(created|saved|added)\b.{0,30}\b(mission|task)/i.test(response)) {
+        suggestions.push('Show my active missions');
+      }
+      if (/\b(created|saved|added)\b.{0,30}\b(playbook|prompt)/i.test(response)) {
+        suggestions.push('Open playbooks');
+      }
+      if (/```[\s\S]{20,}```/.test(response)) {
+        suggestions.push('Explain this code');
+        suggestions.push('Optimize this code');
+      }
+      if (/\b(plan|roadmap|strategy|steps?)\b/i.test(response) && suggestions.length < 3) {
+        suggestions.push('Turn this into missions');
+      }
+      if (/\b(error|bug|issue|fix)\b/i.test(lower) && suggestions.length < 3) {
+        suggestions.push('How do I debug this?');
+      }
+      if (/\b(api|endpoint|route)\b/i.test(lower) && suggestions.length < 3) {
+        suggestions.push('Show example request');
+      }
+
+      // Generic fallbacks — always offer at least 2
+      if (suggestions.length === 0) {
+        suggestions.push('Tell me more');
+        suggestions.push('What should I do next?');
+      } else if (suggestions.length === 1) {
+        suggestions.push('What should I do next?');
+      }
+
+      this.followUpSuggestions = suggestions.slice(0, 3);
+    },
+
+    useSuggestion(text) {
+      this.followUpSuggestions = [];
+      this.chatInput = text;
+      this.$nextTick(() => this.sendChat());
     },
 
     /* ── Chat CRUD ────────────────────────────────────────────── */
@@ -656,7 +701,7 @@ function axonChatMixin() {
             body: titles.length ? titles.join(', ') : 'New playbooks created from chat',
             icon: '📋',
             duration: 8000,
-            action: { label: 'View Playbooks', handler: () => { this.tab = 'prompts'; } },
+            action: { label: 'View Playbooks', tab: 'prompts' },
           });
         }
         // Refresh prompts list
@@ -680,13 +725,10 @@ function axonChatMixin() {
       const packResources = researchPack?.resources || [];
       const attachedResources = this.mergeUniqueResources([...packResources, ...this.selectedResources]);
       const attachedResourceIds = attachedResources.map(resource => Number(resource.id)).filter(Boolean);
-      if (mode === 'agent' && !this.usesOllamaBackend()) {
-        this.showToast('Agent mode requires the Ollama backend.');
-        return;
-      }
       this.setAgentStage(mode === 'agent' ? 'observe' : 'observe');
 
       this.chatInput = '';
+      this.followUpSuggestions = [];
       if (!this.composerOptions.pin_context) {
         this.selectedResources = [];
       }
