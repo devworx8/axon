@@ -2212,6 +2212,132 @@ async def chat(body: ChatMessage):
                 pass
         # ── end Mission intent interception (non-streaming) ──────────────────
 
+        # ── Playbook intent interception (non-streaming) ─────────────────────
+        import re as _re_pbns
+        _playbook_triggers_ns = _re_pbns.compile(
+            r'\b(create|add|make|save|build|write|generate|draft)\b'
+            r'.{0,60}'
+            r'\b(playbooks?|prompts?|templates?|sops?|procedures?|checklists?)\b',
+            _re_pbns.IGNORECASE,
+        )
+        if _playbook_triggers_ns.search(body.message):
+            try:
+                import httpx as _httpx_pbns
+
+                _pbns_api_cfg = provider_registry.runtime_api_config(settings)
+                _pbns_api_key = _pbns_api_cfg.get("api_key", "")
+                if not _pbns_api_key and devvault.VaultSession.is_unlocked():
+                    _pbns_api_key = await devvault.vault_resolve_provider_key(conn, _pbns_api_cfg.get("provider_id", "deepseek"))
+                _pbns_api_base = _pbns_api_cfg.get("api_base_url", "https://api.deepseek.com/").rstrip("/")
+                _pbns_api_model = _pbns_api_cfg.get("api_model", "deepseek-chat")
+
+                _proj_names_pbns = {str(p["id"]): p["name"] for p in projects}
+                _proj_list_pbns = ", ".join(f'{pid}: {pn}' for pid, pn in _proj_names_pbns.items()) or "none"
+
+                _extract_system_pbns = (
+                    "You are a JSON extractor. Extract playbook(s)/prompt templates from the conversation.\n"
+                    "The user wants to save reusable playbooks. Look at the FULL conversation history.\n"
+                    "Return ONLY a JSON array of playbook objects. Each object has:\n"
+                    '  {"title": "string", "content": "string (the full playbook/prompt text)", "tags": "comma,separated,tags", "project_id": null_or_int}\n'
+                    f"Available projects: {_proj_list_pbns}\n"
+                    "Content should be comprehensive and usable as a standalone reference.\n"
+                    "Return ONLY valid JSON array, no markdown fences."
+                )
+
+                _history_context_pbns = ""
+                if history:
+                    _recent_pbns = history[-6:]
+                    _history_lines_pbns = [f"{h['role'].upper()}: {h['content'][:2000]}" for h in _recent_pbns]
+                    _history_context_pbns = "\n---\n".join(_history_lines_pbns) + "\n---\n"
+
+                def _extract_playbooks_ns(user_msg: str) -> list:
+                    _full_msg = _history_context_pbns + "USER (current): " + user_msg if _history_context_pbns else user_msg
+                    if _pbns_api_key:
+                        headers = {"Authorization": f"Bearer {_pbns_api_key}", "Content-Type": "application/json"}
+                        payload = {
+                            "model": _pbns_api_model,
+                            "messages": [
+                                {"role": "system", "content": _extract_system_pbns},
+                                {"role": "user", "content": _full_msg},
+                            ],
+                            "temperature": 0.1,
+                            "stream": False,
+                        }
+                        r = _httpx_pbns.post(f"{_pbns_api_base}/chat/completions", json=payload, headers=headers, timeout=60)
+                        r.raise_for_status()
+                        raw = r.json()["choices"][0]["message"]["content"]
+                    else:
+                        payload = {
+                            "model": settings.get("ollama_model", "qwen2.5-coder:1.5b"),
+                            "messages": [
+                                {"role": "system", "content": _extract_system_pbns},
+                                {"role": "user", "content": _full_msg},
+                            ],
+                            "stream": False,
+                            "options": {"temperature": 0.1},
+                        }
+                        r = _httpx_pbns.post(
+                            f"{settings.get('ollama_url', 'http://localhost:11434')}/api/chat",
+                            json=payload, timeout=60,
+                        )
+                        r.raise_for_status()
+                        raw = r.json()["message"]["content"]
+                    raw = _re_pbns.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=_re_pbns.IGNORECASE)
+                    raw = _re_pbns.sub(r"\s*```$", "", raw.strip())
+                    return _json.loads(raw)
+
+                _set_live_operator(active=True, mode="chat", phase="execute",
+                                   title="Creating playbooks…", detail=body.message[:120],
+                                   workspace_id=body.project_id, preserve_started=True)
+
+                pb_data_ns = await asyncio.to_thread(_extract_playbooks_ns, body.message)
+                if not isinstance(pb_data_ns, list):
+                    pb_data_ns = [pb_data_ns]
+
+                created_pbns = []
+                for pb in pb_data_ns:
+                    if not isinstance(pb, dict) or not pb.get("title"):
+                        continue
+                    pid = await devdb.save_prompt(
+                        conn,
+                        pb.get("project_id"),
+                        pb["title"].strip(),
+                        pb.get("content", "").strip(),
+                        pb.get("tags", ""),
+                    )
+                    await devdb.log_event(conn, "prompt_saved", f"Playbook created via chat: {pb['title'].strip()}", project_id=pb.get("project_id"))
+                    created_pbns.append({"id": pid, **pb})
+
+                if created_pbns:
+                    reply_lines = [f"📋 **{len(created_pbns)} playbook(s) saved:**\n"]
+                    for c in created_pbns:
+                        reply_lines.append(f"📝 **{c['title']}**")
+                        if c.get("tags"):
+                            reply_lines.append(f"   Tags: {c['tags']}")
+                        if c.get("content"):
+                            preview = c['content'][:200].replace('\n', ' ')
+                            reply_lines.append(f"   {preview}{'…' if len(c.get('content','')) > 200 else ''}")
+                        proj_name = _proj_names_pbns.get(str(c.get("project_id")), "")
+                        if proj_name:
+                            reply_lines.append(f"   Workspace: {proj_name}")
+                    reply_lines.append("\nView them in the **Playbooks** tab.")
+                    reply_pbns = "\n".join(reply_lines)
+
+                    _set_live_operator(active=False, mode="chat", phase="verify",
+                                       title="Playbooks saved", detail=f"{len(created_pbns)} playbook(s)",
+                                       summary=reply_pbns[:180], workspace_id=body.project_id)
+
+                    stored_user_msg = _stored_message_with_resources(body.message, resource_bundle["resources"])
+                    await devdb.save_message(conn, "user", stored_user_msg, project_id=body.project_id)
+                    await devdb.save_message(conn, "assistant", reply_pbns, project_id=body.project_id, tokens=0)
+
+                    return {"role": "assistant", "content": reply_pbns, "tokens": 0}
+            except Exception as _pb_err_ns:
+                import traceback as _tb_pbns
+                _tb_pbns.print_exc()
+                pass
+        # ── end Playbook intent interception (non-streaming) ─────────────────
+
         # Call AI with timeout handling
         try:
             import asyncio as _aio
@@ -2621,6 +2747,138 @@ async def chat_stream(body: ChatMessage, request: Request):
             # Fall through to normal chat
             pass
     # ── end Mission intent interception (streaming) ──────────────────────
+
+    # ── Playbook intent interception (streaming) ─────────────────────────
+    import re as _re_pb
+    _playbook_triggers = _re_pb.compile(
+        r'\b(create|add|make|save|build|write|generate|draft)\b'
+        r'.{0,60}'
+        r'\b(playbooks?|prompts?|templates?|sops?|procedures?|checklists?)\b',
+        _re_pb.IGNORECASE,
+    )
+    if _playbook_triggers.search(body.message):
+        try:
+            import httpx as _httpx_pb
+
+            _pb_api_cfg = provider_registry.runtime_api_config(settings)
+            _pb_api_key = _pb_api_cfg.get("api_key", "")
+            if not _pb_api_key and devvault.VaultSession.is_unlocked():
+                async with devdb.get_db() as _pb_conn:
+                    _pb_api_key = await devvault.vault_resolve_provider_key(_pb_conn, _pb_api_cfg.get("provider_id", "deepseek"))
+            _pb_api_base = _pb_api_cfg.get("api_base_url", "https://api.deepseek.com/").rstrip("/")
+            _pb_api_model = _pb_api_cfg.get("api_model", "deepseek-chat")
+
+            _proj_names_pb = {str(p["id"]): p["name"] for p in projects}
+            _proj_list_pb = ", ".join(f'{pid}: {pn}' for pid, pn in _proj_names_pb.items()) or "none"
+
+            _extract_system_pb = (
+                "You are a JSON extractor. Extract playbook(s)/prompt templates from the conversation.\n"
+                "The user wants to save reusable playbooks. Look at the FULL conversation history.\n"
+                "Return ONLY a JSON array of playbook objects. Each object has:\n"
+                '  {"title": "string", "content": "string (the full playbook/prompt text)", "tags": "comma,separated,tags", "project_id": null_or_int}\n'
+                f"Available projects: {_proj_list_pb}\n"
+                "Content should be comprehensive and usable as a standalone reference.\n"
+                "Return ONLY valid JSON array, no markdown fences."
+            )
+
+            _history_context_pb = ""
+            if history:
+                _recent_pb = history[-6:]
+                _history_lines_pb = [f"{h['role'].upper()}: {h['content'][:2000]}" for h in _recent_pb]
+                _history_context_pb = "\n---\n".join(_history_lines_pb) + "\n---\n"
+
+            def _extract_playbooks(user_msg: str) -> list:
+                _full_msg = _history_context_pb + "USER (current): " + user_msg if _history_context_pb else user_msg
+                if _pb_api_key:
+                    headers = {"Authorization": f"Bearer {_pb_api_key}", "Content-Type": "application/json"}
+                    payload = {
+                        "model": _pb_api_model,
+                        "messages": [
+                            {"role": "system", "content": _extract_system_pb},
+                            {"role": "user", "content": _full_msg},
+                        ],
+                        "temperature": 0.1,
+                        "stream": False,
+                    }
+                    r = _httpx_pb.post(f"{_pb_api_base}/chat/completions", json=payload, headers=headers, timeout=60)
+                    r.raise_for_status()
+                    raw = r.json()["choices"][0]["message"]["content"]
+                else:
+                    payload = {
+                        "model": settings.get("ollama_model", "qwen2.5-coder:1.5b"),
+                        "messages": [
+                            {"role": "system", "content": _extract_system_pb},
+                            {"role": "user", "content": _full_msg},
+                        ],
+                        "stream": False,
+                        "options": {"temperature": 0.1},
+                    }
+                    r = _httpx_pb.post(
+                        f"{settings.get('ollama_url', 'http://localhost:11434')}/api/chat",
+                        json=payload, timeout=60,
+                    )
+                    r.raise_for_status()
+                    raw = r.json()["message"]["content"]
+                raw = _re_pb.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=_re_pb.IGNORECASE)
+                raw = _re_pb.sub(r"\s*```$", "", raw.strip())
+                return _json.loads(raw)
+
+            _set_live_operator(active=True, mode="chat", phase="execute",
+                               title="Creating playbooks…", detail=body.message[:120],
+                               workspace_id=body.project_id, preserve_started=True)
+
+            pb_data = await asyncio.to_thread(_extract_playbooks, body.message)
+            if not isinstance(pb_data, list):
+                pb_data = [pb_data]
+
+            created_pb = []
+            async with devdb.get_db() as _pb_db:
+                for pb in pb_data:
+                    if not isinstance(pb, dict) or not pb.get("title"):
+                        continue
+                    pid = await devdb.save_prompt(
+                        _pb_db,
+                        pb.get("project_id"),
+                        pb["title"].strip(),
+                        pb.get("content", "").strip(),
+                        pb.get("tags", ""),
+                    )
+                    await devdb.log_event(_pb_db, "prompt_saved", f"Playbook created via chat: {pb['title'].strip()}", project_id=pb.get("project_id"))
+                    created_pb.append({"id": pid, **pb})
+
+            if created_pb:
+                reply_lines = [f"📋 **{len(created_pb)} playbook(s) saved:**\n"]
+                for c in created_pb:
+                    reply_lines.append(f"📝 **{c['title']}**")
+                    if c.get("tags"):
+                        reply_lines.append(f"   Tags: {c['tags']}")
+                    if c.get("content"):
+                        preview = c['content'][:200].replace('\n', ' ')
+                        reply_lines.append(f"   {preview}{'…' if len(c.get('content','')) > 200 else ''}")
+                    proj_name = _proj_names_pb.get(str(c.get("project_id")), "")
+                    if proj_name:
+                        reply_lines.append(f"   Workspace: {proj_name}")
+                reply_lines.append("\nView them in the **Playbooks** tab.")
+                reply_pb = "\n".join(reply_lines)
+
+                _set_live_operator(active=False, mode="chat", phase="verify",
+                                   title="Playbooks saved", detail=f"{len(created_pb)} playbook(s)",
+                                   summary=reply_pb[:180], workspace_id=body.project_id)
+
+                async with devdb.get_db() as _pb_db2:
+                    stored_user_msg = _stored_message_with_resources(body.message, resource_bundle["resources"])
+                    await devdb.save_message(_pb_db2, "user", stored_user_msg, project_id=body.project_id)
+                    await devdb.save_message(_pb_db2, "assistant", reply_pb, project_id=body.project_id, tokens=0)
+
+                async def _playbook_stream():
+                    yield {"data": _json.dumps({"chunk": reply_pb})}
+                    yield {"data": _json.dumps({"done": True, "tokens": 0})}
+                return EventSourceResponse(_playbook_stream())
+        except Exception as _pb_err:
+            import traceback as _tb_pb
+            _tb_pb.print_exc()
+            pass
+    # ── end Playbook intent interception (streaming) ─────────────────────
 
     if backend != "ollama":
         # Fall back to non-streaming for API/CLI — emit single SSE event

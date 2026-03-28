@@ -589,6 +589,8 @@ function axonChatMixin() {
         this.rememberOperatorOutcome(mode, this.chatMessages[idx]);
         // Detect mission creation in response and trigger notification
         this._checkMissionNotification(this.chatMessages[idx].content);
+        // Detect playbook creation in response and trigger notification
+        this._checkPlaybookNotification(this.chatMessages[idx].content);
       }
       this.clearLiveOperator(this.liveOperator.phase === 'recover' ? 4200 : 1400);
     },
@@ -635,6 +637,31 @@ function axonChatMixin() {
         // Refresh the tasks list so Missions tab is up to date
         if (typeof this.loadTasks === 'function') {
           this.loadTasks();
+        }
+      }
+    },
+
+    // ── Detect playbook creation in AI response and trigger notification ──
+    _checkPlaybookNotification(content) {
+      if (!content) return;
+      const match = content.match(/📋\s*\*?\*?(\d+)\s*playbook/i);
+      if (match) {
+        const count = parseInt(match[1], 10) || 1;
+        const titleMatches = [...content.matchAll(/📝\s*\*?\*?([^*\n]+?)\*?\*?\s*$/gm)];
+        const titles = titleMatches.map(m => m[1].trim()).filter(Boolean);
+        if (typeof this.showStickyNotification === 'function') {
+          this.showStickyNotification({
+            type: 'success',
+            title: `${count} Playbook${count > 1 ? 's' : ''} Saved`,
+            body: titles.length ? titles.join(', ') : 'New playbooks created from chat',
+            icon: '📋',
+            duration: 8000,
+            action: { label: 'View Playbooks', handler: () => { this.tab = 'prompts'; } },
+          });
+        }
+        // Refresh prompts list
+        if (typeof this.loadPrompts === 'function') {
+          this.loadPrompts();
         }
       }
     },

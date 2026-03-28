@@ -151,22 +151,32 @@ function axonNotificationsMixin() {
     },
 
     // ── Browser notification (OS-level) ────────────────────────────
+    _notifPermissionGranted: false,
+
+    async requestNotificationPermission() {
+      if (!('Notification' in window)) return false;
+      if (Notification.permission === 'granted') {
+        this._notifPermissionGranted = true;
+        return true;
+      }
+      if (Notification.permission === 'denied') return false;
+      const result = await Notification.requestPermission();
+      this._notifPermissionGranted = result === 'granted';
+      return this._notifPermissionGranted;
+    },
+
     async _showBrowserNotification(title, body) {
       if (!('Notification' in window)) return;
-      if (Notification.permission === 'default') {
-        await Notification.requestPermission();
-      }
-      if (Notification.permission === 'granted') {
-        try {
-          new Notification(title, {
-            body: body,
-            icon: '/icons/icon-192.png',
-            badge: '/icons/icon-192.png',
-            tag: 'axon-mission',
-            renotify: true,
-          });
-        } catch(e) { /* SW required in some browsers */ }
-      }
+      if (Notification.permission !== 'granted') return;
+      try {
+        new Notification(title, {
+          body: body,
+          icon: '/icons/icon-192.png',
+          badge: '/icons/icon-192.png',
+          tag: 'axon-notif',
+          renotify: true,
+        });
+      } catch(e) { /* SW required in some browsers */ }
     },
 
     // ── Periodic mission reminder check ────────────────────────────
@@ -180,6 +190,86 @@ function axonNotificationsMixin() {
         if (urgent.length > 0) {
           this.notifyMissionReminder(urgent.length);
         }
+      }, 30 * 60 * 1000);
+    },
+
+    // ── Daily Digest ───────────────────────────────────────────────
+    _dailyDigestKey: 'axon_last_daily_digest',
+
+    async notifyDailyDigest() {
+      try {
+        const tasks = this.tasks || [];
+        const open = tasks.filter(t => t.status !== 'done');
+        const urgent = open.filter(t => t.priority === 'urgent' || t.priority === 'high');
+        const overdue = open.filter(t => {
+          if (!t.due_date) return false;
+          return new Date(t.due_date) < new Date();
+        });
+        const doneToday = tasks.filter(t => {
+          if (t.status !== 'done' || !t.updated_at) return false;
+          const d = new Date(t.updated_at);
+          const now = new Date();
+          return d.toDateString() === now.toDateString();
+        });
+
+        const lines = [];
+        if (overdue.length) lines.push(`🔴 ${overdue.length} overdue`);
+        if (urgent.length) lines.push(`🟠 ${urgent.length} urgent/high priority`);
+        lines.push(`📌 ${open.length} open mission${open.length !== 1 ? 's' : ''}`);
+        if (doneToday.length) lines.push(`✅ ${doneToday.length} completed today`);
+
+        this.showStickyNotification({
+          title: 'Daily Digest',
+          body: lines.join('  •  '),
+          type: 'info',
+          icon: '📊',
+          duration: 0,
+          sound: true,
+          action: { label: 'View Missions', tab: 'tasks' },
+        });
+
+        localStorage.setItem(this._dailyDigestKey, new Date().toDateString());
+      } catch(e) { /* digest failed silently */ }
+    },
+
+    _startDailyDigestCheck() {
+      const check = () => {
+        const last = localStorage.getItem(this._dailyDigestKey);
+        const today = new Date().toDateString();
+        if (last !== today) {
+          this.notifyDailyDigest();
+        }
+      };
+      // Check on boot after a slight delay (let tasks load first)
+      setTimeout(check, 5000);
+      // Then check every hour in case app stays open across midnight
+      setInterval(check, 60 * 60 * 1000);
+    },
+
+    // ── Inactivity nudge ───────────────────────────────────────────
+    _lastActivityTime: Date.now(),
+
+    _trackActivity() {
+      this._lastActivityTime = Date.now();
+    },
+
+    _startInactivityNudge() {
+      // If user has been idle for 2 hours with open tasks, nudge
+      setInterval(() => {
+        const idleMs = Date.now() - this._lastActivityTime;
+        if (idleMs < 2 * 60 * 60 * 1000) return;
+        const tasks = this.tasks || [];
+        const open = tasks.filter(t => t.status !== 'done');
+        if (open.length === 0) return;
+        this.showStickyNotification({
+          title: 'Still there?',
+          body: `You have ${open.length} open mission${open.length !== 1 ? 's' : ''} waiting.`,
+          type: 'info',
+          icon: '👋',
+          duration: 20000,
+          sound: false,
+        });
+        this._lastActivityTime = Date.now(); // Reset so we don't spam
       }, 30 * 60 * 1000);
     },
 

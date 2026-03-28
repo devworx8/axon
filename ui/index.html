@@ -3215,6 +3215,25 @@
             </div>
           </div>
 
+          <!-- Notifications -->
+          <div class="border-t border-slate-800 pt-4 space-y-3">
+            <div class="text-[11px] uppercase tracking-[0.24em] text-slate-500 mb-2">Notifications</div>
+            <div class="flex items-center gap-3 flex-wrap">
+              <button @click="requestNotificationPermission().then(ok => showToast(ok ? 'Notifications enabled ✓' : 'Permission denied'))"
+                      class="px-4 py-2 border rounded-xl text-xs font-medium transition"
+                      :class="'Notification' in window && Notification.permission === 'granted'
+                        ? 'border-emerald-500/40 bg-emerald-600/10 text-emerald-300'
+                        : 'border-slate-700 text-slate-400 hover:border-blue-500 hover:text-blue-300'">
+                <span x-text="'Notification' in window && Notification.permission === 'granted' ? '🔔 Notifications Enabled' : '🔕 Enable Notifications'"></span>
+              </button>
+              <label class="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+                <input type="checkbox" x-model="_notifSoundEnabled"
+                       class="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500/30" />
+                Sound effects
+              </label>
+            </div>
+          </div>
+
           <button @click="saveSettings()" :disabled="settingsSaving"
                   class="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-medium rounded-xl transition">
             <span x-text="settingsSaving ? 'Saving...' : 'Save runtime settings'"></span>
@@ -5571,10 +5590,12 @@ function devbrain() {
       await this.loadProjects();
       this.loadTasks();
       this._startMissionReminders();
-      // Request notification permission early
-      if ('Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission();
-      }
+      this._startDailyDigestCheck();
+      this._startInactivityNudge();
+      // Track user activity for inactivity nudge
+      ['click', 'keydown', 'scroll'].forEach(evt =>
+        document.addEventListener(evt, () => this._trackActivity && this._trackActivity(), { passive: true })
+      );
       this.loadLatestDigest();
       await this.loadRuntimeStatus();
       this.connectLiveFeed();
