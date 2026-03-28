@@ -117,8 +117,12 @@ function axonResourcesMixin() {
 
     async loadPrompts() {
       try {
-        this.prompts = await this.api('GET', '/api/prompts');
-      } catch(e) { this.showToast('Failed to load playbooks'); }
+        const result = await this.api('GET', '/api/prompts');
+        this.prompts = result;
+      } catch(e) {
+        console.error('[Axon] loadPrompts() error:', e);
+        this.showToast('Failed to load playbooks');
+      }
     },
 
     async savePrompt() {
@@ -160,7 +164,8 @@ function axonResourcesMixin() {
 
     async copyPrompt(pr) {
       await navigator.clipboard.writeText(pr.content);
-      this.api('GET', `/api/prompts`); // increment usage via side effect
+      this.api('POST', `/api/prompts/${pr.id}/use`);
+      pr.used_count = (pr.used_count || 0) + 1;
       this.showToast('Copied to clipboard');
     },
 
@@ -170,6 +175,8 @@ function axonResourcesMixin() {
       }
       this.chatInput = pr.content;
       this.activeTab = 'chat';
+      this.api('POST', `/api/prompts/${pr.id}/use`);
+      pr.used_count = (pr.used_count || 0) + 1;
       this.showToast(this.promptIsComposerPreset(pr) ? 'Preset loaded into Console' : 'Playbook sent to Console');
     },
 

@@ -653,6 +653,11 @@ import secrets as _secrets
 _auth_sessions: dict[str, datetime] = {}
 _AUTH_SESSION_HOURS = 72  # sessions last 3 days
 
+# Rate-limit login attempts: { ip_str: (fail_count, last_attempt_time) }
+_login_attempts: dict[str, tuple[int, float]] = {}
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_LOCKOUT_SECONDS = 300  # 5-minute lockout after 5 failures
+
 
 def _extract_session_token(request: Request) -> str:
     return (
@@ -691,7 +696,7 @@ def _valid_session(token: str) -> bool:
 
 # Paths that don't require auth
 _AUTH_EXEMPT = {"/", "/sw.js", "/manifest.json", "/manual", "/manual.html",
-                "/api/health", "/api/tunnel/status", "/api/tunnel/start", "/api/tunnel/stop"}
+                "/api/health", "/api/tunnel/status"}
 _AUTH_EXEMPT_PREFIXES = ("/api/auth/", "/icons/", "/js/", "/styles.css")
 
 @app.middleware("http")
@@ -748,14 +753,21 @@ async def auth_setup(body: PinSetup):
     return {"status": "ok", "token": token}
 
 @app.post("/api/auth/login")
-async def auth_login(body: PinLogin):
+async def auth_login(body: PinLogin, request: Request):
     """Verify PIN and return a session token."""
+    import time as _time_mod
+    client_ip = request.client.host if request.client else "unknown"
+    fails, last_t = _login_attempts.get(client_ip, (0, 0.0))
+    if fails >= _LOGIN_MAX_ATTEMPTS and (_time_mod.time() - last_t) < _LOGIN_LOCKOUT_SECONDS:
+        raise HTTPException(429, f"Too many failed attempts. Try again in {int(_LOGIN_LOCKOUT_SECONDS - (_time_mod.time() - last_t))}s.")
     async with devdb.get_db() as conn:
         pin_hash = await devdb.get_setting(conn, "auth_pin_hash")
     if not pin_hash:
         raise HTTPException(400, "No PIN set — use /api/auth/setup first")
     if _hash_pin(body.pin.strip()) != pin_hash:
+        _login_attempts[client_ip] = (fails + 1, _time_mod.time())
         raise HTTPException(401, "Wrong PIN")
+    _login_attempts.pop(client_ip, None)
     token = _create_session()
     return {"status": "ok", "token": token}
 
@@ -986,7 +998,8 @@ class PromptCreate(BaseModel):
 async def list_prompts(project_id: Optional[int] = None):
     async with devdb.get_db() as conn:
         rows = await devdb.get_prompts(conn, project_id=project_id)
-        return [_serialize_prompt(r) for r in rows]
+        result = [_serialize_prompt(r) for r in rows]
+        return result
 
 
 @app.post("/api/prompts")
@@ -1041,6 +1054,9 @@ async def update_prompt(prompt_id: int, body: PromptUpdate):
 @app.post("/api/prompts/{prompt_id}/pin")
 async def toggle_pin(prompt_id: int):
     async with devdb.get_db() as conn:
+        cur = await conn.execute("SELECT id FROM prompts WHERE id = ?", (prompt_id,))
+        if not await cur.fetchone():
+            raise HTTPException(404, "Prompt not found")
         await conn.execute(
             "UPDATE prompts SET pinned = CASE WHEN pinned = 1 THEN 0 ELSE 1 END, "
             "updated_at = datetime('now') WHERE id = ?",
@@ -1050,6 +1066,13 @@ async def toggle_pin(prompt_id: int):
         cur = await conn.execute("SELECT pinned FROM prompts WHERE id = ?", (prompt_id,))
         row = await cur.fetchone()
         return {"pinned": bool(row["pinned"])}
+
+
+@app.post("/api/prompts/{prompt_id}/use")
+async def use_prompt(prompt_id: int):
+    async with devdb.get_db() as conn:
+        await devdb.increment_prompt_usage(conn, prompt_id)
+        return {"ok": True}
 
 
 class EnhanceRequest(BaseModel):
@@ -3051,8 +3074,8 @@ async def agent_endpoint(body: AgentRequest, request: Request):
             _agent_api_base = _agent_api_cfg.get("api_base_url", "https://api.deepseek.com/")
             _agent_api_model = _agent_api_cfg.get("api_model", "deepseek-chat")
             _agent_api_provider = _agent_api_cfg.get("provider_id", "api")
-            # Use role-specific model for code tasks
-            _agent_role = _local_role_for_composer(composer_options)
+            # Use role-specific model for code/reasoning tasks
+            _agent_role = _local_role_for_composer(composer_options, agent_request=True)
             _agent_role_map = brain.API_MODEL_BY_ROLE.get(_agent_api_provider, {})
             if _agent_role in _agent_role_map:
                 _agent_api_model = _agent_role_map[_agent_role]
@@ -4780,6 +4803,22 @@ async def _terminal_execute_request(session_id: int, body: TerminalCommandBody, 
         cwd = await _resolve_terminal_cwd(conn, session_row, body.cwd)
         timeout_seconds = _terminal_timeout_seconds(settings, body.timeout_seconds)
 
+        # Block dangerous commands regardless of mode
+        if _command_is_blocked(command):
+            await devdb.add_terminal_event(
+                conn,
+                session_id=session_id,
+                event_type="status",
+                content=f"Blocked dangerous command: {command}",
+            )
+            return {
+                "status": "blocked",
+                "mode": mode,
+                "command": command,
+                "cwd": str(cwd),
+                "message": "This command matches a blocked pattern and cannot be executed.",
+            }
+
         if mode == "simulation":
             await devdb.update_terminal_session(conn, session_id, mode=mode, cwd=str(cwd), status="idle", pending_command="")
             await devdb.add_terminal_event(
@@ -5679,7 +5718,7 @@ async def serve_styles():
     css_path = UI_DIR / "styles.css"
     if not css_path.exists():
         return Response("/* not found */", media_type="text/css", status_code=404)
-    return FileResponse(css_path, media_type="text/css", headers={"Cache-Control": "public, max-age=60"})
+    return FileResponse(css_path, media_type="text/css", headers={"Cache-Control": "no-cache"})
 
 @app.get("/js/{filename:path}")
 async def serve_js(filename: str):
@@ -5689,7 +5728,7 @@ async def serve_js(filename: str):
     js_path = UI_DIR / "js" / filename
     if not js_path.exists():
         return Response("// not found", media_type="application/javascript", status_code=404)
-    return FileResponse(js_path, media_type="application/javascript", headers={"Cache-Control": "public, max-age=60"})
+    return FileResponse(js_path, media_type="application/javascript", headers={"Cache-Control": "no-cache"})
 
 @app.get("/icons/{filename}")
 async def serve_icon(filename: str):

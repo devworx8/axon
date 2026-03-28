@@ -160,7 +160,7 @@ function axonTasksMixin() {
       return this.researchPacks || [];
     },
 
-    filteredMemoryItems() {
+    get filteredMemoryItems() {
       const q = (this.memorySearch || '').toLowerCase().trim();
       const layer = (this.memoryLayerFilter || '').toLowerCase();
       const trust = (this.memoryTrustFilter || '').toLowerCase();

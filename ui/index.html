@@ -113,7 +113,7 @@
 </div>
 
 <!-- ── App Shell ─────────────────────────────────────────────────── -->
-<div x-show="authenticated" class="flex h-screen overflow-hidden">
+<div x-show="authenticated" x-cloak class="flex h-screen overflow-hidden">
 
   <!-- ── Sidebar — hidden on mobile, visible md+ ──────────────────── -->
   <aside class="hidden md:flex w-56 shrink-0 flex-col bg-slate-900 border-r border-slate-800">
@@ -2652,6 +2652,12 @@
           </div>
         </div>
 
+        <!-- No search results -->
+        <div x-show="!showAddPrompt && prompts.length > 0 && filteredPrompts.length === 0" class="text-center py-8">
+          <div class="text-3xl mb-2">🔍</div>
+          <div class="text-sm text-slate-400">No playbooks match "<span x-text="promptSearch"></span>"</div>
+        </div>
+
         <div class="grid gap-3">
           <template x-for="pr in filteredPrompts" :key="pr.id">
             <div class="bg-slate-900 border rounded-2xl p-4 transition cursor-pointer group"
@@ -4042,10 +4048,10 @@
 
           <!-- Filter result counter -->
           <div x-show="!memoryLoading && memoryItems.length > 0" class="text-[10px] text-slate-500 px-1">
-            Showing <span x-text="filteredMemoryItems().length"></span> of <span x-text="memoryItems.length"></span> items
+            Showing <span x-text="filteredMemoryItems.length"></span> of <span x-text="memoryItems.length"></span> items
           </div>
 
-          <div x-show="!memoryLoading && filteredMemoryItems().length === 0 && memoryItems.length > 0" class="rounded-2xl border border-dashed border-slate-800 px-4 py-10 text-center">
+          <div x-show="!memoryLoading && filteredMemoryItems.length === 0 && memoryItems.length > 0" class="rounded-2xl border border-dashed border-slate-800 px-4 py-10 text-center">
             <div class="text-4xl mb-3">🔍</div>
             <div class="text-sm text-slate-200">No memory items matched</div>
             <div class="mt-1 text-[11px] text-slate-500">Loosen the filters to see all <span x-text="memoryItems.length"></span> items.</div>
@@ -4058,7 +4064,7 @@
           </div>
 
           <div class="grid gap-3">
-            <template x-for="item in filteredMemoryItems()" :key="item.id">
+            <template x-for="item in filteredMemoryItems" :key="item.id">
               <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
                 <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div class="min-w-0">
@@ -5167,20 +5173,20 @@
 </div>
 
 <!-- ── Axon Modules ── -->
-<script src="/js/helpers.js?v=20260328"></script>
-<script src="/js/auth.js?v=20260328"></script>
-<script src="/js/dashboard.js?v=20260328"></script>
-<script src="/js/chat.js?v=20260328b"></script>
-<script src="/js/voice.js?v=20260328"></script>
-<script src="/js/settings.js?v=20260328"></script>
-<script src="/js/resources.js?v=20260328"></script>
-<script src="/js/projects.js?v=20260328"></script>
-<script src="/js/tasks.js?v=20260328c"></script>
-<script src="/js/notifications.js?v=20260328"></script>
-<script src="/js/mobile.js?v=20260328"></script>
-<script src="/js/vault.js?v=20260328"></script>
-<script src="/js/files.js?v=20260328"></script>
-<script src="/js/models.js?v=20260328"></script>
+<script src="/js/helpers.js?v=20260328e"></script>
+<script src="/js/auth.js?v=20260328e"></script>
+<script src="/js/dashboard.js?v=20260328e"></script>
+<script src="/js/chat.js?v=20260328e"></script>
+<script src="/js/voice.js?v=20260328e"></script>
+<script src="/js/settings.js?v=20260328e"></script>
+<script src="/js/resources.js?v=20260328e"></script>
+<script src="/js/projects.js?v=20260328e"></script>
+<script src="/js/tasks.js?v=20260328e"></script>
+<script src="/js/notifications.js?v=20260328e"></script>
+<script src="/js/mobile.js?v=20260328e"></script>
+<script src="/js/vault.js?v=20260328e"></script>
+<script src="/js/files.js?v=20260328e"></script>
+<script src="/js/models.js?v=20260328e"></script>
 
 <script>
 function devbrain() {
@@ -5714,7 +5720,7 @@ function devbrain() {
       this.$watch('activeTab', tab => {
         this.showMoreMenu = false;
         this.activeProjectMenu = null;
-        if (tab === 'chat') {
+        if (tab === 'chat' && !this.chatMessages.length) {
           this.loadChatHistory();
         }
       });
@@ -5783,9 +5789,10 @@ function devbrain() {
     },
   };
 
-  // Merge all module mixins into the state object
-  return Object.assign(
-    state,
+  // Merge all module mixins into the state object.
+  // Use defineProperties instead of Object.assign to preserve JS getters
+  // (Object.assign evaluates getters and copies the result as a dead value).
+  const mixins = [
     axonHelpersMixin(),
     axonAuthMixin(),
     axonDashboardMixin(),
@@ -5799,8 +5806,12 @@ function devbrain() {
     axonMobileMixin(),
     axonVaultMixin(),
     axonFilesMixin(),
-    axonModelsMixin()
-  );
+    axonModelsMixin(),
+  ];
+  for (const mixin of mixins) {
+    Object.defineProperties(state, Object.getOwnPropertyDescriptors(mixin));
+  }
+  return state;
 }
 // TODO(axon-compat): keep the legacy root function name until a dedicated migration pass removes old embeds safely.
 window.axon = devbrain;

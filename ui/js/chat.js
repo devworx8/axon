@@ -55,11 +55,12 @@ function axonChatMixin() {
     },
 
     scrollChat() {
-      this.$nextTick(() => {
+      if (this._scrollRaf) return;
+      this._scrollRaf = requestAnimationFrame(() => {
+        this._scrollRaf = null;
         const el = document.getElementById('chat-messages');
         if (!el) return;
         el.scrollTop = el.scrollHeight;
-        // Retry after a short delay in case the panel just became visible
         if (el.scrollHeight <= 0) {
           setTimeout(() => { el.scrollTop = el.scrollHeight; }, 150);
         }
