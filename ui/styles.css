@@ -109,8 +109,9 @@ button, [role="button"], a {
 }
 .prose-dark th { color: #f8fafc; font-weight: 600; }
 .prose-dark code { background: #1e293b; border-radius: 4px; padding: 1px 5px; font-size: 0.85em; color: #7dd3fc; }
-.prose-dark pre { background: #0f172a; border-radius: 8px; padding: 1rem; overflow-x: auto; margin: 0.5rem 0; }
-.prose-dark pre code { background: none; padding: 0; }
+.prose-dark pre { background: #0f172a; border-radius: 10px; padding: 1rem; overflow-x: auto; margin: 0.75rem 0; border: 1px solid rgba(51,65,85,0.5); position: relative; }
+.prose-dark pre code { background: none; padding: 0; color: #e2e8f0; font-size: 0.82em; }
+.prose-dark pre code.hljs { background: none; padding: 0; }
 
 /* ── Canvas ── */
 .canvas-shell {

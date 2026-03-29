@@ -47,6 +47,13 @@ function axonHelpersMixin() {
             }
             return;
           }
+          // Allow class on CODE/SPAN for syntax highlighting (hljs-*)
+          if (name === 'class' && (node.tagName === 'CODE' || node.tagName === 'SPAN')) {
+            // Only keep hljs-* and language-* classes
+            const safe = value.split(/\s+/).filter(c => /^(hljs|language-)/.test(c)).join(' ');
+            if (safe) { node.setAttribute('class', safe); } else { node.removeAttribute('class'); }
+            return;
+          }
           if (name !== 'href' && name !== 'colspan' && name !== 'rowspan') {
             node.removeAttribute(attr.name);
           }
@@ -59,11 +66,24 @@ function axonHelpersMixin() {
     renderMd(text) {
       if (!text || typeof marked === 'undefined') return text || '';
       if (!this._markdownConfigured) {
+        const renderer = new marked.Renderer();
+        renderer.code = function({ text: code, lang }) {
+          if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
+            const highlighted = hljs.highlight(code, { language: lang }).value;
+            return `<pre><code class="hljs language-${lang}">${highlighted}</code></pre>`;
+          }
+          if (typeof hljs !== 'undefined') {
+            const highlighted = hljs.highlightAuto(code).value;
+            return `<pre><code class="hljs">${highlighted}</code></pre>`;
+          }
+          return `<pre><code>${code}</code></pre>`;
+        };
         marked.setOptions({
           gfm: true,
           breaks: true,
           headerIds: false,
           mangle: false,
+          renderer,
         });
         this._markdownConfigured = true;
       }

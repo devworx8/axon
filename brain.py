@@ -1260,6 +1260,40 @@ def _direct_agent_action(
 def _build_react_system(context_block: str, project_name: Optional[str], tool_names: list[str]) -> str:
     """Build ReAct-style system prompt for the agent."""
     tool_list = "\n".join(f"- {n}" for n in tool_names)
+
+    # Self-improvement context when working on the Axon codebase
+    axon_ctx = ""
+    if project_name and ("axon" in project_name.lower() or "devbrain" in project_name.lower() or "dashpro" in project_name.lower()):
+        axon_ctx = """
+
+SELF-IMPROVEMENT MODE — You are working on your own codebase (Axon).
+Axon lives at ~/.devbrain/ and you can read, search, and modify your own source code.
+
+Architecture:
+  server.py    — FastAPI app (~5800 lines), all API routes, SSE streaming
+  brain.py     — AI orchestration, ReAct agent loop, tool execution, model routing
+  db.py        — SQLite schema + CRUD (aiosqlite), 20+ tables
+  scheduler.py — APScheduler background jobs (scans, digests, webhook queue)
+  integrations.py — GitHub CLI, Slack webhooks, generic webhook retry queue
+  vault.py     — AES-256-GCM encrypted secrets with TOTP
+  memory_engine.py — Memory layer (facts, preferences, project context)
+  scanner.py   — Project directory scanner
+  model_router.py — Multi-provider model selection
+  ui/index.html — SPA (Alpine.js + Tailwind), ~5900 lines
+  ui/js/       — chat.js, helpers.js, dashboard.js, settings.js, voice.js
+  ui/styles.css — Custom styles for prose, canvas, animations
+
+Key patterns:
+  - Routes use: async with devdb.get_db() as conn
+  - Agent tools: _TOOL_REGISTRY dict, AGENT_TOOL_DEFS list
+  - SSE events: {"type": "text|thinking|tool_call|tool_result|done|error"}
+  - DB: aiosqlite with row_factory, init_db() for schema migrations
+  - Venv: .venv/bin/python, deps in requirements.txt
+
+When asked to improve Axon, use read_file + search_code to understand the current code,
+then write_file to make changes. Test with shell_cmd: "cd ~/.devbrain && .venv/bin/python -c 'import ast; ast.parse(open(\"<file>\").read()); print(\"OK\")'".
+After changes, suggest the user restart Axon (axon restart) to apply."""
+
     return f"""You are Axon Agent — a local AI operator that can use tools to help developers.
 
 Available tools: {', '.join(tool_names)}
@@ -1282,6 +1316,7 @@ Rules:
 - Be concise in ANSWER — use markdown
 - Never make up file contents or command output
 - All paths must start with ~ or /home/{os.getenv('USER', 'edp')}
+{axon_ctx}
 {('Context: ' + context_block[:800]) if context_block else ''}
 {('Project: ' + project_name) if project_name else ''}"""
 
@@ -1674,8 +1709,9 @@ ESCALATION_BASE_URL = "https://api.deepseek.com/"
 ESCALATION_MODEL = "deepseek-chat"
 
 # Model overrides by role for API backends
+# deepseek-chat handles code well; only reasoning gets a distinct model
 API_MODEL_BY_ROLE: dict[str, dict[str, str]] = {
-    "deepseek": {"code": "deepseek-coder", "reasoning": "deepseek-reasoner"},
+    "deepseek": {"reasoning": "deepseek-reasoner"},
 }
 
 
