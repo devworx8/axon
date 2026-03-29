@@ -17,11 +17,7 @@ fi
 
 echo "→ Installing Python dependencies..."
 "$DEVBRAIN_DIR/.venv/bin/pip" install --quiet --upgrade pip 2>&1 | tail -1
-"$DEVBRAIN_DIR/.venv/bin/pip" install --quiet \
-     fastapi uvicorn aiosqlite anthropic apscheduler watchdog \
-     rich click httpx sse-starlette pydantic python-pptx qrcode \
-     Markdown pyotp cryptography bcrypt beautifulsoup4 lxml \
-     aiohttp Pillow 2>&1 | tail -3
+"$DEVBRAIN_DIR/.venv/bin/pip" install --quiet -r "$DEVBRAIN_DIR/requirements.txt" 2>&1 | tail -3
 
 # ── Make scripts executable ───────────────────────────────────────
 chmod +x "$DEVBRAIN_DIR/start.sh"

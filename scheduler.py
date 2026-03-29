@@ -201,6 +201,16 @@ def setup_scheduler(
         misfire_grace_time=300,
     )
 
+    # Process webhook retry queue every 45 seconds
+    from integrations import process_webhook_queue
+    sched.add_job(
+        process_webhook_queue,
+        trigger=IntervalTrigger(seconds=45),
+        id="webhook_queue",
+        replace_existing=True,
+        misfire_grace_time=30,
+    )
+
     return sched
 
 

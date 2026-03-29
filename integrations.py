@@ -239,9 +239,66 @@ async def fire_webhook(url: str, event: str, payload: dict, secret: str = "") ->
 
 async def fire_all_webhooks(webhook_urls_csv: str, event: str,
                              payload: dict, secret: str = "") -> None:
-    """Fire all configured webhook URLs for an event (fire-and-forget)."""
+    """Enqueue webhooks for reliable delivery with retry."""
+    import db as devdb
     urls = [u.strip() for u in webhook_urls_csv.split(",") if u.strip().startswith("http")]
-    await asyncio.gather(
-        *[fire_webhook(u, event, payload, secret) for u in urls],
-        return_exceptions=True,
-    )
+    if not urls:
+        return
+    payload_json = json.dumps({
+        "event": event,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "data": payload,
+    })
+    try:
+        async with devdb.get_db() as conn:
+            for url in urls:
+                await devdb.enqueue_webhook(conn, url, event, payload_json, secret)
+    except Exception:
+        # Fallback: fire-and-forget if DB unavailable
+        await asyncio.gather(
+            *[fire_webhook(u, event, payload, secret) for u in urls],
+            return_exceptions=True,
+        )
+
+
+async def process_webhook_queue() -> int:
+    """Process pending webhook jobs. Returns count of jobs processed.
+    Call this from the scheduler every 30–60 seconds."""
+    import db as devdb
+    processed = 0
+    try:
+        async with devdb.get_db() as conn:
+            jobs = await devdb.get_pending_webhooks(conn, limit=20)
+            for job in jobs:
+                job = dict(job)
+                url = job["webhook_url"]
+                headers = {"Content-Type": "application/json",
+                           "X-DevBrain-Event": job["event"]}
+                if job["secret"]:
+                    import hmac, hashlib
+                    sig = hmac.new(
+                        job["secret"].encode(), job["payload_json"].encode(),
+                        hashlib.sha256
+                    ).hexdigest()
+                    headers["X-DevBrain-Signature"] = f"sha256={sig}"
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(
+                            url, data=job["payload_json"], headers=headers,
+                            timeout=aiohttp.ClientTimeout(total=10)
+                        ) as resp:
+                            if resp.status < 300:
+                                await devdb.mark_webhook_sent(conn, job["id"])
+                            else:
+                                backoff = 30 * (2 ** job["attempt_count"])
+                                await devdb.mark_webhook_failed(
+                                    conn, job["id"],
+                                    f"HTTP {resp.status}", backoff)
+                except Exception as exc:
+                    backoff = 30 * (2 ** job["attempt_count"])
+                    await devdb.mark_webhook_failed(
+                        conn, job["id"], str(exc)[:200], backoff)
+                processed += 1
+    except Exception:
+        pass
+    return processed

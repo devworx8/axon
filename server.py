@@ -5506,6 +5506,104 @@ async def system_action_execute(body: SystemActionExecute, background_tasks: Bac
     raise HTTPException(400, "Unsupported system action")
 
 
+# ─── Backup — export / import ─────────────────────────────────────────────────
+
+@app.get("/api/backup/export")
+async def backup_export():
+    """Export all Axon data as a JSON snapshot (vault secrets excluded)."""
+    async with devdb.get_db() as conn:
+        projects = [dict(r) for r in await devdb.get_projects(conn)]
+        tasks = [dict(r) for r in await devdb.get_tasks(conn, status=None)]
+        prompts = [dict(r) for r in await devdb.get_prompts(conn)]
+        memory = [dict(r) for r in await devdb.list_memory_items(conn, limit=5000)]
+        resources = [dict(r) for r in await devdb.list_resources(conn, limit=5000)]
+        settings = await devdb.get_all_settings(conn)
+        chat = [dict(r) for r in await devdb.get_chat_history(conn, limit=10000)]
+
+    # Strip sensitive settings
+    for key in ("auth_pin_hash", "vault_key_hash"):
+        settings.pop(key, None)
+
+    snapshot = {
+        "version": 1,
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "projects": projects,
+        "tasks": tasks,
+        "prompts": prompts,
+        "memory_items": memory,
+        "resources_metadata": resources,
+        "settings": settings,
+        "chat_history": chat,
+    }
+    return JSONResponse(snapshot)
+
+
+@app.post("/api/backup/import")
+async def backup_import(request: Request):
+    """Import a JSON snapshot into Axon (additive — does not delete existing data)."""
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+    if not isinstance(data, dict) or "version" not in data:
+        raise HTTPException(400, "Missing version field — not a valid Axon backup")
+
+    counts: dict[str, int] = {}
+    async with devdb.get_db() as conn:
+        # Import tasks
+        for t in data.get("tasks", []):
+            try:
+                await conn.execute(
+                    """INSERT OR IGNORE INTO tasks
+                       (project_id, title, detail, status, priority, due_date)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (t.get("project_id", 1), t["title"], t.get("detail", ""),
+                     t.get("status", "open"), t.get("priority", "medium"),
+                     t.get("due_date")),
+                )
+            except Exception:
+                continue
+        counts["tasks"] = len(data.get("tasks", []))
+
+        # Import prompts
+        for p in data.get("prompts", []):
+            try:
+                await conn.execute(
+                    """INSERT OR IGNORE INTO prompts (project_id, label, body)
+                       VALUES (?, ?, ?)""",
+                    (p.get("project_id", 1), p["label"], p.get("body", "")),
+                )
+            except Exception:
+                continue
+        counts["prompts"] = len(data.get("prompts", []))
+
+        # Import memory items
+        for m in data.get("memory_items", []):
+            try:
+                await conn.execute(
+                    """INSERT OR IGNORE INTO memory_items
+                       (workspace_id, memory_key, summary, layer, source, metadata_json)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (m.get("workspace_id", 1), m.get("memory_key", ""),
+                     m.get("summary", ""), m.get("layer", "general"),
+                     m.get("source", "import"), m.get("metadata_json", "{}")),
+                )
+            except Exception:
+                continue
+        counts["memory_items"] = len(data.get("memory_items", []))
+
+        # Import settings (skip auth-related)
+        skip_keys = {"auth_pin_hash", "vault_key_hash"}
+        for key, val in data.get("settings", {}).items():
+            if key not in skip_keys:
+                await devdb.set_setting(conn, key, val)
+        counts["settings"] = len(data.get("settings", {}))
+
+        await conn.commit()
+
+    return {"status": "imported", "counts": counts}
+
+
 # ─── Health check ─────────────────────────────────────────────────────────────
 
 @app.get("/api/health")
