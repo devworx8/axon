@@ -1347,7 +1347,9 @@ Key patterns:
 
 When asked to improve Axon, use read_file + search_code to understand the current code,
 then write_file to make changes. Test with shell_cmd: "cd ~/.devbrain && .venv/bin/python -c 'import ast; ast.parse(open(\"<file>\").read()); print(\"OK\")'".
-After changes, suggest the user restart Axon (axon restart) to apply."""
+After changes, suggest the user restart Axon (axon restart) to apply.
+Never claim that a file was modified, patched, backed up, or verified unless you actually used write_file
+and received a successful tool result for that exact file path."""
 
     # Always include a brief self-awareness block so the model never hallucinates about its own capabilities
     self_awareness = f"""
@@ -1414,6 +1416,43 @@ def _sanitize_agent_text(text: str) -> str:
     return "\n".join(cleaned).strip()
 
 
+def _looks_like_unverified_edit_claim(text: str) -> bool:
+    """Detect model-written "I edited files" reports that were not backed by tools."""
+    sample = (text or "").strip()
+    if not sample:
+        return False
+    suspicious_markers = (
+        "# TASK:",
+        "# STATUS:",
+        "# CHANGES:",
+        "# METHOD:",
+        "# PROGRESS:",
+        "Files modified:",
+        "Changes made to ",
+        "Backup created",
+        "Do not restart server",
+        "implementation in place",
+        "Fix Applied",
+        "patch applied",
+        "commit when ready",
+    )
+    return any(marker.lower() in sample.lower() for marker in suspicious_markers)
+
+
+def _guard_unverified_edit_claim(text: str, wrote_files: bool) -> str:
+    """Prevent the model from narrating fake self-edits when no write tool ran."""
+    cleaned = _sanitize_agent_text(text)
+    if wrote_files or not _looks_like_unverified_edit_claim(cleaned):
+        return cleaned
+    return (
+        "Axon did not verify any real file edits in this run.\n\n"
+        "What happened instead: the model produced a work-log style answer without a successful "
+        "`write_file` tool action behind it.\n\n"
+        "To make real changes, Axon must first inspect the code with tools, then call `write_file`, "
+        "and only after that report the exact file path it changed."
+    )
+
+
 def _parse_react_action(text: str) -> tuple[str, dict] | None:
     """Parse ACTION/ARGS from ReAct-formatted text. Returns (tool_name, args) or None."""
     action_match = _re.search(r'ACTION:\s*(\w+)', text)
@@ -1464,6 +1503,7 @@ async def run_agent(
     active_tool_names = list(_TOOL_REGISTRY.keys()) if tools is None else [
         t for t in tools if t in _TOOL_REGISTRY
     ]
+    wrote_files = False
 
     use_api = bool(api_key and api_base_url)
 
@@ -1631,13 +1671,15 @@ async def run_agent(
 
             yield {"type": "tool_call", "name": tool_name, "args": tool_args}
             result = await asyncio.to_thread(_execute_tool, tool_name, tool_args)
+            if tool_name == "write_file" and not str(result).startswith("ERROR:"):
+                wrote_files = True
             yield {"type": "tool_result", "name": tool_name, "result": result[:2000]}
 
             messages.append({"role": "assistant", "content": full_text})
             messages.append({"role": "user", "content": f"Tool result for {tool_name}:\n{result[:2000]}\n\nContinue."})
 
         elif answer_match:
-            answer = _sanitize_agent_text(answer_match.group(1).strip())
+            answer = _guard_unverified_edit_claim(answer_match.group(1).strip(), wrote_files=wrote_files)
             if not answer or answer == "your response here":
                 yield {"type": "text", "chunk": "\n⚠️ Axon could not form a clean answer. Please retry the task."}
                 break
@@ -1645,8 +1687,9 @@ async def run_agent(
             break
         else:
             # No pattern found — emit as-is (final answer without ANSWER: prefix)
-            if clean_text:
-                yield {"type": "text", "chunk": clean_text}
+            guarded_text = _guard_unverified_edit_claim(clean_text, wrote_files=wrote_files)
+            if guarded_text:
+                yield {"type": "text", "chunk": guarded_text}
             else:
                 yield {"type": "text", "chunk": "\n⚠️ Axon produced an invalid tool response. Please retry the task."}
             break
