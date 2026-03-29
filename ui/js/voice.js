@@ -268,6 +268,8 @@ function axonVoiceMixin() {
 
     async startLocalVoiceCapture() {
       if (this.voice.recording && this.voice.mediaRecorder) {
+        clearTimeout(this._voiceRecordTimeout);
+        clearInterval(this._voiceSilenceInterval);
         this.voice.mediaRecorder.stop();
         return;
       }
@@ -287,11 +289,40 @@ function axonVoiceMixin() {
         this.voice.responseText = '';
         this.syncVoiceTranscript('');
         this.setVoiceState('listening');
+        // ── Auto-stop: max 30s recording timeout ──
+        this._voiceRecordTimeout = setTimeout(() => {
+          if (this.voice.mediaRecorder?.state === 'recording') {
+            this.voice.mediaRecorder.stop();
+          }
+        }, 30000);
+        // ── Auto-stop: silence detection (2s of silence after speech detected) ──
+        let speechDetected = false;
+        let silenceStart = 0;
+        const SILENCE_THRESHOLD = 0.06;
+        const SILENCE_DURATION = 2000;
+        this._voiceSilenceInterval = setInterval(() => {
+          const level = this.normalizedVoiceLevel();
+          if (level > SILENCE_THRESHOLD) {
+            speechDetected = true;
+            silenceStart = 0;
+          } else if (speechDetected) {
+            if (!silenceStart) silenceStart = Date.now();
+            else if (Date.now() - silenceStart > SILENCE_DURATION) {
+              clearInterval(this._voiceSilenceInterval);
+              clearTimeout(this._voiceRecordTimeout);
+              if (this.voice.mediaRecorder?.state === 'recording') {
+                this.voice.mediaRecorder.stop();
+              }
+            }
+          }
+        }, 150);
       };
       recorder.ondataavailable = (event) => {
         if (event.data?.size) this.voice.recordedChunks.push(event.data);
       };
       recorder.onerror = (event) => {
+        clearTimeout(this._voiceRecordTimeout);
+        clearInterval(this._voiceSilenceInterval);
         this.voice.recording = false;
         this.voiceActive = false;
         this.voice.mediaRecorder = null;
@@ -300,6 +331,8 @@ function axonVoiceMixin() {
         this.showToast(`Voice capture failed: ${event?.error?.message || 'recording error'}`);
       };
       recorder.onstop = async () => {
+        clearTimeout(this._voiceRecordTimeout);
+        clearInterval(this._voiceSilenceInterval);
         this.voice.recording = false;
         this.voiceActive = false;
         this.voice.mediaRecorder = null;

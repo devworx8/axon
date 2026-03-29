@@ -54,6 +54,7 @@ Pygments==2.19.2
 pyotp==2.9.0
 pypdf==6.9.2
 python-docx==1.2.0
+ptyprocess==0.7.0
 python-multipart==0.0.22
 python-pptx==1.0.2
 PyYAML==6.0.3
@@ -73,6 +74,7 @@ typer==0.24.1
 typing_extensions==4.15.0
 typing-inspection==0.4.2
 tzlocal==5.3.1
-uvicorn==0.42.0
+uvicorn[standard]==0.42.0
+websockets==16.0
 xlsxwriter==3.2.9
 yarl==1.23.0

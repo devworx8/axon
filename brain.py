@@ -518,8 +518,8 @@ _ALLOWED_CMDS = frozenset([
 ])
 
 
-def _tool_read_file(path: str, max_kb: int = 32) -> str:
-    """Read a file, sandboxed to home directory."""
+def _tool_read_file(path: str, max_kb: int = 512) -> str:
+    """Read a file, sandboxed to home directory. Reads up to 512 KB by default."""
     p = os.path.realpath(os.path.expanduser(path))
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory is not allowed."
@@ -529,7 +529,16 @@ def _tool_read_file(path: str, max_kb: int = 32) -> str:
         return f"ERROR: {p} is a directory — use list_dir."
     size = os.path.getsize(p)
     if size > max_kb * 1024:
-        return f"ERROR: File too large ({size // 1024}KB > {max_kb}KB limit). Use head/tail or search_code."
+        # For very large files, return the first 512 KB with a warning
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                content = f.read(max_kb * 1024)
+            return (
+                f"=== {p} ({size // 1024}KB — showing first {max_kb}KB) ===\n{content}\n"
+                f"\n[...file truncated at {max_kb}KB. Use search_code to find specific sections.]"
+            )
+        except PermissionError:
+            return f"ERROR: Permission denied: {p}"
     try:
         with open(p, encoding="utf-8", errors="replace") as f:
             content = f.read()
@@ -600,12 +609,13 @@ def _tool_git_status(path: str = "~") -> str:
 
 
 def _tool_search_code(pattern: str, path: str = "~", glob: str = "*.py *.ts *.tsx *.js *.jsx") -> str:
-    """Grep for a pattern in source files. Returns matching lines with context."""
+    """Grep for a pattern in source files. Returns matching lines with file:line context."""
     p = os.path.realpath(os.path.expanduser(path))
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory."
     includes = " ".join(f"--include={g}" for g in glob.split())
-    cmd = f"grep -rn --max-count=3 {includes} -l {shlex.quote(pattern)} {shlex.quote(p)}"
+    # -E: extended regex so | works as alternation; no -l so we get actual lines not just filenames
+    cmd = f"grep -rEn --max-count=5 {includes} {shlex.quote(pattern)} {shlex.quote(p)}"
     result = _tool_shell_cmd(cmd)
     return result[:3000] if len(result) > 3000 else result
 
@@ -1117,6 +1127,51 @@ def _is_general_planning_request(user_message: str) -> bool:
     return any(_contains_phrase(lower, term) for term in business_terms) and any(_contains_phrase(lower, term) for term in writing_terms)
 
 
+def _is_casual_conversation(user_message: str) -> bool:
+    """
+    Return True if the message is pure casual conversation that should get a
+    direct, natural reply — no tools, no ReAct, no project scan.
+    """
+    raw = (user_message or "").strip()
+    lower = raw.lower()
+    if not lower or len(lower) > 300:
+        return False
+
+    # Never treat messages with explicit action words as casual
+    action_signals = (
+        "run ", "execute ", "read ", "write ", "scan ", "search ", "find ",
+        "list ", "show me ", "check ", "open ", "create file", "git ",
+        "fix ", "refactor ", "analyse ", "analyze ", "deploy ", "build ",
+        "install ", "debug ", "test ", "review ", "explain the code",
+    )
+    if any(lower.startswith(s) or f" {s}" in lower for s in action_signals):
+        return False
+
+    # Greetings and openers
+    greetings = (
+        "hi", "hello", "hey", "howzit", "yo", "sup", "what's up", "whats up",
+        "good morning", "good afternoon", "good evening", "morning", "evening",
+    )
+    if any(lower == g or lower.startswith(g + " ") or lower.startswith(g + ",") for g in greetings):
+        return True
+
+    # Short check-in / status questions about Axon itself
+    about_self = (
+        "how are you", "how do you feel", "who are you", "what are you",
+        "what can you do", "what do you do", "tell me about yourself",
+        "are you ready", "you there", "you awake",
+    )
+    if any(s in lower for s in about_self):
+        return True
+
+    # Very short single-word or two-word messages with no clear command intent
+    words = lower.split()
+    if len(words) <= 2 and not any(s in lower for s in ("run", "git", "fix", "file", "scan", "list")):
+        return True
+
+    return False
+
+
 def _parse_list_dir_entries(result: str) -> list[tuple[str, str]]:
     """Parse _tool_list_dir output into (kind, name) pairs."""
     entries: list[tuple[str, str]] = []
@@ -1294,7 +1349,17 @@ When asked to improve Axon, use read_file + search_code to understand the curren
 then write_file to make changes. Test with shell_cmd: "cd ~/.devbrain && .venv/bin/python -c 'import ast; ast.parse(open(\"<file>\").read()); print(\"OK\")'".
 After changes, suggest the user restart Axon (axon restart) to apply."""
 
-    return f"""You are Axon Agent — a local AI operator that can use tools to help developers.
+    # Always include a brief self-awareness block so the model never hallucinates about its own capabilities
+    self_awareness = f"""
+## What you are
+You are Axon — an agentic AI copilot embedded in a local developer OS at ~/.devbrain/.
+Your THINKING blocks and tool calls (Working blocks) render live in the user's browser as you work.
+You are NOT limited in streaming. Do NOT tell the user you "can't show real-time output" — you can and do.
+You can read and modify your own source code. You are a partner, not a chatbot.
+Axon core files: server.py (FastAPI routes), brain.py (agent loop + tools), ui/index.html (SPA), ui/js/ (Alpine.js modules).
+"""
+
+    return f"""You are Axon Agent — an agentic AI copilot that uses tools to act on behalf of developers.
 
 Available tools: {', '.join(tool_names)}
 
@@ -1308,15 +1373,15 @@ ANSWER: your response here
 Rules:
 - ALWAYS use tools for: find, locate, search, where is, list, read, check, run, show me, open, what files, what is in, scan, look for, get, fetch — do NOT describe how the user could do it themselves.
 - Use tools when you need real data (file contents, git status, directory listings, search results, etc.)
-- If the user asks you to find/locate/search for ANYTHING on the filesystem — do it yourself with search_files or list_dir. Never tell the user to open Finder or File Explorer.
-- When the user asks to create/add/track a mission or task, use create_mission immediately. When asked to complete/update a mission, use update_mission. Use list_missions to check current missions.
+- If the user asks you to find/locate/search for ANYTHING on the filesystem — do it yourself. Never tell the user to open Finder or a terminal.
+- When the user asks to create/add/track a mission, use create_mission immediately. Use update_mission to complete/update. Use list_missions to check.
 - Do not give the user shell instructions for tasks you can complete with the available tools.
 - Only skip tools for pure creative writing, brainstorming, or math that requires NO local data.
 - After seeing tool results, either use another tool or give ANSWER
-- Be concise in ANSWER — use markdown
+- Be a partner in ANSWER — direct, warm, technically sharp. Use markdown. No unnecessary apologies or hedging.
 - Never make up file contents or command output
 - All paths must start with ~ or /home/{os.getenv('USER', 'edp')}
-{axon_ctx}
+{self_awareness}{axon_ctx}
 {('Context: ' + context_block[:800]) if context_block else ''}
 {('Project: ' + project_name) if project_name else ''}"""
 
@@ -1401,6 +1466,34 @@ async def run_agent(
     ]
 
     use_api = bool(api_key and api_base_url)
+
+    # ── Casual conversation bypass ─────────────────────────────────────────
+    # Greetings and short conversational messages get a direct human reply —
+    # no ReAct loop, no tools, no project scan.
+    if not force_tool_mode and _is_casual_conversation(user_message):
+        casual_system = (
+            "You are Axon — a sharp, friendly AI copilot embedded in the user's local developer OS.\n"
+            "The user is making casual conversation. Reply naturally and warmly, like a capable colleague.\n"
+            "Be brief (2-4 sentences max). Mention what you can help with if relevant, but keep it conversational.\n"
+            "Do NOT use tools, do NOT list files, do NOT run commands, do NOT produce reports."
+        )
+        msgs: list[dict] = [{"role": "system", "content": casual_system}]
+        msgs.extend(_filtered_general_history(history))
+        if use_api:
+            msgs.append({"role": "user", "content": user_message})
+            async for chunk in _stream_api_chat(
+                messages=msgs, api_key=api_key,
+                api_base_url=api_base_url, api_model=api_model, max_tokens=300,
+            ):
+                yield {"type": "text", "chunk": chunk}
+        else:
+            msgs.append({"role": "user", "content": user_message})
+            async for chunk in _stream_ollama_chat(
+                messages=msgs, model=model, ollama_url=ollama_url, max_tokens=300,
+            ):
+                yield {"type": "text", "chunk": chunk}
+        yield {"type": "done", "iterations": 0}
+        return
 
     if not force_tool_mode and _is_general_planning_request(user_message):
         system = (
@@ -1671,32 +1764,40 @@ async def _call_cli(prompt: str, system: str = "", cli_path: str = "") -> str:
 
 # ─── System Prompts ──────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are Axon, a local AI Operator for a software developer.
-You know everything about their active workspaces, missions, and saved playbooks.
-You help them stay focused, organised, and productive.
+SYSTEM_PROMPT = """You are Axon — a proactive AI copilot and operator running locally at ~/.devbrain.
 
-Your personality:
-- Direct and concise — no fluff, no padding
-- Proactively flag risks (stale workspaces, overdue missions, patterns)
-- South African developer context: Rands (R), local references OK
-- When asked about code, give concrete actionable answers
-- You remember the context of this conversation
+You are not a generic chatbot. You are a partner: technically sharp, direct, and always useful.
+Think like a senior engineer who knows the codebase, the missions, and the developer's goals.
+You live alongside the developer — you see what they're working on, you remember context, and you act.
 
-When giving advice:
-1. Be specific — mention actual project names, file paths, task titles
-2. Prioritise ruthlessly — what matters TODAY?
-3. Flag things that are quietly rotting (old commits, many TODOs)
-4. Celebrate wins — when something ships, say so
+## What you are
+- A full-stack AI operator with real-time tool access (files, shell, search, git, missions)
+- Your thinking and tool steps stream live in the Axon UI — the developer sees everything as it happens
+- You can read and improve your own source code (you live at ~/.devbrain/)
+- You know the developer's workspaces, active missions, saved playbooks, and vault secrets
 
-Format rules:
-- Use markdown for structure when it helps
-- Keep lists short (max 5 items unless explicitly asked)
-- Prefer bullet points over paragraphs for action items"""
+## How to behave
+- Warm but direct — no fluff, no corporate-speak, no unnecessary apologies
+- Be specific: mention actual project names, file paths, task titles, line numbers
+- If you can do something with a tool — do it. Never instruct the user to do what you can do yourself
+- Prioritise ruthlessly — what matters right now?
+- Proactively flag risk: stale repos, overdue missions, dangerous patterns
+- Celebrate when something ships — acknowledge the win
+- South African developer context: Rands (R), local references fine
 
-SYSTEM_PROMPT_OLLAMA = """You are Axon, a local AI Operator for a software developer.
-Be concise, direct, and practical. Use markdown when it helps.
-Focus on actionable advice. Mention specific project names, file paths, task titles when relevant.
-Keep responses under 400 words unless asked for more detail."""
+## Format
+- Markdown for structure; short lists (≤5 items) unless asked for more
+- Code blocks for any code, commands, file paths
+- Match response length to complexity — be brief for quick questions, thorough for deep ones"""
+
+SYSTEM_PROMPT_OLLAMA = """You are Axon — a local AI copilot for a software developer.
+Be like a senior engineer partner: direct, warm, technically sharp, and always useful.
+
+You are NOT a limited chatbot. Your thinking blocks and tool calls stream live in the Axon UI.
+Do NOT tell the user you "can't stream" or have limitations you don't have — you can see everything they see.
+
+Use real project names, file paths, and task titles. Be concise but complete. Use markdown.
+Keep responses focused — under 500 words unless depth is needed."""
 
 
 def _build_context_block(projects: list, tasks: list, prompts: list) -> str:

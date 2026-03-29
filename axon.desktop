@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Axon
+Comment=Axon AI Development Brain
+Exec=/home/edp/.devbrain/axon-launch.sh
+Icon=/home/edp/.devbrain/ui/icons/icon-512.png
+Terminal=false
+Type=Application
+Categories=Development;IDE;
+StartupWMClass=Axon
+StartupNotify=true

@@ -47,8 +47,18 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/styles/github-dark.min.css">
   <script defer src="https://cdn.jsdelivr.net/npm/microsoft-cognitiveservices-speech-sdk/distrib/browser/microsoft.cognitiveservices.speech.sdk.bundle-min.js"
           onload="window.dispatchEvent(new Event('axon-speech-sdk-ready'))"></script>
-  <link rel="stylesheet" href="/styles.css?v=20260328c">
-  <style>[x-cloak] { display: none !important; }</style>
+  <!-- xterm.js — interactive PTY terminal -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
+  <link rel="stylesheet" href="/styles.css?v=20260329a">
+  <style>
+    [x-cloak] { display: none !important; }
+    /* xterm overrides to fit Axon dark theme */
+    .xterm-viewport { border-radius: 0.5rem; }
+    .xterm { padding: 8px; }
+  </style>
   <script>
     tailwind.config = {
       theme: {
@@ -461,114 +471,163 @@
                 </section>
               </div>
 
-              <div class="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-                <section class="rounded-[28px] border border-slate-800 bg-slate-900/45 p-4 md:p-5">
-                  <div class="flex items-center justify-between gap-3">
-                    <div>
-                      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Recent Timeline</div>
-                      <div class="mt-2 text-lg font-semibold text-white">What just happened</div>
+              <!-- Recent Timeline + Runtime Signals — compact collapsible pair -->
+              <div class="grid gap-3 lg:grid-cols-2" x-data="{ tlOpen: false, rsOpen: false }">
+
+                <!-- Recent Timeline -->
+                <section class="rounded-2xl border border-slate-800 bg-slate-900/45 overflow-hidden">
+                  <div class="flex items-center gap-2 px-4 py-2.5">
+                    <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500 shrink-0">Timeline</span>
+                    <span class="text-slate-700 shrink-0">·</span>
+                    <!-- latest item preview -->
+                    <span class="text-[11px] text-slate-400 truncate flex-1"
+                          x-text="dashRecentActivity[0] ? (dashRecentActivity[0].event_type === 'scan' ? scanTriggerLabel(dashRecentActivity[0].summary) : (dashRecentActivity[0].summary || dashRecentActivity[0].event_type)) : 'No recent events'"></span>
+                    <span class="text-[10px] text-slate-600 shrink-0"
+                          x-text="dashRecentActivity[0] ? timeAgo(dashRecentActivity[0].created_at) : ''"></span>
+                    <div class="flex items-center gap-1 ml-1 shrink-0">
+                      <button @click="switchTab('activity')"
+                              class="rounded-lg border border-slate-700/60 bg-slate-800/60 px-2 py-0.5 text-[10px] text-slate-400 hover:text-slate-200 transition">All</button>
+                      <button @click="tlOpen = !tlOpen"
+                              class="w-6 h-6 flex items-center justify-center rounded-lg text-slate-600 hover:text-slate-300 hover:bg-slate-800 transition"
+                              :title="tlOpen ? 'Collapse' : 'Show history'">
+                        <svg class="w-3.5 h-3.5 transition-transform duration-200" :class="tlOpen ? 'rotate-180' : ''" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                      </button>
                     </div>
-                    <button @click="switchTab('activity')" class="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-[10px] text-slate-300 transition hover:border-slate-500">Open Timeline</button>
                   </div>
-                  <div class="mt-4 space-y-2.5" x-show="dashRecentActivity.length">
-                    <template x-for="a in dashRecentActivity" :key="a.id">
-                      <div class="flex items-center gap-3 rounded-2xl border border-slate-800 bg-slate-950/60 px-4 py-3">
-                        <span class="text-sm shrink-0" x-text="eventIcon(a.event_type)"></span>
-                        <div class="min-w-0 flex-1">
-                          <div class="truncate text-sm text-slate-100" x-text="a.event_type === 'scan' ? scanTriggerLabel(a.summary) : (a.summary || a.event_type)"></div>
-                          <div class="mt-1 text-[11px] text-slate-500">
-                            <span x-text="a.event_type === 'scan' ? (a.summary || 'Scan complete') : (a.project_name || 'General')"></span>
+                  <div x-show="tlOpen" x-collapse class="border-t border-slate-800/60">
+                    <div class="px-3 py-2 space-y-1.5 max-h-56 overflow-y-auto">
+                      <template x-for="a in dashRecentActivity" :key="a.id">
+                        <div class="flex items-center gap-2.5 rounded-xl border border-slate-800/80 bg-slate-950/50 px-3 py-2">
+                          <span class="text-sm shrink-0" x-text="eventIcon(a.event_type)"></span>
+                          <div class="min-w-0 flex-1">
+                            <div class="truncate text-[12px] text-slate-200"
+                                 x-text="a.event_type === 'scan' ? scanTriggerLabel(a.summary) : (a.summary || a.event_type)"></div>
+                            <div class="text-[10px] text-slate-600"
+                                 x-text="a.event_type === 'scan' ? (a.summary || 'Scan') : (a.project_name || 'General')"></div>
                           </div>
+                          <span class="shrink-0 text-[10px] text-slate-600" x-text="timeAgo(a.created_at)"></span>
                         </div>
-                        <span class="shrink-0 text-[10px] text-slate-500" x-text="timeAgo(a.created_at)"></span>
-                      </div>
-                    </template>
-                  </div>
-                  <div x-show="!dashRecentActivity.length" class="mt-4 rounded-2xl border border-dashed border-slate-800 bg-slate-950/60 px-4 py-5 text-sm text-slate-500">
-                    Timeline updates will appear here after scans, missions, resource work, or operator actions.
+                      </template>
+                      <div x-show="!dashRecentActivity.length" class="py-4 text-center text-[11px] text-slate-600">No recent activity</div>
+                    </div>
                   </div>
                 </section>
 
-                <section class="rounded-[28px] border border-slate-800 bg-slate-900/45 p-4 md:p-5">
-                  <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Runtime Signals</div>
-                  <div class="mt-2 text-lg font-semibold text-white">Connection and model posture</div>
-                  <div class="mt-4 flex flex-wrap gap-2">
-                    <template x-for="badge in runtimeProviderBadges()" :key="badge.label">
-                      <span class="rounded-full border px-2.5 py-1 text-[10px]"
-                            :class="runtimeProviderBadgeClass(badge.tone)"
-                            x-text="badge.label"></span>
-                    </template>
-                  </div>
-                  <div class="mt-4 grid gap-3 sm:grid-cols-2">
-                    <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
-                      <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Connection</div>
-                      <div class="mt-2 text-sm font-medium text-slate-100" x-text="connectionStatusBadges().map(item => item.label).join(' · ') || 'Local only'"></div>
-                      <div class="mt-1 text-[11px] text-slate-500" x-text="liveFeed.connected ? 'Live feed is connected.' : 'Live feed is idle until Axon starts work.'"></div>
+                <!-- Runtime Signals -->
+                <section class="rounded-2xl border border-slate-800 bg-slate-900/45 overflow-hidden">
+                  <div class="flex items-center gap-2 px-4 py-2.5">
+                    <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500 shrink-0">Runtime</span>
+                    <span class="text-slate-700 shrink-0">·</span>
+                    <!-- inline badges -->
+                    <div class="flex items-center gap-1.5 flex-1 min-w-0 overflow-hidden">
+                      <template x-for="badge in runtimeProviderBadges()" :key="badge.label">
+                        <span class="rounded-full border px-2 py-0.5 text-[9px] shrink-0"
+                              :class="runtimeProviderBadgeClass(badge.tone)"
+                              x-text="badge.label"></span>
+                      </template>
                     </div>
-                    <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
-                      <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Memory posture</div>
-                      <div class="mt-2 text-sm font-medium text-slate-100" x-text="runtimeStatus.memory_state || 'Ready'"></div>
-                      <div class="mt-1 text-[11px] text-slate-500" x-text="memoryOverviewText()"></div>
+                    <button @click="rsOpen = !rsOpen"
+                            class="w-6 h-6 flex items-center justify-center rounded-lg text-slate-600 hover:text-slate-300 hover:bg-slate-800 transition ml-1 shrink-0"
+                            :title="rsOpen ? 'Collapse' : 'Show details'">
+                      <svg class="w-3.5 h-3.5 transition-transform duration-200" :class="rsOpen ? 'rotate-180' : ''" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                  </div>
+                  <div x-show="rsOpen" x-collapse class="border-t border-slate-800/60">
+                    <div class="px-3 py-3 grid gap-2 sm:grid-cols-2">
+                      <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5">
+                        <div class="text-[10px] uppercase tracking-[0.16em] text-slate-600">Connection</div>
+                        <div class="mt-1 text-[12px] font-medium text-slate-200"
+                             x-text="connectionStatusBadges().map(i=>i.label).join(' · ') || 'Local only'"></div>
+                        <div class="mt-0.5 text-[10px] text-slate-600"
+                             x-text="liveFeed.connected ? 'Live feed connected' : 'Live feed idle'"></div>
+                      </div>
+                      <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5">
+                        <div class="text-[10px] uppercase tracking-[0.16em] text-slate-600">Memory</div>
+                        <div class="mt-1 text-[12px] font-medium text-slate-200" x-text="runtimeStatus.memory_state || 'Ready'"></div>
+                        <div class="mt-0.5 text-[10px] text-slate-600" x-text="memoryOverviewText()"></div>
+                      </div>
                     </div>
                   </div>
                 </section>
               </div>
 
-              <!-- ── Local Tools ─────────────────────────────── -->
-              <section class="rounded-[28px] border border-amber-500/15 bg-gradient-to-br from-amber-950/20 via-slate-900/60 to-slate-900/45 p-4 md:p-5">
-                <div class="flex items-center justify-between gap-3">
-                  <div>
-                    <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300/80">Local Tools</div>
-                    <div class="mt-1 text-base font-semibold text-white">Machine Access</div>
-                    <div class="mt-1 text-[11px] text-slate-400 max-w-lg">Axon can browse, read, and write files inside your home directory, run guarded terminal commands, and capture a live desktop preview — all within safe boundaries.</div>
-                  </div>
-                  <div class="hidden md:flex items-center gap-1.5 shrink-0">
-                    <span class="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[10px] text-emerald-300">Sandboxed</span>
-                    <span class="rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 text-[10px] text-amber-300">Approval mode</span>
+              <!-- ── Local Tools — compact collapsible ──────── -->
+              <section x-data="{ ltOpen: false }"
+                       class="rounded-2xl border border-amber-500/15 bg-slate-900/50 overflow-hidden">
+                <!-- Header row — always visible -->
+                <div class="flex items-center gap-2 px-4 py-2.5">
+                  <!-- Label + badges -->
+                  <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300/70 shrink-0">Local Tools</span>
+                  <span class="text-slate-700 shrink-0">·</span>
+                  <span class="text-[11px] font-medium text-slate-300 truncate">Machine Access</span>
+                  <span class="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[9px] text-emerald-400 shrink-0 hidden sm:inline">Sandboxed</span>
+                  <span class="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[9px] text-amber-400 shrink-0 hidden md:inline"
+                        x-text="(settingsForm.terminal_default_mode || 'read_only').replace(/_/g,' ')"></span>
+
+                  <!-- Quick actions row -->
+                  <div class="ml-auto flex items-center gap-1 shrink-0">
+                    <button @click="activeTab='chat'; toggleLocalToolsPanel()"
+                            class="flex items-center gap-1 rounded-lg border border-slate-700/60 bg-slate-800/60 px-2.5 py-1 text-[11px] text-slate-300 hover:border-amber-500/40 hover:text-amber-200 transition press-scale">
+                      🗂 Files
+                    </button>
+                    <button @click="activeTab='chat'; composerOptions.terminal_mode=true; if(!terminal.sessions.length) createTerminalSession()"
+                            class="flex items-center gap-1 rounded-lg border border-slate-700/60 bg-slate-800/60 px-2.5 py-1 text-[11px] text-slate-300 hover:border-amber-500/40 hover:text-amber-200 transition press-scale">
+                      ⌨ Shell
+                    </button>
+                    <button @click="runScan()"
+                            class="hidden md:flex items-center gap-1 rounded-lg border border-slate-700/60 bg-slate-800/60 px-2.5 py-1 text-[11px] text-slate-300 hover:border-blue-500/40 hover:text-blue-200 transition press-scale">
+                      🔍 Scan
+                    </button>
+                    <button @click="refreshDesktopPreview(true)"
+                            class="hidden lg:flex items-center gap-1 rounded-lg border border-slate-700/60 bg-slate-800/60 px-2.5 py-1 text-[11px] text-slate-300 hover:border-cyan-500/40 hover:text-cyan-200 transition press-scale">
+                      🖥 Preview
+                    </button>
+                    <!-- expand chevron -->
+                    <button @click="ltOpen = !ltOpen"
+                            class="ml-1 w-6 h-6 flex items-center justify-center rounded-lg text-slate-600 hover:text-slate-300 hover:bg-slate-800 transition"
+                            :title="ltOpen ? 'Collapse' : 'More options'">
+                      <svg class="w-3.5 h-3.5 transition-transform duration-200" :class="ltOpen ? 'rotate-180' : ''" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
                   </div>
                 </div>
-                <div class="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
-                  <button @click="activeTab = 'chat'; toggleLocalToolsPanel()"
-                          class="flex flex-col items-center gap-2 rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-3 transition hover:border-amber-500/30 hover:bg-amber-500/8 press-scale group">
-                    <span class="text-xl">🗂️</span>
-                    <span class="text-[11px] font-medium text-slate-300 group-hover:text-amber-200">Browse Files</span>
-                  </button>
-                  <button @click="activeTab = 'chat'; toggleLocalToolsPanel()"
-                          class="flex flex-col items-center gap-2 rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-3 transition hover:border-amber-500/30 hover:bg-amber-500/8 press-scale group">
-                    <span class="text-xl">📖</span>
-                    <span class="text-[11px] font-medium text-slate-300 group-hover:text-amber-200">Read File</span>
-                  </button>
-                  <button @click="activeTab = 'chat'; toggleLocalToolsPanel()"
-                          class="flex flex-col items-center gap-2 rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-3 transition hover:border-amber-500/30 hover:bg-amber-500/8 press-scale group">
-                    <span class="text-xl">✏️</span>
-                    <span class="text-[11px] font-medium text-slate-300 group-hover:text-amber-200">Write File</span>
-                  </button>
-                  <button @click="refreshDesktopPreview(true)"
-                          class="flex flex-col items-center gap-2 rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-3 transition hover:border-cyan-500/30 hover:bg-cyan-500/8 press-scale group">
-                    <span class="text-xl">🖥️</span>
-                    <span class="text-[11px] font-medium text-slate-300 group-hover:text-cyan-200">Desktop Preview</span>
-                  </button>
-                  <button @click="activeTab = 'chat'; composerOptions.terminal_mode = true"
-                          class="flex flex-col items-center gap-2 rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-3 transition hover:border-amber-500/30 hover:bg-amber-500/8 press-scale group">
-                    <span class="text-xl">⌨️</span>
-                    <span class="text-[11px] font-medium text-slate-300 group-hover:text-amber-200">Terminal</span>
-                  </button>
-                  <button @click="runScan()"
-                          class="flex flex-col items-center gap-2 rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-3 transition hover:border-blue-500/30 hover:bg-blue-500/8 press-scale group">
-                    <span class="text-xl">🔍</span>
-                    <span class="text-[11px] font-medium text-slate-300 group-hover:text-blue-200">Scan Workspace</span>
-                  </button>
-                  <button @click="activeTab = 'chat'"
-                          class="flex flex-col items-center gap-2 rounded-2xl border border-emerald-500/15 bg-emerald-500/8 px-3 py-3 transition hover:border-emerald-500/30 press-scale group col-span-2">
-                    <span class="text-xl">🔒</span>
-                    <div class="text-center">
-                      <div class="text-[11px] font-medium text-emerald-300">Safe Local Mode</div>
-                      <div class="text-[10px] text-slate-500" x-text="'Terminal: ' + (settingsForm.terminal_default_mode || 'read_only').replace(/_/g,' ')"></div>
-                    </div>
-                  </button>
-                </div>
-                <div class="mt-3 rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-[10px] text-slate-500">
-                  Sandboxed to your home directory. Write access requires explicit permission or approval mode. Terminal is <span class="text-amber-400/80" x-text="(settingsForm.terminal_default_mode || 'read_only').replace(/_/g,' ')"></span> by default.
+
+                <!-- Expanded details — collapsed by default -->
+                <div x-show="ltOpen" x-collapse class="border-t border-slate-800/60 px-4 py-3">
+                  <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                    <button @click="activeTab='chat'; toggleLocalToolsPanel(); ltOpen=false"
+                            class="flex flex-col items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/60 px-2 py-2.5 text-center transition hover:border-amber-500/30 hover:bg-amber-500/8 press-scale group">
+                      <span class="text-lg">🗂️</span>
+                      <span class="text-[10px] text-slate-400 group-hover:text-amber-200">Browse</span>
+                    </button>
+                    <button @click="activeTab='chat'; toggleLocalToolsPanel(); ltOpen=false"
+                            class="flex flex-col items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/60 px-2 py-2.5 text-center transition hover:border-amber-500/30 hover:bg-amber-500/8 press-scale group">
+                      <span class="text-lg">📖</span>
+                      <span class="text-[10px] text-slate-400 group-hover:text-amber-200">Read</span>
+                    </button>
+                    <button @click="activeTab='chat'; toggleLocalToolsPanel(); ltOpen=false"
+                            class="flex flex-col items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/60 px-2 py-2.5 text-center transition hover:border-amber-500/30 hover:bg-amber-500/8 press-scale group">
+                      <span class="text-lg">✏️</span>
+                      <span class="text-[10px] text-slate-400 group-hover:text-amber-200">Write</span>
+                    </button>
+                    <button @click="activeTab='chat'; composerOptions.terminal_mode=true; ltOpen=false"
+                            class="flex flex-col items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/60 px-2 py-2.5 text-center transition hover:border-amber-500/30 hover:bg-amber-500/8 press-scale group">
+                      <span class="text-lg">⌨️</span>
+                      <span class="text-[10px] text-slate-400 group-hover:text-amber-200">Terminal</span>
+                    </button>
+                    <button @click="runScan(); ltOpen=false"
+                            class="flex flex-col items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/60 px-2 py-2.5 text-center transition hover:border-blue-500/30 hover:bg-blue-500/8 press-scale group">
+                      <span class="text-lg">🔍</span>
+                      <span class="text-[10px] text-slate-400 group-hover:text-blue-200">Scan</span>
+                    </button>
+                    <button @click="refreshDesktopPreview(true); ltOpen=false"
+                            class="flex flex-col items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/60 px-2 py-2.5 text-center transition hover:border-cyan-500/30 hover:bg-cyan-500/8 press-scale group">
+                      <span class="text-lg">🖥️</span>
+                      <span class="text-[10px] text-slate-400 group-hover:text-cyan-200">Preview</span>
+                    </button>
+                  </div>
+                  <div class="mt-2.5 text-[10px] text-slate-600">
+                    Sandboxed to home directory. Terminal: <span class="text-amber-500/70" x-text="(settingsForm.terminal_default_mode || 'read_only').replace(/_/g,' ')"></span>
+                  </div>
                 </div>
               </section>
             </div>
@@ -721,7 +780,7 @@
     ════════════════════════════════════════════════════════════ -->
     <div x-show="activeTab === 'chat'" class="flex flex-col h-full">
       <!-- Console header — desktop only -->
-      <div class="hidden md:flex items-center justify-between px-4 py-2.5 border-b border-slate-800 bg-slate-950/70 backdrop-blur shrink-0 gap-3 desktop-header-glass">
+      <div class="hidden md:flex items-center justify-between px-4 py-2.5 border-b border-slate-800 bg-slate-950/70 backdrop-blur shrink-0 gap-3 desktop-header-glass relative z-20">
         <!-- Left: back + title -->
         <div class="flex items-center gap-2 min-w-0">
           <button x-show="chatProject" @click="activeTab = 'projects'"
@@ -743,28 +802,53 @@
               </span>
               <svg class="w-3.5 h-3.5 text-slate-500 group-hover:text-slate-300 transition flex-none" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
             </button>
-            <!-- Dropdown -->
+            <!-- Dropdown — shows all backends: Ollama + API providers + CLI -->
             <div x-show="chatModelOpen" @click.away="chatModelOpen=false"
                  x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 -translate-y-1" x-transition:enter-end="opacity-100 translate-y-0"
-                 class="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl z-50 min-w-[240px] py-1 overflow-hidden">
-              <div x-show="settingsForm.ai_backend === 'ollama'">
-                <div class="px-3 py-1.5 text-[10px] text-slate-500 uppercase tracking-wider border-b border-slate-800/80 flex items-center justify-between">
-                  <span>Ollama models</span>
-                  <button @click.stop="loadOllamaModels()" class="text-slate-600 hover:text-slate-400 transition">↻</button>
-                </div>
-                <template x-for="m in ollamaModels" :key="m.name">
-                  <button @click="selectedChatModel = m.name; settingsForm.ollama_model = m.name; settingsForm.code_model = m.name; api('POST', '/api/settings', {ollama_model: m.name, code_model: m.name}).catch(()=>{}); chatModelOpen=false"
-                          :class="activeChatModel() === m.name ? 'bg-blue-600/15 text-blue-300' : 'text-slate-300 hover:bg-slate-800/80'"
-                          class="w-full text-left px-3 py-2.5 text-sm flex items-center gap-2.5 transition">
-                    <div class="w-1.5 h-1.5 rounded-full shrink-0" :class="activeChatModel() === m.name ? 'bg-blue-400' : 'bg-slate-700'"></div>
-                    <span class="flex-1 truncate" x-text="m.name"></span>
-                    <span class="text-slate-500 text-xs shrink-0" x-text="m.size_gb + ' GB'"></span>
-                  </button>
-                </template>
-                <div x-show="ollamaModels.length === 0" class="px-3 py-3 text-xs text-slate-500 text-center">No models — Settings → Ollama</div>
+                 class="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl z-[200] min-w-[260px] py-1 overflow-hidden max-h-[420px] overflow-y-auto">
+
+              <!-- Ollama local models -->
+              <div class="px-3 py-1.5 text-[10px] text-slate-500 uppercase tracking-wider border-b border-slate-800/80 flex items-center justify-between sticky top-0 bg-slate-900 z-10">
+                <span>Local · Ollama</span>
+                <button @click.stop="loadOllamaModels()" class="text-slate-600 hover:text-slate-400 transition" title="Refresh">↻</button>
               </div>
-              <div x-show="settingsForm.ai_backend !== 'ollama'" class="px-4 py-3 text-xs text-slate-400 text-center">
-                Model selection requires the Ollama backend
+              <template x-for="m in ollamaModels" :key="m.name">
+                <button @click="settingsForm.ai_backend='ollama'; selectedChatModel=m.name; settingsForm.ollama_model=m.name; settingsForm.code_model=m.name; api('POST','/api/settings',{ai_backend:'ollama',ollama_model:m.name,code_model:m.name}).catch(()=>{}); chatModelOpen=false"
+                        :class="settingsForm.ai_backend==='ollama' && activeChatModel()===m.name ? 'bg-green-600/10 text-green-300' : 'text-slate-300 hover:bg-slate-800/60'"
+                        class="w-full text-left px-3 py-2 text-[13px] flex items-center gap-2.5 transition">
+                  <div class="w-1.5 h-1.5 rounded-full shrink-0" :class="settingsForm.ai_backend==='ollama' && activeChatModel()===m.name ? 'bg-green-400' : 'bg-slate-700'"></div>
+                  <span class="flex-1 truncate" x-text="m.name"></span>
+                  <span class="text-slate-600 text-[11px] shrink-0" x-text="m.size_gb + ' GB'"></span>
+                </button>
+              </template>
+              <div x-show="ollamaModels.length === 0" class="px-3 py-2 text-[11px] text-slate-600 italic">No local models — Settings → Ollama</div>
+
+              <!-- API providers -->
+              <template x-if="(runtimeStatus.api_providers || []).length">
+                <div>
+                  <div class="px-3 py-1.5 text-[10px] text-slate-500 uppercase tracking-wider border-y border-slate-800/80 mt-0.5 sticky top-[30px] bg-slate-900 z-10">Cloud · API</div>
+                  <template x-for="p in (runtimeStatus.api_providers || [])" :key="p.id">
+                    <button @click="settingsForm.ai_backend='api'; settingsForm.api_provider=p.id; api('POST','/api/settings',{ai_backend:'api',api_provider:p.id}).catch(()=>{}); chatModelOpen=false"
+                            :class="settingsForm.ai_backend==='api' && settingsForm.api_provider===p.id ? 'bg-blue-600/10 text-blue-300' : 'text-slate-300 hover:bg-slate-800/60'"
+                            class="w-full text-left px-3 py-2 text-[13px] flex items-center gap-2.5 transition">
+                      <div class="w-1.5 h-1.5 rounded-full shrink-0"
+                           :class="settingsForm.ai_backend==='api' && settingsForm.api_provider===p.id ? 'bg-blue-400' : (p.configured ? 'bg-slate-500' : 'bg-slate-800')"></div>
+                      <span class="flex-1 truncate" x-text="p.label"></span>
+                      <span class="text-[10px] shrink-0" :class="p.configured ? 'text-emerald-600' : 'text-slate-700'" x-text="p.configured ? '✓ key' : 'no key'"></span>
+                    </button>
+                  </template>
+                </div>
+              </template>
+
+              <!-- CLI agent -->
+              <div class="border-t border-slate-800/80 mt-0.5">
+                <button @click="settingsForm.ai_backend='cli'; api('POST','/api/settings',{ai_backend:'cli'}).catch(()=>{}); chatModelOpen=false"
+                        :class="settingsForm.ai_backend==='cli' ? 'bg-amber-600/10 text-amber-300' : 'text-slate-300 hover:bg-slate-800/60'"
+                        class="w-full text-left px-3 py-2 text-[13px] flex items-center gap-2.5 transition">
+                  <div class="w-1.5 h-1.5 rounded-full shrink-0" :class="settingsForm.ai_backend==='cli' ? 'bg-amber-400' : 'bg-slate-700'"></div>
+                  <span class="flex-1">CLI Agent</span>
+                  <span class="text-[10px] text-slate-600 shrink-0">local bridge</span>
+                </button>
               </div>
             </div>
           </div>
@@ -795,7 +879,7 @@
 
       <!-- Canvas: messages + input bar -->
       <div class="flex-1 flex flex-col min-w-0 min-h-0 relative" :class="{ 'agent-canvas-glow': agentMode && chatLoading }">
-      <div class="flex-1 overflow-y-auto page-content px-3 md:px-5 py-4 space-y-3" id="chat-messages">
+      <div class="flex-1 overflow-y-auto page-content px-3 md:px-5 py-4 space-y-3" id="chat-messages" @scroll.passive="onChatScroll($event)">
         <!-- Empty state -->
         <div x-show="chatMessages.length === 0" class="flex flex-col items-center justify-center h-full text-center px-4">
           <!-- Axon ORB -->
@@ -866,26 +950,31 @@
                 </template>
               </div>
 
-              <div x-show="msg.workingBlocks && msg.workingBlocks.length" class="mb-2 space-y-2">
+              <div x-show="msg.workingBlocks && msg.workingBlocks.length" class="mb-2 space-y-1.5">
                 <template x-for="block in (msg.workingBlocks || [])" :key="block.id">
-                  <div class="rounded-2xl border px-3 py-2.5"
-                       :class="block.status === 'running' ? 'border-amber-500/20 bg-amber-500/10' : 'border-slate-700/60 bg-slate-900/60'"
+                  <div class="rounded-xl border overflow-hidden"
+                       :class="block.status === 'running' ? 'border-amber-500/20' : 'border-slate-700/50'"
                        x-data="{ open: block.status === 'running' }"
                        x-effect="if (block.status === 'running') open = true">
-                    <div class="flex items-center gap-2 cursor-pointer select-none" @click="open = !open">
-                      <svg :class="open ? 'rotate-90' : ''" class="w-3 h-3 transition-transform duration-150 shrink-0"
-                           :class="block.status === 'running' ? 'text-amber-400' : 'text-emerald-400'"
+                    <!-- Header row -->
+                    <div class="flex items-center gap-2 px-3 py-2 cursor-pointer select-none"
+                         :class="block.status === 'running' ? 'bg-amber-950/40' : 'bg-slate-900/70'"
+                         @click="open = !open">
+                      <span class="w-1.5 h-1.5 rounded-full shrink-0 transition-colors"
+                            :class="block.status === 'running' ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'"></span>
+                      <span class="text-[11px] font-medium"
+                            :class="block.status === 'running' ? 'text-amber-100' : 'text-slate-300'"
+                            x-text="block.title"></span>
+                      <!-- Inline preview when collapsed -->
+                      <span x-show="!open" class="text-[10px] text-slate-500 font-mono truncate max-w-[200px]"
+                            x-text="toolPreview(block.name, block.args)"></span>
+                      <span class="ml-auto text-[10px] text-slate-600 shrink-0" x-text="block.updatedAt ? timeAgo(block.updatedAt) : ''"></span>
+                      <svg :class="open ? 'rotate-90' : ''" class="w-3 h-3 transition-transform duration-150 shrink-0 text-slate-600"
                            fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path d="M9 5l7 7-7 7"/></svg>
-                      <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.16em]"
-                            :class="block.status === 'running' ? 'border-amber-500/20 bg-amber-500/10 text-amber-200 animate-pulse' : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200'"
-                            x-text="block.status === 'running' ? 'Executing…' : 'Completed'"></span>
-                      <span class="text-[11px] font-medium text-slate-100" x-text="block.title"></span>
-                      <span class="ml-auto text-[10px] text-slate-500" x-text="block.updatedAt ? timeAgo(block.updatedAt) : ''"></span>
                     </div>
+                    <!-- Expanded body — explicit property refs ensure Alpine re-evaluates reactively -->
                     <div x-show="open" x-collapse>
-                      <div x-show="Object.keys(block.args || {}).length" class="mt-2 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 font-mono text-[10px] text-slate-400 break-all"
-                           x-text="JSON.stringify(block.args, null, 2)"></div>
-                      <div x-show="block.result" class="mt-2 text-[11px] leading-5 text-slate-400 whitespace-pre-wrap" x-text="block.result.slice(0, 500)"></div>
+                      <div x-html="renderToolBlock(block.name, block.args, block.result, block.status)"></div>
                     </div>
                   </div>
                 </template>
@@ -1064,27 +1153,51 @@
                 <span class="max-w-[100px] truncate" x-text="consoleRuntimeLabel()"></span>
                 <svg class="w-3 h-3 opacity-50" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
               </button>
+              <!-- Composer model picker — full tri-section: Ollama + API + CLI -->
               <div x-show="composerModelOpen" @click.away="composerModelOpen=false"
-                   x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 -translate-y-1"
-                   class="absolute bottom-full left-0 mb-1.5 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl z-50 min-w-[220px] py-1 overflow-hidden">
-                <div x-show="settingsForm.ai_backend === 'ollama'">
-                  <div class="px-3 py-1.5 text-[10px] text-slate-500 uppercase tracking-wider border-b border-slate-800/80 flex items-center justify-between">
-                    <span>Models</span>
-                    <button @click.stop="loadOllamaModels()" class="text-slate-600 hover:text-slate-400 transition">↻</button>
-                  </div>
-                  <template x-for="m in ollamaModels" :key="m.name">
-                    <button @click="selectedChatModel = m.name; settingsForm.ollama_model = m.name; settingsForm.code_model = m.name; api('POST', '/api/settings', {ollama_model: m.name, code_model: m.name}).catch(()=>{}); composerModelOpen=false"
-                            :class="activeChatModel() === m.name ? 'bg-blue-600/15 text-blue-300' : 'text-slate-300 hover:bg-slate-800/80'"
-                            class="w-full text-left px-3 py-2 text-xs flex items-center gap-2 transition">
-                      <div class="w-1.5 h-1.5 rounded-full shrink-0" :class="activeChatModel() === m.name ? 'bg-blue-400' : 'bg-slate-700'"></div>
-                      <span class="flex-1 truncate" x-text="m.name"></span>
-                      <span class="text-slate-500 text-[10px]" x-text="m.size_gb + 'GB'"></span>
-                    </button>
-                  </template>
-                  <div x-show="ollamaModels.length === 0" class="px-3 py-2.5 text-[11px] text-slate-500 text-center">No local models</div>
+                   x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 translate-y-1"
+                   x-transition:enter-end="opacity-100 translate-y-0"
+                   class="absolute bottom-full left-0 mb-1.5 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl z-[200] min-w-[260px] max-w-[300px] py-1 overflow-hidden max-h-[420px] overflow-y-auto">
+                <!-- Ollama local -->
+                <div class="px-3 py-1.5 text-[10px] text-slate-500 uppercase tracking-wider border-b border-slate-800/80 sticky top-0 bg-slate-900 flex items-center justify-between">
+                  <span>🖥 Local · Ollama</span>
+                  <button @click.stop="loadOllamaModels()" class="text-slate-600 hover:text-slate-400 transition" title="Refresh">↻</button>
                 </div>
-                <div x-show="settingsForm.ai_backend !== 'ollama'" class="px-3 py-2.5 text-[11px] text-slate-400 text-center">
-                  <span x-text="consoleRuntimeLabel()"></span>
+                <template x-for="m in ollamaModels" :key="m.name">
+                  <button @click="settingsForm.ai_backend='ollama'; selectedChatModel=m.name; settingsForm.ollama_model=m.name; settingsForm.code_model=m.name; api('POST','/api/settings',{ai_backend:'ollama',ollama_model:m.name,code_model:m.name}).catch(()=>{}); composerModelOpen=false"
+                          :class="settingsForm.ai_backend==='ollama' && activeChatModel()===m.name ? 'bg-green-600/10 text-green-300' : 'text-slate-300 hover:bg-slate-800/60'"
+                          class="w-full text-left px-3 py-2 text-[12px] flex items-center gap-2 transition">
+                    <div class="w-1.5 h-1.5 rounded-full shrink-0" :class="settingsForm.ai_backend==='ollama' && activeChatModel()===m.name ? 'bg-green-400' : 'bg-slate-700'"></div>
+                    <span class="flex-1 truncate" x-text="m.name"></span>
+                    <span class="text-slate-600 text-[10px] shrink-0" x-text="m.size_gb+'GB'"></span>
+                  </button>
+                </template>
+                <div x-show="ollamaModels.length===0" class="px-3 py-2 text-[11px] text-slate-600 italic">No local models</div>
+                <!-- API cloud providers -->
+                <template x-if="(runtimeStatus.api_providers||[]).length">
+                  <div>
+                    <div class="px-3 py-1.5 text-[10px] text-slate-500 uppercase tracking-wider border-y border-slate-800/80 mt-0.5 sticky top-[30px] bg-slate-900">☁ Cloud · API</div>
+                    <template x-for="p in (runtimeStatus.api_providers||[])" :key="p.id">
+                      <button @click="settingsForm.ai_backend='api'; settingsForm.api_provider=p.id; api('POST','/api/settings',{ai_backend:'api',api_provider:p.id}).catch(()=>{}); composerModelOpen=false"
+                              :class="settingsForm.ai_backend==='api' && settingsForm.api_provider===p.id ? 'bg-blue-600/10 text-blue-300' : 'text-slate-300 hover:bg-slate-800/60'"
+                              class="w-full text-left px-3 py-2 text-[12px] flex items-center gap-2 transition">
+                        <div class="w-1.5 h-1.5 rounded-full shrink-0"
+                             :class="settingsForm.ai_backend==='api' && settingsForm.api_provider===p.id ? 'bg-blue-400' : (p.configured ? 'bg-slate-500' : 'bg-slate-800')"></div>
+                        <span class="flex-1 truncate" x-text="p.label"></span>
+                        <span class="text-[10px] shrink-0" :class="p.configured ? 'text-emerald-600' : 'text-slate-700'" x-text="p.configured ? '✓' : '—'"></span>
+                      </button>
+                    </template>
+                  </div>
+                </template>
+                <!-- CLI agent -->
+                <div class="border-t border-slate-800/80 mt-0.5">
+                  <button @click="settingsForm.ai_backend='cli'; api('POST','/api/settings',{ai_backend:'cli'}).catch(()=>{}); composerModelOpen=false"
+                          :class="settingsForm.ai_backend==='cli' ? 'bg-amber-600/10 text-amber-300' : 'text-slate-300 hover:bg-slate-800/60'"
+                          class="w-full text-left px-3 py-2 text-[12px] flex items-center gap-2 transition">
+                    <div class="w-1.5 h-1.5 rounded-full shrink-0" :class="settingsForm.ai_backend==='cli' ? 'bg-amber-400' : 'bg-slate-700'"></div>
+                    <span class="flex-1">CLI Agent</span>
+                    <span class="text-[10px] text-slate-600">local bridge</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -1220,7 +1333,8 @@
                 <button @click="loadOllamaModels()" class="shrink-0 text-[10px] text-slate-500 hover:text-slate-200">↻</button>
               </div>
 
-              <div x-show="!usesOllamaBackend()" class="flex min-w-0 flex-1 items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900/70 px-2 py-1.5 md:flex-none md:min-w-[250px] md:gap-2 md:rounded-2xl md:px-2.5">
+              <!-- API provider selector -->
+              <div x-show="settingsForm.ai_backend === 'api'" class="flex min-w-0 flex-1 items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900/70 px-2 py-1.5 md:flex-none md:min-w-[250px] md:gap-2 md:rounded-2xl md:px-2.5">
                 <span class="text-[9px] md:text-[10px] uppercase tracking-[0.16em] text-slate-500">Provider</span>
                 <select x-model="settingsForm.api_provider" @change="saveSettingsQuiet()"
                         class="dark-select min-w-0 flex-1 rounded-lg border border-slate-800 px-2 py-1 text-[11px] focus:outline-none md:rounded-xl">
@@ -1228,6 +1342,16 @@
                     <option :value="p.id" x-text="p.label"></option>
                   </template>
                 </select>
+              </div>
+              <!-- CLI agent info -->
+              <div x-show="settingsForm.ai_backend === 'cli'" class="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-green-500/20 bg-green-500/8 px-2.5 py-1.5 md:flex-none md:rounded-2xl">
+                <svg class="w-3.5 h-3.5 text-green-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6.75h16v10.5H4z"/><path stroke-linecap="round" stroke-linejoin="round" d="m8 10 2 2-2 2m5 0h3"/></svg>
+                <div class="min-w-0 flex-1">
+                  <div class="text-[10px] font-medium text-green-300 truncate"
+                       x-text="(settingsForm.claude_cli_path || runtimeStatus.cli_binary || 'claude').split('/').pop()"></div>
+                  <div class="text-[9px] text-slate-500 truncate"
+                       x-text="runtimeStatus.cli_model || 'Default model (set in CLI config)'"></div>
+                </div>
               </div>
 
               <button x-show="chatInput.trim()" @click="clearChatInput()"
@@ -1257,28 +1381,6 @@
             <span class="rounded-full border border-blue-500/20 bg-blue-500/10 px-2.5 py-1 text-[10px] text-blue-200" x-text="selectedApiProviderLabel()"></span>
             <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-400" x-text="selectedApiProviderModel() || 'model pending'"></span>
             <span class="text-[10px] text-slate-500">External runtime is active for this console session.</span>
-          </div>
-
-          <div class="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2.5">
-            <div class="flex items-center gap-3">
-              <span class="inline-flex h-9 w-9 items-center justify-center rounded-2xl border"
-                    :class="providerIdentityTone(consoleProviderIdentity().providerId)">
-                <span class="w-4 h-4" x-html="providerIdentityIcon(consoleProviderIdentity().providerId)"></span>
-              </span>
-              <div class="min-w-0 flex-1">
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Provider</span>
-                  <span class="truncate text-sm font-medium text-slate-100" x-text="consoleProviderIdentity().providerLabel"></span>
-                </div>
-                <div class="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
-                  <span class="truncate max-w-[200px]" x-text="consoleProviderIdentity().modelLabel"></span>
-                  <span class="text-slate-600">•</span>
-                  <span x-text="consoleProviderIdentity().transportLabel"></span>
-                </div>
-              </div>
-              <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] text-slate-400"
-                    x-text="agentMode ? 'Agent' : 'Chat'"></span>
-            </div>
           </div>
 
           <!-- ▾ Agent Steps (collapsible) -->
@@ -1448,17 +1550,17 @@
                  x-text="liveFeed.connected ? 'Live · ' + (liveFeed.latest?.at ? timeAgo(liveFeed.latest.at) : 'connected') : (liveFeed.reconnecting ? 'Reconnecting…' : 'Idle')"></div>
           </div>
 
-          <div class="mt-3 rounded-2xl border border-sky-500/20 bg-slate-950/70 p-3">
-            <div class="flex items-start justify-between gap-3">
-              <div>
-                <div class="text-xs font-semibold text-white">Live Page Control</div>
-                <div class="mt-1 text-[10px] text-slate-500">Inspect can be continuous. Navigation, clicks, typing, and submit-like actions stay queued until approved.</div>
-              </div>
-              <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.16em]"
+          <!-- ▾ Live Page Control (collapsible) -->
+          <div class="mt-3 rounded-2xl border border-sky-500/20 bg-slate-950/70 overflow-hidden">
+            <button @click="panelBrowserOpen = !panelBrowserOpen" class="flex items-center gap-2 w-full px-3 py-2.5 text-left group">
+              <span class="text-[9px] text-sky-500/60 transition" :class="panelBrowserOpen ? 'rotate-0' : '-rotate-90'" style="display:inline-block">▾</span>
+              <span class="text-xs font-semibold text-white group-hover:text-sky-200 transition">Live Page Control</span>
+              <span class="ml-auto rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] shrink-0"
                     :class="browserActions.pending_count ? 'border-amber-500/20 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
-                    x-text="browserActions.pending_count ? `${browserActions.pending_count} pending` : 'Approval-first'"></span>
-            </div>
-            <div class="mt-3 flex flex-wrap items-center gap-2">
+                    x-text="browserActions.pending_count ? `${browserActions.pending_count} pending` : (browserActions.session?.connected ? 'Attached' : 'No page')"></span>
+            </button>
+            <div x-show="panelBrowserOpen" x-transition class="px-3 pb-3">
+            <div class="flex flex-wrap items-center gap-2">
               <span class="rounded-full border px-2 py-0.5 text-[10px]"
                     :class="browserActions.session?.connected ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
                     x-text="browserActions.session?.connected ? 'Page attached' : 'No page attached'"></span>
@@ -1510,6 +1612,7 @@
             <div x-show="!browserActions.proposals?.length" class="mt-3 rounded-xl border border-dashed border-slate-800 px-3 py-3 text-[11px] text-slate-500">
               Browser actions will appear here as a queue: inspect page state freely, but gate clicks, typing, navigation, and submits behind explicit approval.
             </div>
+            </div><!-- /panelBrowserOpen -->
           </div>
 
           <div x-show="terminal.panelOpen || composerOptions.terminal_mode" class="mt-3 rounded-2xl border border-amber-500/20 bg-slate-950/70 p-3">
@@ -1542,19 +1645,33 @@
                     </div>
                   </template>
                   <template x-for="session in terminal.sessions" :key="session.id">
-                    <button @click="loadTerminalSessionDetail(session.id)"
-                            class="w-full rounded-xl border px-3 py-2 text-left transition"
-                            :class="Number(terminal.activeSessionId) === Number(session.id) ? 'border-amber-500/30 bg-amber-500/10' : 'border-slate-800 bg-slate-900/50 hover:border-slate-700'">
-                      <div class="flex items-start justify-between gap-2">
-                        <div class="min-w-0">
-                          <div class="truncate text-sm text-slate-100" x-text="session.title"></div>
-                          <div class="mt-1 text-[10px] text-slate-500" x-text="session.workspace_name || session.cwd || 'Home scope'"></div>
+                    <div class="rounded-xl border transition"
+                         :class="Number(terminal.activeSessionId) === Number(session.id) ? 'border-amber-500/30 bg-amber-500/10' : 'border-slate-800 bg-slate-900/50 hover:border-slate-700'">
+                      <button @click="loadTerminalSessionDetail(session.id)"
+                              class="w-full px-3 py-2 text-left">
+                        <div class="flex items-start justify-between gap-2">
+                          <div class="min-w-0">
+                            <div class="truncate text-sm text-slate-100" x-text="session.title"></div>
+                            <div class="mt-1 text-[10px] text-slate-500" x-text="session.workspace_name || session.cwd || 'Home scope'"></div>
+                          </div>
+                          <span class="rounded-full border px-2 py-0.5 text-[9px] shrink-0"
+                                :class="terminalStatusClass(session.status)"
+                                x-text="session.status"></span>
                         </div>
-                        <span class="rounded-full border px-2 py-0.5 text-[9px]"
-                              :class="terminalStatusClass(session.status)"
-                              x-text="session.status"></span>
+                      </button>
+                      <div class="flex items-center gap-1.5 px-3 pb-2">
+                        <button @click="closeTerminalSession(session.id)"
+                                class="rounded-lg border border-rose-500/20 bg-rose-500/8 px-2 py-0.5 text-[9px] text-rose-400 hover:bg-rose-500/15 transition"
+                                title="Close this session">
+                          ✕ Close
+                        </button>
+                        <button x-show="session.status === 'running'"
+                                @click="terminal.activeSessionId = session.id; stopTerminalCommand()"
+                                class="rounded-lg border border-amber-500/20 bg-amber-500/8 px-2 py-0.5 text-[9px] text-amber-300 hover:bg-amber-500/15 transition">
+                          ⏹ Stop
+                        </button>
                       </div>
-                    </button>
+                    </div>
                   </template>
                 </div>
               </div>
@@ -1593,21 +1710,95 @@
                   Axon is waiting for approval to run:
                   <span class="mono block mt-1 text-amber-200" x-text="terminal.pendingCommand"></span>
                 </div>
-                <div class="rounded-2xl border border-slate-800 bg-slate-950/80 px-3 py-3">
-                  <div class="flex items-center justify-between gap-2">
-                    <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Output</div>
-                    <div class="text-[10px] text-slate-500" x-text="terminal.sessionDetail?.last_output_at ? 'Updated ' + timeAgo(terminal.sessionDetail.last_output_at) : ''"></div>
-                  </div>
-                  <div class="mt-2 max-h-64 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/70 p-3 font-mono text-[11px] leading-5 text-slate-300">
-                    <template x-if="!terminal.sessionDetail?.recent_events?.length">
-                      <div class="text-slate-500">Terminal output will appear here.</div>
-                    </template>
-                    <template x-for="event in terminal.sessionDetail?.recent_events || []" :key="event.id">
-                      <div class="mb-2">
-                        <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500" x-text="event.event_type"></div>
-                        <div class="whitespace-pre-wrap break-words" x-text="event.content"></div>
+                <!-- ── Interactive PTY Terminal ──────────────────────── -->
+                <!-- @keydown.stop etc. prevent xterm keystrokes bubbling to Alpine/chat textarea -->
+                <div class="mt-1 rounded-2xl overflow-hidden shadow-2xl"
+                     style="border: 1px solid rgba(99,102,241,0.25); background:#0b0d14;"
+                     @keydown.stop @keyup.stop @keypress.stop
+                     x-ref="xtermWrap"
+                     x-init="$nextTick(() => initXterm($el))"
+                     x-effect="if ((terminal.panelOpen || composerOptions.terminal_mode) && !_xtermInst) $nextTick(() => initXterm($el))">
+
+                  <!-- macOS-style title bar -->
+                  <div class="flex items-center gap-3 px-3.5 py-2.5 border-b"
+                       style="background: linear-gradient(180deg,#161928 0%,#111420 100%); border-color: rgba(99,102,241,0.2);">
+                    <!-- traffic lights -->
+                    <div class="flex items-center gap-1.5 shrink-0">
+                      <button @click="disconnectPty(); toggleTerminalMode(false)"
+                              class="w-3 h-3 rounded-full flex items-center justify-center group transition hover:scale-110"
+                              style="background:#ff5f57;" title="Close terminal">
+                        <span class="opacity-0 group-hover:opacity-100 text-[7px] font-black leading-none" style="color:#8b0000;">✕</span>
+                      </button>
+                      <span class="w-3 h-3 rounded-full" style="background:#febc2e;" title="Minimize"></span>
+                      <button @click="fitXterm()"
+                              class="w-3 h-3 rounded-full transition hover:scale-110"
+                              style="background:#28c840;" title="Fit terminal"></button>
+                    </div>
+
+                    <!-- path / title -->
+                    <div class="flex-1 text-center select-none">
+                      <span class="text-[11px] font-medium"
+                            style="color: rgba(148,163,184,0.7);"
+                            x-text="ptyConnected ? (terminal.sessionDetail?.cwd || '~') + '  —  bash' : 'bash — Interactive Shell'"></span>
+                    </div>
+
+                    <!-- status + controls -->
+                    <div class="flex items-center gap-2 shrink-0">
+                      <!-- live dot -->
+                      <div class="flex items-center gap-1">
+                        <span class="w-1.5 h-1.5 rounded-full"
+                              :class="ptyConnected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'"></span>
+                        <span class="text-[9px] font-medium"
+                              :class="ptyConnected ? 'text-emerald-400' : 'text-slate-600'"
+                              x-text="ptyConnected ? 'LIVE' : 'IDLE'"></span>
                       </div>
-                    </template>
+                      <!-- kill / connect -->
+                      <button @click="ptyConnected ? disconnectPty() : connectPty()"
+                              class="rounded-md px-2 py-0.5 text-[10px] font-semibold transition"
+                              :class="ptyConnected
+                                ? 'text-rose-400 hover:text-rose-300 hover:bg-rose-500/10'
+                                : 'text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10'">
+                        <span x-text="ptyConnected ? '⏻ Kill' : '▶ Connect'"></span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- xterm canvas — stop ALL keyboard events from reaching Alpine/chat -->
+                  <div id="axon-xterm"
+                       @keydown.stop @keyup.stop @keypress.stop
+                       :style="`height:${xtermHeight}px; background:#0b0d14;`"></div>
+
+                  <!-- drag-to-resize handle -->
+                  <div class="flex items-center justify-center h-3 cursor-ns-resize select-none"
+                       style="background: rgba(11,13,20,0.9); border-top: 1px solid rgba(99,102,241,0.15);"
+                       title="Drag to resize terminal"
+                       @mousedown="xtermResizing = true; xtermResizeStartY = $event.clientY; xtermResizeStartH = xtermHeight"
+                       @touchstart.prevent="xtermResizing = true; xtermResizeStartY = $event.touches[0].clientY; xtermResizeStartH = xtermHeight">
+                    <div class="w-8 h-0.5 rounded-full" style="background: rgba(99,102,241,0.35);"></div>
+                  </div>
+
+                  <!-- splash / connect overlay -->
+                  <div x-show="!ptyConnected"
+                       x-transition:enter="transition ease-out duration-150"
+                       x-transition:enter-start="opacity-0"
+                       x-transition:enter-end="opacity-100"
+                       class="absolute inset-0 flex flex-col items-center justify-center gap-4"
+                       style="top:44px; background:rgba(11,13,20,0.92); backdrop-filter:blur(6px); z-index:10;">
+                    <!-- icon -->
+                    <div class="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl"
+                         style="background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.25);">⌨</div>
+                    <div class="text-center">
+                      <div class="text-slate-200 font-semibold text-sm mb-1">Interactive Shell</div>
+                      <div class="text-slate-500 text-xs">Full PTY · colours · vim · htop · git · npm</div>
+                    </div>
+                    <button @click="connectPty()"
+                            class="flex items-center gap-2 rounded-xl px-6 py-2.5 text-sm font-semibold transition press-scale"
+                            style="background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.4); color: #a5b4fc;"
+                            onmouseover="this.style.background='rgba(99,102,241,0.25)'"
+                            onmouseout="this.style.background='rgba(99,102,241,0.15)'">
+                      <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                      Open Shell
+                    </button>
                   </div>
                 </div>
               </div>
@@ -5326,6 +5517,7 @@ function devbrain() {
     panelStepsOpen: true,
     panelToolsOpen: false,
     panelConnectionOpen: false,
+    panelBrowserOpen: false,
     showVoiceOrb: false,
     selectedResources: [],
     composerOptions: {
@@ -5411,6 +5603,16 @@ function devbrain() {
       command: '', pendingCommand: '', approvalRequired: false,
       lastDetailLoadedAt: '',
     },
+    // PTY / xterm.js state
+    ptyConnected: false,
+    _xtermInst: null,
+    _xtermFit: null,
+    _ptyWs: null,
+    xtermHeight: 340,
+    xtermResizing: false,
+    xtermResizeStartY: 0,
+    xtermResizeStartH: 340,
+    _ptySessionId: null,
     browserActions: {
       session: { connected: false, url: '', title: '', last_seen_at: '', mode: 'approval_required' },
       proposals: [],
@@ -5775,6 +5977,21 @@ function devbrain() {
           this.panelRuntimeOpen = true;
         }
       });
+
+      // xterm drag-to-resize global handlers
+      window.addEventListener('mousemove', (e) => {
+        if (!this.xtermResizing) return;
+        const delta = e.clientY - this.xtermResizeStartY;
+        this.xtermHeight = Math.max(160, Math.min(800, this.xtermResizeStartH + delta));
+        setTimeout(() => this.fitXterm?.(), 50);
+      });
+      window.addEventListener('mouseup', () => { this.xtermResizing = false; });
+      window.addEventListener('touchmove', (e) => {
+        if (!this.xtermResizing) return;
+        const delta = e.touches[0].clientY - this.xtermResizeStartY;
+        this.xtermHeight = Math.max(160, Math.min(800, this.xtermResizeStartH + delta));
+      }, { passive: true });
+      window.addEventListener('touchend', () => { this.xtermResizing = false; });
     },
 
     _tabHistory: [],

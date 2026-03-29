@@ -236,6 +236,113 @@ function axonHelpersMixin() {
       setTimeout(() => this.toast.show = false, duration);
     },
 
+    // Signature takes 4 explicit params so Alpine tracks each property change reactively.
+    renderToolBlock(name, args, result, status) {
+      const isRunning = status === 'running';
+      args = args || {};
+      result = result || '';
+
+      const esc = (s) => String(s || '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+      const highlight = (code, lang) => {
+        if (typeof hljs !== 'undefined') {
+          if (lang && lang !== 'plaintext' && hljs.getLanguage(lang)) {
+            return hljs.highlight(code, { language: lang }).value;
+          }
+          if (lang === 'plaintext') return esc(code);
+          return hljs.highlightAuto(code).value;
+        }
+        return esc(code);
+      };
+
+      const extToLang = (path) => {
+        const ext = String(path || '').split('.').pop().toLowerCase();
+        return { js: 'javascript', ts: 'typescript', tsx: 'typescript', jsx: 'javascript',
+                 py: 'python', sh: 'bash', bash: 'bash', html: 'html', css: 'css',
+                 json: 'json', md: 'markdown', yml: 'yaml', yaml: 'yaml',
+                 rs: 'rust', go: 'go', java: 'java', rb: 'ruby', php: 'php',
+                 c: 'c', cpp: 'cpp', cs: 'csharp', sql: 'sql', toml: 'ini' }[ext] || 'plaintext';
+      };
+
+      // A flush section: divider + label bar + code
+      const section = (code, lang, label, isInput) => {
+        const highlighted = highlight(code, lang);
+        const bg = isInput ? 'rgba(2,6,23,0.95)' : 'rgba(2,6,23,0.7)';
+        const labelColor = isInput ? '#f59e0b' : '#475569';
+        return `<div style="border-top:1px solid rgba(30,41,59,0.8)">` +
+          `<div style="padding:3px 12px;background:rgba(2,6,23,0.55)">` +
+          `<span style="font-size:9px;text-transform:uppercase;letter-spacing:.12em;color:${labelColor};font-family:monospace">${label}</span></div>` +
+          `<pre style="margin:0;padding:8px 12px;font-size:11px;line-height:1.6;overflow-x:auto;background:${bg}">` +
+          `<code class="hljs language-${esc(lang)}">${highlighted}</code></pre></div>`;
+      };
+
+      const pathRow = (p) => p
+        ? `<div style="border-top:1px solid rgba(30,41,59,0.8);padding:4px 12px;background:rgba(2,6,23,0.55)">` +
+          `<span style="font-size:10px;color:#64748b;font-family:monospace">${esc(p)}</span></div>`
+        : '';
+
+      const runningRow = () =>
+        `<div style="border-top:1px solid rgba(30,41,59,0.8);padding:7px 12px;background:rgba(2,6,23,0.7)">` +
+        `<span style="font-size:10px;color:#f59e0b;font-family:monospace;opacity:0.55">executing…</span></div>`;
+
+      const successRow = (msg) =>
+        `<div style="border-top:1px solid rgba(16,185,129,0.15);padding:5px 12px;background:rgba(6,78,59,0.2)">` +
+        `<span style="font-size:10px;color:#34d399;font-family:monospace">✓ ${esc(msg)}</span></div>`;
+
+      let html = '';
+
+      if (name === 'shell_cmd') {
+        const cmd = args.cmd || args.command || '';
+        if (cmd) html += section(cmd, 'bash', '$ command', true);
+        if (result) html += section(result.slice(0, 1200), 'plaintext', 'output', false);
+        else if (isRunning && cmd) html += runningRow();
+
+      } else if (name === 'write_file') {
+        const lang = extToLang(args.path || '');
+        html += pathRow(args.path);
+        if (args.content) html += section(args.content, lang, lang !== 'plaintext' ? lang : 'content', true);
+        if (result) html += successRow(result.slice(0, 180));
+        else if (isRunning) html += runningRow();
+
+      } else if (name === 'read_file') {
+        const lang = extToLang(args.path || '');
+        html += pathRow(args.path);
+        if (result) html += section(result.slice(0, 1200), lang, lang !== 'plaintext' ? lang : 'file', false);
+        else if (isRunning) html += runningRow();
+
+      } else if (name === 'list_dir') {
+        html += pathRow(args.path);
+        if (result) html += section(result.slice(0, 800), 'plaintext', 'directory', false);
+        else if (isRunning) html += runningRow();
+
+      } else if (name === 'search_code' || name === 'search_files') {
+        const query = args.query || args.pattern || args.q || '';
+        if (query) html += pathRow('🔍 ' + query);
+        if (result) html += section(result.slice(0, 800), 'plaintext', 'matches', false);
+        else if (isRunning) html += runningRow();
+
+      } else {
+        if (Object.keys(args).length) {
+          html += section(JSON.stringify(args, null, 2), 'json', name.replace(/_/g, ' '), true);
+        }
+        if (result) html += section(result.slice(0, 600), 'plaintext', 'result', false);
+        else if (isRunning && Object.keys(args).length) html += runningRow();
+      }
+
+      return html;
+    },
+
+    toolPreview(name, args) {
+      if (!name || !args) return '';
+      if (name === 'shell_cmd') return String(args.cmd || args.command || '').split('\n')[0].slice(0, 60);
+      if (name === 'write_file' || name === 'read_file') return String(args.path || '').split('/').slice(-2).join('/');
+      if (name === 'list_dir') return String(args.path || '').replace(/^\/home\/[^/]+/, '~');
+      if (name === 'search_code' || name === 'search_files') return String(args.query || args.pattern || '').slice(0, 50);
+      const keys = Object.keys(args);
+      return keys.length === 1 ? String(args[keys[0]] || '').slice(0, 50) : '';
+    },
+
   };
 }
 

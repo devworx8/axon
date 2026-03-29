@@ -55,6 +55,8 @@ function axonChatMixin() {
     },
 
     scrollChat() {
+      // Don't force scroll if the user has manually scrolled up to read
+      if (this._userScrolled) return;
       if (this._scrollRaf) return;
       this._scrollRaf = requestAnimationFrame(() => {
         this._scrollRaf = null;
@@ -64,10 +66,17 @@ function axonChatMixin() {
         // If container hidden or not rendered, retry with escalating delays
         if (el.scrollHeight <= 0) {
           [150, 400, 800].forEach(ms => {
-            setTimeout(() => { el.scrollTop = el.scrollHeight; }, ms);
+            setTimeout(() => { if (!this._userScrolled) el.scrollTop = el.scrollHeight; }, ms);
           });
         }
       });
+    },
+
+    onChatScroll(e) {
+      const el = e?.target || document.getElementById('chat-messages');
+      if (!el) return;
+      // User is considered "scrolled up" if they're more than 140px from the bottom
+      this._userScrolled = (el.scrollHeight - el.scrollTop - el.clientHeight) > 140;
     },
 
     /* ── Mode resolution ──────────────────────────────────────── */
@@ -733,6 +742,7 @@ function axonChatMixin() {
 
       this.chatInput = '';
       this.followUpSuggestions = [];
+      this._userScrolled = false; // resume auto-scroll for the new message
       if (!this.composerOptions.pin_context) {
         this.selectedResources = [];
       }

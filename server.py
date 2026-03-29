@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Optional
 from urllib import error as _urlerror, request as _urlrequest
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -112,6 +112,8 @@ _live_operator_snapshot = {
     "updated_at": "",
 }
 _terminal_processes: dict[int, dict] = {}
+# PTY WebSocket sessions: session_id → {pty, ws_set, task}
+_pty_sessions: dict[str, dict] = {}
 _domain_probe_cache = {
     "url": "",
     "active": False,
@@ -644,7 +646,7 @@ def _valid_session(token: str) -> bool:
 # Paths that don't require auth
 _AUTH_EXEMPT = {"/", "/sw.js", "/manifest.json", "/manual", "/manual.html",
                 "/api/health", "/api/tunnel/status"}
-_AUTH_EXEMPT_PREFIXES = ("/api/auth/", "/icons/", "/js/", "/styles.css")
+_AUTH_EXEMPT_PREFIXES = ("/api/auth/", "/icons/", "/js/", "/styles.css", "/ws/")
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -2976,16 +2978,17 @@ async def chat_stream(body: ChatMessage, request: Request):
             )
             yield {"data": _json.dumps({"done": True, "tokens": 0})}
         except Exception as exc:
+            _err_msg = str(exc)
             _set_live_operator(
                 active=False,
                 mode="chat",
                 phase="recover",
                 title="Reply interrupted",
-                detail=str(exc),
+                detail=_err_msg,
                 summary=body.message[:120],
                 workspace_id=body.project_id,
             )
-            yield {"data": _json.dumps({"error": str(exc)})}
+            yield {"data": _json.dumps({"error": _err_msg})}
 
     return EventSourceResponse(generate())
 
@@ -3188,16 +3191,17 @@ async def agent_endpoint(body: AgentRequest, request: Request):
                     await devdb.log_event(conn, "agent", body.message[:100],
                                            project_id=body.project_id)
         except Exception as exc:
+            _err_msg = str(exc)
             _set_live_operator(
                 active=False,
                 mode="agent",
                 phase="recover",
                 title="Needs attention",
-                detail=str(exc),
+                detail=_err_msg,
                 summary=body.message[:120],
                 workspace_id=body.project_id,
             )
-            yield {"data": _json.dumps({"type": "error", "message": str(exc)})}
+            yield {"data": _json.dumps({"type": "error", "message": _err_msg})}
 
     return EventSourceResponse(generate())
 
@@ -3390,6 +3394,12 @@ class CloudProviderTestRequest(BaseModel):
 async def list_cloud_providers():
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
+        # Merge vault-resolved keys so configured=True even when key is vault-only
+        vault_keys = await devvault.vault_resolve_all_provider_keys(conn)
+        for provider_id, api_key in vault_keys.items():
+            spec = provider_registry.PROVIDER_BY_ID.get(provider_id)
+            if spec and api_key and not settings.get(spec.key_setting):
+                settings = {**settings, spec.key_setting: api_key}
     return {
         "selected": provider_registry.runtime_api_config(settings),
         "providers": provider_registry.api_provider_cards(settings),
@@ -3401,11 +3411,15 @@ async def list_cloud_providers():
 async def test_cloud_provider(body: CloudProviderTestRequest):
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
+        # If no API key supplied, try vault fallback
+        api_key = body.api_key
+        if not api_key and body.provider_id:
+            api_key = await devvault.vault_resolve_provider_key(conn, body.provider_id) or ""
     return await provider_registry.test_provider_connection(
         body.provider_id,
         settings,
         overrides={
-            "api_key": body.api_key,
+            "api_key": api_key,
             "base_url": body.base_url,
             "model": body.model,
         },
@@ -3675,6 +3689,12 @@ async def runtime_status():
     """Return the Axon runtime snapshot used by the dashboard and settings."""
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
+        # Merge vault-resolved keys so configured=True for vault-only keys
+        vault_keys = await devvault.vault_resolve_all_provider_keys(conn)
+        for provider_id, api_key in vault_keys.items():
+            spec = provider_registry.PROVIDER_BY_ID.get(provider_id)
+            if spec and api_key and not settings.get(spec.key_setting):
+                settings = {**settings, spec.key_setting: api_key}
         projects = await devdb.get_projects(conn, status="active")
         resources = await devdb.list_resources(conn)
         memory_overview = await memory_engine.sync_memory_layers(conn, settings)
@@ -4941,6 +4961,138 @@ async def terminal_stop(session_id: int):
     return {"status": "stopped", "message": "Command stopped."}
 
 
+@app.delete("/api/terminal/sessions/{session_id}")
+async def close_terminal_session(session_id: int):
+    """Close/terminate a terminal session (kills running process, marks closed)."""
+    # Kill PTY if active
+    pty_info = _pty_sessions.get(session_id)
+    if pty_info:
+        try:
+            pty_info["proc"].terminate()
+        except Exception:
+            pass
+        _pty_sessions.pop(session_id, None)
+    # Kill subprocess process if active
+    entry = _terminal_processes.pop(session_id, None)
+    if entry:
+        process = entry.get("process")
+        if process and process.returncode is None:
+            try:
+                process.terminate()
+            except Exception:
+                pass
+    async with devdb.get_db() as conn:
+        row = await devdb.get_terminal_session(conn, session_id)
+        if not row:
+            raise HTTPException(404, "Terminal session not found")
+        await devdb.update_terminal_session(conn, session_id, status="closed", active_command="", pending_command="")
+    return {"status": "closed", "message": "Session closed."}
+
+
+# ─── PTY / Interactive Terminal WebSocket ────────────────────────────────────
+
+@app.websocket("/ws/pty/{session_id}")
+async def pty_websocket(websocket: WebSocket, session_id: str):
+    """
+    Full interactive PTY over WebSocket.
+    Protocol (text frames):
+      Client → server: raw keystrokes / paste text
+      Client → server: JSON {"type":"resize","cols":N,"rows":N}
+      Server → client: raw terminal output bytes (base64-encoded JSON {"type":"data","data":"<b64>"})
+      Server → client: JSON {"type":"exit","code":N}
+    """
+    import base64
+
+    await websocket.accept()
+
+    # Auth check — skip if no PIN set, otherwise require token query param
+    async with devdb.get_db() as conn:
+        pin_hash = await devdb.get_setting(conn, "auth_pin_hash")
+    if pin_hash:
+        token = websocket.query_params.get("token", "")
+        if not token or not _valid_session(token):
+            await websocket.send_json({"type": "error", "message": "Authentication required"})
+            await websocket.close()
+            return
+
+    try:
+        from ptyprocess import PtyProcess
+    except ImportError:
+        await websocket.send_json({"type": "error", "message": "ptyprocess not installed on server"})
+        await websocket.close()
+        return
+
+    cols, rows = 220, 50
+    shell = os.environ.get("SHELL", "/bin/bash")
+    home = str(Path.home())
+
+    pty_proc = PtyProcess.spawn(
+        [shell, "--login"],
+        dimensions=(rows, cols),
+        env={**os.environ, "TERM": "xterm-256color"},
+        cwd=home,
+    )
+
+    entry = {"pty": pty_proc, "ws": websocket, "alive": True}
+    _pty_sessions[session_id] = entry
+
+    async def _read_pty():
+        loop = asyncio.get_event_loop()
+        try:
+            while entry["alive"] and pty_proc.isalive():
+                try:
+                    data = await loop.run_in_executor(None, pty_proc.read, 4096)
+                    if data:
+                        await websocket.send_json({
+                            "type": "data",
+                            "data": base64.b64encode(data if isinstance(data, bytes) else data.encode()).decode(),
+                        })
+                except EOFError:
+                    break
+                except Exception:
+                    break
+        finally:
+            exit_code = pty_proc.exitstatus if not pty_proc.isalive() else None
+            try:
+                await websocket.send_json({"type": "exit", "code": exit_code})
+            except Exception:
+                pass
+
+    read_task = asyncio.create_task(_read_pty())
+    entry["task"] = read_task
+
+    try:
+        while True:
+            msg = await websocket.receive_text()
+            if not pty_proc.isalive():
+                break
+            try:
+                parsed = _json.loads(msg)
+                if parsed.get("type") == "resize":
+                    c = int(parsed.get("cols", cols))
+                    r = int(parsed.get("rows", rows))
+                    pty_proc.setwinsize(r, c)
+                elif parsed.get("type") == "ping":
+                    await websocket.send_json({"type": "pong"})
+                elif parsed.get("type") == "input":
+                    pty_proc.write(parsed.get("data", ""))
+            except (_json.JSONDecodeError, ValueError):
+                # Plain text input (keystroke)
+                pty_proc.write(msg)
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        entry["alive"] = False
+        read_task.cancel()
+        try:
+            pty_proc.terminate(force=True)
+        except Exception:
+            pass
+        _pty_sessions.pop(session_id, None)
+
+
 # ─── Ollama endpoints ─────────────────────────────────────────────────────────
 
 @app.get("/api/ollama/status")
@@ -5092,7 +5244,8 @@ async def ollama_pull(body: OllamaPullRequest, request: Request):
                         except _json.JSONDecodeError:
                             pass
         except Exception as exc:
-            yield {"data": _json.dumps({"error": str(exc), "status": "error"})}
+            _err_msg = str(exc)
+            yield {"data": _json.dumps({"error": _err_msg, "status": "error"})}
 
     return EventSourceResponse(generate())
 

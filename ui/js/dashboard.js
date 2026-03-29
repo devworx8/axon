@@ -1484,6 +1484,25 @@ function axonDashboardMixin() {
       this.terminal.stopping = false;
     },
 
+    async closeTerminalSession(sessionId) {
+      if (!sessionId) return;
+      // Kill PTY if it's the active one
+      if (this.ptyConnected && Number(this.terminal.activeSessionId) === Number(sessionId)) {
+        this.disconnectPty();
+      }
+      try {
+        await this.api('DELETE', `/api/terminal/sessions/${sessionId}`);
+        this.terminal.sessions = (this.terminal.sessions || []).filter(s => Number(s.id) !== Number(sessionId));
+        if (Number(this.terminal.activeSessionId) === Number(sessionId)) {
+          this.terminal.activeSessionId = this.terminal.sessions[0]?.id || null;
+          this.terminal.sessionDetail = null;
+        }
+        this.showToast('Session closed');
+      } catch (e) {
+        this.showToast(`Close failed: ${e.message}`);
+      }
+    },
+
     async connectLiveFeed() {
       if (!this.settingsForm.live_feed_enabled) {
         this.liveFeed.connected = false;
@@ -2003,6 +2022,162 @@ function axonDashboardMixin() {
         this.rememberOperatorOutcome(mode, this.chatMessages[idx]);
       }
       this.clearLiveOperator(this.liveOperator.phase === 'recover' ? 4200 : 1400);
+    },
+
+    // ── PTY / xterm.js ─────────────────────────────────────────────────────
+
+    initXterm(wrapEl) {
+      if (this._xtermInst) return;  // already initialised
+      if (typeof Terminal === 'undefined') return;  // xterm.js not loaded yet
+
+      const term = new Terminal({
+        theme: {
+          background: '#0d0d0d',
+          foreground: '#e2e8f0',
+          cursor: '#f59e0b',
+          selectionBackground: 'rgba(245,158,11,0.3)',
+          black: '#1e293b', brightBlack: '#475569',
+          red: '#f87171', brightRed: '#fca5a5',
+          green: '#4ade80', brightGreen: '#86efac',
+          yellow: '#fbbf24', brightYellow: '#fcd34d',
+          blue: '#60a5fa', brightBlue: '#93c5fd',
+          magenta: '#c084fc', brightMagenta: '#d8b4fe',
+          cyan: '#22d3ee', brightCyan: '#67e8f9',
+          white: '#cbd5e1', brightWhite: '#f1f5f9',
+        },
+        fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", monospace',
+        fontSize: 13,
+        lineHeight: 1.4,
+        cursorStyle: 'bar',
+        cursorBlink: true,
+        scrollback: 5000,
+        allowProposedApi: true,
+      });
+
+      // CDN UMD bundles export as window.FitAddon = { FitAddon: class }
+      const FitAddonClass = (typeof FitAddon !== 'undefined' && FitAddon.FitAddon) ? FitAddon.FitAddon : FitAddon;
+      const fitAddon = new FitAddonClass();
+      term.loadAddon(fitAddon);
+
+      if (typeof WebLinksAddon !== 'undefined') {
+        const WebLinksClass = WebLinksAddon.WebLinksAddon || WebLinksAddon;
+        term.loadAddon(new WebLinksClass());
+      }
+
+      const container = wrapEl.querySelector('#axon-xterm');
+      term.open(container);
+      fitAddon.fit();
+
+      this._xtermInst = term;
+      this._xtermFit = fitAddon;
+
+      // Handle resize
+      const ro = new ResizeObserver(() => { try { fitAddon.fit(); } catch(_) {} });
+      ro.observe(container);
+
+      // Forward user input to PTY WebSocket
+      term.onData(data => {
+        if (this._ptyWs && this._ptyWs.readyState === WebSocket.OPEN) {
+          this._ptyWs.send(JSON.stringify({ type: 'input', data }));
+        }
+      });
+
+      // Forward terminal resize to PTY
+      term.onResize(({ cols, rows }) => {
+        if (this._ptyWs && this._ptyWs.readyState === WebSocket.OPEN) {
+          this._ptyWs.send(JSON.stringify({ type: 'resize', cols, rows }));
+        }
+      });
+
+      term.writeln('\x1b[90mAxon Interactive Terminal — click \x1b[32mOpen Terminal\x1b[90m to connect\x1b[0m');
+    },
+
+    fitXterm() {
+      try { this._xtermFit && this._xtermFit.fit(); } catch(_) {}
+    },
+
+    async connectPty() {
+      if (this._ptyWs) this.disconnectPty();
+
+      // Lazy-init xterm if it wasn't initialised yet (panel was hidden at x-init time)
+      if (!this._xtermInst) {
+        const wrap = this.$refs && this.$refs.xtermWrap;
+        if (wrap) this.initXterm(wrap);
+        if (!this._xtermInst) {
+          // xterm.js CDN not loaded yet — retry after a short delay
+          await new Promise(r => setTimeout(r, 600));
+          if (wrap) this.initXterm(wrap);
+        }
+      }
+      if (this._xtermInst && this._xtermFit) {
+        try { this._xtermFit.fit(); } catch(_) {}
+      }
+
+      // Make sure a terminal session exists (for context/cwd tracking)
+      if (!this.terminal.activeSessionId) {
+        await this.createTerminalSession();
+      }
+
+      const sessionId = this._ptySessionId || ('pty-' + Date.now());
+      this._ptySessionId = sessionId;
+
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const tokenParam = this.authToken ? `?token=${encodeURIComponent(this.authToken)}` : '';
+      const ws = new WebSocket(`${proto}://${location.host}/ws/pty/${sessionId}${tokenParam}`);
+
+      ws.onopen = () => {
+        this.ptyConnected = true;
+        if (this._xtermInst) {
+          this._xtermInst.clear();
+          // Send initial resize
+          const { cols, rows } = this._xtermInst;
+          ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+          // Fit after a tick (dimensions stabilise)
+          setTimeout(() => {
+            try { this._xtermFit && this._xtermFit.fit(); } catch(_) {}
+          }, 100);
+        }
+      };
+
+      ws.onmessage = async (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg.type === 'data' && this._xtermInst) {
+            const bytes = atob(msg.data);
+            const arr = new Uint8Array(bytes.length);
+            for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+            this._xtermInst.write(arr);
+          } else if (msg.type === 'exit') {
+            if (this._xtermInst) {
+              this._xtermInst.writeln(`\r\n\x1b[90m[Process exited with code ${msg.code ?? '?'}]\x1b[0m`);
+            }
+            this.disconnectPty();
+          }
+        } catch(e) {
+          console.warn('PTY WS message error', e);
+        }
+      };
+
+      ws.onerror = () => {
+        if (this._xtermInst) {
+          this._xtermInst.writeln('\r\n\x1b[31m[WebSocket error — check server logs]\x1b[0m');
+        }
+      };
+
+      ws.onclose = () => {
+        this.ptyConnected = false;
+        this._ptyWs = null;
+      };
+
+      this._ptyWs = ws;
+    },
+
+    disconnectPty() {
+      if (this._ptyWs) {
+        try { this._ptyWs.close(); } catch(_) {}
+        this._ptyWs = null;
+      }
+      this.ptyConnected = false;
     },
 
   };
