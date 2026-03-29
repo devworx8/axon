@@ -537,6 +537,7 @@ function axonDashboardMixin() {
         anthropic: 'anthropic_api_key',
         openai_gpts: 'openai_api_key',
         gemini_gems: 'gemini_api_key',
+        deepseek: 'deepseek_api_key',
         generic_api: 'generic_api_key',
       };
       return map[providerId] || '';
@@ -547,6 +548,7 @@ function axonDashboardMixin() {
         anthropic: 'anthropic_base_url',
         openai_gpts: 'openai_base_url',
         gemini_gems: 'gemini_base_url',
+        deepseek: 'deepseek_base_url',
         generic_api: 'generic_api_url',
       };
       return map[providerId] || '';
@@ -557,6 +559,7 @@ function axonDashboardMixin() {
         anthropic: 'anthropic_api_model',
         openai_gpts: 'openai_api_model',
         gemini_gems: 'gemini_api_model',
+        deepseek: 'deepseek_api_model',
         generic_api: 'generic_api_model',
       };
       return map[providerId] || '';
@@ -567,6 +570,7 @@ function axonDashboardMixin() {
         anthropic: '_anthropicKeyHint',
         openai_gpts: '_openaiKeyHint',
         gemini_gems: '_geminiKeyHint',
+        deepseek: '_deepseekKeyHint',
         generic_api: '_genericKeyHint',
       };
       return map[providerId] || '';
@@ -603,6 +607,7 @@ function axonDashboardMixin() {
     providerKeyPlaceholder(providerId) {
       if (providerId === 'anthropic') return 'sk-ant-...';
       if (providerId === 'gemini_gems') return 'AIza...';
+      if (providerId === 'deepseek') return 'sk-...';
       return 'Paste provider key';
     },
 
@@ -1524,6 +1529,12 @@ function axonDashboardMixin() {
             if (!line.startsWith('data: ')) continue;
             try {
               const payload = JSON.parse(line.slice(6));
+              if (payload.type === 'heartbeat') {
+                // Keep-alive — just update connection state
+                this.liveFeed.connected = true;
+                this.liveFeed.reconnecting = false;
+                continue;
+              }
               this.handleLiveFeedSnapshot(payload);
             } catch (_) {}
           }
@@ -1535,7 +1546,7 @@ function axonDashboardMixin() {
         this.liveFeed.connecting = false;
         this.liveFeed.reconnecting = true;
         this.liveFeed.error = e.message || 'Live feed unavailable';
-        setTimeout(() => this.connectLiveFeed(), 3000);
+        setTimeout(() => this.connectLiveFeed(), 6000);
       }
     },
 
