@@ -61,8 +61,11 @@ function axonChatMixin() {
         const el = document.getElementById('chat-messages');
         if (!el) return;
         el.scrollTop = el.scrollHeight;
+        // If container hidden or not rendered, retry with escalating delays
         if (el.scrollHeight <= 0) {
-          setTimeout(() => { el.scrollTop = el.scrollHeight; }, 150);
+          [150, 400, 800].forEach(ms => {
+            setTimeout(() => { el.scrollTop = el.scrollHeight; }, ms);
+          });
         }
       });
     },

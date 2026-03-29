@@ -899,15 +899,23 @@
               <!-- Bubble -->
               <div :class="msg.role === 'user'
                 ? 'bg-blue-600 text-white px-4 py-2.5 rounded-[20px] rounded-tr-[6px] text-sm shadow-md shadow-blue-500/20'
-                : ((msg.mode === 'agent' || (msg.agentEvents && msg.agentEvents.length))
-                  ? 'bg-slate-800/95 border border-amber-500/20 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm'
-                  : 'bg-slate-800/90 border border-slate-700/50 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm')">
+                : (msg.error
+                  ? 'bg-red-950/60 border border-red-500/30 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm'
+                  : ((msg.mode === 'agent' || (msg.agentEvents && msg.agentEvents.length))
+                    ? 'bg-slate-800/95 border border-amber-500/20 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm'
+                    : 'bg-slate-800/90 border border-slate-700/50 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm'))">
                 <div x-show="msg.role === 'assistant'" class="prose-dark text-sm">
                   <div x-html="renderMd(msg.content)"></div>
                   <!-- Streaming cursor -->
                   <span x-show="msg.streaming" class="inline-block w-2 h-4 bg-blue-400 ml-0.5 animate-pulse rounded-sm align-middle"></span>
                 </div>
                 <div x-show="msg.role === 'user'" class="whitespace-pre-wrap leading-relaxed" x-text="msg.content"></div>
+                <!-- Prominent retry button inside error bubbles -->
+                <button x-show="msg.error && !chatLoading"
+                        @click="retryChat(msg)"
+                        class="mt-3 flex items-center gap-2 px-4 py-2 bg-amber-600/30 hover:bg-amber-500/40 border border-amber-500/30 text-amber-200 rounded-xl text-xs font-medium transition press-scale">
+                  <span>🔄</span> <span>Retry this request</span>
+                </button>
                 <div x-show="msg.resources?.length" class="mt-2 flex flex-wrap gap-1.5">
                   <template x-for="resource in (msg.resources || [])" :key="resource.id">
                     <span class="inline-flex items-center gap-1 rounded-full border border-sky-500/20 bg-sky-500/10 px-2 py-1 text-[10px] text-sky-200">
@@ -5736,8 +5744,12 @@ function devbrain() {
       this.$watch('activeTab', tab => {
         this.showMoreMenu = false;
         this.activeProjectMenu = null;
-        if (tab === 'chat' && !this.chatMessages.length) {
-          this.loadChatHistory();
+        if (tab === 'chat') {
+          if (!this.chatMessages.length) {
+            this.loadChatHistory();
+          } else {
+            this.$nextTick(() => requestAnimationFrame(() => this.scrollChat()));
+          }
         }
       });
       this.$watch('chatLoading', value => {
