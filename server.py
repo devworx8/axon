@@ -145,59 +145,6 @@ def _now_iso() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
 
-def _setting_truthy(value) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _read_settings_sync() -> dict[str, str]:
-    try:
-        conn = _sqlite3.connect(devdb.DB_PATH)
-        cur = conn.execute("SELECT key, value FROM settings")
-        rows = cur.fetchall()
-        conn.close()
-        return {row[0]: row[1] for row in rows}
-    except Exception:
-        return {}
-
-
-def _normalize_domain(raw: str | None) -> str:
-    value = str(raw or "").strip().lower()
-    if not value:
-        return "axon.edudashpro.org.za"
-    if value.startswith("http://") or value.startswith("https://"):
-        value = value.split("://", 1)[1]
-    value = value.split("/", 1)[0].strip()
-    return value or "axon.edudashpro.org.za"
-
-
-def _normalize_public_base_url(raw: str | None, domain: str) -> str:
-    value = str(raw or "").strip()
-    if not value:
-        return f"https://{domain}" if domain else ""
-    if not value.startswith(("http://", "https://")):
-        value = f"https://{value}"
-    return value.rstrip("/")
-
-
-def _connection_config(settings: Optional[dict[str, str]] = None) -> dict:
-    settings = settings or _read_settings_sync()
-    stable_domain = _normalize_domain(settings.get("stable_domain"))
-    public_base_url = _normalize_public_base_url(settings.get("public_base_url"), stable_domain)
-    tunnel_mode = str(settings.get("tunnel_mode") or "trycloudflare").strip().lower()
-    if tunnel_mode not in {"trycloudflare", "named", "external"}:
-        tunnel_mode = "trycloudflare"
-    stable_domain_enabled = _setting_truthy(settings.get("stable_domain_enabled"))
-    cloudflare_tunnel_token = str(settings.get("cloudflare_tunnel_token") or "").strip()
-    return {
-        "stable_domain": stable_domain,
-        "public_base_url": public_base_url,
-        "stable_domain_enabled": stable_domain_enabled,
-        "tunnel_mode": tunnel_mode,
-        "cloudflare_tunnel_token": cloudflare_tunnel_token,
-        "named_tunnel_ready": tunnel_mode == "named" and bool(cloudflare_tunnel_token),
-    }
-
-
 def _probe_public_origin(public_base_url: str, enabled: bool) -> dict:
     if not enabled or not public_base_url:
         return {
@@ -1413,6 +1360,9 @@ async def _effective_ai_params(settings: dict, composer_options: dict, *, conn=N
         if route.get("selected_model"):
             ai["ollama_model"] = route["selected_model"]
     else:
+        if requested_model:
+            ai["api_model"] = requested_model
+            return ai
         # API backend: pick role-specific model when available
         role = _local_role_for_composer(composer_options, agent_request=agent_request)
         provider_id = ai.get("api_provider", "")
@@ -2627,9 +2577,9 @@ async def chat_stream(body: ChatMessage, request: Request):
             return EventSourceResponse(_pptx_stream())
         except Exception as _pptx_stream_err:
             import traceback as _tb_s
+            print(f"[Axon] PPTX stream error: {_pptx_stream_err}")
             _tb_s.print_exc()
             # Fall through to normal chat if PPTX generation fails
-            pass
     # ── end PPTX intent interception (streaming) ─────────────────────────
 
     # ── Mission intent interception (streaming) ──────────────────────────
@@ -2773,9 +2723,9 @@ async def chat_stream(body: ChatMessage, request: Request):
                 return EventSourceResponse(_mission_stream())
         except Exception as _mission_err:
             import traceback as _tb_m
+            print(f"[Axon] Mission stream error: {_mission_err}")
             _tb_m.print_exc()
             # Fall through to normal chat
-            pass
     # ── end Mission intent interception (streaming) ──────────────────────
 
     # ── Playbook intent interception (streaming) ─────────────────────────
@@ -2906,8 +2856,9 @@ async def chat_stream(body: ChatMessage, request: Request):
                 return EventSourceResponse(_playbook_stream())
         except Exception as _pb_err:
             import traceback as _tb_pb
+            print(f"[Axon] Playbook stream error: {_pb_err}")
             _tb_pb.print_exc()
-            pass
+            # Fall through to normal chat
     # ── end Playbook intent interception (streaming) ─────────────────────
 
     if backend != "ollama":
@@ -3311,6 +3262,7 @@ async def get_settings():
             "anthropic_api_key",
             "openai_api_key",
             "gemini_api_key",
+            "deepseek_api_key",
             "generic_api_key",
             "azure_speech_key",
             "cloudflare_tunnel_token",
@@ -3367,6 +3319,7 @@ class SettingsUpdate(BaseModel):
     cloud_agents_enabled: Optional[bool] = None
     openai_gpts_enabled: Optional[bool] = None
     gemini_gems_enabled: Optional[bool] = None
+    deepseek_enabled: Optional[bool] = None
     generic_api_enabled: Optional[bool] = None
     openai_api_key: Optional[str] = None
     openai_base_url: Optional[str] = None
@@ -3374,6 +3327,9 @@ class SettingsUpdate(BaseModel):
     gemini_api_key: Optional[str] = None
     gemini_base_url: Optional[str] = None
     gemini_api_model: Optional[str] = None
+    deepseek_api_key: Optional[str] = None
+    deepseek_base_url: Optional[str] = None
+    deepseek_api_model: Optional[str] = None
     generic_api_key: Optional[str] = None
     generic_api_url: Optional[str] = None
     generic_api_model: Optional[str] = None

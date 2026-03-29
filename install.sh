@@ -9,12 +9,19 @@ BIN_DIR="$HOME/bin"
 
 echo "✦ Installing Axon..."
 
-# ── Python deps ───────────────────────────────────────────────────
+# ── Python venv + deps ────────────────────────────────────────────
+echo "→ Setting up Python virtual environment..."
+if [ ! -d "$DEVBRAIN_DIR/.venv" ]; then
+  python3 -m venv "$DEVBRAIN_DIR/.venv"
+fi
+
 echo "→ Installing Python dependencies..."
-pip3 install fastapi uvicorn aiosqlite anthropic apscheduler watchdog \
-     rich click --break-system-packages --quiet 2>&1 | tail -3 || \
-pip3 install fastapi uvicorn aiosqlite anthropic apscheduler watchdog \
-     rich click --quiet 2>&1 | tail -3
+"$DEVBRAIN_DIR/.venv/bin/pip" install --quiet --upgrade pip 2>&1 | tail -1
+"$DEVBRAIN_DIR/.venv/bin/pip" install --quiet \
+     fastapi uvicorn aiosqlite anthropic apscheduler watchdog \
+     rich click httpx sse-starlette pydantic python-pptx qrcode \
+     Markdown pyotp cryptography bcrypt beautifulsoup4 lxml \
+     aiohttp Pillow 2>&1 | tail -3
 
 # ── Make scripts executable ───────────────────────────────────────
 chmod +x "$DEVBRAIN_DIR/start.sh"
