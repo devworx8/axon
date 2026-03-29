@@ -2918,7 +2918,7 @@
         <div x-show="vault.is_unlocked">
           <!-- Add secret form -->
           <div x-show="showVaultAddForm" class="bg-slate-900 border border-slate-800 rounded-2xl p-3 md:p-5 mb-4 space-y-3">
-            <div class="font-medium text-white text-sm mb-1">Add New Secret</div>
+            <div class="font-medium text-white text-sm mb-1" x-text="editingSecretId ? 'Edit Secret' : 'Add New Secret'"></div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
                 <label class="block text-xs text-slate-400 mb-1">Name *</label>
@@ -2960,9 +2960,9 @@
             <div class="flex gap-2">
               <button @click="saveSecret()" :disabled="!newSecret.name || vaultSubmitting"
                       class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs rounded-lg transition">
-                <span x-text="vaultSubmitting ? 'Saving...' : 'Save Secret'"></span>
+                <span x-text="vaultSubmitting ? 'Saving...' : (editingSecretId ? 'Update Secret' : 'Save Secret')"></span>
               </button>
-              <button @click="showVaultAddForm = false; newSecret = { name:'', category:'general', username:'', password:'', url:'', notes:'' }"
+              <button @click="showVaultAddForm = false; editingSecretId = null; newSecret = { name:'', category:'general', username:'', password:'', url:'', notes:'' }"
                       class="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-lg transition">Cancel</button>
             </div>
           </div>
@@ -2970,7 +2970,7 @@
           <!-- Header row -->
           <div class="flex items-center justify-between mb-3">
             <div class="text-sm text-slate-400" x-text="vaultSecrets.length + ' secrets'"></div>
-            <button @click="showVaultAddForm = !showVaultAddForm; if(showVaultAddForm) newSecret = { name:'', category:'general', username:'', password:'', url:'', notes:'' }"
+            <button @click="showVaultAddForm = !showVaultAddForm; editingSecretId = null; if(showVaultAddForm) newSecret = { name:'', category:'general', username:'', password:'', url:'', notes:'' }"
                     class="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition">
               + Add Secret
             </button>
@@ -3007,6 +3007,10 @@
                     <button @click="revealSecret(s.id)"
                             class="px-2.5 py-1 text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition">
                       👁 View
+                    </button>
+                    <button @click="editSecret(s.id)"
+                            class="px-2.5 py-1 text-[10px] bg-slate-800 hover:bg-blue-900/40 hover:text-blue-400 text-slate-400 rounded-lg transition">
+                      ✏️ Edit
                     </button>
                     <button @click="deleteSecret(s.id, s.name)"
                             class="px-2.5 py-1 text-[10px] bg-slate-800 hover:bg-red-900/40 hover:text-red-400 text-slate-400 rounded-lg transition">
@@ -5682,6 +5686,7 @@ function devbrain() {
     vaultSecrets: [],
     vaultSecretsLoading: false,
     showVaultAddForm: false,
+    editingSecretId: null,
     newSecret: { name:'', category:'general', username:'', password:'', url:'', notes:'' },
     viewingSecret: null,
     viewingSecretId: null,

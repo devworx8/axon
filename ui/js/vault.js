@@ -76,6 +76,7 @@ function axonVaultMixin() {
         this.vaultSecrets = [];
         this.viewingSecret = null;
         this.viewingSecretId = null;
+        this.editingSecretId = null;
         this.showVaultAddForm = false;
         this.showToast('Vault locked 🔒');
       } catch(e) {}
@@ -106,14 +107,38 @@ function axonVaultMixin() {
     async saveSecret() {
       if (!this.newSecret.name) return;
       this.vaultSubmitting = true;
+      const isEdit = !!this.editingSecretId;
       try {
-        await this.api('POST', '/api/vault/secrets', this.newSecret);
+        if (isEdit) {
+          await this.api('PUT', `/api/vault/secrets/${this.editingSecretId}`, this.newSecret);
+        } else {
+          await this.api('POST', '/api/vault/secrets', this.newSecret);
+        }
         await this.loadVaultSecrets();
         this.showVaultAddForm = false;
+        this.editingSecretId = null;
         this.newSecret = { name:'', category:'general', username:'', password:'', url:'', notes:'' };
-        this.showToast('Secret saved 🔐');
+        this.showToast(isEdit ? 'Secret updated 🔐' : 'Secret saved 🔐');
       } catch(e) { this.showToast('Failed: ' + e.message); }
       this.vaultSubmitting = false;
+    },
+
+    async editSecret(id) {
+      try {
+        const secret = await this.api('GET', `/api/vault/secrets/${id}`);
+        this.editingSecretId = id;
+        this.newSecret = {
+          name: secret.name || '',
+          category: secret.category || 'general',
+          username: secret.username || '',
+          password: secret.password || '',
+          url: secret.url || '',
+          notes: secret.notes || '',
+        };
+        this.showVaultAddForm = true;
+        this.viewingSecretId = null;
+        this.viewingSecret = null;
+      } catch(e) { this.showToast('Failed to load secret for editing'); }
     },
 
     async deleteSecret(id, name) {
