@@ -55,3 +55,7 @@ Open `http://localhost:7734` and finish setup in `Settings -> Runtime`.
 - Runtime state lives locally in `~/.devbrain/devbrain.db` and is intentionally gitignored.
 - Logs, pid files, and bundled binaries are excluded from version control in this repo.
 - On display-attached 6GB NVIDIA GPUs, Axon guards large Ollama models to avoid desktop blanking or compositor resets.
+
+## Self-edit verification
+
+Axon can modify its own codebase when a real tool-backed file write succeeds. This section was added as a tiny local proof edit and should appear in `git diff` immediately after the change.
