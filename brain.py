@@ -1467,23 +1467,52 @@ async def run_agent(
         messages.append(_ollama_message_with_images(user_message, resource_image_paths))
 
     for iteration in range(max_iterations):
-        # Collect streamed response
+        # Stream tokens to UI in real-time while also buffering for pattern detection
         full_text = ""
+        streamed_up_to = 0  # How many chars we've already yielded as thinking
+        found_action_live = False
         try:
-            if use_api:
-                async for chunk in _stream_api_chat(
-                    messages=messages, api_key=api_key,
-                    api_base_url=api_base_url, api_model=api_model, max_tokens=800,
-                ):
-                    full_text += chunk
-            else:
-                if iteration == 0 and execution.get("note"):
-                    yield {"type": "text", "chunk": f"⚠️ {execution['note']}\n\n"}
-                async for chunk in _stream_ollama_chat(
-                    messages=messages, model=execution["model"],
-                    max_tokens=800, ollama_url=ollama_url, purpose="agent",
-                ):
-                    full_text += chunk
+            async def _token_source():
+                if use_api:
+                    async for chunk in _stream_api_chat(
+                        messages=messages, api_key=api_key,
+                        api_base_url=api_base_url, api_model=api_model, max_tokens=800,
+                    ):
+                        yield chunk
+                else:
+                    async for chunk in _stream_ollama_chat(
+                        messages=messages, model=execution["model"],
+                        max_tokens=800, ollama_url=ollama_url, purpose="agent",
+                    ):
+                        yield chunk
+
+            if not use_api and iteration == 0 and execution.get("note"):
+                yield {"type": "text", "chunk": f"⚠️ {execution['note']}\n\n"}
+
+            async for chunk in _token_source():
+                full_text += chunk
+                # Stream thinking text live (everything before ACTION:/ANSWER:)
+                if not found_action_live:
+                    # Check if we've hit a pattern marker
+                    for marker in ("ACTION:", "ANSWER:"):
+                        pos = full_text.find(marker)
+                        if pos >= 0:
+                            found_action_live = True
+                            # Yield any remaining thinking text before the marker
+                            remaining = _sanitize_agent_text(full_text[streamed_up_to:pos].strip())
+                            if remaining:
+                                yield {"type": "thinking", "chunk": remaining}
+                            streamed_up_to = pos
+                            break
+                    if not found_action_live:
+                        # Stream thinking tokens live — but hold back the last 10 chars
+                        # in case "ACTION:" or "ANSWER:" is split across chunks
+                        safe_end = max(streamed_up_to, len(full_text) - 10)
+                        new_text = full_text[streamed_up_to:safe_end]
+                        if new_text.strip():
+                            yield {"type": "thinking", "chunk": new_text}
+                            streamed_up_to = safe_end
+
         except Exception as exc:
             provider_label = api_provider or ("API" if use_api else "Ollama")
             yield {"type": "text", "chunk": f"\n⚠️ {provider_label} error: {exc}"}
@@ -1500,11 +1529,12 @@ async def run_agent(
 
         if action:
             tool_name, tool_args = action
-            # Emit the thinking text (everything before ACTION:)
-            think_text = full_text[:full_text.find("ACTION:")].strip()
-            think_text = _sanitize_agent_text(think_text)
-            if think_text:
-                yield {"type": "thinking", "chunk": think_text}
+            # Emit any leftover thinking text not yet streamed
+            if not found_action_live:
+                think_text = full_text[:full_text.find("ACTION:")].strip()
+                think_text = _sanitize_agent_text(think_text)
+                if think_text:
+                    yield {"type": "thinking", "chunk": think_text}
 
             yield {"type": "tool_call", "name": tool_name, "args": tool_args}
             result = await asyncio.to_thread(_execute_tool, tool_name, tool_args)

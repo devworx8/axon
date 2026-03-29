@@ -357,12 +357,12 @@ function axonChatMixin() {
     },
 
     appendThinkingBlock(message, chunk) {
-      const text = String(chunk || '').trim();
-      if (!text) return;
+      const text = String(chunk || '');
+      if (!text.trim()) return;
       this.ensureAssistantMessageBlocks(message);
       const last = message.thinkingBlocks[message.thinkingBlocks.length - 1];
       if (last && last.status === 'active') {
-        last.content = `${last.content}\n\n${text}`.trim();
+        last.content += text;
         last.updatedAt = new Date().toISOString();
         return;
       }
