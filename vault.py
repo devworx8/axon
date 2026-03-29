@@ -31,7 +31,7 @@ class VaultSession:
     """Singleton holding the in-memory unlock state."""
     _key: Optional[bytes] = None          # AES-256 key (32 bytes)
     _unlocked_at: Optional[float] = None  # epoch seconds
-    SESSION_TTL = 3600                    # auto-lock after 1 hour
+    SESSION_TTL = 86400                   # auto-lock after 24 hours
 
     @classmethod
     def unlock(cls, key: bytes):

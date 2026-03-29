@@ -1222,10 +1222,12 @@
 
               <div x-show="!usesOllamaBackend()" class="flex min-w-0 flex-1 items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900/70 px-2 py-1.5 md:flex-none md:min-w-[250px] md:gap-2 md:rounded-2xl md:px-2.5">
                 <span class="text-[9px] md:text-[10px] uppercase tracking-[0.16em] text-slate-500">Provider</span>
-                <div class="min-w-0 flex-1">
-                  <div class="truncate text-[11px] text-slate-100" x-text="selectedApiProviderLabel()"></div>
-                  <div class="truncate text-[10px] text-slate-500" x-text="selectedApiProviderModel() || selectedApiProviderTransportLabel()"></div>
-                </div>
+                <select x-model="settingsForm.api_provider" @change="saveSettingsQuiet()"
+                        class="dark-select min-w-0 flex-1 rounded-lg border border-slate-800 px-2 py-1 text-[11px] focus:outline-none md:rounded-xl">
+                  <template x-for="p in (runtimeStatus.api_providers || [])" :key="p.id">
+                    <option :value="p.id" x-text="p.label"></option>
+                  </template>
+                </select>
               </div>
 
               <button x-show="chatInput.trim()" @click="clearChatInput()"
