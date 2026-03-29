@@ -301,10 +301,18 @@ PROVIDER_VAULT_NAMES: dict[str, list[str]] = {
     "generic_api": ["api key", "generic api"],
 }
 
+PROVIDER_VAULT_URLS: dict[str, list[str]] = {
+    "anthropic": ["anthropic.com"],
+    "openai_gpts": ["openai.com"],
+    "gemini_gems": ["generativelanguage.googleapis.com", "aistudio.google.com"],
+    "deepseek": ["deepseek.com"],
+}
+
 
 async def vault_resolve_provider_key(db, provider_id: str) -> str:
     """
     Look up a provider's API key from the vault.
+    Matches by secret name OR URL domain.
     Returns the decrypted password/secret if found, empty string otherwise.
     Requires the vault to be unlocked.
     """
@@ -313,19 +321,30 @@ async def vault_resolve_provider_key(db, provider_id: str) -> str:
         return ""
 
     names = PROVIDER_VAULT_NAMES.get(provider_id, [provider_id])
+    url_patterns = PROVIDER_VAULT_URLS.get(provider_id, [])
 
     cur = await db.execute(
-        "SELECT id, name, category FROM vault_secrets ORDER BY name"
+        "SELECT id, name, category, url FROM vault_secrets ORDER BY name"
     )
     rows = await cur.fetchall()
 
     for row in rows:
         secret_name = (row["name"] or "").strip().lower()
+        secret_url = (row["url"] or "").strip().lower()
+        matched = False
         for candidate in names:
             if candidate.lower() in secret_name:
-                secret = await vault_get_secret(db, row["id"], key)
-                if secret and secret.get("password"):
-                    return secret["password"]
+                matched = True
+                break
+        if not matched:
+            for domain in url_patterns:
+                if domain in secret_url:
+                    matched = True
+                    break
+        if matched:
+            secret = await vault_get_secret(db, row["id"], key)
+            if secret and secret.get("password"):
+                return secret["password"]
 
     return ""
 
@@ -333,6 +352,7 @@ async def vault_resolve_provider_key(db, provider_id: str) -> str:
 async def vault_resolve_all_provider_keys(db) -> dict[str, str]:
     """
     Resolve API keys for all known providers from the vault.
+    Matches by secret name OR URL domain.
     Returns {provider_id: api_key} for providers that have a matching secret.
     """
     key = VaultSession.get_key()
@@ -340,7 +360,7 @@ async def vault_resolve_all_provider_keys(db) -> dict[str, str]:
         return {}
 
     cur = await db.execute(
-        "SELECT id, name, category FROM vault_secrets ORDER BY name"
+        "SELECT id, name, category, url FROM vault_secrets ORDER BY name"
     )
     rows = await cur.fetchall()
 
@@ -348,15 +368,24 @@ async def vault_resolve_all_provider_keys(db) -> dict[str, str]:
     for provider_id, names in PROVIDER_VAULT_NAMES.items():
         if provider_id in resolved:
             continue
+        url_patterns = PROVIDER_VAULT_URLS.get(provider_id, [])
         for row in rows:
             secret_name = (row["name"] or "").strip().lower()
+            secret_url = (row["url"] or "").strip().lower()
+            matched = False
             for candidate in names:
                 if candidate.lower() in secret_name:
-                    secret = await vault_get_secret(db, row["id"], key)
-                    if secret and secret.get("password"):
-                        resolved[provider_id] = secret["password"]
+                    matched = True
+                    break
+            if not matched:
+                for domain in url_patterns:
+                    if domain in secret_url:
+                        matched = True
                         break
-            if provider_id in resolved:
-                break
+            if matched:
+                secret = await vault_get_secret(db, row["id"], key)
+                if secret and secret.get("password"):
+                    resolved[provider_id] = secret["password"]
+                    break
 
     return resolved
