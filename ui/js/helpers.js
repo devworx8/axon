@@ -66,24 +66,21 @@ function axonHelpersMixin() {
     renderMd(text) {
       if (!text || typeof marked === 'undefined') return text || '';
       if (!this._markdownConfigured) {
-        const renderer = new marked.Renderer();
-        renderer.code = function({ text: code, lang }) {
-          if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
-            const highlighted = hljs.highlight(code, { language: lang }).value;
-            return `<pre><code class="hljs language-${lang}">${highlighted}</code></pre>`;
-          }
-          if (typeof hljs !== 'undefined') {
-            const highlighted = hljs.highlightAuto(code).value;
-            return `<pre><code class="hljs">${highlighted}</code></pre>`;
-          }
-          return `<pre><code>${code}</code></pre>`;
-        };
-        marked.setOptions({
+        // marked v15+ uses marked-highlight extension for syntax highlighting
+        if (typeof markedHighlight !== 'undefined' && typeof hljs !== 'undefined') {
+          marked.use(markedHighlight.markedHighlight({
+            langPrefix: 'hljs language-',
+            highlight(code, lang) {
+              if (lang && hljs.getLanguage(lang)) {
+                return hljs.highlight(code, { language: lang }).value;
+              }
+              return hljs.highlightAuto(code).value;
+            }
+          }));
+        }
+        marked.use({
           gfm: true,
           breaks: true,
-          headerIds: false,
-          mangle: false,
-          renderer,
         });
         this._markdownConfigured = true;
       }
