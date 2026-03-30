@@ -84,6 +84,27 @@ Every structural change must include the cheapest reliable verification:
 - `node --check` for touched JS modules when applicable
 - targeted smoke tests for touched routes or scripts
 
+## Anti-hallucination policy — ZERO TOLERANCE
+
+Hallucination is defined as inventing data, simulating tool output, or claiming
+actions were performed without real tool execution.
+
+1. **No fabricated output.** Every command result, file content, diff, or API
+   response must come from an actual tool call. Never simulate output.
+2. **No phantom edits.** Claiming a file was edited requires a successful
+   `edit_file` / `write_file` tool result. No exceptions.
+3. **No narrated commands.** Writing `git push` in a code block is not the same
+   as running it. Use `shell_cmd` for every command.
+4. **Verify after acting.** After any edit, read the file back or show a diff.
+   After any command, report the real output.
+5. **Admit uncertainty.** If you cannot verify a fact, say "I'm not sure" and
+   use a tool to check. Never guess and present it as fact.
+6. **Runtime enforcement.** The ReAct loop has automated hallucination detection
+   (`_looks_like_hallucinated_execution`). If triggered, the model is forced to
+   retry with real tool calls. Repeated failures abort the task.
+
+Any agent output that violates these rules is considered a critical defect.
+
 ## Prohibited shortcuts
 
 - Do not add another standalone prototype that is not wired into the live app.

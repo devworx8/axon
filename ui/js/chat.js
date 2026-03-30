@@ -135,7 +135,7 @@ function axonChatMixin() {
     async _uploadPastedImage(file) {
       try {
         const fd = new FormData();
-        fd.append('file', file, `paste-${Date.now()}.png`);
+        fd.append('files', file, `paste-${Date.now()}.png`);
         if (this.chatProjectId) fd.append('workspace_id', this.chatProjectId);
         const res = await fetch('/api/resources/upload', {
           method: 'POST',
@@ -144,8 +144,9 @@ function axonChatMixin() {
         });
         if (!res.ok) { this.showToast('Image upload failed'); return; }
         const data = await res.json();
-        if (data?.resource) {
-          this.selectedResources = [...(this.selectedResources || []), data.resource];
+        const item = (data?.items || [])[0];
+        if (item) {
+          this.selectedResources = [...(this.selectedResources || []), item];
           this.showToast('Image attached ✓');
         }
       } catch (err) {
@@ -421,7 +422,7 @@ function axonChatMixin() {
         this.liveOperator.title,
         msg ? `Goal received: ${msg.slice(0, 120)}` : this.liveOperator.detail,
       );
-      if (mode === 'agent') this.setAgentStage('observe');
+      if (mode === 'agent') { this.setAgentStage('observe'); this.agentCtxPct = 0; this.agentCtxIter = 0; }
       if (this.desktopPreview.enabled) {
         this.refreshDesktopPreview(true);
         this.scheduleDesktopPreview();
@@ -567,7 +568,31 @@ function axonChatMixin() {
       if (!message) return;
       if (!Array.isArray(message.thinkingBlocks)) message.thinkingBlocks = [];
       if (!Array.isArray(message.workingBlocks)) message.workingBlocks = [];
+      if (!Number.isInteger(message.agentBlockCounter)) {
+        const existingOrders = [...message.thinkingBlocks, ...message.workingBlocks]
+          .map(block => Number(block?.order || 0))
+          .filter(order => Number.isFinite(order) && order > 0);
+        message.agentBlockCounter = existingOrders.length ? Math.max(...existingOrders) : 0;
+      }
       if (!message.providerIdentity) message.providerIdentity = this.assistantProviderIdentity();
+    },
+
+    nextAgentBlockOrder(message) {
+      this.ensureAssistantMessageBlocks(message);
+      message.agentBlockCounter += 1;
+      return message.agentBlockCounter;
+    },
+
+    chronologicalAgentBlocks(message) {
+      this.ensureAssistantMessageBlocks(message);
+      return [
+        ...(message.thinkingBlocks || []).map(block => ({ kind: 'thinking', block })),
+        ...(message.workingBlocks || []).map(block => ({ kind: 'working', block })),
+      ].sort((left, right) => {
+        const orderDelta = Number(left.block?.order || 0) - Number(right.block?.order || 0);
+        if (orderDelta !== 0) return orderDelta;
+        return String(left.block?.createdAt || '').localeCompare(String(right.block?.createdAt || ''));
+      });
     },
 
     appendThinkingBlock(message, chunk) {
@@ -576,6 +601,11 @@ function axonChatMixin() {
       this.ensureAssistantMessageBlocks(message);
       const last = message.thinkingBlocks[message.thinkingBlocks.length - 1];
       if (last && last.status === 'active') {
+        // Chunks are accumulated text slices, not raw BPE sub-word tokens.
+        // The server may strip boundary whitespace, so repair word seams.
+        if (last.content.length && /[a-zA-Z0-9,]$/.test(last.content) && /^[a-zA-Z0-9]/.test(text)) {
+          last.content += ' ';
+        }
         last.content += text;
         last.updatedAt = new Date().toISOString();
         return;
@@ -585,6 +615,7 @@ function axonChatMixin() {
         title: 'Thinking',
         content: text,
         status: 'active',
+        order: this.nextAgentBlockOrder(message),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
@@ -606,6 +637,7 @@ function axonChatMixin() {
         args: event.args || {},
         result: '',
         status: 'running',
+        order: this.nextAgentBlockOrder(message),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
@@ -627,6 +659,7 @@ function axonChatMixin() {
         args: {},
         result: String(event.result || '').trim(),
         status: 'done',
+        order: this.nextAgentBlockOrder(message),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
@@ -762,6 +795,10 @@ function axonChatMixin() {
                 }
                 this.updateLiveOperator(effectiveMode, data);
                 this.scrollChat();
+              } else if (data.type === 'context_usage') {
+                this.agentCtxPct = data.pct || 0;
+                this.agentCtxIter = data.iteration || 0;
+                this.agentMaxIter = data.max_iterations || this.agentMaxIter || 75;
               } else if (data.type === 'done') {
                 this.setAgentStage('verify');
                 this.finalizeThinkingBlocks(this.chatMessages[idx]);
@@ -829,6 +866,12 @@ function axonChatMixin() {
       const suggestions = [];
       const lower = response.toLowerCase();
       const userLower = (userMessage || '').toLowerCase();
+      const trimmed = response.trim();
+
+      // Detect model asking for continuation ("Continue.", "please continue", etc.)
+      if (/\bcontinue\.?\s*$/i.test(trimmed) || /\bplease continue\b/i.test(trimmed)) {
+        suggestions.push('→ Continue');
+      }
 
       // Context-aware suggestions based on response content
       if (/\b(created|saved|added)\b.{0,30}\b(mission|task)/i.test(response)) {
@@ -864,7 +907,9 @@ function axonChatMixin() {
 
     useSuggestion(text) {
       this.followUpSuggestions = [];
-      this.chatInput = text;
+      // "→ Continue" chip sends a continuation prompt
+      const msg = text === '→ Continue' ? 'please continue' : text;
+      this.chatInput = msg;
       this.$nextTick(() => this.sendChat());
     },
 
@@ -892,6 +937,98 @@ function axonChatMixin() {
       } catch(e) {
         this.chatMessages = [];
       }
+      // Check for interrupted agent sessions on every chat load
+      this.checkInterruptedSession();
+    },
+
+    async checkInterruptedSession() {
+      try {
+        const data = await this.api('GET', '/api/agent/sessions/interrupted');
+        this.interruptedSession = data.session || null;
+        this.resumeBannerDismissed = false;
+      } catch(e) {
+        this.interruptedSession = null;
+      }
+    },
+
+    /* ── User message continuity actions ─────────────────────────────── */
+
+    editUserMessage(msg) {
+      // Put the message back into the composer for editing — do NOT re-send yet
+      this.chatInput = msg.content;
+      this.$nextTick(() => {
+        const el = this.$refs.chatComposer;
+        if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+        this.resetChatComposerHeight?.();
+      });
+      this.showToast('Message loaded for editing — modify and send when ready');
+    },
+
+    async retryUserMessage(msg) {
+      // Re-send the user message exactly as-is (creates new assistant response)
+      if (this.chatLoading) return;
+      this.chatInput = msg.content;
+      await this.$nextTick();
+      this.sendChat();
+    },
+
+    async quickResume() {
+      // Inject "please continue" as a user message to resume the last agent session
+      if (this.chatLoading) return;
+      this.interruptedSession = null;
+      this.resumeBannerDismissed = true;
+      this.chatInput = 'please continue';
+      await this.$nextTick();
+      this.sendChat();
+    },
+
+    /* ── Tasks ─────────────────────────────────────────────────────────── */
+
+    async loadWorkspaceTasks() {
+      try {
+        const pid = this.chatProjectId ? `?project_id=${this.chatProjectId}&status=open` : '?status=open';
+        const data = await this.api('GET', `/api/tasks${pid}`);
+        this.workspaceTasks = data.tasks || data || [];
+      } catch(e) { this.workspaceTasks = []; }
+    },
+
+    async toggleTaskDone(task) {
+      const newStatus = task.status === 'done' ? 'open' : 'done';
+      try {
+        await this.api('PATCH', `/api/tasks/${task.id}`, { status: newStatus });
+        task.status = newStatus;
+      } catch(e) {}
+    },
+
+    async submitAddFolder() {
+      const path = (this.addFolderModal.path || '').trim();
+      if (!path) { this.addFolderModal.error = 'Please enter a folder path.'; return; }
+      this.addFolderModal.loading = true;
+      this.addFolderModal.error = '';
+      try {
+        const result = await this.api('POST', '/api/workspaces/add-folder', { path, persist_root: true });
+        await this.loadProjects();
+        const pid = result.project?.id;
+        if (pid) { this.chatProjectId = String(pid); this.updateChatProject(); }
+        this.addFolderModal.open = false;
+        this.addFolderModal.path = '';
+        this.showToast(`✓ Workspace "${result.project?.name || path}" added`);
+      } catch(e) {
+        this.addFolderModal.error = e.message || 'Failed to add folder.';
+      }
+      this.addFolderModal.loading = false;
+    },
+
+    async submitNewTask() {
+      const title = (this.newTaskTitle || '').trim();
+      if (!title) return;
+      try {
+        const pid = this.chatProjectId ? parseInt(this.chatProjectId) : null;
+        const task = await this.api('POST', '/api/tasks', { title, project_id: pid });
+        this.workspaceTasks.push(task);
+        this.newTaskTitle = '';
+        this.addingTask = false;
+      } catch(e) {}
     },
 
     // ── Detect mission creation in AI response and trigger notification ──
@@ -991,13 +1128,19 @@ function axonChatMixin() {
         const idx = this.chatMessages.findIndex(m => m.id === respId);
         if (idx >= 0) {
           const isFetch = e.message === 'Failed to fetch' || e.message.includes('NetworkError');
-          this.chatMessages[idx].content = `⚠️ ${mode === 'agent' ? 'Agent error: ' : ''}${isFetch ? 'Connection lost.' : e.message}`;
+          const isAgentDisconnect = isFetch && mode === 'agent';
+          this.chatMessages[idx].content = isAgentDisconnect
+            ? '⚠️ Connection lost mid-task. The agent session was saved — say **"please continue"** or tap Resume below to pick up exactly where it stopped.'
+            : `⚠️ ${mode === 'agent' ? 'Agent error: ' : ''}${isFetch ? 'Connection lost.' : e.message}`;
           this.chatMessages[idx].streaming = false;
           this.chatMessages[idx].error = true;
           this.chatMessages[idx].retryMsg = msg;
           this.chatMessages[idx].mode = mode;
+          this.chatMessages[idx].agentDisconnect = isAgentDisconnect;
           if (isFetch) this.serverConnected = false;
           this.rememberOperatorOutcome(mode, this.chatMessages[idx]);
+          // Refresh interrupted session banner after disconnect
+          if (isAgentDisconnect) setTimeout(() => this.checkInterruptedSession(), 1500);
         }
         if (mode === 'agent') this.setAgentStage('recover');
         this.updateLiveOperator(mode, { type: 'error', message: e.message === 'Failed to fetch' || e.message.includes('NetworkError') ? 'Connection lost.' : e.message });

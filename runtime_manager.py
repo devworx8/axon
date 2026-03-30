@@ -4,6 +4,11 @@ Runtime snapshot helpers for Axon.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 from model_router import LOCAL_MODELS_ENABLED, ModelRouterConfig, local_model_cards, resolve_model_for_role
 from agent_registry import active_agents_count, lifecycle_phases, registered_agents
 from permissions_guard import default_permission_cards
@@ -86,6 +91,42 @@ def build_router_config(settings: dict) -> ModelRouterConfig:
             "gemini_gems": _setting_enabled(settings.get("gemini_gems_enabled")),
         },
     )
+
+
+def env_snapshot(workspace_path: str | None = None) -> dict:
+    """Return environment info for a workspace path (or the server root)."""
+    if workspace_path:
+        probe = Path(workspace_path).expanduser().resolve()
+    else:
+        probe = Path(__file__).resolve().parent
+    work_dir = probe.name
+    # Detect virtualenv inside the workspace
+    venv_name = ""
+    if workspace_path:
+        for candidate in (".venv", "venv", ".env"):
+            vdir = probe / candidate
+            if (vdir / "bin" / "python").is_file() or (vdir / "Scripts" / "python.exe").is_file():
+                venv_name = candidate
+                break
+    else:
+        venv = os.environ.get("VIRTUAL_ENV") or ""
+        venv_name = Path(venv).name if venv else ""
+        if not venv_name and sys.prefix != sys.base_prefix:
+            venv_name = Path(sys.prefix).name
+    # Git branch
+    git_branch = ""
+    try:
+        git_branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(probe), stderr=subprocess.DEVNULL, timeout=2,
+        ).decode().strip()
+    except Exception:
+        pass
+    return {
+        "venv": venv_name,
+        "git_branch": git_branch,
+        "work_dir": work_dir,
+    }
 
 
 def build_runtime_status(
@@ -174,4 +215,5 @@ def build_runtime_status(
             "url_import_enabled": _setting_enabled(settings.get("resource_url_import_enabled", "1")),
         },
         "memory_overview": memory_overview,
+        "env": env_snapshot(),
     }

@@ -295,20 +295,80 @@ function axonHelpersMixin() {
         `<div style="border-top:1px solid rgba(16,185,129,0.15);padding:5px 12px;background:rgba(6,78,59,0.2)">` +
         `<span style="font-size:10px;color:#34d399;font-family:monospace">✓ ${esc(msg)}</span></div>`;
 
+      // Blocked file-edit gate UI
+      const blockedEditHtml = (op, filePath) => {
+        const shortPath = filePath.split('/').slice(-2).join('/');
+        const opLabel = { write: 'write', edit: 'edit', delete: 'delete', append: 'append', create: 'create' }[op] || op;
+        return `<div style="border-top:1px solid rgba(245,158,11,0.3);padding:10px 12px;background:rgba(120,53,15,0.25)">
+          <div style="font-size:11px;color:#fbbf24;margin-bottom:8px">
+            🔒 <strong>${opLabel}</strong> blocked — <code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:4px">${esc(shortPath)}</code> requires your approval.
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button onclick="window.__axon?.allowEdit('${esc(filePath)}','file')"
+              style="padding:4px 10px;font-size:10px;border-radius:8px;border:1px solid rgba(245,158,11,0.4);background:rgba(245,158,11,0.15);color:#fbbf24;cursor:pointer">
+              Allow this file
+            </button>
+            <button onclick="window.__axon?.allowEdit('${esc(filePath)}','repo')"
+              style="padding:4px 10px;font-size:10px;border-radius:8px;border:1px solid rgba(34,197,94,0.4);background:rgba(34,197,94,0.15);color:#4ade80;cursor:pointer">
+              Allow this repo
+            </button>
+            <button onclick="window.__axon?.allowEdit('','session')"
+              style="padding:4px 10px;font-size:10px;border-radius:8px;border:1px solid rgba(99,102,241,0.4);background:rgba(99,102,241,0.1);color:#a5b4fc;cursor:pointer">
+              Allow all edits this session
+            </button>
+          </div>
+          <div style="font-size:9px;color:#6b7280;margin-top:6px">After allowing, say <em>please continue</em> to retry.</div>
+        </div>`;
+      };
+
       let html = '';
 
       if (name === 'shell_cmd') {
         const cmd = args.cmd || args.command || '';
         if (cmd) html += section(cmd, 'bash', '$ command', true);
-        if (result) html += section(result.slice(0, 1200), 'plaintext', 'output', false);
-        else if (isRunning && cmd) html += runningRow();
+        // Detect blocked command — show approval UI instead of raw error
+        if (result && result.startsWith('BLOCKED_CMD:')) {
+          const parts = result.split(':');
+          const blockedName = parts[1] || cmd.split(' ')[0];
+          const fullCmd = parts.slice(2).join(':') || cmd;
+          html += `<div style="border-top:1px solid rgba(245,158,11,0.3);padding:10px 12px;background:rgba(120,53,15,0.25)">
+            <div style="font-size:11px;color:#fbbf24;margin-bottom:8px">
+              ⚠️ Command <code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:4px">${esc(blockedName)}</code> is not in the allowed list.
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button onclick="window.__axon?.allowCommand('${esc(blockedName)}',false,false)"
+                style="padding:4px 10px;font-size:10px;border-radius:8px;border:1px solid rgba(245,158,11,0.4);background:rgba(245,158,11,0.15);color:#fbbf24;cursor:pointer">
+                Allow this session
+              </button>
+              <button onclick="window.__axon?.allowCommand('${esc(blockedName)}',false,true)"
+                style="padding:4px 10px;font-size:10px;border-radius:8px;border:1px solid rgba(34,197,94,0.4);background:rgba(34,197,94,0.15);color:#4ade80;cursor:pointer">
+                Allow permanently
+              </button>
+              <button onclick="window.__axon?.allowCommand('',true,false)"
+                style="padding:4px 10px;font-size:10px;border-radius:8px;border:1px solid rgba(99,102,241,0.4);background:rgba(99,102,241,0.1);color:#a5b4fc;cursor:pointer">
+                Allow all commands
+              </button>
+            </div>
+            <div style="font-size:9px;color:#6b7280;margin-top:6px">After allowing, say <em>please continue</em> to retry.</div>
+          </div>`;
+        } else if (result) {
+          html += section(result.slice(0, 1200), 'plaintext', 'output', false);
+        } else if (isRunning && cmd) html += runningRow();
 
-      } else if (name === 'write_file') {
+      } else if (name === 'write_file' || name === 'edit_file' || name === 'delete_file' || name === 'append_file' || name === 'create_file') {
         const lang = extToLang(args.path || '');
         html += pathRow(args.path);
-        if (args.content) html += section(args.content, lang, lang !== 'plaintext' ? lang : 'content', true);
-        if (result) html += successRow(result.slice(0, 180));
-        else if (isRunning) html += runningRow();
+        if (result && result.startsWith('BLOCKED_EDIT:')) {
+          const parts = result.split(':');
+          const op = parts[1] || name.replace('_file', '');
+          const filePath = parts.slice(2).join(':');
+          html += blockedEditHtml(op, filePath);
+        } else {
+          if (name === 'write_file' && args.content) html += section(args.content, lang, lang !== 'plaintext' ? lang : 'content', true);
+          if (name === 'edit_file' && args.old_string) html += section(`- ${args.old_string}\n+ ${args.new_string || ''}`, 'diff', 'diff', true);
+          if (result) html += successRow(result.slice(0, 180));
+          else if (isRunning) html += runningRow();
+        }
 
       } else if (name === 'read_file') {
         const lang = extToLang(args.path || '');

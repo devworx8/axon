@@ -446,7 +446,21 @@
                          type="number" min="5" max="300"
                          class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-blue-500 transition" />
                 </div>
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Max agent iterations</label>
+                  <input x-model="settingsForm.max_agent_iterations"
+                         type="number" min="10" max="200"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-blue-500 transition" />
+                  <div class="mt-1 text-[10px] text-slate-600">Default 75 — raise for long tasks, lower to save tokens</div>
+                </div>
               </div>
+              <label class="flex items-center gap-2 text-[11px] text-slate-300 mt-1">
+                <input type="checkbox"
+                       :checked="!!settingsForm.context_compact_enabled"
+                       @change="settingsForm.context_compact_enabled = $event.target.checked"
+                       class="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500">
+                <span>Auto-compact context when nearing token limit <span class="text-slate-500">(summarises old tool results, prevents context overflow)</span></span>
+              </label>
               <div class="flex flex-wrap gap-2 text-[10px] text-slate-500">
                 <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1"
                       x-text="connectionStatusBadges().map(item => item.label).join(' · ') || 'Local only'"></span>

@@ -461,6 +461,7 @@ async def stream_chat(
     resource_image_paths: Optional[list[str]] = None,
     vision_model: str = "",
     project_name: Optional[str] = None,
+    workspace_path: str = "",
     backend: str = "ollama",
     api_key: str = "",
     api_provider: str = "anthropic",
@@ -471,7 +472,7 @@ async def stream_chat(
 ) -> AsyncGenerator[str, None]:
     """Public async generator — yields chat response chunks across supported runtimes."""
     system = SYSTEM_PROMPT_OLLAMA
-    if _requires_local_operator_execution(user_message, db_path=DEVBRAIN_DB_PATH):
+    if _requires_local_operator_execution(user_message, db_path=DEVBRAIN_DB_PATH, workspace_path=workspace_path):
         yield (
             "This request needs local tools. I did not create, edit, append, delete, "
             "or verify any local file, repo, or workspace state in this plain chat turn. "
@@ -600,19 +601,123 @@ _ALLOWED_CMDS = frozenset([
     "jq", "yq", "awk", "sed", "sort", "uniq", "cut", "tr",
 ])
 
+# Runtime-session allowlist — populated via /api/agent/allow-command without restart
+# Persisted to settings as "extra_allowed_cmds" (comma-separated) and loaded on boot
+_SESSION_ALLOWED_CMDS: set[str] = set()
+
+# Sentinel value for "allow all" mode (no command filtering)
+_ALLOW_ALL_CMDS: bool = False
+
+# ── Edit permission gate ────────────────────────────────────────────────────
+_SESSION_ALLOWED_PATHS: set[str] = set()   # specific file paths cleared this session
+_SESSION_ALLOWED_REPOS: set[str] = set()   # repo roots — all files under these are OK
+_ALLOW_ALL_EDITS: bool = False             # session-wide allow-all for file writes/edits
+
+# Active workspace root — set at the start of each agent run for cwd defaulting
+_ACTIVE_WORKSPACE_PATH: str = ""
+
+
+def _workspace_root() -> str:
+    """Return the active workspace root for the current agent run, if available."""
+    if _ACTIVE_WORKSPACE_PATH:
+        resolved = os.path.realpath(os.path.expanduser(_ACTIVE_WORKSPACE_PATH))
+        if resolved.startswith(_HOME) and os.path.isdir(resolved):
+            return resolved
+    return _HOME
+
+
+def _resolve_agent_path(path: str = "", *, default_to_workspace: bool = True) -> str:
+    """Resolve agent paths relative to the selected workspace instead of server cwd."""
+    raw = str(path or "").strip()
+    if raw.startswith("~"):
+        candidate = os.path.expanduser(raw)
+    elif os.path.isabs(raw):
+        candidate = raw
+    elif raw:
+        base = _workspace_root() if default_to_workspace else _HOME
+        candidate = os.path.join(base, raw)
+    else:
+        candidate = _workspace_root() if default_to_workspace else _HOME
+    return os.path.realpath(candidate)
+
+
+def _resolve_hidden_path(path: str) -> str:
+    """Auto-correct common hidden-path omissions like devbrain -> .devbrain."""
+    if os.path.exists(path):
+        return path
+    parts = path.split(os.sep)
+    for i, part in enumerate(parts):
+        if part and not part.startswith("."):
+            candidate = os.sep.join(parts[:i] + ["." + part] + parts[i + 1 :])
+            if os.path.exists(candidate):
+                return candidate
+    return path
+
+
+def _edit_is_allowed(path: str) -> bool:
+    """Return True if this absolute path is cleared for writing/editing/deletion."""
+    if _ALLOW_ALL_EDITS:
+        return True
+    if path in _SESSION_ALLOWED_PATHS:
+        return True
+    for repo in _SESSION_ALLOWED_REPOS:
+        if path == repo or path.startswith(repo + os.sep):
+            return True
+    return False
+
+
+def agent_allow_edit(path: str = "", scope: str = "session") -> None:
+    """Whitelist file edits: scope='file' | 'repo' | 'session'."""
+    global _ALLOW_ALL_EDITS
+    if scope == "session":
+        _ALLOW_ALL_EDITS = True
+        return
+    if not path:
+        return
+    if scope == "repo":
+        # Walk up from path to find .git root; fall back to parent dir
+        candidate = Path(path)
+        if candidate.is_file() or not candidate.exists():
+            candidate = candidate.parent
+        while candidate != candidate.parent:
+            if (candidate / ".git").exists():
+                break
+            candidate = candidate.parent
+        _SESSION_ALLOWED_REPOS.add(str(candidate))
+    else:  # scope == "file"
+        _SESSION_ALLOWED_PATHS.add(path)
+
+
+def agent_get_edit_state() -> dict:
+    """Return current edit-gate state (for debug / status endpoints)."""
+    return {
+        "allow_all": _ALLOW_ALL_EDITS,
+        "paths": sorted(_SESSION_ALLOWED_PATHS),
+        "repos": sorted(_SESSION_ALLOWED_REPOS),
+    }
+
+
+def _effective_allowed_cmds() -> frozenset[str]:
+    return _ALLOWED_CMDS | _SESSION_ALLOWED_CMDS
+
+
+def agent_allow_command(cmd: str, allow_all: bool = False) -> None:
+    """Add a command to the session allowlist (called from server endpoints)."""
+    global _ALLOW_ALL_CMDS
+    if allow_all:
+        _ALLOW_ALL_CMDS = True
+    else:
+        _SESSION_ALLOWED_CMDS.add(cmd.strip().lower())
+
+
+def agent_get_session_allowed() -> list[str]:
+    """Return the current session-allowed commands list."""
+    return sorted(_SESSION_ALLOWED_CMDS)
+
 
 def _tool_read_file(path: str, max_kb: int = 512) -> str:
     """Read a file, sandboxed to home directory. Reads up to 512 KB by default."""
-    p = os.path.realpath(os.path.expanduser(path))
-    # Auto-correct: model may omit leading dot from hidden dirs (devbrain/x → .devbrain/x)
-    if not os.path.exists(p):
-        parts = p.split(os.sep)
-        for i, part in enumerate(parts):
-            if part and not part.startswith("."):
-                candidate = os.sep.join(parts[:i] + ["." + part] + parts[i+1:])
-                if os.path.exists(candidate):
-                    p = candidate
-                    break
+    p = _resolve_hidden_path(_resolve_agent_path(path))
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory is not allowed."
     if not os.path.exists(p):
@@ -639,16 +744,9 @@ def _tool_read_file(path: str, max_kb: int = 512) -> str:
         return f"ERROR: Permission denied: {p}"
 
 
-def _tool_list_dir(path: str = "~") -> str:
+def _tool_list_dir(path: str = "") -> str:
     """List directory contents, sandboxed to home."""
-    p = os.path.realpath(os.path.expanduser(path))
-    # Auto-correct: model may omit leading dot from hidden dirs (devbrain → .devbrain)
-    if not os.path.exists(p):
-        parent = os.path.dirname(p)
-        basename = os.path.basename(p)
-        dotted = os.path.join(parent, "." + basename)
-        if os.path.exists(dotted):
-            p = dotted
+    p = _resolve_hidden_path(_resolve_agent_path(path))
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory is not allowed."
     if not os.path.exists(p):
@@ -677,11 +775,14 @@ def _tool_shell_cmd(cmd: str, cwd: str = "", timeout: int = 15) -> str:
     if not parts:
         return "ERROR: Empty command."
     base_cmd = os.path.basename(parts[0])
-    if base_cmd not in _ALLOWED_CMDS:
-        return f"ERROR: Command '{base_cmd}' is not in the allowed list. Allowed: {', '.join(sorted(_ALLOWED_CMDS))}"
-    work_dir = os.path.realpath(os.path.expanduser(cwd)) if cwd else _HOME
+    if not _ALLOW_ALL_CMDS and base_cmd not in _effective_allowed_cmds():
+        # Return structured blocked signal so the UI can offer an approval dialog
+        return f"BLOCKED_CMD:{base_cmd}:{cmd}"
+    work_dir = _resolve_agent_path(cwd, default_to_workspace=True) if cwd else _workspace_root()
     if not work_dir.startswith(_HOME):
         return "ERROR: cwd must be within home directory."
+    if not os.path.isdir(work_dir):
+        return f"ERROR: cwd is not a directory: {work_dir}"
     try:
         result = subprocess.run(
             parts, capture_output=True, text=True,
@@ -699,9 +800,9 @@ def _tool_shell_cmd(cmd: str, cwd: str = "", timeout: int = 15) -> str:
         return f"ERROR: {exc}"
 
 
-def _tool_git_status(path: str = "~") -> str:
+def _tool_git_status(path: str = "") -> str:
     """Get git status + recent log for a directory."""
-    p = os.path.realpath(os.path.expanduser(path))
+    p = _resolve_agent_path(path)
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory."
     if not os.path.exists(p):
@@ -712,9 +813,9 @@ def _tool_git_status(path: str = "~") -> str:
     return f"Branch: {branch.strip()}\n\nStatus:\n{status}\n\nRecent commits:\n{log}"
 
 
-def _tool_search_code(pattern: str, path: str = "~", glob: str = "*.py *.ts *.tsx *.js *.jsx") -> str:
+def _tool_search_code(pattern: str, path: str = "", glob: str = "*.py *.ts *.tsx *.js *.jsx") -> str:
     """Grep for a pattern in source files. Returns matching lines with file:line context."""
-    p = os.path.realpath(os.path.expanduser(path))
+    p = _resolve_agent_path(path)
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory."
     includes = " ".join(f"--include={g}" for g in glob.split())
@@ -726,9 +827,11 @@ def _tool_search_code(pattern: str, path: str = "~", glob: str = "*.py *.ts *.ts
 
 def _tool_write_file(path: str, content: str) -> str:
     """Write content to a file (sandboxed to home)."""
-    p = os.path.realpath(os.path.expanduser(path))
+    p = _resolve_agent_path(path)
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory."
+    if not _edit_is_allowed(p):
+        return f"BLOCKED_EDIT:write:{p}"
     os.makedirs(os.path.dirname(p), exist_ok=True)
     try:
         with open(p, "w", encoding="utf-8") as f:
@@ -742,9 +845,11 @@ def _tool_append_file(path: str, content: str = "") -> str:
     """Append content to a file (sandboxed to home)."""
     if not content:
         return "ERROR: append_file requires 'content'."
-    p = os.path.realpath(os.path.expanduser(path))
+    p = _resolve_agent_path(path)
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory."
+    if not _edit_is_allowed(p):
+        return f"BLOCKED_EDIT:append:{p}"
     os.makedirs(os.path.dirname(p), exist_ok=True)
     try:
         with open(p, "a", encoding="utf-8") as f:
@@ -756,9 +861,11 @@ def _tool_append_file(path: str, content: str = "") -> str:
 
 def _tool_create_file(path: str, content: str = "") -> str:
     """Create a new file, failing if it already exists."""
-    p = os.path.realpath(os.path.expanduser(path))
+    p = _resolve_agent_path(path)
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory."
+    if not _edit_is_allowed(p):
+        return f"BLOCKED_EDIT:create:{p}"
     if os.path.exists(p):
         return f"ERROR: File already exists: {p}"
     os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -772,9 +879,11 @@ def _tool_create_file(path: str, content: str = "") -> str:
 
 def _tool_delete_file(path: str) -> str:
     """Delete a file safely (sandboxed to home)."""
-    p = os.path.realpath(os.path.expanduser(path))
+    p = _resolve_agent_path(path)
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory."
+    if not _edit_is_allowed(p):
+        return f"BLOCKED_EDIT:delete:{p}"
     if not os.path.exists(p):
         return f"ERROR: File not found: {p}"
     if os.path.isdir(p):
@@ -790,9 +899,11 @@ def _tool_edit_file(path: str, old_string: str, new_string: str, replace_all: bo
     """Targeted find-and-replace edit. Replaces an exact substring in a file.
     old_string must be unique in the file (unless replace_all=True).
     This is the preferred way to make code changes — surgical, reviewable edits."""
-    p = os.path.realpath(os.path.expanduser(path))
+    p = _resolve_agent_path(path)
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory."
+    if not _edit_is_allowed(p):
+        return f"BLOCKED_EDIT:edit:{p}"
     if not os.path.exists(p):
         return f"ERROR: File not found: {p}"
     if os.path.isdir(p):
@@ -843,9 +954,9 @@ def _tool_edit_file(path: str, old_string: str, new_string: str, replace_all: bo
     )
 
 
-def _tool_show_diff(path: str = "~", staged: bool = False) -> str:
+def _tool_show_diff(path: str = "", staged: bool = False) -> str:
     """Show git diff for a file or directory. Use after edits to review changes."""
-    p = os.path.realpath(os.path.expanduser(path))
+    p = _resolve_agent_path(path)
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory."
     flag = "--staged" if staged else ""
@@ -1247,6 +1358,260 @@ def _tool_spawn_subagent(task: str, context: str = "", max_iterations: int = 10)
     return f"**Sub-agent result:**\n{answer}"
 
 
+def _tool_project_info(path: str = "") -> str:
+    """Scan a project directory and return real structure: file tree, LOC, git log, key files.
+    Always call this before making any claims about a project's structure or codebase.
+    """
+    import subprocess as _sp
+    expanded = _resolve_agent_path(path)
+    if not expanded.startswith(_HOME):
+        return f"ERROR: Access outside home directory: {expanded}"
+    if not os.path.isdir(expanded):
+        return f"ERROR: Not a directory: {expanded}"
+    lines: list[str] = []
+    # File tree (2 levels, skip hidden/.venv/__pycache__)
+    try:
+        tree = _sp.run(
+            ["find", expanded, "-maxdepth", "2", "-not", "-path", "*/.*",
+             "-not", "-path", "*/__pycache__/*", "-not", "-path", "*/.venv/*",
+             "-not", "-path", "*/node_modules/*"],
+            capture_output=True, text=True, timeout=10
+        )
+        entries = [e for e in tree.stdout.strip().splitlines() if e != expanded]
+        lines.append(f"## File tree ({len(entries)} entries):\n" + "\n".join(entries[:80]))
+    except Exception as e:
+        lines.append(f"Tree error: {e}")
+    # Real LOC per language
+    try:
+        py_loc = _sp.run(["find", expanded, "-name", "*.py", "-not", "-path", "*/.venv/*",
+                          "-not", "-path", "*/__pycache__/*", "-exec", "wc", "-l", "{}", "+"],
+                         capture_output=True, text=True, timeout=10)
+        js_loc = _sp.run(["find", expanded, "-name", "*.js", "-o", "-name", "*.ts",
+                          "-not", "-path", "*/node_modules/*"],
+                         capture_output=True, text=True, timeout=10)
+        total_py = py_loc.stdout.strip().splitlines()[-1].strip() if py_loc.stdout.strip() else "0"
+        lines.append(f"\n## Lines of code:\nPython: {total_py}\nJS/TS files: {len(js_loc.stdout.strip().splitlines())}")
+    except Exception as e:
+        lines.append(f"LOC error: {e}")
+    # Git status
+    try:
+        git = _sp.run(["git", "-C", expanded, "log", "--oneline", "-8"],
+                      capture_output=True, text=True, timeout=8)
+        if git.returncode == 0:
+            lines.append(f"\n## Recent git commits:\n{git.stdout.strip()}")
+        else:
+            lines.append("\n## Git: No repository found")
+    except Exception:
+        lines.append("\n## Git: Not available")
+    # Key config files
+    for fname in ["pyproject.toml", "package.json", "requirements.txt", "Dockerfile", "README.md"]:
+        fpath = os.path.join(expanded, fname)
+        if os.path.exists(fpath):
+            try:
+                with open(fpath) as f:
+                    snippet = f.read(400)
+                lines.append(f"\n## {fname} (first 400 chars):\n{snippet}")
+            except Exception:
+                pass
+    return "\n".join(lines)
+
+
+def _tool_web_search(query: str, max_results: int = 6) -> str:
+    """Search the web using DuckDuckGo and return top results with titles and snippets.
+    Use for: current events, documentation lookups, package info, error messages.
+    """
+    import urllib.request as _req
+    import urllib.parse as _parse
+    import html as _html
+    import re as _rre
+    try:
+        encoded = _parse.quote_plus(query)
+        url = f"https://html.duckduckgo.com/html/?q={encoded}"
+        request = _req.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120",
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+        with _req.urlopen(request, timeout=15) as resp:
+            body = resp.read(65536).decode("utf-8", errors="replace")
+        # Parse result blocks
+        results: list[str] = []
+        blocks = _rre.findall(
+            r'<a class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?<a class="result__snippet"[^>]*>(.*?)</a>',
+            body, _rre.DOTALL
+        )
+        for href, title, snippet in blocks[:max_results]:
+            title_clean = _html.unescape(_rre.sub(r'<[^>]+>', '', title)).strip()
+            snippet_clean = _html.unescape(_rre.sub(r'<[^>]+>', '', snippet)).strip()
+            results.append(f"**{title_clean}**\n{href}\n{snippet_clean}")
+        if not results:
+            return f"No results found for: {query}"
+        return f"## Web search: {query}\n\n" + "\n\n---\n\n".join(results)
+    except Exception as exc:
+        return f"ERROR: web search failed — {exc}"
+
+
+def _tool_glob_files(pattern: str, path: str = "") -> str:
+    """Find files matching a glob pattern (e.g. '**/*.py', 'src/**/*.ts').
+    Returns matching paths sorted by modification time (newest first).
+    """
+    import glob as _glob
+    base = _resolve_agent_path(path)
+    if not base.startswith(_HOME):
+        return f"ERROR: Access outside home directory: {base}"
+    full_pattern = os.path.join(base, pattern)
+    try:
+        matches = _glob.glob(full_pattern, recursive=True)
+        # Filter out hidden dirs, venv, __pycache__
+        matches = [m for m in matches
+                   if "/.venv/" not in m and "/__pycache__/" not in m
+                   and "/node_modules/" not in m and "/." not in m.replace(base, "")]
+        matches.sort(key=os.path.getmtime, reverse=True)
+        if not matches:
+            return f"No files match pattern '{pattern}' in {base}"
+        lines = [f"{m} ({os.path.getsize(m):,} bytes)" for m in matches[:60]]
+        return f"## {len(matches)} file(s) matching '{pattern}':\n" + "\n".join(lines)
+    except Exception as exc:
+        return f"ERROR: {exc}"
+
+
+def _tool_grep_code(pattern: str, path: str = "", file_type: str = "",
+                    context_lines: int = 2, max_results: int = 40) -> str:
+    """Search file contents with regex (ripgrep-style). Faster and more powerful than search_code.
+    Args:
+        pattern: Regex pattern to search for
+        path: Directory to search in (default: home)
+        file_type: File extension filter e.g. 'py', 'js', 'ts' (optional)
+        context_lines: Lines of context around each match (0-5)
+        max_results: Cap on number of matches returned
+    """
+    import subprocess as _sp
+    base = _resolve_agent_path(path)
+    if not base.startswith(_HOME):
+        return f"ERROR: Access outside home directory: {base}"
+    cmd = ["grep", "-r", "--include-dir=.git",
+           f"-C{max(0, min(5, int(context_lines)))}",
+           "-n", "--color=never"]
+    if file_type:
+        cmd += [f"--include=*.{file_type.lstrip('.')}"]
+    cmd += ["--exclude-dir=.venv", "--exclude-dir=__pycache__",
+            "--exclude-dir=node_modules", "--exclude-dir=.git"]
+    cmd += [pattern, base]
+    try:
+        result = _sp.run(cmd, capture_output=True, text=True, timeout=15)
+        output = result.stdout.strip()
+        if not output:
+            return f"No matches for '{pattern}' in {base}"
+        lines = output.splitlines()
+        if len(lines) > max_results * 3:
+            lines = lines[:max_results * 3]
+            output = "\n".join(lines) + f"\n... (truncated to {max_results} results)"
+        return f"## grep '{pattern}' in {base}:\n\n{output}"
+    except Exception as exc:
+        return f"ERROR: {exc}"
+
+
+def _tool_diff_files(path_a: str, path_b: str) -> str:
+    """Show a unified diff between two files. Useful for reviewing changes or comparing versions."""
+    import subprocess as _sp
+    a = _resolve_agent_path(path_a)
+    b = _resolve_agent_path(path_b)
+    for p in (a, b):
+        if not p.startswith(_HOME):
+            return f"ERROR: Access outside home directory: {p}"
+    for p in (a, b):
+        if not os.path.isfile(p):
+            return f"ERROR: File not found: {p}"
+    try:
+        result = _sp.run(["diff", "-u", a, b], capture_output=True, text=True, timeout=10)
+        diff = result.stdout.strip()
+        if not diff:
+            return f"Files are identical: {a} vs {b}"
+        lines = diff.splitlines()
+        if len(lines) > 200:
+            lines = lines[:200]
+            diff = "\n".join(lines) + "\n... (truncated)"
+        return f"## diff {a} vs {b}:\n\n{diff}"
+    except Exception as exc:
+        return f"ERROR: {exc}"
+
+
+def _tool_memory_write(category: str, key: str, value: str) -> str:
+    """Write a structured memory entry for Axon. Supports categories: facts, patterns, preferences, code, context.
+    Use this to build Axon's persistent knowledge base across sessions.
+    Example: category='patterns', key='user_prefers_typescript', value='User always uses TypeScript with strict mode'
+    """
+    import sqlite3 as _sq
+    valid_cats = {"facts", "patterns", "preferences", "code", "context", "skills", "project"}
+    category = category.strip().lower()
+    if category not in valid_cats:
+        category = "facts"
+    db = str(DEVBRAIN_DB_PATH)
+    compound_key = f"{category}:{key.strip()}"
+    try:
+        with _sq.connect(db, timeout=10) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS agent_notes (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            """)
+            conn.execute("""
+                INSERT INTO agent_notes (key, value, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+            """, (compound_key, value.strip(), time.time()))
+            conn.commit()
+        return f"Memory saved [{category}:{key}] — {len(value)} chars"
+    except Exception as exc:
+        return f"ERROR: {exc}"
+
+
+def _tool_memory_read(category: str = "", query: str = "") -> str:
+    """Read from Axon's structured memory bank. Filter by category and/or search term.
+    Categories: facts, patterns, preferences, code, context, skills, project
+    """
+    import sqlite3 as _sq
+    db = str(DEVBRAIN_DB_PATH)
+    try:
+        with _sq.connect(db, timeout=10) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS agent_notes (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            """)
+            if category and query:
+                rows = conn.execute(
+                    "SELECT key, value, updated_at FROM agent_notes "
+                    "WHERE key LIKE ? AND (key LIKE ? OR value LIKE ?) "
+                    "ORDER BY updated_at DESC LIMIT 30",
+                    (f"{category}:%", f"%{query}%", f"%{query}%")
+                ).fetchall()
+            elif category:
+                rows = conn.execute(
+                    "SELECT key, value, updated_at FROM agent_notes "
+                    "WHERE key LIKE ? ORDER BY updated_at DESC LIMIT 30",
+                    (f"{category.strip().lower()}:%",)
+                ).fetchall()
+            elif query:
+                rows = conn.execute(
+                    "SELECT key, value, updated_at FROM agent_notes "
+                    "WHERE key LIKE ? OR value LIKE ? ORDER BY updated_at DESC LIMIT 30",
+                    (f"%{query}%", f"%{query}%")
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT key, value, updated_at FROM agent_notes ORDER BY updated_at DESC LIMIT 30"
+                ).fetchall()
+        if not rows:
+            return f"No memory entries found (category='{category}', query='{query}')"
+        lines = [f"**[{r[0]}]**: {r[1][:300]}" for r in rows]
+        return f"## Axon memory ({len(rows)} entries):\n" + "\n\n".join(lines)
+    except Exception as exc:
+        return f"ERROR: {exc}"
+
+
 _TOOL_REGISTRY = {
     "read_file":      _tool_read_file,
     "list_dir":       _tool_list_dir,
@@ -1268,6 +1633,14 @@ _TOOL_REGISTRY = {
     "recall":         _tool_recall,
     "plan_task":      _tool_plan_task,
     "spawn_subagent": _tool_spawn_subagent,
+    # ── Power tools ───────────────────────────────────────────────────────
+    "project_info":   _tool_project_info,
+    "web_search":     _tool_web_search,
+    "glob_files":     _tool_glob_files,
+    "grep_code":      _tool_grep_code,
+    "diff_files":     _tool_diff_files,
+    "memory_write":   _tool_memory_write,
+    "memory_read":    _tool_memory_read,
 }
 
 # Legacy in-file agent implementation removed. The extracted runtime now lives
@@ -1652,10 +2025,12 @@ async def run_agent(
     resource_image_paths: Optional[list[str]] = None,
     vision_model: str = "",
     project_name: Optional[str] = None,
+    workspace_path: str = "",
     tools: list[str] | None = None,
     ollama_url: str = "",
     ollama_model: str = "",
     max_iterations: int = 25,
+    context_compact: bool = True,
     force_tool_mode: bool = False,
     api_key: str = "",
     api_base_url: str = "",
@@ -1665,6 +2040,8 @@ async def run_agent(
     backend: str = "",
 ) -> AsyncGenerator[dict, None]:
     """Compatibility wrapper over the extracted ReAct-style agent loop."""
+    global _ACTIVE_WORKSPACE_PATH
+    _ACTIVE_WORKSPACE_PATH = workspace_path or ""
     async for event in _run_agent_core(
         user_message,
         history,
@@ -1678,6 +2055,7 @@ async def run_agent(
         ollama_url=ollama_url,
         ollama_model=ollama_model,
         max_iterations=max_iterations,
+        context_compact=context_compact,
         force_tool_mode=force_tool_mode,
         api_key=api_key,
         api_base_url=api_base_url,
@@ -1866,6 +2244,7 @@ async def chat(
     resource_image_paths: Optional[list[str]] = None,
     vision_model: str = "",
     project_name: Optional[str] = None,
+    workspace_path: str = "",
     api_key: str = "",
     api_provider: str = "anthropic",
     api_base_url: str = "",
@@ -1880,7 +2259,7 @@ async def chat(
     Supports local Ollama, CLI agent, and external API runtimes.
     """
     system = SYSTEM_PROMPT_OLLAMA if backend == "ollama" else SYSTEM_PROMPT
-    if _requires_local_operator_execution(user_message, db_path=DEVBRAIN_DB_PATH):
+    if _requires_local_operator_execution(user_message, db_path=DEVBRAIN_DB_PATH, workspace_path=workspace_path):
         return {
             "content": (
                 "This request needs local tools. I did not create, edit, append, delete, "

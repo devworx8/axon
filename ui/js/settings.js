@@ -16,7 +16,7 @@ function axonSettingsMixin() {
           scan_interval_hours: s.scan_interval_hours || '6',
           morning_digest_hour: s.morning_digest_hour || '8',
           ai_backend: s.ai_backend || 'ollama',
-          api_provider: s.api_provider || 'anthropic',
+          api_provider: s.api_provider || 'deepseek',
           claude_cli_path: s.claude_cli_path || '',
           ollama_url: s.ollama_url || '',
           ollama_runtime_mode: s.ollama_runtime_mode || 'gpu_default',
@@ -63,6 +63,8 @@ function axonSettingsMixin() {
           _azureSpeechKeyHint: '',
           _cloudflareTunnelTokenHint: '',
           _deepseekKeyHint: '',
+          max_agent_iterations: s.max_agent_iterations || '75',
+          context_compact_enabled: this.settingEnabled(s.context_compact_enabled ?? true),
         };
         this.selectedChatModel = s.code_model || s.ollama_model || this.selectedChatModel || '';
         if (s.ai_backend === 'ollama') { this.checkOllamaStatus(); this.loadOllamaModels(); }
@@ -117,7 +119,7 @@ function axonSettingsMixin() {
       if (this.settingsForm.scan_interval_hours) payload.scan_interval_hours = String(this.settingsForm.scan_interval_hours);
       if (this.settingsForm.morning_digest_hour) payload.morning_digest_hour = String(this.settingsForm.morning_digest_hour);
       if (this.settingsForm.ai_backend) payload.ai_backend = this.settingsForm.ai_backend;
-      payload.api_provider = this.settingsForm.api_provider || 'anthropic';
+      payload.api_provider = this.settingsForm.api_provider || 'deepseek';
       payload.claude_cli_path = this.settingsForm.claude_cli_path || '';
       payload.ollama_url = this.settingsForm.ollama_url || '';
       payload.ollama_runtime_mode = this.settingsForm.ollama_runtime_mode || 'gpu_default';
@@ -138,6 +140,8 @@ function axonSettingsMixin() {
       if (this.settingsForm.cloudflare_tunnel_token) payload.cloudflare_tunnel_token = this.settingsForm.cloudflare_tunnel_token;
       payload.terminal_default_mode = this.settingsForm.terminal_default_mode || 'read_only';
       payload.terminal_command_timeout_seconds = String(this.settingsForm.terminal_command_timeout_seconds || '25');
+      payload.max_agent_iterations = String(this.settingsForm.max_agent_iterations || '75');
+      payload.context_compact_enabled = !!this.settingsForm.context_compact_enabled;
       payload.cloud_agents_enabled = !!this.settingsForm.cloud_agents_enabled;
       payload.openai_gpts_enabled = !!this.settingsForm.openai_gpts_enabled;
       payload.gemini_gems_enabled = !!this.settingsForm.gemini_gems_enabled;
@@ -204,7 +208,7 @@ function axonSettingsMixin() {
 
     async saveSettingsQuiet() {
       try {
-        await this.api('POST', '/api/settings', { api_provider: this.settingsForm.api_provider || 'anthropic' });
+        await this.api('POST', '/api/settings', { api_provider: this.settingsForm.api_provider || 'deepseek' });
         await this.loadRuntimeStatus();
       } catch(e) { this.showToast('Failed to switch provider'); }
     },

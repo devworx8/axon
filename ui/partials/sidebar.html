@@ -34,9 +34,19 @@
         >
           <span x-text="item.icon" class="text-base"></span>
           <span x-text="item.label"></span>
-          <span x-show="item.id === 'tasks' && urgentCount > 0"
-                class="ml-auto bg-red-500 text-white text-[10px] font-bold rounded-full px-1.5 py-0.5"
-                x-text="urgentCount"></span>
+          <!-- Mission badges: active (blue) + urgent/high (red) -->
+          <template x-if="item.id === 'tasks'">
+            <span class="ml-auto flex items-center gap-1">
+              <span x-show="tasks.filter(t => t.status === 'in_progress').length > 0"
+                    class="bg-blue-500 text-white text-[9px] font-bold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center animate-pulse"
+                    x-text="tasks.filter(t => t.status === 'in_progress').length"
+                    title="Active missions"></span>
+              <span x-show="urgentCount > 0"
+                    class="bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center"
+                    x-text="urgentCount"
+                    title="High priority missions"></span>
+            </span>
+          </template>
         </button>
       </template>
     </nav>

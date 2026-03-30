@@ -121,11 +121,14 @@ function axonModelsMixin() {
       this.chatProject = this.projects.find(p => p.id == this.chatProjectId) || null;
       this._userScrolled = false;
       this.showScrollToBottom = false;
+      if (typeof this._refreshWorkspaceEnv === 'function') this._refreshWorkspaceEnv();
       if (typeof this.loadChatHistory === 'function') {
         this.loadChatHistory();
       } else {
         this.$nextTick(() => requestAnimationFrame(() => this.scrollChat?.(true)));
       }
+      // Refresh tasks for the newly selected workspace
+      if (typeof this.loadWorkspaceTasks === 'function') this.loadWorkspaceTasks();
     },
 
     clearHistory() {

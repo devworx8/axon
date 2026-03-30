@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Optional
 from urllib import error as _urlerror, request as _urlrequest
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -560,14 +560,13 @@ async def lifespan(app: FastAPI):
         settings = await devdb.get_all_settings(conn)
         scan_hours = int(settings.get("scan_interval_hours", 6))
         digest_hour = int(settings.get("morning_digest_hour", 8))
-        # Clean up stale terminal sessions from previous runs.
-        # PTY processes don't survive a server restart, so any session left
-        # in the DB with status "running" or "idle" is stale. Delete them so
-        # they don't keep appearing as phantom tabs in the UI.
+        # Clean up ALL stale terminal sessions from previous runs.
+        # PTY processes never survive a server restart regardless of their
+        # recorded status. Leaving "done" sessions also causes phantom
+        # "Console Terminal" tabs to pile up across restarts.
+        # Wipe everything so the user starts with a clean terminal panel.
         try:
-            await conn.execute(
-                "DELETE FROM terminal_sessions WHERE status IN ('running', 'idle', 'pending')"
-            )
+            await conn.execute("DELETE FROM terminal_sessions")
             await conn.commit()
         except Exception:
             pass  # table may not exist yet on first run
@@ -579,6 +578,19 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     print(f"[Axon] Server started on http://localhost:{PORT}")
     print(f"[Axon] Scheduler running — scan every {scan_hours}h, digest at {digest_hour}:00")
+
+    # Load persisted extra-allowed commands into the session allowlist
+    try:
+        async with devdb.get_db() as conn:
+            extra_cmds = (await devdb.get_setting(conn, "extra_allowed_cmds")) or ""
+        for cmd in extra_cmds.split(","):
+            cmd = cmd.strip()
+            if cmd == "*":
+                brain.agent_allow_command("", allow_all=True)
+            elif cmd:
+                brain.agent_allow_command(cmd)
+    except Exception:
+        pass
 
     # Run initial scan on startup
     asyncio.create_task(sched_module.trigger_scan_now(trigger_type="startup"))
@@ -856,6 +868,12 @@ async def list_teams():
 
 # ─── Projects ─────────────────────────────────────────────────────────────────
 
+@app.get("/api/workspace/env")
+async def workspace_env(path: str = Query(default="")):
+    """Return venv / git-branch / dir name for an arbitrary workspace path."""
+    return runtime_manager.env_snapshot(path or None)
+
+
 @app.get("/api/projects")
 async def list_projects(status: Optional[str] = None):
     async with devdb.get_db() as conn:
@@ -930,6 +948,44 @@ async def run_scan():
     """Trigger an immediate project scan."""
     asyncio.create_task(sched_module.trigger_scan_now(trigger_type="manual"))
     return {"status": "scan started"}
+
+
+class AddFolderBody(BaseModel):
+    path: str                   # Absolute or ~-relative path to the folder
+    persist_root: bool = True   # Also add the parent dir to projects_root setting
+
+
+@app.post("/api/workspaces/add-folder")
+async def add_workspace_folder(body: AddFolderBody):
+    """Manually add a local folder as a workspace (scan + upsert into DB)."""
+    folder = Path(os.path.realpath(os.path.expanduser(body.path)))
+    if not folder.exists():
+        raise HTTPException(400, f"Path does not exist: {folder}")
+    if not folder.is_dir():
+        raise HTTPException(400, f"Path is not a directory: {folder}")
+
+    # Scan the folder immediately
+    loop = asyncio.get_event_loop()
+    proj_data = await loop.run_in_executor(None, scanner.scan_project, folder)
+
+    async with devdb.get_db() as conn:
+        project_id = await devdb.upsert_project(conn, proj_data)
+        project = dict(await devdb.get_project(conn, project_id))
+
+        if body.persist_root:
+            # Ensure the parent dir is included in projects_root for future scans
+            parent_str = str(folder.parent)
+            existing = (await devdb.get_setting(conn, "projects_root")) or "~/Desktop"
+            roots = [r.strip() for r in existing.split(",") if r.strip()]
+            # Add the folder itself as an explicit root so it always gets scanned
+            folder_str = str(folder)
+            if folder_str not in roots and parent_str not in roots:
+                roots.append(folder_str)
+                await devdb.set_setting(conn, "projects_root", ",".join(roots))
+
+        await devdb.log_event(conn, "scan", f"Manually added workspace: {proj_data['name']}")
+
+    return {"project": project, "scanned": proj_data}
 
 
 # ─── Prompts ─────────────────────────────────────────────────────────────────
@@ -1507,6 +1563,7 @@ async def _ingest_resource_bytes(
     source_type: str,
     source_url: str,
     settings: dict,
+    workspace_id: Optional[int] = None,
 ) -> dict:
     if len(content) > resource_bank.upload_limit_bytes(settings):
         raise HTTPException(413, "Resource exceeds the configured upload size limit.")
@@ -1524,6 +1581,7 @@ async def _ingest_resource_bytes(
         size_bytes=len(content),
         sha256=resource_bank.sha256_bytes(content),
         status="pending",
+        workspace_id=workspace_id,
     )
     await devdb.log_event(conn, "resource_added", f"Resource added: {title}")
 
@@ -1571,6 +1629,7 @@ async def _ingest_resource_bytes(
 class ResourceImportRequest(BaseModel):
     url: str
     title: Optional[str] = None
+    workspace_id: Optional[int] = None
 
 
 class ResourceUpdate(BaseModel):
@@ -1600,7 +1659,7 @@ async def list_resources(
 
 
 @app.post("/api/resources/upload")
-async def upload_resources(files: list[UploadFile] = File(...)):
+async def upload_resources(files: list[UploadFile] = File(...), workspace_id: Optional[int] = Form(None)):
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
         created = []
@@ -1619,6 +1678,7 @@ async def upload_resources(files: list[UploadFile] = File(...)):
                     source_type="upload",
                     source_url="",
                     settings=settings,
+                    workspace_id=workspace_id,
                 )
             )
     return {"items": created}
@@ -1639,6 +1699,7 @@ async def import_resource_url(body: ResourceImportRequest):
             source_type="url",
             source_url=fetched["final_url"],
             settings=settings,
+            workspace_id=body.workspace_id,
         )
     return created
 
@@ -1903,12 +1964,14 @@ async def chat(body: ChatMessage):
         history_rows = await devdb.get_chat_history(conn, project_id=body.project_id)
         history = [{"role": r["role"], "content": r["content"]} for r in history_rows]
 
-        # Get project name if scoped
+        # Get project scope if present
         project_name = None
+        workspace_path = ""
         if body.project_id:
             proj = await devdb.get_project(conn, body.project_id)
             if proj:
                 project_name = proj["name"]
+                workspace_path = proj["path"] or ""
 
         resource_bundle = await _resource_bundle(
             conn,
@@ -2340,6 +2403,7 @@ async def chat(body: ChatMessage):
                     history,
                     merged_context_block,
                     project_name=project_name,
+                    workspace_path=workspace_path,
                     resource_context=resource_bundle["context_block"],
                     resource_image_paths=resource_bundle["image_paths"],
                     vision_model=resource_bundle["vision_model"],
@@ -2417,10 +2481,12 @@ async def chat_stream(body: ChatMessage, request: Request):
         history_rows = await devdb.get_chat_history(conn, project_id=body.project_id)
         history = [{"role": r["role"], "content": r["content"]} for r in history_rows]
         project_name = None
+        workspace_path = ""
         if body.project_id:
             proj = await devdb.get_project(conn, body.project_id)
             if proj:
                 project_name = proj["name"]
+                workspace_path = proj["path"] or ""
         resource_bundle = await _resource_bundle(
             conn,
             resource_ids=body.resource_ids or [],
@@ -2881,6 +2947,7 @@ async def chat_stream(body: ChatMessage, request: Request):
                 history,
                 merged_context_block,
                 project_name=project_name,
+                workspace_path=workspace_path,
                 resource_context=resource_bundle["context_block"],
                 resource_image_paths=resource_bundle["image_paths"],
                 vision_model=resource_bundle["vision_model"],
@@ -2988,6 +3055,9 @@ async def agent_endpoint(body: AgentRequest, request: Request):
             if not _agent_api_key:
                 raise HTTPException(400, "Agent mode with API backend requires a configured API key. Check Settings or Vault.")
 
+        _max_agent_iterations = max(10, min(200, int(settings.get("max_agent_iterations") or "75")))
+        _context_compact = str(settings.get("context_compact_enabled", "1")).strip().lower() in {"1", "true", "yes", "on"}
+
         projects = [dict(r) for r in await devdb.get_projects(conn, status="active")]
         tasks = [dict(r) for r in await devdb.get_tasks(conn, status="open")]
         prompts_list = [dict(r) for r in await devdb.get_prompts(conn)]
@@ -2995,10 +3065,12 @@ async def agent_endpoint(body: AgentRequest, request: Request):
         history_rows = await devdb.get_chat_history(conn, project_id=body.project_id)
         history = [{"role": r["role"], "content": r["content"]} for r in history_rows]
         project_name = None
+        workspace_path = ""
         if body.project_id:
             proj = await devdb.get_project(conn, body.project_id)
             if proj:
                 project_name = proj["name"]
+                workspace_path = proj["path"] or ""
         resource_bundle = await _resource_bundle(
             conn,
             resource_ids=body.resource_ids or [],
@@ -3053,11 +3125,14 @@ async def agent_endpoint(body: AgentRequest, request: Request):
                 history,
                 merged_context_block,
                 project_name=project_name,
+                workspace_path=workspace_path,
                 resource_context=resource_bundle["context_block"],
                 resource_image_paths=resource_bundle["image_paths"],
                 vision_model=resource_bundle["vision_model"],
                 tools=body.tools,
                 ollama_url=ollama_url, ollama_model=ollama_model,
+                max_iterations=_max_agent_iterations,
+                context_compact=_context_compact,
                 force_tool_mode=bool(composer_options.get("action_mode") or composer_options.get("agent_role")),
                 api_key=_agent_api_key,
                 api_base_url=_agent_api_base,
@@ -3310,6 +3385,8 @@ class SettingsUpdate(BaseModel):
     dash_bridge_url: Optional[str] = None
     dash_bridge_token: Optional[str] = None
     dash_bridge_mode: Optional[str] = None
+    max_agent_iterations: Optional[str] = None
+    context_compact_enabled: Optional[bool] = None
 
 
 @app.post("/api/settings")
@@ -5765,6 +5842,83 @@ async def backup_import(request: Request):
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "port": PORT}
+
+
+# ─── Agent command approval ────────────────────────────────────────────────────
+
+class AllowCommandBody(BaseModel):
+    command: str = ""          # specific command name to allow (e.g. "pgrep")
+    allow_all: bool = False    # allow ALL commands (no filter)
+    persist: bool = False      # also save to settings for future sessions
+
+
+@app.post("/api/agent/allow-command")
+async def allow_agent_command(body: AllowCommandBody):
+    """Whitelist a shell command for the agent (session or persistent)."""
+    brain.agent_allow_command(body.command, allow_all=body.allow_all)
+    if body.persist:
+        async with devdb.get_db() as conn:
+            existing = (await devdb.get_setting(conn, "extra_allowed_cmds")) or ""
+            existing_set = {c.strip() for c in existing.split(",") if c.strip()}
+            if body.allow_all:
+                existing_set.add("*")
+            elif body.command:
+                existing_set.add(body.command.strip())
+            await devdb.set_setting(conn, "extra_allowed_cmds", ",".join(sorted(existing_set)))
+    return {
+        "ok": True,
+        "allow_all": body.allow_all,
+        "session_allowed": brain.agent_get_session_allowed(),
+    }
+
+
+@app.get("/api/agent/sessions/interrupted")
+async def get_interrupted_session():
+    """Return the most-recent interrupted/active agent session (for resume banner)."""
+    from axon_core.session_store import SessionStore
+    ss = SessionStore(devdb.DB_PATH)
+    session = ss.get_interrupted(max_age_hours=72.0)   # 3-day resume window
+    if not session:
+        return {"session": None}
+    return {
+        "session": {
+            "session_id": session.session_id,
+            "task": session.task,
+            "iteration": session.iteration,
+            "status": session.status,
+            "age_seconds": session.age_seconds(),
+            "summary": session.summary(),
+            "tool_count": len(session.tool_log),
+            "project_name": session.project_name,
+            "backend": session.backend,
+        }
+    }
+
+
+
+class AllowEditBody(BaseModel):
+    path: str = ""
+    scope: str = "file"   # "file" | "repo" | "session"
+
+
+@app.post("/api/agent/allow-edit")
+async def allow_agent_edit(body: AllowEditBody):
+    """Whitelist file edits for a specific file, repo root, or the whole session."""
+    brain.agent_allow_edit(body.path, scope=body.scope)
+    return {"ok": True, "scope": body.scope, **brain.agent_get_edit_state()}
+
+
+@app.get("/api/agent/allowed-commands")
+async def get_allowed_commands():
+    """Return the current allowed command lists."""
+    async with devdb.get_db() as conn:
+        extra = (await devdb.get_setting(conn, "extra_allowed_cmds")) or ""
+    return {
+        "base": sorted(brain._ALLOWED_CMDS),
+        "session": brain.agent_get_session_allowed(),
+        "allow_all": brain._ALLOW_ALL_CMDS,
+        "persistent_extra": [c for c in extra.split(",") if c.strip()],
+    }
 
 
 # ─── PPTX Generation ──────────────────────────────────────────────────────────

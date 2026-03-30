@@ -19,7 +19,8 @@ function axonDashboardMixin() {
     toggleLocalToolsPanel() {
       this.composerOptions.terminal_mode = true;
       this.terminal.panelOpen = true;
-      this.ensureTerminalSession();
+      // Do NOT auto-create a terminal session here — user must click "Open Shell"
+      this.loadTerminalSessions();
     },
 
     async loadLatestDigest() {
@@ -353,7 +354,7 @@ function axonDashboardMixin() {
 
     selectedApiProviderModel() {
       return this.runtimeStatus?.selected_api_provider?.api_model
-        || this.providerValue(this.settingsForm?.api_provider || 'anthropic', 'model')
+        || this.providerValue(this.settingsForm?.api_provider || 'deepseek', 'model')
         || '';
     },
 
@@ -376,6 +377,47 @@ function axonDashboardMixin() {
         return model ? `${provider} · ${model}` : provider;
       }
       return 'CLI agent';
+    },
+
+    composerEnvLabel() {
+      const p = this.chatProject;
+      if (p?.path) {
+        const dir = p.path.split('/').pop() || p.name;
+        const env = this._workspaceEnv || {};
+        const parts = [];
+        if (env.venv) parts.push(`(${env.venv})`);
+        parts.push(dir);
+        if (env.git_branch) parts.push(`git:(${env.git_branch})`);
+        return parts.join(' → ');
+      }
+      const env = this.runtimeStatus?.env || {};
+      const parts = [];
+      if (env.venv) parts.push(`(${env.venv})`);
+      parts.push(env.work_dir || '.devbrain');
+      if (env.git_branch) parts.push(`git:(${env.git_branch})`);
+      return parts.join(' → ');
+    },
+
+    composerEnvData() {
+      const p = this.chatProject;
+      if (p?.path) {
+        const env = this._workspaceEnv || {};
+        return {
+          venv: env.venv || '',
+          git_branch: env.git_branch || p.git_branch || '',
+          work_dir: p.path.split('/').pop() || p.name,
+        };
+      }
+      return this.runtimeStatus?.env || {};
+    },
+
+    async _refreshWorkspaceEnv() {
+      const p = this.chatProject;
+      if (!p?.path) { this._workspaceEnv = null; return; }
+      try {
+        const data = await this.api('GET', `/api/workspace/env?path=${encodeURIComponent(p.path)}`);
+        this._workspaceEnv = data || {};
+      } catch { this._workspaceEnv = null; }
     },
 
     assistantRuntimeLabel() {
@@ -589,7 +631,7 @@ function axonDashboardMixin() {
     },
 
     activeApiProviderCard() {
-      const id = this.settingsForm?.api_provider || 'anthropic';
+      const id = this.settingsForm?.api_provider || 'deepseek';
       return (this.runtimeStatus.api_providers || []).find(provider => provider.id === id) || null;
     },
 
@@ -1726,6 +1768,7 @@ function axonDashboardMixin() {
       try {
         const form = new FormData();
         files.forEach(file => form.append('files', file));
+        if (this.chatProjectId) form.append('workspace_id', this.chatProjectId);
         const resp = await fetch('/api/resources/upload', {
           method: 'POST',
           headers: this.authHeaders(),
@@ -1756,10 +1799,12 @@ function axonDashboardMixin() {
         const data = await this.api('POST', '/api/resources/import-url', {
           url,
           title: this.resourceImportForm.title.trim() || '',
+          workspace_id: this.chatProjectId ? parseInt(this.chatProjectId, 10) : null,
         });
-        if (data?.item) {
-          await this.loadResources(data.item.id);
-          this.mergeSelectedResources([data.item]);
+        const item = data?.item || data;
+        if (item?.id) {
+          await this.loadResources(item.id);
+          this.mergeSelectedResources([item]);
           this.showToast('Resource imported');
         }
         this.resourceImportForm = { url: '', title: '' };
@@ -2031,6 +2076,10 @@ function axonDashboardMixin() {
                 this.chatMessages[idx].agentEvents.push(data);
                 this.updateLiveOperator(effectiveMode, data);
                 this.scrollChat();
+              } else if (data.type === 'context_usage') {
+                this.agentCtxPct = data.pct || 0;
+                this.agentCtxIter = data.iteration || 0;
+                this.agentMaxIter = data.max_iterations || this.agentMaxIter || 75;
               } else if (data.type === 'done') {
                 this.setAgentStage('verify');
                 this.chatMessages[idx].streaming = false;
