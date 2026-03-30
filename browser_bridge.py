@@ -20,16 +20,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-import os
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from playwright.async_api import Browser, BrowserContext, Page, Playwright
 
 _log = logging.getLogger("axon.browser_bridge")
 
 # Lazy playwright import — only needed when bridge is active
-_playwright = None
-_browser = None
-_context = None
-_page = None
+_playwright: Optional[Playwright] = None
 _lock = asyncio.Lock()
 
 
@@ -50,11 +49,11 @@ async def _ensure_playwright():
 class BrowserBridge:
     """Manages a single browser instance for Axon browser actions."""
 
-    def __init__(self):
-        self._browser = None
-        self._context = None
-        self._page = None
-        self._pw = None
+    def __init__(self) -> None:
+        self._browser: Optional[Browser] = None
+        self._context: Optional[BrowserContext] = None
+        self._page: Optional[Page] = None
+        self._cached_title: str = ""
         self._started = False
 
     @property
@@ -75,20 +74,21 @@ class BrowserBridge:
         if self._page:
             try:
                 # Use a cached title — don't await here
-                return getattr(self._page, '_cached_title', '')
+                return getattr(self, '_cached_title', '')
             except Exception:
                 return ""
         return ""
 
-    async def start(self, headless: bool = False, proxy: Optional[dict] = None):
+    async def start(self, headless: bool = False, proxy: Optional[dict[str, str]] = None):
         """Launch browser. Pass proxy={"server": "socks5://..."} for proxy."""
         async with _lock:
             if self._started:
                 return
             await _ensure_playwright()
-            launch_opts = {"headless": headless}
+            launch_opts: dict[str, Any] = {"headless": headless}
             if proxy:
                 launch_opts["proxy"] = proxy
+            assert _playwright is not None
             self._browser = await _playwright.chromium.launch(**launch_opts)
             self._context = await self._browser.new_context(
                 viewport={"width": 1280, "height": 800},
@@ -117,7 +117,7 @@ class BrowserBridge:
             self._started = False
             _log.info("Browser bridge stopped")
 
-    async def execute_action(self, action: dict) -> dict:
+    async def execute_action(self, action: dict[str, Any]) -> dict[str, Any]:
         """
         Execute a browser action. Returns {"success": bool, "result": str, "screenshot": str|None}.
 
@@ -139,7 +139,7 @@ class BrowserBridge:
                 if not nav_url.startswith(("http://", "https://")):
                     nav_url = "https://" + nav_url
                 await self._page.goto(nav_url, wait_until="domcontentloaded", timeout=30000)
-                self._page._cached_title = await self._page.title()
+                self._cached_title = await self._page.title()
                 return {"success": True, "result": f"Navigated to {self._page.url}", "screenshot": None}
 
             elif action_type == "click":
@@ -224,7 +224,7 @@ class BrowserBridge:
         except Exception:
             return ""
 
-    def status(self) -> dict:
+    def status(self) -> dict[str, Any]:
         return {
             "running": self.is_running,
             "url": self.current_url,

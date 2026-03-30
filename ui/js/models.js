@@ -7,6 +7,11 @@ function axonModelsMixin() {
 
     // ── Model management ────────────────────────────────────────────
     async loadOllamaModels() {
+      if (!this.runtimeStatus?.local_models_enabled) {
+        this.ollamaModels = [];
+        this.ollamaRecommended = [];
+        return;
+      }
       this.modelsLoading = true;
       try {
         const [modRes, recRes] = await Promise.all([
@@ -114,6 +119,13 @@ function axonModelsMixin() {
 
     updateChatProject() {
       this.chatProject = this.projects.find(p => p.id == this.chatProjectId) || null;
+      this._userScrolled = false;
+      this.showScrollToBottom = false;
+      if (typeof this.loadChatHistory === 'function') {
+        this.loadChatHistory();
+      } else {
+        this.$nextTick(() => requestAnimationFrame(() => this.scrollChat?.(true)));
+      }
     },
 
     clearHistory() {

@@ -23,6 +23,19 @@ import anthropic
 import httpx
 import gpu_guard
 import resource_bank
+from axon_core.agent import (
+    AGENT_TOOL_DEFS as AGENT_TOOL_DEFS_CORE,
+    AgentRuntimeDeps,
+    _build_react_system,
+    _execute_tool as _execute_tool_core,
+    _filtered_general_history,
+    _guard_unverified_edit_claim,
+    _is_casual_conversation,
+    _is_general_planning_request,
+    _requires_local_operator_execution,
+    _direct_agent_action as _direct_agent_action_core,
+    run_agent as _run_agent_core,
+)
 
 # ─── Load .env (fallback API keys) ───────────────────────────────────────────
 _env_path = Path(__file__).parent / ".env"
@@ -77,14 +90,15 @@ _DEFAULT_CLI_PATHS = [
     "/home/edp/.config/Claude/claude-code/2.1.63/claude",
     "/home/edp/.vscode/extensions/anthropic.claude-code-2.1.81-linux-x64/resources/native-binary/claude",
     "/usr/local/bin/claude",
+    "/usr/bin/claude",
     "claude",
 ]
 
 
 OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_DEFAULT_MODEL = "qwen2.5-coder:7b"
-OLLAMA_FAST_MODEL = "qwen2.5-coder:1.5b"    # quick tasks
-OLLAMA_AGENT_MODEL = "qwen2.5-coder:7b"     # tool-calling / agent loops
+OLLAMA_DEFAULT_MODEL = "qwen2.5:7b"         # general chat default
+OLLAMA_FAST_MODEL = "qwen2.5:1.5b"          # quick tasks
+OLLAMA_AGENT_MODEL = "qwen2.5:7b"           # tool-calling / agent loops
 DEVBRAIN_DB_PATH = Path.home() / ".devbrain" / "devbrain.db"
 
 
@@ -284,7 +298,11 @@ def _call_ollama_sync(
         "model": chosen_model,
         "messages": messages,
         "stream": False,
-        "options": {"num_predict": max_tokens, "num_ctx": execution["num_ctx"]},
+        "options": {
+            "num_predict": max_tokens,
+            "num_ctx": execution["num_ctx"],
+            "num_gpu": 0,   # force CPU
+        },
     }).encode()
 
     req = _urlreq.Request(
@@ -351,7 +369,11 @@ async def _stream_ollama_chat(
         "model": chosen_model,
         "messages": messages,
         "stream": True,
-        "options": {"num_predict": max_tokens, "num_ctx": execution["num_ctx"]},
+        "options": {
+            "num_predict": max_tokens,
+            "num_ctx": execution["num_ctx"],
+            "num_gpu": 0,   # force CPU — GPU causes freezes on low-VRAM machines
+        },
     }
     last_exc: Exception | None = None
     for attempt in range(3):
@@ -439,11 +461,23 @@ async def stream_chat(
     resource_image_paths: Optional[list[str]] = None,
     vision_model: str = "",
     project_name: Optional[str] = None,
+    backend: str = "ollama",
+    api_key: str = "",
+    api_provider: str = "anthropic",
+    api_base_url: str = "",
+    api_model: str = "",
     ollama_url: str = "",
     ollama_model: str = "",
 ) -> AsyncGenerator[str, None]:
-    """Public async generator — yields chat response chunks (Ollama only, for SSE streaming)."""
+    """Public async generator — yields chat response chunks across supported runtimes."""
     system = SYSTEM_PROMPT_OLLAMA
+    if _requires_local_operator_execution(user_message, db_path=DEVBRAIN_DB_PATH):
+        yield (
+            "This request needs local tools. I did not create, edit, append, delete, "
+            "or verify any local file, repo, or workspace state in this plain chat turn. "
+            "Run it in Agent mode or let Axon auto-route it to the local operator."
+        )
+        return
     if _is_general_planning_request(user_message):
         history = _filtered_general_history(history)
         system += (
@@ -461,6 +495,53 @@ async def stream_chat(
     messages: list[dict] = [{"role": "system", "content": system}]
     for h in history[-6:]:
         messages.append({"role": h["role"], "content": h["content"][:600]})
+
+    runtime = (backend or "ollama").strip().lower()
+    if runtime == "cli":
+        result = await chat(
+            user_message,
+            history,
+            context_block=context_block,
+            project_name=project_name,
+            resource_context=resource_context,
+            resource_image_paths=resource_image_paths,
+            vision_model=vision_model,
+            backend="cli",
+            api_key=api_key,
+            api_provider=api_provider,
+            api_base_url=api_base_url,
+            api_model=api_model,
+            ollama_url=ollama_url,
+            ollama_model=ollama_model,
+        )
+        yield result["content"]
+        return
+
+    if runtime != "ollama":
+        messages.append({"role": "user", "content": user_message})
+        if api_provider in {"openai_gpts", "generic_api", "deepseek"} and api_key:
+            async for chunk in _stream_api_chat(
+                messages=messages,
+                api_key=api_key,
+                api_base_url=api_base_url,
+                api_model=api_model,
+                max_tokens=1500,
+            ):
+                yield chunk
+            return
+
+        content, _ = await _call_api_messages(
+            messages[1:],
+            system=system,
+            api_key=api_key,
+            api_provider=api_provider,
+            api_base_url=api_base_url,
+            api_model=api_model,
+            max_tokens=1500,
+        )
+        yield content
+        return
+
     messages.append(_ollama_message_with_images(user_message, resource_image_paths))
 
     execution = await asyncio.to_thread(
@@ -521,6 +602,15 @@ _ALLOWED_CMDS = frozenset([
 def _tool_read_file(path: str, max_kb: int = 512) -> str:
     """Read a file, sandboxed to home directory. Reads up to 512 KB by default."""
     p = os.path.realpath(os.path.expanduser(path))
+    # Auto-correct: model may omit leading dot from hidden dirs (devbrain/x → .devbrain/x)
+    if not os.path.exists(p):
+        parts = p.split(os.sep)
+        for i, part in enumerate(parts):
+            if part and not part.startswith("."):
+                candidate = os.sep.join(parts[:i] + ["." + part] + parts[i+1:])
+                if os.path.exists(candidate):
+                    p = candidate
+                    break
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory is not allowed."
     if not os.path.exists(p):
@@ -550,6 +640,13 @@ def _tool_read_file(path: str, max_kb: int = 512) -> str:
 def _tool_list_dir(path: str = "~") -> str:
     """List directory contents, sandboxed to home."""
     p = os.path.realpath(os.path.expanduser(path))
+    # Auto-correct: model may omit leading dot from hidden dirs (devbrain → .devbrain)
+    if not os.path.exists(p):
+        parent = os.path.dirname(p)
+        basename = os.path.basename(p)
+        dotted = os.path.join(parent, "." + basename)
+        if os.path.exists(dotted):
+            p = dotted
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory is not allowed."
     if not os.path.exists(p):
@@ -558,8 +655,13 @@ def _tool_list_dir(path: str = "~") -> str:
         return f"ERROR: {p} is a file — use read_file."
     try:
         entries = sorted(os.scandir(p), key=lambda e: (e.is_file(), e.name.lower()))
-        lines = [f"{'DIR ' if e.is_dir() else 'FILE'} {e.name}" for e in entries if not e.name.startswith(".")]
-        return f"=== {p} ===\n" + "\n".join(lines[:100])
+        # Include dot-directories (like .devbrain, .git) but skip dot-files to reduce noise
+        lines = [
+            f"{'DIR ' if e.is_dir() else 'FILE'} {e.name}"
+            for e in entries
+            if e.is_dir() or not e.name.startswith(".")
+        ]
+        return f"=== {p} ===\n" + "\n".join(lines[:120])
     except PermissionError:
         return f"ERROR: Permission denied: {p}"
 
@@ -634,6 +736,123 @@ def _tool_write_file(path: str, content: str) -> str:
         return f"ERROR: Permission denied: {p}"
 
 
+def _tool_append_file(path: str, content: str = "") -> str:
+    """Append content to a file (sandboxed to home)."""
+    if not content:
+        return "ERROR: append_file requires 'content'."
+    p = os.path.realpath(os.path.expanduser(path))
+    if not p.startswith(_HOME):
+        return "ERROR: Access outside home directory."
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    try:
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(content)
+        return f"Appended {len(content)} bytes to {p}"
+    except PermissionError:
+        return f"ERROR: Permission denied: {p}"
+
+
+def _tool_create_file(path: str, content: str = "") -> str:
+    """Create a new file, failing if it already exists."""
+    p = os.path.realpath(os.path.expanduser(path))
+    if not p.startswith(_HOME):
+        return "ERROR: Access outside home directory."
+    if os.path.exists(p):
+        return f"ERROR: File already exists: {p}"
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    try:
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(content or "")
+        return f"Created {p}"
+    except PermissionError:
+        return f"ERROR: Permission denied: {p}"
+
+
+def _tool_delete_file(path: str) -> str:
+    """Delete a file safely (sandboxed to home)."""
+    p = os.path.realpath(os.path.expanduser(path))
+    if not p.startswith(_HOME):
+        return "ERROR: Access outside home directory."
+    if not os.path.exists(p):
+        return f"ERROR: File not found: {p}"
+    if os.path.isdir(p):
+        return f"ERROR: {p} is a directory. delete_file only removes files."
+    try:
+        os.remove(p)
+        return f"Deleted {p}"
+    except PermissionError:
+        return f"ERROR: Permission denied: {p}"
+
+
+def _tool_edit_file(path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
+    """Targeted find-and-replace edit. Replaces an exact substring in a file.
+    old_string must be unique in the file (unless replace_all=True).
+    This is the preferred way to make code changes — surgical, reviewable edits."""
+    p = os.path.realpath(os.path.expanduser(path))
+    if not p.startswith(_HOME):
+        return "ERROR: Access outside home directory."
+    if not os.path.exists(p):
+        return f"ERROR: File not found: {p}"
+    if os.path.isdir(p):
+        return f"ERROR: {p} is a directory, not a file."
+    if not old_string:
+        return "ERROR: old_string is required and cannot be empty."
+    if old_string == new_string:
+        return "ERROR: old_string and new_string are identical — no change needed."
+    try:
+        with open(p, encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except PermissionError:
+        return f"ERROR: Permission denied: {p}"
+
+    count = content.count(old_string)
+    if count == 0:
+        # Try to help: show nearby content
+        lines = content.splitlines()
+        first_words = old_string.split()[:4]
+        hint_key = " ".join(first_words) if first_words else old_string[:40]
+        nearby = [
+            f"  L{i+1}: {line.rstrip()}"
+            for i, line in enumerate(lines)
+            if hint_key.lower() in line.lower()
+        ][:5]
+        hint = ""
+        if nearby:
+            hint = "\nDid you mean one of these lines?\n" + "\n".join(nearby)
+        return f"ERROR: old_string not found in {p}. The exact text must match (including whitespace/indentation).{hint}"
+    if count > 1 and not replace_all:
+        return (
+            f"ERROR: old_string matches {count} locations in {p}. "
+            f"Provide more surrounding context to make it unique, or set replace_all=true."
+        )
+
+    new_content = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
+    try:
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(new_content)
+    except PermissionError:
+        return f"ERROR: Permission denied: {p}"
+
+    replaced = count if replace_all else 1
+    delta = len(new_string) - len(old_string)
+    return (
+        f"Edited {p}: {replaced} replacement(s), {'+' if delta >= 0 else ''}{delta} chars. "
+        f"File is now {len(new_content)} bytes."
+    )
+
+
+def _tool_show_diff(path: str = "~", staged: bool = False) -> str:
+    """Show git diff for a file or directory. Use after edits to review changes."""
+    p = os.path.realpath(os.path.expanduser(path))
+    if not p.startswith(_HOME):
+        return "ERROR: Access outside home directory."
+    flag = "--staged" if staged else ""
+    diff = _tool_shell_cmd(f"git diff {flag} -- {shlex.quote(p)}", cwd=os.path.dirname(p) if os.path.isfile(p) else p, timeout=10)
+    if not diff or diff.strip() == "(no output)":
+        return f"No diff found for {p}. Either no changes or the file is not tracked by git."
+    return diff
+
+
 def _normalize_tool_args(name: str, args: dict) -> dict:
     """Accept common argument aliases from weaker local models."""
     normalized = dict(args or {})
@@ -682,20 +901,52 @@ def _normalize_tool_args(name: str, args: dict) -> dict:
             normalized.pop(alias, None)
         return {k: v for k, v in normalized.items() if k in {"pattern", "path", "glob"}}
 
-    if name == "write_file":
+    if name in {"write_file", "append_file", "create_file", "delete_file"}:
         if not normalized.get("path"):
             for alias in ("file", "target", "destination"):
                 if normalized.get(alias):
                     normalized["path"] = normalized.pop(alias)
                     break
-        if not normalized.get("content"):
+        if name != "delete_file" and not normalized.get("content"):
             for alias in ("text", "body"):
                 if normalized.get(alias):
                     normalized["content"] = normalized.pop(alias)
                     break
         for alias in ("file", "target", "destination", "text", "body"):
             normalized.pop(alias, None)
-        return {k: v for k, v in normalized.items() if k in {"path", "content"}}
+        allowed = {"path"} if name == "delete_file" else {"path", "content"}
+        return {k: v for k, v in normalized.items() if k in allowed}
+
+    if name == "edit_file":
+        if not normalized.get("path"):
+            for alias in ("file", "filepath", "filename", "target"):
+                if normalized.get(alias):
+                    normalized["path"] = normalized.pop(alias)
+                    break
+        if not normalized.get("old_string"):
+            for alias in ("old", "find", "search", "original", "before"):
+                if normalized.get(alias):
+                    normalized["old_string"] = normalized.pop(alias)
+                    break
+        if not normalized.get("new_string"):
+            for alias in ("new", "replace", "replacement", "after", "with"):
+                if normalized.get(alias):
+                    normalized["new_string"] = normalized.pop(alias)
+                    break
+        for alias in ("file", "filepath", "filename", "target", "old", "find", "search",
+                       "original", "before", "new", "replace", "replacement", "after", "with"):
+            normalized.pop(alias, None)
+        return {k: v for k, v in normalized.items() if k in {"path", "old_string", "new_string", "replace_all"}}
+
+    if name == "show_diff":
+        if not normalized.get("path"):
+            for alias in ("file", "dir", "directory", "cwd", "repo"):
+                if normalized.get(alias):
+                    normalized["path"] = normalized.pop(alias)
+                    break
+        for alias in ("file", "dir", "directory", "cwd", "repo"):
+            normalized.pop(alias, None)
+        return {k: v for k, v in normalized.items() if k in {"path", "staged"}}
 
     if name == "create_mission":
         if not normalized.get("title"):
@@ -830,872 +1081,18 @@ _TOOL_REGISTRY = {
     "git_status": _tool_git_status,
     "search_code": _tool_search_code,
     "write_file": _tool_write_file,
+    "delete_file": _tool_delete_file,
+    "edit_file": _tool_edit_file,
+    "show_diff": _tool_show_diff,
+    "append_file": _tool_append_file,
+    "create_file": _tool_create_file,
     "create_mission": lambda **kw: _tool_mission_create(**kw),
     "update_mission": lambda **kw: _tool_mission_update(**kw),
     "list_missions": lambda **kw: _tool_mission_list(**kw),
 }
 
-AGENT_TOOL_DEFS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "Read a file from the filesystem. Returns file content.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "File path (absolute or ~-relative)"},
-                    "max_kb": {"type": "integer", "description": "Max KB to read (default 32)", "default": 32},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_dir",
-            "description": "List files and directories in a given path.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Directory path (default: ~)", "default": "~"},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "shell_cmd",
-            "description": "Run an allowlisted shell command (git, ls, grep, python3, etc.) and return output.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "cmd": {"type": "string", "description": "Shell command to run"},
-                    "cwd": {"type": "string", "description": "Working directory (default: home)", "default": "~"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 15)", "default": 15},
-                },
-                "required": ["cmd"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "git_status",
-            "description": "Get git branch, status, and recent commit log for a project directory.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Project directory path"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_code",
-            "description": "Search for a pattern in source code files using grep.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pattern": {"type": "string", "description": "Search pattern (regex)"},
-                    "path": {"type": "string", "description": "Directory to search in", "default": "~"},
-                    "glob": {"type": "string", "description": "File glob patterns (space-separated)", "default": "*.py *.ts *.tsx *.js *.jsx"},
-                },
-                "required": ["pattern"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_file",
-            "description": "Write content to a file.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "File path to write"},
-                    "content": {"type": "string", "description": "Content to write"},
-                },
-                "required": ["path", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_mission",
-            "description": "Create a new mission (task) for tracking. Use this when the user asks to create, add, or queue a mission/task.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "Short mission title (e.g. 'Fix login page bug')"},
-                    "detail": {"type": "string", "description": "Detailed description of what needs to be done", "default": ""},
-                    "priority": {"type": "string", "enum": ["low", "medium", "high", "urgent"], "description": "Priority level", "default": "medium"},
-                    "project_id": {"type": "integer", "description": "Project ID to link to (optional)"},
-                    "due_date": {"type": "string", "description": "Due date in YYYY-MM-DD format (optional)"},
-                },
-                "required": ["title"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "update_mission",
-            "description": "Update an existing mission's status or fields. Use this to mark missions as done, in_progress, or to change details.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "mission_id": {"type": "integer", "description": "The mission ID to update"},
-                    "status": {"type": "string", "enum": ["open", "in_progress", "done", "cancelled"], "description": "New status"},
-                    "title": {"type": "string", "description": "Updated title"},
-                    "detail": {"type": "string", "description": "Updated description"},
-                    "priority": {"type": "string", "enum": ["low", "medium", "high", "urgent"], "description": "Updated priority"},
-                    "due_date": {"type": "string", "description": "Updated due date (YYYY-MM-DD)"},
-                },
-                "required": ["mission_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_missions",
-            "description": "List current missions/tasks, optionally filtered by status or project.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "status": {"type": "string", "enum": ["open", "in_progress", "done", "cancelled"], "description": "Filter by status (default: all open)"},
-                    "project_id": {"type": "integer", "description": "Filter by project ID"},
-                },
-                "required": [],
-            },
-        },
-    },
-]
-
-
-def _execute_tool(name: str, args: dict) -> str:
-    """Execute a tool by name with the given arguments."""
-    fn = _TOOL_REGISTRY.get(name)
-    if not fn:
-        return f"ERROR: Unknown tool '{name}'"
-    try:
-        return fn(**_normalize_tool_args(name, args))
-    except TypeError as e:
-        return f"ERROR: Bad arguments for {name}: {e}"
-    except Exception as e:
-        return f"ERROR: {name} failed: {e}"
-
-
-def _project_name_pattern(name: str) -> str:
-    parts = [part for part in _re.split(r"[^a-z0-9]+", (name or "").lower()) if part]
-    if not parts:
-        return ""
-    return rf"(?<![a-z0-9]){'[\\s/_-]*'.join(_re.escape(part) for part in parts)}(?![a-z0-9])"
-
-
-def _resolve_project_path_from_text(text: str) -> Optional[str]:
-    """Resolve a scanned Axon workspace name mentioned in free text."""
-    if not DEVBRAIN_DB_PATH.exists():
-        return None
-
-    lower = text.lower()
-    try:
-        with sqlite3.connect(str(DEVBRAIN_DB_PATH)) as conn:
-            rows = conn.execute(
-                "SELECT name, path FROM projects "
-                "WHERE COALESCE(status, 'active') != 'archived' "
-                "ORDER BY LENGTH(name) DESC"
-            ).fetchall()
-    except sqlite3.Error:
-        return None
-
-    for name, path in rows:
-        pattern = _project_name_pattern(name)
-        if pattern and _re.search(pattern, lower):
-            return path
-    return None
-
-
-def _extract_path_from_text(text: str) -> Optional[str]:
-    """Best-effort path extraction for common local-path requests."""
-    candidates = _re.findall(r'(~\/[^\s,"\')]+|\/home\/[^\s,"\')]+)', text)
-    if candidates:
-        return candidates[0].rstrip(".,:;!?")
-
-    lower = text.lower()
-    common_paths = [
-        ("desktop", "~/Desktop"),
-        ("downloads", "~/Downloads"),
-        ("documents", "~/Documents"),
-        ("pictures", "~/Pictures"),
-        ("music", "~/Music"),
-        ("videos", "~/Videos"),
-        ("home directory", "~"),
-        ("home folder", "~"),
-        ("home", "~"),
-    ]
-    for label, path in common_paths:
-        if label in lower:
-            return path
-    return _resolve_project_path_from_text(text)
-
-
-def _recent_repo_path(history: list[dict] | None = None, project_name: Optional[str] = None) -> Optional[str]:
-    """Reuse the most recent explicit or workspace-derived path from chat history."""
-    if project_name:
-        project_path = _resolve_project_path_from_text(project_name)
-        if project_path:
-            return project_path
-
-    for item in reversed(history or []):
-        content = str(item.get("content", "") or "")
-        path = _extract_path_from_text(content)
-        if path:
-            return path
-    return None
-
-
-def _contains_phrase(text: str, phrase: str) -> bool:
-    lower = (text or "").lower()
-    token = (phrase or "").lower().strip()
-    if not token:
-        return False
-    return bool(_re.search(rf"(?<![a-z0-9]){_re.escape(token)}(?![a-z0-9])", lower))
-
-
-def _has_local_operator_markers(text: str) -> bool:
-    lower = (text or "").lower()
-    return (
-        bool(_extract_path_from_text(text or ""))
-        or "action:" in lower
-        or "args:" in lower
-        or "answer:" in lower
-        or any(_contains_phrase(lower, term) for term in (
-            "git ", "git status", "branch", "commit", "repo", "repository",
-            "workspace", "file", "folder", "directory", "path", "readme",
-            ".py", ".ts", ".tsx", ".js", ".jsx", ".md", "package.json",
-            "list_dir", "shell_cmd", "read_file", "search_code",
-        ))
-    )
-
-
-def _filtered_general_history(history: list[dict] | None = None) -> list[dict]:
-    filtered: list[dict] = []
-    for item in history or []:
-        content = str(item.get("content", "") or "")
-        if not content.strip():
-            continue
-        if _has_local_operator_markers(content):
-            continue
-        filtered.append({"role": item.get("role", "user"), "content": content[:500]})
-    return filtered[-4:]
-
-
-def _is_general_planning_request(user_message: str) -> bool:
-    lower = (user_message or "").strip().lower()
-    if not lower:
-        return False
-
-    local_action_terms = (
-        "git", "repo", "repository", "branch", "commit", "file", "files", "folder",
-        "folders", "directory", "directories", "desktop", "workspace", "scan", "inspect",
-        "search code", "read ", "open ", "run ", "execute ", "check ", "look at ",
-    )
-    if any(_contains_phrase(lower, term) for term in local_action_terms):
-        return False
-    if _extract_path_from_text(user_message):
-        return False
-
-    business_terms = (
-        "company profile", "business profile", "enterprise", "company", "business",
-        "capability statement", "proposal", "strategy", "go-to-market", "brand profile",
-        "executive summary", "corporate profile", "mission statement", "vision statement",
-        "service offering", "value proposition", "pitch deck", "brochure", "profile for me",
-    )
-    writing_terms = (
-        "plan", "draft", "write", "create", "prepare", "outline", "summarize",
-        "improve", "rewrite", "structure",
-    )
-    return any(_contains_phrase(lower, term) for term in business_terms) and any(_contains_phrase(lower, term) for term in writing_terms)
-
-
-def _is_casual_conversation(user_message: str) -> bool:
-    """
-    Return True if the message is pure casual conversation that should get a
-    direct, natural reply — no tools, no ReAct, no project scan.
-    """
-    raw = (user_message or "").strip()
-    lower = raw.lower()
-    if not lower or len(lower) > 300:
-        return False
-
-    # Never treat messages with explicit action words as casual
-    action_signals = (
-        "run ", "execute ", "read ", "write ", "scan ", "search ", "find ",
-        "list ", "show me ", "check ", "open ", "create file", "git ",
-        "fix ", "refactor ", "analyse ", "analyze ", "deploy ", "build ",
-        "install ", "debug ", "test ", "review ", "explain the code",
-    )
-    if any(lower.startswith(s) or f" {s}" in lower for s in action_signals):
-        return False
-
-    # Greetings and openers
-    greetings = (
-        "hi", "hello", "hey", "howzit", "yo", "sup", "what's up", "whats up",
-        "good morning", "good afternoon", "good evening", "morning", "evening",
-    )
-    if any(lower == g or lower.startswith(g + " ") or lower.startswith(g + ",") for g in greetings):
-        return True
-
-    # Short check-in / status questions about Axon itself
-    about_self = (
-        "how are you", "how do you feel", "who are you", "what are you",
-        "what can you do", "what do you do", "tell me about yourself",
-        "are you ready", "you there", "you awake",
-    )
-    if any(s in lower for s in about_self):
-        return True
-
-    # Very short single-word or two-word messages with no clear command intent
-    words = lower.split()
-    if len(words) <= 2 and not any(s in lower for s in ("run", "git", "fix", "file", "scan", "list")):
-        return True
-
-    return False
-
-
-def _parse_list_dir_entries(result: str) -> list[tuple[str, str]]:
-    """Parse _tool_list_dir output into (kind, name) pairs."""
-    entries: list[tuple[str, str]] = []
-    for line in result.splitlines():
-        if line.startswith("DIR "):
-            entries.append(("dir", line[4:].strip()))
-        elif line.startswith("FILE "):
-            entries.append(("file", line[5:].strip()))
-    return entries
-
-
-def _format_listing_answer(path: str, names: list[str], label: str) -> str:
-    resolved = os.path.realpath(os.path.expanduser(path))
-    if not names:
-        return f"I checked `{resolved}` and there are no visible {label} there."
-    visible = names[:40]
-    bullets = "\n".join(f"- {name}" for name in visible)
-    more = ""
-    if len(names) > len(visible):
-        more = f"\n- ...and {len(names) - len(visible)} more"
-    return f"Here are the {label} in `{resolved}`:\n{bullets}{more}"
-
-
-def _direct_agent_action(
-    user_message: str,
-    history: list[dict] | None = None,
-    project_name: Optional[str] = None,
-) -> tuple[str, dict, str, str] | None:
-    """
-    Handle obvious local actions deterministically so the agent behaves like a copilot
-    even when the model does not emit a tool call.
-    Returns (tool_name, args, tool_result, final_answer) or None.
-    """
-    lower = user_message.lower()
-
-    power_phrases = (
-        "reboot", "restart the system", "restart my system", "restart the machine",
-        "restart my machine", "restart the computer", "restart my computer",
-        "shutdown", "shut down", "power off", "poweroff", "turn off the computer",
-        "turn off the machine", "halt the system",
-    )
-    if any(phrase in lower for phrase in power_phrases):
-        answer = (
-            "I can't reboot or power off this system directly from chat.\n\n"
-            "- Full power actions stay blocked in agent mode by design.\n"
-            "- Open `Settings -> System Actions` for the guided restart and reboot flow.\n"
-            "- From there, Axon can restart safe local services or prepare the exact OS command for you to run manually."
-        )
-        return "shell_cmd", {"cmd": "echo blocked-power-action"}, "BLOCKED: power action not allowed", answer
-
-    path = _extract_path_from_text(user_message)
-    lower_has_git = any(term in lower for term in ("git", "branch", "repo", "repository", "status", "commit"))
-    if not path and lower_has_git:
-        path = _recent_repo_path(history, project_name)
-
-    if not path:
-        return None
-
-    branch_list_phrases = (
-        "list all branches", "list branches", "show all branches", "show branches",
-        "what branches", "which branches",
-    )
-    if any(phrase in lower for phrase in branch_list_phrases):
-        tool_name = "shell_cmd"
-        tool_args = {"cmd": "git branch --all --no-color", "cwd": path, "timeout": 15}
-        tool_result = _execute_tool(tool_name, tool_args)
-        if tool_result.startswith("ERROR:"):
-            return tool_name, tool_args, tool_result, tool_result
-        branches = [line.rstrip() for line in tool_result.splitlines() if line.strip()]
-        visible = "\n".join(f"- {line}" for line in branches[:80]) if branches else "- (no branches found)"
-        answer = f"Here are the branches in `{os.path.realpath(os.path.expanduser(path))}`:\n{visible}"
-        return tool_name, tool_args, tool_result, answer
-
-    status_phrases = (
-        "git status", "report the status", "repo status", "repository status",
-        "working tree", "uncommitted changes",
-    )
-    if any(phrase in lower for phrase in status_phrases):
-        tool_name = "git_status"
-        tool_args = {"path": path}
-        tool_result = _execute_tool(tool_name, tool_args)
-        if tool_result.startswith("ERROR:"):
-            return tool_name, tool_args, tool_result, tool_result
-        return tool_name, tool_args, tool_result, tool_result
-
-    branch_verify_match = _re.search(r'\b(?:verify|confirm|check)\b.*?\b(?:the )?([a-z0-9._/-]+)\s+branch\b', lower)
-    current_branch_phrases = ("current branch", "which branch", "what branch", "verify this is the branch")
-    if branch_verify_match or any(phrase in lower for phrase in current_branch_phrases):
-        tool_name = "shell_cmd"
-        tool_args = {"cmd": "git branch --show-current", "cwd": path, "timeout": 15}
-        tool_result = _execute_tool(tool_name, tool_args)
-        if tool_result.startswith("ERROR:"):
-            return tool_name, tool_args, tool_result, tool_result
-        current_branch = tool_result.strip().splitlines()[-1].strip()
-        target_branch = branch_verify_match.group(1).strip() if branch_verify_match else ""
-        if target_branch:
-            if current_branch == target_branch:
-                answer = f"Yes — `{os.path.realpath(os.path.expanduser(path))}` is currently on the `{current_branch}` branch."
-            else:
-                answer = f"No — `{os.path.realpath(os.path.expanduser(path))}` is on `{current_branch}`, not `{target_branch}`."
-        else:
-            answer = f"`{os.path.realpath(os.path.expanduser(path))}` is currently on the `{current_branch}` branch."
-        return tool_name, tool_args, tool_result, answer
-
-    listing_phrases = (
-        "list", "show", "what's in", "what is in", "contents of", "items in", "items on",
-        "folders in", "folders on", "directories in", "directories on", "files in", "files on",
-        "inside",
-    )
-    if any(phrase in lower for phrase in listing_phrases):
-        tool_name = "list_dir"
-        tool_args = {"path": path}
-        tool_result = _execute_tool(tool_name, tool_args)
-        if tool_result.startswith("ERROR:"):
-            return tool_name, tool_args, tool_result, tool_result
-
-        parsed = _parse_list_dir_entries(tool_result)
-        wants_all = any(phrase in lower for phrase in ("contents", "inside", "what's in", "what is in", "items"))
-        wants_dirs = any(word in lower for word in ("folder", "folders", "directory", "directories")) and not wants_all
-        wants_files = ("file" in lower or "files" in lower) and not wants_dirs and not wants_all
-
-        if wants_all:
-            names = [name for _, name in parsed]
-            label = "items"
-        elif wants_dirs:
-            names = [name for kind, name in parsed if kind == "dir"]
-            label = "folders"
-        elif wants_files:
-            names = [name for kind, name in parsed if kind == "file"]
-            label = "files"
-        else:
-            names = [name for _, name in parsed]
-            label = "items"
-
-        answer = _format_listing_answer(path, names, label)
-        return tool_name, tool_args, tool_result, answer
-
-    return None
-
-
-def _build_react_system(context_block: str, project_name: Optional[str], tool_names: list[str]) -> str:
-    """Build ReAct-style system prompt for the agent."""
-    tool_list = "\n".join(f"- {n}" for n in tool_names)
-
-    # Self-improvement context when working on the Axon codebase
-    axon_ctx = ""
-    if project_name and ("axon" in project_name.lower() or "devbrain" in project_name.lower() or "dashpro" in project_name.lower()):
-        axon_ctx = """
-
-SELF-IMPROVEMENT MODE — You are working on your own codebase (Axon).
-Axon lives at ~/.devbrain/ and you can read, search, and modify your own source code.
-
-Architecture:
-  server.py    — FastAPI app (~5800 lines), all API routes, SSE streaming
-  brain.py     — AI orchestration, ReAct agent loop, tool execution, model routing
-  db.py        — SQLite schema + CRUD (aiosqlite), 20+ tables
-  scheduler.py — APScheduler background jobs (scans, digests, webhook queue)
-  integrations.py — GitHub CLI, Slack webhooks, generic webhook retry queue
-  vault.py     — AES-256-GCM encrypted secrets with TOTP
-  memory_engine.py — Memory layer (facts, preferences, project context)
-  scanner.py   — Project directory scanner
-  model_router.py — Multi-provider model selection
-  ui/index.html — SPA (Alpine.js + Tailwind), ~5900 lines
-  ui/js/       — chat.js, helpers.js, dashboard.js, settings.js, voice.js
-  ui/styles.css — Custom styles for prose, canvas, animations
-
-Key patterns:
-  - Routes use: async with devdb.get_db() as conn
-  - Agent tools: _TOOL_REGISTRY dict, AGENT_TOOL_DEFS list
-  - SSE events: {"type": "text|thinking|tool_call|tool_result|done|error"}
-  - DB: aiosqlite with row_factory, init_db() for schema migrations
-  - Venv: .venv/bin/python, deps in requirements.txt
-
-When asked to improve Axon, use read_file + search_code to understand the current code,
-then write_file to make changes. Test with shell_cmd: "cd ~/.devbrain && .venv/bin/python -c 'import ast; ast.parse(open(\"<file>\").read()); print(\"OK\")'".
-After changes, suggest the user restart Axon (axon restart) to apply.
-Never claim that a file was modified, patched, backed up, or verified unless you actually used write_file
-and received a successful tool result for that exact file path."""
-
-    # Always include a brief self-awareness block so the model never hallucinates about its own capabilities
-    self_awareness = f"""
-## What you are
-You are Axon — an agentic AI copilot embedded in a local developer OS at ~/.devbrain/.
-Your THINKING blocks and tool calls (Working blocks) render live in the user's browser as you work.
-You are NOT limited in streaming. Do NOT tell the user you "can't show real-time output" — you can and do.
-You can read and modify your own source code. You are a partner, not a chatbot.
-Axon core files: server.py (FastAPI routes), brain.py (agent loop + tools), ui/index.html (SPA), ui/js/ (Alpine.js modules).
-"""
-
-    return f"""You are Axon Agent — an agentic AI copilot that uses tools to act on behalf of developers.
-
-Available tools: {', '.join(tool_names)}
-
-To use a tool, output EXACTLY in this format (no extra text before it):
-ACTION: tool_name
-ARGS: {{"arg1": "value1"}}
-
-When you have the final answer, output EXACTLY:
-ANSWER: your response here
-
-Rules:
-- ALWAYS use tools for: find, locate, search, where is, list, read, check, run, show me, open, what files, what is in, scan, look for, get, fetch — do NOT describe how the user could do it themselves.
-- Use tools when you need real data (file contents, git status, directory listings, search results, etc.)
-- If the user asks you to find/locate/search for ANYTHING on the filesystem — do it yourself. Never tell the user to open Finder or a terminal.
-- When the user asks to create/add/track a mission, use create_mission immediately. Use update_mission to complete/update. Use list_missions to check.
-- Do not give the user shell instructions for tasks you can complete with the available tools.
-- Only skip tools for pure creative writing, brainstorming, or math that requires NO local data.
-- After seeing tool results, either use another tool or give ANSWER
-- Be a partner in ANSWER — direct, warm, technically sharp. Use markdown. No unnecessary apologies or hedging.
-- Never make up file contents or command output
-- All paths must start with ~ or /home/{os.getenv('USER', 'edp')}
-{self_awareness}{axon_ctx}
-{('Context: ' + context_block[:800]) if context_block else ''}
-{('Project: ' + project_name) if project_name else ''}"""
-
-
-def _sanitize_agent_text(text: str) -> str:
-    """Remove leaked internal ReAct instructions before showing text to the user."""
-    skip_contains = (
-        "To use a tool, output EXACTLY in this format",
-        "When you have the final answer, output EXACTLY",
-        "EXACTLY in this format (no extra text before it)",
-        "ANSWER: your response here",
-    )
-    skip_exact = {
-        "ACTION: tool_name",
-        'ARGS: {"arg1": "value1"}',
-    }
-
-    cleaned: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            cleaned.append(line)
-            continue
-        if stripped in skip_exact:
-            continue
-        if any(marker in stripped for marker in skip_contains):
-            continue
-        cleaned.append(line)
-
-    return "\n".join(cleaned).strip()
-
-
-def _looks_like_unverified_edit_claim(text: str) -> bool:
-    """Detect model-written "I edited files" reports that were not backed by tools."""
-    sample = (text or "").strip()
-    if not sample:
-        return False
-    suspicious_markers = (
-        "# TASK:",
-        "# STATUS:",
-        "# CHANGES:",
-        "# METHOD:",
-        "# PROGRESS:",
-        "Files modified:",
-        "Changes made to ",
-        "Backup created",
-        "Do not restart server",
-        "implementation in place",
-        "Fix Applied",
-        "patch applied",
-        "commit when ready",
-    )
-    return any(marker.lower() in sample.lower() for marker in suspicious_markers)
-
-
-def _guard_unverified_edit_claim(text: str, wrote_files: bool) -> str:
-    """Prevent the model from narrating fake self-edits when no write tool ran."""
-    cleaned = _sanitize_agent_text(text)
-    if wrote_files or not _looks_like_unverified_edit_claim(cleaned):
-        return cleaned
-    return (
-        "Axon did not verify any real file edits in this run.\n\n"
-        "What happened instead: the model produced a work-log style answer without a successful "
-        "`write_file` tool action behind it.\n\n"
-        "To make real changes, Axon must first inspect the code with tools, then call `write_file`, "
-        "and only after that report the exact file path it changed."
-    )
-
-
-def _parse_react_action(text: str) -> tuple[str, dict] | None:
-    """Parse ACTION/ARGS from ReAct-formatted text. Returns (tool_name, args) or None."""
-    action_match = _re.search(r'ACTION:\s*(\w+)', text)
-    args_match = _re.search(r'ARGS:\s*(\{[^}]*\}|\{[\s\S]*?\})', text)
-    if not action_match:
-        return None
-    tool_name = action_match.group(1).strip()
-    if tool_name == "tool_name":
-        return None
-    args = {}
-    if args_match:
-        try:
-            args = json.loads(args_match.group(1))
-        except json.JSONDecodeError:
-            # Try to extract key-value pairs loosely
-            for kv in _re.findall(r'"(\w+)":\s*"([^"]*)"', args_match.group(1)):
-                args[kv[0]] = kv[1]
-    return tool_name, args
-
-
-async def run_agent(
-    user_message: str,
-    history: list[dict],
-    context_block: str = "",
-    resource_context: str = "",
-    resource_image_paths: Optional[list[str]] = None,
-    vision_model: str = "",
-    project_name: Optional[str] = None,
-    tools: list[str] | None = None,
-    ollama_url: str = "",
-    ollama_model: str = "",
-    max_iterations: int = 6,
-    force_tool_mode: bool = False,
-    api_key: str = "",
-    api_base_url: str = "",
-    api_model: str = "",
-    api_provider: str = "",
-) -> AsyncGenerator[dict, None]:
-    """
-    Async generator yielding agent events (ReAct-style, streaming-compatible):
-      {"type": "text",        "chunk": str}
-      {"type": "tool_call",   "name": str, "args": dict}
-      {"type": "tool_result", "name": str, "result": str}
-      {"type": "done",        "iterations": int}
-
-    Uses ReAct text-based tool calling (reliable across all Ollama models).
-    """
-    active_tool_names = list(_TOOL_REGISTRY.keys()) if tools is None else [
-        t for t in tools if t in _TOOL_REGISTRY
-    ]
-    wrote_files = False
-
-    use_api = bool(api_key and api_base_url)
-
-    # ── Casual conversation bypass ─────────────────────────────────────────
-    # Greetings and short conversational messages get a direct human reply —
-    # no ReAct loop, no tools, no project scan.
-    if not force_tool_mode and _is_casual_conversation(user_message):
-        casual_system = (
-            "You are Axon — a sharp, friendly AI copilot embedded in the user's local developer OS.\n"
-            "The user is making casual conversation. Reply naturally and warmly, like a capable colleague.\n"
-            "Be brief (2-4 sentences max). Mention what you can help with if relevant, but keep it conversational.\n"
-            "Do NOT use tools, do NOT list files, do NOT run commands, do NOT produce reports."
-        )
-        msgs: list[dict] = [{"role": "system", "content": casual_system}]
-        msgs.extend(_filtered_general_history(history))
-        if use_api:
-            msgs.append({"role": "user", "content": user_message})
-            async for chunk in _stream_api_chat(
-                messages=msgs, api_key=api_key,
-                api_base_url=api_base_url, api_model=api_model, max_tokens=300,
-            ):
-                yield {"type": "text", "chunk": chunk}
-        else:
-            msgs.append({"role": "user", "content": user_message})
-            async for chunk in _stream_ollama_chat(
-                messages=msgs, model=model, ollama_url=ollama_url, max_tokens=300,
-            ):
-                yield {"type": "text", "chunk": chunk}
-        yield {"type": "done", "iterations": 0}
-        return
-
-    if not force_tool_mode and _is_general_planning_request(user_message):
-        system = (
-            "You are Axon, a calm and practical AI operator.\n"
-            "This request is a general planning or writing task, not a local tool task.\n"
-            "Do not use tools. Do not inspect files or directories unless the user explicitly asks for local data.\n"
-            "Answer directly with a clear structure, a concise draft, and 2-4 helpful next-step options."
-        )
-        if resource_context:
-            system += f"\n\nUse these attached resources when they are relevant:\n{resource_context[:5000]}"
-        messages: list[dict] = [{"role": "system", "content": system}]
-        messages.extend(_filtered_general_history(history))
-
-        if use_api:
-            messages.append({"role": "user", "content": user_message})
-            async for chunk in _stream_api_chat(
-                messages=messages, api_key=api_key,
-                api_base_url=api_base_url, api_model=api_model, max_tokens=1200,
-            ):
-                yield {"type": "text", "chunk": chunk}
-        else:
-            execution = await asyncio.to_thread(
-                _ollama_execution_profile_sync,
-                vision_model or ollama_model or OLLAMA_DEFAULT_MODEL,
-                ollama_url, streaming=True, purpose="chat",
-            )
-            messages.append(_ollama_message_with_images(user_message, resource_image_paths))
-            if execution.get("note"):
-                yield {"type": "text", "chunk": f"⚠️ {execution['note']}\n\n"}
-            async for chunk in _stream_ollama_chat(
-                messages=messages, model=execution["model"],
-                max_tokens=1200, ollama_url=ollama_url, purpose="chat",
-            ):
-                yield {"type": "text", "chunk": chunk}
-        yield {"type": "done", "iterations": 1}
-        return
-
-    direct_action = _direct_agent_action(user_message, history=history, project_name=project_name)
-    if direct_action:
-        tool_name, tool_args, result, answer = direct_action
-        yield {"type": "tool_call", "name": tool_name, "args": tool_args}
-        yield {"type": "tool_result", "name": tool_name, "result": result[:2000]}
-        yield {"type": "text", "chunk": answer}
-        yield {"type": "done", "iterations": 1}
-        return
-
-    system_context = context_block
-    if resource_context:
-        system_context = f"{system_context}\n\n{resource_context}" if system_context else resource_context
-    system = _build_react_system(system_context, project_name, active_tool_names)
-
-    messages: list[dict] = [{"role": "system", "content": system}]
-    for h in history[-4:]:
-        messages.append({"role": h["role"], "content": h["content"][:400]})
-
-    if use_api:
-        messages.append({"role": "user", "content": user_message})
-    else:
-        execution = await asyncio.to_thread(
-            _ollama_execution_profile_sync,
-            vision_model or ollama_model or OLLAMA_AGENT_MODEL,
-            ollama_url, streaming=True, purpose="agent",
-        )
-        messages.append(_ollama_message_with_images(user_message, resource_image_paths))
-
-    for iteration in range(max_iterations):
-        # Stream tokens to UI in real-time while also buffering for pattern detection
-        full_text = ""
-        streamed_up_to = 0  # How many chars we've already yielded as thinking
-        found_action_live = False
-        try:
-            async def _token_source():
-                if use_api:
-                    async for chunk in _stream_api_chat(
-                        messages=messages, api_key=api_key,
-                        api_base_url=api_base_url, api_model=api_model, max_tokens=800,
-                    ):
-                        yield chunk
-                else:
-                    async for chunk in _stream_ollama_chat(
-                        messages=messages, model=execution["model"],
-                        max_tokens=800, ollama_url=ollama_url, purpose="agent",
-                    ):
-                        yield chunk
-
-            if not use_api and iteration == 0 and execution.get("note"):
-                yield {"type": "text", "chunk": f"⚠️ {execution['note']}\n\n"}
-
-            async for chunk in _token_source():
-                full_text += chunk
-                # Stream thinking text live (everything before ACTION:/ANSWER:)
-                if not found_action_live:
-                    # Check if we've hit a pattern marker
-                    for marker in ("ACTION:", "ANSWER:"):
-                        pos = full_text.find(marker)
-                        if pos >= 0:
-                            found_action_live = True
-                            # Yield any remaining thinking text before the marker
-                            remaining = _sanitize_agent_text(full_text[streamed_up_to:pos].strip())
-                            if remaining:
-                                yield {"type": "thinking", "chunk": remaining}
-                            streamed_up_to = pos
-                            break
-                    if not found_action_live:
-                        # Stream thinking tokens live — but hold back the last 10 chars
-                        # in case "ACTION:" or "ANSWER:" is split across chunks
-                        safe_end = max(streamed_up_to, len(full_text) - 10)
-                        new_text = full_text[streamed_up_to:safe_end]
-                        if new_text.strip():
-                            yield {"type": "thinking", "chunk": new_text}
-                            streamed_up_to = safe_end
-
-        except Exception as exc:
-            provider_label = api_provider or ("API" if use_api else "Ollama")
-            yield {"type": "text", "chunk": f"\n⚠️ {provider_label} error: {exc}"}
-            break
-
-        if not full_text.strip():
-            yield {"type": "text", "chunk": "\n⚠️ Empty response from model."}
-            break
-
-        # Parse for ReAct patterns
-        action = _parse_react_action(full_text)
-        answer_match = _re.search(r'ANSWER:\s*([\s\S]+)', full_text)
-        clean_text = _sanitize_agent_text(full_text)
-
-        if action:
-            tool_name, tool_args = action
-            # Emit any leftover thinking text not yet streamed
-            if not found_action_live:
-                think_text = full_text[:full_text.find("ACTION:")].strip()
-                think_text = _sanitize_agent_text(think_text)
-                if think_text:
-                    yield {"type": "thinking", "chunk": think_text}
-
-            yield {"type": "tool_call", "name": tool_name, "args": tool_args}
-            result = await asyncio.to_thread(_execute_tool, tool_name, tool_args)
-            if tool_name == "write_file" and not str(result).startswith("ERROR:"):
-                wrote_files = True
-            yield {"type": "tool_result", "name": tool_name, "result": result[:2000]}
-
-            messages.append({"role": "assistant", "content": full_text})
-            messages.append({"role": "user", "content": f"Tool result for {tool_name}:\n{result[:2000]}\n\nContinue."})
-
-        elif answer_match:
-            answer = _guard_unverified_edit_claim(answer_match.group(1).strip(), wrote_files=wrote_files)
-            if not answer or answer == "your response here":
-                yield {"type": "text", "chunk": "\n⚠️ Axon could not form a clean answer. Please retry the task."}
-                break
-            yield {"type": "text", "chunk": answer}
-            break
-        else:
-            # No pattern found — emit as-is (final answer without ANSWER: prefix)
-            guarded_text = _guard_unverified_edit_claim(clean_text, wrote_files=wrote_files)
-            if guarded_text:
-                yield {"type": "text", "chunk": guarded_text}
-            else:
-                yield {"type": "text", "chunk": "\n⚠️ Axon produced an invalid tool response. Please retry the task."}
-            break
-
-    yield {"type": "done", "iterations": iteration + 1}
-
+# Legacy in-file agent implementation removed. The extracted runtime now lives
+# in axon_core.agent and is exposed below via compatibility wrappers.
 
 def _ollama_list_models_sync(ollama_url: str = "") -> list[str]:
     """Synchronous model listing — for use in to_thread."""
@@ -1730,18 +1127,159 @@ async def ollama_status(ollama_url: str = "") -> dict:
 
 
 def _find_cli(override_path: str = "") -> str:
-    """Find the claude CLI binary."""
+    """Find the claude CLI binary, searching PATH and common install locations."""
+    import shutil as _shutil
+    import glob as _glob
+
     if override_path and os.path.isfile(override_path):
         return override_path
+
+    # 1. Check explicit default paths
     for p in _DEFAULT_CLI_PATHS:
         if p == "claude":
-            import shutil
-            found = shutil.which("claude")
-            if found:
-                return found
-        elif os.path.isfile(p):
+            continue  # handled below
+        if os.path.isfile(p) and os.access(p, os.X_OK):
             return p
+
+    # 2. Search PATH (server may have limited PATH without nvm)
+    found = _shutil.which("claude")
+    if found:
+        return found
+
+    # 3. Search nvm-managed Node versions (server process doesn't source ~/.bashrc)
+    home = os.path.expanduser("~")
+    for pattern in [
+        f"{home}/.nvm/versions/node/*/bin/claude",
+        f"{home}/.volta/bin/claude",
+        f"{home}/.npm-global/bin/claude",
+        f"{home}/.local/bin/claude",
+        f"{home}/bin/claude",
+    ]:
+        matches = sorted(_glob.glob(pattern), reverse=True)  # newest version first
+        for m in matches:
+            if os.path.isfile(m) and os.access(m, os.X_OK):
+                return m
+
+    # 4. VSCode extension binaries (any version)
+    for pattern in [
+        f"{home}/.vscode/extensions/anthropic.claude-code-*/resources/native-binary/claude",
+        f"{home}/.vscode-server/extensions/anthropic.claude-code-*/resources/native-binary/claude",
+    ]:
+        matches = sorted(_glob.glob(pattern), reverse=True)
+        for m in matches:
+            if os.path.isfile(m) and os.access(m, os.X_OK):
+                return m
+
     return ""
+
+
+async def _stream_cli(
+    messages: list[dict],
+    cli_path: str = "",
+    max_tokens: int = 4096,
+) -> AsyncGenerator[str, None]:
+    """Async generator yielding text chunks from the Claude CLI via stream-json output.
+
+    Uses `--output-format stream-json --include-partial-messages` for real-time streaming.
+    Each NDJSON line from the CLI is a JSON event; we extract `delta` or `text` fields.
+    """
+    binary = _find_cli(cli_path)
+    if not binary:
+        raise RuntimeError("CLI agent not found. Set the path in Settings or switch to a different runtime.")
+
+    # Build a single prompt from the messages list
+    prompt_parts: list[str] = []
+    system_text = ""
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(c.get("text", "") if isinstance(c, dict) else str(c) for c in content)
+        if role == "system":
+            system_text += content + "\n"
+        elif role == "user":
+            prompt_parts.append(f"Human: {content}")
+        else:
+            prompt_parts.append(f"Assistant: {content}")
+
+    full_prompt = "\n".join(prompt_parts)
+    if system_text:
+        full_prompt = f"<system>\n{system_text.strip()}\n</system>\n\n{full_prompt}"
+
+    cmd = [
+        binary, "-p",
+        "--output-format", "stream-json",
+        "--include-partial-messages",
+        full_prompt,
+    ]
+
+    clean_env = {**os.environ, "NO_COLOR": "1"}
+    clean_env.pop("CLAUDECODE", None)
+    clean_env.pop("CLAUDE_CODE_ENTRYPOINT", None)
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=clean_env,
+    )
+
+    total_cost = 0.0
+    total_tokens = 0
+    try:
+        async for raw_line in proc.stdout:
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            etype = event.get("type", "")
+
+            # Partial text chunk from --include-partial-messages
+            if etype in ("assistant", "text"):
+                # assistant message event: content is a list of content blocks
+                content = event.get("message", {}).get("content") or event.get("content")
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            text = block.get("text", "")
+                            if text:
+                                yield text
+                elif isinstance(content, str) and content:
+                    yield content
+                # direct text field
+                text = event.get("text", "")
+                if text:
+                    yield text
+
+            # Stream delta (content_block_delta style)
+            elif etype == "content_block_delta":
+                delta = event.get("delta", {})
+                text = delta.get("text", "") if isinstance(delta, dict) else ""
+                if text:
+                    yield text
+
+            # Final result event
+            elif etype == "result":
+                result_text = event.get("result", "")
+                total_cost = float(event.get("total_cost_usd", 0.0))
+                usage = event.get("usage", {})
+                total_tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+                # Only emit result text if we haven't streamed anything yet
+                # (fallback for CLIs that don't stream partial messages)
+                if result_text:
+                    yield result_text
+
+    finally:
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            proc.kill()
+        if total_tokens or total_cost:
+            _track_usage(total_tokens, total_cost, backend="cli")
 
 
 async def _call_cli(prompt: str, system: str = "", cli_path: str = "") -> str:
@@ -1803,6 +1341,93 @@ async def _call_cli(prompt: str, system: str = "", cli_path: str = "") -> str:
     text = "\n".join(clean_lines).strip()
 
     return text, tokens
+
+
+# Compatibility wrappers over the extracted agent core. These intentionally
+# shadow the legacy in-file implementations above until the full block is
+# removed in a later cleanup pass.
+AGENT_TOOL_DEFS = AGENT_TOOL_DEFS_CORE
+
+
+def _agent_runtime_deps() -> AgentRuntimeDeps:
+    """Build the runtime dependency bundle for the extracted agent core."""
+    return AgentRuntimeDeps(
+        tool_registry=_TOOL_REGISTRY,
+        normalize_tool_args=_normalize_tool_args,
+        stream_cli=_stream_cli,
+        stream_api_chat=_stream_api_chat,
+        stream_ollama_chat=_stream_ollama_chat,
+        ollama_execution_profile_sync=_ollama_execution_profile_sync,
+        ollama_message_with_images=_ollama_message_with_images,
+        find_cli=_find_cli,
+        ollama_default_model=OLLAMA_DEFAULT_MODEL,
+        ollama_agent_model=OLLAMA_AGENT_MODEL,
+        db_path=DEVBRAIN_DB_PATH,
+    )
+
+
+def _execute_tool(name: str, args: dict) -> str:
+    """Compatibility wrapper over the extracted agent tool executor."""
+    return _execute_tool_core(name, args, _agent_runtime_deps())
+
+
+def _direct_agent_action(
+    user_message: str,
+    history: list[dict] | None = None,
+    project_name: Optional[str] = None,
+) -> tuple[str, dict, str, str] | None:
+    """Compatibility wrapper over the extracted deterministic agent action handler."""
+    return _direct_agent_action_core(
+        user_message,
+        history=history,
+        project_name=project_name,
+        deps=_agent_runtime_deps(),
+    )
+
+
+async def run_agent(
+    user_message: str,
+    history: list[dict],
+    context_block: str = "",
+    resource_context: str = "",
+    resource_image_paths: Optional[list[str]] = None,
+    vision_model: str = "",
+    project_name: Optional[str] = None,
+    tools: list[str] | None = None,
+    ollama_url: str = "",
+    ollama_model: str = "",
+    max_iterations: int = 12,
+    force_tool_mode: bool = False,
+    api_key: str = "",
+    api_base_url: str = "",
+    api_model: str = "",
+    api_provider: str = "",
+    cli_path: str = "",
+    backend: str = "",
+) -> AsyncGenerator[dict, None]:
+    """Compatibility wrapper over the extracted ReAct-style agent loop."""
+    async for event in _run_agent_core(
+        user_message,
+        history,
+        deps=_agent_runtime_deps(),
+        context_block=context_block,
+        resource_context=resource_context,
+        resource_image_paths=resource_image_paths,
+        vision_model=vision_model,
+        project_name=project_name,
+        tools=tools,
+        ollama_url=ollama_url,
+        ollama_model=ollama_model,
+        max_iterations=max_iterations,
+        force_tool_mode=force_tool_mode,
+        api_key=api_key,
+        api_base_url=api_base_url,
+        api_model=api_model,
+        api_provider=api_provider,
+        cli_path=cli_path,
+        backend=backend,
+    ):
+        yield event
 
 
 # ─── System Prompts ──────────────────────────────────────────────────────────
@@ -1883,9 +1508,12 @@ ESCALATION_BASE_URL = "https://api.deepseek.com/"
 ESCALATION_MODEL = "deepseek-chat"
 
 # Model overrides by role for API backends
-# deepseek-chat handles code well; only reasoning gets a distinct model
+# DeepSeek-chat is the default for everything; reasoning gets a distinct model.
+# Claude and Gemini are available as alternatives per provider selection.
 API_MODEL_BY_ROLE: dict[str, dict[str, str]] = {
-    "deepseek": {"reasoning": "deepseek-reasoner"},
+    "deepseek": {"reasoning": "deepseek-reasoner", "code": "deepseek-chat", "general": "deepseek-chat"},
+    "anthropic": {"code": "claude-sonnet-4-5", "reasoning": "claude-sonnet-4-5", "general": "claude-sonnet-4-5"},
+    "gemini_gems": {"code": "gemini-2.5-pro", "reasoning": "gemini-2.5-pro", "general": "gemini-2.5-pro"},
 }
 
 
@@ -1993,6 +1621,15 @@ async def chat(
     Supports local Ollama, CLI agent, and external API runtimes.
     """
     system = SYSTEM_PROMPT_OLLAMA if backend == "ollama" else SYSTEM_PROMPT
+    if _requires_local_operator_execution(user_message, db_path=DEVBRAIN_DB_PATH):
+        return {
+            "content": (
+                "This request needs local tools. I did not create, edit, append, delete, "
+                "or verify any local file, repo, or workspace state in this plain chat turn. "
+                "Run it in Agent mode or let Axon auto-route it to the local operator."
+            ),
+            "tokens": 0,
+        }
     if _is_general_planning_request(user_message):
         history = _filtered_general_history(history)
         system += (

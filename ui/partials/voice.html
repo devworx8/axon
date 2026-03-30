@@ -1,0 +1,148 @@
+  <!-- ── Voice ORB Fullscreen Overlay ──────────────────────────────── -->
+  <div x-show="voice.open" x-transition:enter="transition ease-out duration-300"
+       x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-200"
+       x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
+       class="fixed inset-0 z-[999] bg-slate-950/95 backdrop-blur-xl voice-command-center overflow-hidden"
+       x-cloak>
+    <button @click="closeVoiceCommandCenter(true)"
+            class="absolute right-5 top-5 z-10 w-10 h-10 rounded-full bg-slate-900/70 text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center transition">
+      <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>
+
+    <div class="voice-stage min-h-full w-full px-6 py-12 md:px-10">
+      <div class="voice-stage__backdrop"></div>
+
+      <div class="voice-stage__content">
+        <div class="text-center">
+          <div class="voice-stage__eyebrow">Axon Voice Mode</div>
+          <div class="voice-stage__provider">
+            <span class="voice-stage__provider-chip" x-text="consoleProviderIdentity().providerLabel"></span>
+            <span class="voice-stage__provider-chip voice-stage__provider-chip--muted" x-text="consoleProviderIdentity().modelLabel"></span>
+          </div>
+        </div>
+
+        <!-- ── Arena: 3-column on desktop, stacked on mobile ── -->
+        <div class="voice-arena">
+          <!-- Left float: Transcript -->
+          <div class="voice-float voice-float--left">
+            <div class="voice-float__edge"></div>
+            <div class="voice-float__inner">
+              <div class="voice-float__label">
+                <span class="voice-float__dot"></span>
+                Transcript
+              </div>
+              <div class="voice-float__body" x-text="voiceDisplayTranscript()"></div>
+            </div>
+          </div>
+
+          <!-- Center: Reactor + Status -->
+          <div class="voice-arena__center">
+            <div class="voice-visual-wrap">
+          <div class="voice-hud voice-hud--left"></div>
+          <div class="voice-hud voice-hud--right"></div>
+          <svg class="axon-reactor" viewBox="0 0 420 420" role="img" aria-label="Axon voice reactor" :data-state="voiceVisualState()">
+            <defs>
+              <radialGradient id="axon-orb-core" cx="50%" cy="50%" r="60%">
+                <stop offset="0%" stop-color="#ffffff"></stop>
+                <stop offset="22%" stop-color="#dff8ff"></stop>
+                <stop offset="58%" stop-color="#46dbff"></stop>
+                <stop offset="100%" stop-color="#0a1630"></stop>
+              </radialGradient>
+              <linearGradient id="blade-fill" x1="0%" x2="100%" y1="0%" y2="100%">
+                <stop offset="0%" stop-color="#f7fbff"></stop>
+                <stop offset="16%" stop-color="#b9dbf7"></stop>
+                <stop offset="52%" stop-color="#2f6396"></stop>
+                <stop offset="100%" stop-color="#030d1f"></stop>
+              </linearGradient>
+              <linearGradient id="blade-edge" x1="0%" x2="100%" y1="0%" y2="0%">
+                <stop offset="0%" stop-color="#ffffff" stop-opacity="0.7"></stop>
+                <stop offset="100%" stop-color="#7fdcff" stop-opacity="0.05"></stop>
+              </linearGradient>
+              <linearGradient id="beam-fill" x1="0%" x2="100%" y1="50%" y2="50%">
+                <stop offset="0%" stop-color="rgba(125,211,252,0)"></stop>
+                <stop offset="50%" stop-color="#8cf3ff"></stop>
+                <stop offset="100%" stop-color="rgba(125,211,252,0)"></stop>
+              </linearGradient>
+              <filter id="orb-glow" x="-200%" y="-200%" width="400%" height="400%">
+                <feGaussianBlur stdDeviation="18" result="blur"></feGaussianBlur>
+                <feMerge>
+                  <feMergeNode in="blur"></feMergeNode>
+                  <feMergeNode in="SourceGraphic"></feMergeNode>
+                </feMerge>
+              </filter>
+            </defs>
+
+            <g class="reactor-rings">
+              <circle class="reactor-ring" cx="210" cy="210" r="86" :style="voiceRingStyle(0)"></circle>
+              <circle class="reactor-ring" cx="210" cy="210" r="112" :style="voiceRingStyle(1)"></circle>
+              <circle class="reactor-ring" cx="210" cy="210" r="138" :style="voiceRingStyle(2)"></circle>
+            </g>
+
+            <g class="reactor-beams">
+              <rect class="reactor-beam beam-left" x="118" y="292" width="182" height="10" rx="5" fill="url(#beam-fill)" :style="voiceBeamStyle(1)"></rect>
+              <rect class="reactor-beam beam-right" x="118" y="292" width="182" height="10" rx="5" fill="url(#beam-fill)" :style="voiceBeamStyle(0.86)"></rect>
+            </g>
+
+            <g class="reactor-shell">
+              <g class="reactor-blade reactor-blade--top">
+                <path d="M210 38 L270 198 L210 286 L150 198 Z" fill="url(#blade-fill)"></path>
+                <path d="M210 38 L270 198" stroke="url(#blade-edge)" stroke-width="3" fill="none"></path>
+                <path d="M210 38 L150 198" stroke="rgba(255,255,255,0.42)" stroke-width="2" fill="none"></path>
+              </g>
+              <g class="reactor-blade reactor-blade--left">
+                <path d="M66 334 L186 208 L170 348 Z" fill="url(#blade-fill)"></path>
+                <path d="M66 334 L186 208" stroke="url(#blade-edge)" stroke-width="3" fill="none"></path>
+              </g>
+              <g class="reactor-blade reactor-blade--right">
+                <path d="M354 334 L234 208 L250 348 Z" fill="url(#blade-fill)"></path>
+                <path d="M354 334 L234 208" stroke="url(#blade-edge)" stroke-width="3" fill="none"></path>
+              </g>
+            </g>
+
+            <g class="reactor-core" filter="url(#orb-glow)">
+              <circle class="reactor-orb-glow" cx="210" cy="210" r="70" :style="voiceGlowStyle()"></circle>
+              <circle class="reactor-orb" cx="210" cy="210" r="52" fill="url(#axon-orb-core)"></circle>
+              <circle class="reactor-orb-outline" cx="210" cy="210" r="58"></circle>
+            </g>
+          </svg>
+        </div>
+
+        <div class="voice-stage__status text-center">
+          <div class="voice-stage__state-label" x-text="voiceStatusLabel()"></div>
+          <div class="voice-stage__state-caption" x-text="voiceStateCaption()"></div>
+          <div class="voice-stage__state-hint" x-text="voiceStatusHint()"></div>
+          <div x-show="voiceSessionStartedAt" class="voice-stage__started" x-text="'Started ' + timeAgo(voiceSessionStartedAt)"></div>
+        </div>
+          </div><!-- /voice-arena__center -->
+
+          <!-- Right float: Response -->
+          <div class="voice-float voice-float--right" :class="voice.responseText ? 'voice-float--active' : ''">
+            <div class="voice-float__edge"></div>
+            <div class="voice-float__scanline"></div>
+            <div class="voice-float__inner">
+              <div class="voice-float__label">
+                <span class="voice-float__dot voice-float__dot--cyan"></span>
+                Response
+              </div>
+              <div class="voice-float__body voice-float__body--response" x-text="voiceDisplayResponse()"></div>
+            </div>
+          </div>
+        </div><!-- /voice-arena -->
+
+        <div class="voice-stage__actions">
+          <button @click="startVoiceListening()" class="voice-action voice-action--primary"
+                  :class="voice.recording ? 'voice-action--recording' : ''">
+            <span x-text="voice.recording ? '⏹ Stop & Send' : '🎙 Speak'"></span>
+          </button>
+          <button @click="clearVoiceTranscript()" class="voice-action voice-action--secondary" :disabled="!(voice.transcript || voice.responseText)">
+            Clear
+          </button>
+          <button @click="closeVoiceCommandCenter(true)" class="voice-action voice-action--ghost">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+    </div>
+  </div>

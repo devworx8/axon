@@ -1,0 +1,557 @@
+         TAB: DASHBOARD
+    ════════════════════════════════════════════════════════════ -->
+    <div x-show="activeTab === 'dashboard'" class="flex flex-col h-full">
+      <div class="hidden md:flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/50 desktop-header-glass">
+        <div class="flex items-center gap-3">
+          <div class="font-semibold text-white">Dashboard</div>
+          <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400 uppercase tracking-wider">Control Room</span>
+        </div>
+        <div class="flex items-center gap-3 text-[11px]">
+          <span x-show="currentUser.name" class="text-slate-500">
+            Signed in as <span class="text-slate-300 font-medium" x-text="currentUser.name"></span>
+          </span>
+          <span class="rounded-full border px-2.5 py-1"
+                :class="liveFeed.connected ? 'border-emerald-500/25 text-emerald-400' : 'border-slate-700 text-slate-500'"
+                x-text="liveFeed.connected ? '⬤ Live' : '◯ Idle'"></span>
+        </div>
+      </div>
+      <div class="flex-1 overflow-y-auto page-content">
+        <div x-show="dashLoading" class="w-full max-w-[1600px] mx-auto px-4 py-4 md:px-6 md:py-6 xl:px-8 2xl:px-10 space-y-3">
+          <template x-for="i in 3" :key="`dash-skeleton-${i}`">
+            <div class="bg-slate-900 rounded-2xl p-4 border border-slate-800 space-y-3">
+              <div class="flex items-center gap-3">
+                <div class="skeleton w-10 h-10 rounded-xl"></div>
+                <div class="flex-1 space-y-2">
+                  <div class="skeleton skeleton-text-lg w-2/3"></div>
+                  <div class="skeleton skeleton-text w-1/2"></div>
+                </div>
+              </div>
+              <div class="skeleton h-2 rounded-full w-full"></div>
+              <div class="flex gap-2">
+                <div class="skeleton skeleton-btn flex-1"></div>
+                <div class="skeleton skeleton-btn flex-1"></div>
+                <div class="skeleton w-11 h-11 rounded-xl"></div>
+              </div>
+            </div>
+          </template>
+        </div>
+        <div x-show="!dashLoading" class="w-full max-w-[1600px] mx-auto px-4 py-4 md:px-6 md:py-6 xl:px-8 2xl:px-10">
+          <div class="xl:grid xl:grid-cols-[minmax(0,1fr)_360px] xl:gap-6 xl:items-start">
+            <div class="min-w-0 space-y-4 md:space-y-5">
+
+              <div class="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.95fr)]">
+                <!-- ── Operator Console hero ─────────────── -->
+                <section class="hero-card rounded-[28px] border border-blue-500/15 bg-gradient-to-br from-slate-900 via-slate-900/95 to-slate-900/80 p-5 shadow-[0_28px_90px_rgba(30,64,175,0.12)] backdrop-blur md:p-6">
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <div class="flex items-center gap-2">
+                        <div class="text-[10px] font-semibold uppercase tracking-[0.24em] text-cyan-300/80">Operator Console</div>
+                        <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em]"
+                              :class="phaseChipClass(liveOperator.phase || 'observe')"
+                              x-text="phaseLabel(liveOperator.phase || 'observe')"></span>
+                      </div>
+                      <h2 class="mt-3 text-2xl font-bold text-white md:text-3xl"
+                          x-text="'Good ' + (new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 17 ? 'afternoon' : 'evening') + (currentUser.name ? ', ' + currentUser.name.split(' ')[0] : '')"></h2>
+                      <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-400">Axon is your local operator. It observes, plans, executes, and verifies work on your machine — inside safe boundaries — and reports proof here.</p>
+                    </div>
+                    <div class="rounded-2xl border border-blue-500/20 bg-blue-600/8 px-4 py-3 min-w-[220px]">
+                      <div class="text-[10px] uppercase tracking-[0.2em] text-slate-500">Current focus</div>
+                      <div class="mt-2 flex items-center gap-2">
+                        <span class="h-1.5 w-1.5 rounded-full shrink-0 animate-pulse"
+                              :class="liveOperator.active ? 'bg-emerald-400' : 'bg-slate-600'"></span>
+                        <span class="text-sm font-medium text-slate-100" x-text="liveOperator.title || lastOperatorOutcome.title || 'Standing by'"></span>
+                      </div>
+                      <div class="mt-1 text-[11px] leading-5 text-slate-400" x-text="liveOperator.detail || lastOperatorOutcome.summary || 'The next visible action appears here as soon as Axon starts working.'"></div>
+                      <div x-show="liveOperator.workspaceName || chatProject?.name" class="mt-2 text-[10px] text-blue-400/70" x-text="'Workspace: ' + (liveOperator.workspaceName || chatProject?.name)"></div>
+                    </div>
+                  </div>
+
+                  <div class="mt-5 flex flex-wrap gap-2">
+                    <button @click="switchTab('chat')" class="flex items-center gap-2 rounded-2xl border border-blue-500/30 bg-blue-600/15 px-4 py-2.5 text-sm font-semibold text-blue-200 transition hover:border-blue-400/40 hover:bg-blue-500/20 press-scale shadow-sm shadow-blue-500/10">
+                      💬 Open Console
+                    </button>
+                    <button @click="runScan()" :disabled="scanning" class="flex items-center gap-2 rounded-2xl border border-slate-700/70 bg-slate-950/70 px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:border-slate-500 press-scale">
+                      <span x-text="scanning ? '⏳' : '🔄'"></span>
+                      <span x-text="scanning ? 'Scanning…' : 'Run Axon Scan'"></span>
+                    </button>
+                    <button @click="switchTab('tasks'); showAddTask = true" class="flex items-center gap-2 rounded-2xl border border-slate-700/70 bg-slate-950/70 px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:border-slate-500 press-scale">
+                      ➕ New Mission
+                    </button>
+                    <button x-show="!isMobile" @click="activeTab = 'chat'; toggleLocalToolsPanel()" class="flex items-center gap-2 rounded-2xl border border-amber-500/25 bg-amber-500/8 px-4 py-2.5 text-sm font-medium text-amber-300/80 transition hover:border-amber-400/40 press-scale">
+                      🖥️ Local Tools
+                    </button>
+                  </div>
+                </section>
+
+                <section class="hero-card rounded-[28px] border border-cyan-500/15 bg-gradient-to-br from-slate-950 via-slate-900/95 to-slate-900/80 p-5 shadow-[0_28px_90px_rgba(8,145,178,0.14)] md:p-6">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.22em] text-cyan-300/80">Proof of Work</div>
+                      <div class="mt-2 flex items-center gap-2">
+                        <span class="h-2.5 w-2.5 rounded-full animate-pulse" :class="liveOperator.phase === 'recover' ? 'bg-amber-400' : (liveOperator.active ? 'bg-emerald-400' : 'bg-slate-500')"></span>
+                        <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em]"
+                              :class="phaseChipClass(liveOperator.phase || agentProgressState || 'observe')"
+                              x-text="phaseLabel(liveOperator.phase || agentProgressState || 'observe')"></span>
+                      </div>
+                    </div>
+                    <div class="text-right text-[10px] text-slate-500">
+                      <div x-text="liveOperator.startedAt ? 'Started ' + timeAgo(liveOperator.startedAt) : 'Ready now'"></div>
+                      <div x-text="lastOperatorOutcome.at ? 'Last result ' + timeAgo(lastOperatorOutcome.at) : ''"></div>
+                    </div>
+                  </div>
+
+                  <div class="mt-4">
+                    <div class="text-lg font-semibold text-white" x-text="liveOperator.title || lastOperatorOutcome.title || 'Axon is ready'"></div>
+                    <div class="mt-2 text-sm leading-6 text-slate-400" x-text="liveOperator.detail || lastOperatorOutcome.summary || 'When Axon is planning, executing, or verifying, you will see the active workspace, step detail, and result summary here.'"></div>
+                  </div>
+
+                  <div class="mt-4 h-1.5 overflow-hidden rounded-full bg-slate-800/90">
+                    <div class="h-full rounded-full bg-gradient-to-r from-cyan-400 via-blue-500 to-emerald-400 transition-all duration-300"
+                         :style="`width:${operatorProgressWidth()}`"></div>
+                  </div>
+
+                  <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                      <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Workspace</div>
+                      <div class="mt-2 text-sm font-medium text-slate-100" x-text="liveOperator.workspaceName || chatProject?.name || dashboardWeakestWorkspace()?.name || 'No workspace pinned'"></div>
+                      <div class="mt-1 text-[11px] text-slate-500" x-text="dashboardWeakestWorkspace() ? `Lowest health currently ${dashboardWeakestWorkspace().health}%` : 'Axon will name the active workspace while it works.'"></div>
+                    </div>
+                    <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                      <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Last action</div>
+                      <div class="mt-2 text-sm font-medium text-slate-100" x-text="lastOperatorOutcome.tool ? prettyToolName(lastOperatorOutcome.tool) : 'Waiting for the next action'"></div>
+                      <div class="mt-1 text-[11px] text-slate-500" x-text="lastOperatorOutcome.summary || 'The latest verified result lands here so you can see proof that work really happened.'"></div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+
+              <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
+                <div class="stat-card rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">
+                  <div class="mb-2 flex items-center gap-2">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-blue-600/20 text-base text-blue-400">📁</div>
+                    <span class="text-xs font-medium text-slate-400">Workspaces</span>
+                  </div>
+                  <div class="text-2xl font-bold text-white" x-text="dashStats.active"></div>
+                  <div class="text-[11px] text-slate-500" x-text="'of ' + dashStats.projects + ' tracked'"></div>
+                </div>
+                <div class="stat-card rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">
+                  <div class="mb-2 flex items-center gap-2">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-green-600/20 text-base text-green-400">✅</div>
+                    <span class="text-xs font-medium text-slate-400">Missions</span>
+                  </div>
+                  <div class="text-2xl font-bold text-white" x-text="dashStats.tasks"></div>
+                  <div class="text-[11px] text-slate-500"><span class="font-semibold text-amber-400" x-text="dashStats.urgent"></span> priority</div>
+                </div>
+                <div class="stat-card rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">
+                  <div class="mb-2 flex items-center gap-2">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-600/20 text-base text-emerald-400">💚</div>
+                    <span class="text-xs font-medium text-slate-400">System Health</span>
+                  </div>
+                  <div class="text-2xl font-bold" :class="dashStats.health_avg >= 70 ? 'text-green-400' : dashStats.health_avg >= 40 ? 'text-yellow-400' : 'text-red-400'" x-text="dashStats.health_avg + '%'"></div>
+                  <div class="text-[11px] text-slate-500">across active workspaces</div>
+                </div>
+                <div class="stat-card rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">
+                  <div class="mb-2 flex items-center gap-2">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-purple-600/20 text-base text-purple-400">🧠</div>
+                    <span class="text-xs font-medium text-slate-400">AI Runtime</span>
+                  </div>
+                  <div class="text-2xl font-bold text-white" x-text="runtimeStatus.runtime_label || backendBadge()"></div>
+                  <div class="text-[11px] text-slate-500" x-text="runtimeStatus.active_model || composerModelSummary() || 'Awaiting model selection'"></div>
+                </div>
+              </div>
+
+              <div class="grid gap-2 md:grid-cols-5">
+                <template x-for="item in runtimeStatusCards()" :key="item.label">
+                  <div class="rounded-2xl border bg-slate-900/55 px-3 py-3 backdrop-blur"
+                       :class="item.tone === 'ok' ? 'border-emerald-500/15' : item.tone === 'warn' ? 'border-amber-500/15' : 'border-slate-800'">
+                    <div class="text-[10px] uppercase tracking-[0.2em] text-slate-500" x-text="item.label"></div>
+                    <div class="mt-1 text-sm font-medium text-slate-100" x-text="item.value"></div>
+                  </div>
+                </template>
+              </div>
+
+              <div class="grid gap-4 lg:grid-cols-[minmax(0,1.12fr)_minmax(320px,0.88fr)]">
+                <section class="rounded-[28px] border border-slate-800 bg-slate-900/45 p-4 md:p-5">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Workspace Risk</div>
+                      <div class="mt-2 text-lg font-semibold text-white">Weakest workspaces first</div>
+                    </div>
+                    <button @click="switchTab('projects')" class="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-[10px] text-slate-300 transition hover:border-slate-500">Open Workspaces</button>
+                  </div>
+                  <div class="mt-4 space-y-3" x-show="dashTopProjects.length">
+                    <template x-for="p in dashTopProjects" :key="p.id">
+                      <button @click="chatProjectId = String(p.id); chatProject = p; switchTab('chat');"
+                              class="flex w-full items-center gap-3 rounded-2xl border border-slate-800 bg-slate-950/65 px-4 py-3 text-left transition hover:border-slate-600 press-scale">
+                        <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-sm font-semibold"
+                             :class="p.health >= 70 ? 'bg-emerald-500/10 text-emerald-300' : p.health >= 40 ? 'bg-amber-500/10 text-amber-300' : 'bg-rose-500/10 text-rose-300'"
+                             x-text="`${p.health}%`"></div>
+                        <div class="min-w-0 flex-1">
+                          <div class="truncate text-sm font-medium text-slate-100" x-text="p.name"></div>
+                          <div class="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                            <span x-text="p.stack || 'unknown stack'"></span>
+                                <span x-show="p.todo_count > 0" class="text-amber-400"
+                                  :title="`${p.todo_count} code markers found across scanned files. Includes TODO / FIXME / HACK / XXX comments.`"
+                                  x-text="`${p.todo_count} TODOs`"></span>
+                          </div>
+                        </div>
+                        <svg class="h-4 w-4 shrink-0 text-slate-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+                      </button>
+                    </template>
+                  </div>
+                  <div x-show="!dashTopProjects.length" class="mt-4 rounded-2xl border border-dashed border-slate-800 bg-slate-950/60 px-4 py-5 text-sm text-slate-500">
+                    Add a workspace or run Axon Scan to start tracking health here.
+                  </div>
+                </section>
+
+                <section class="rounded-[28px] border border-slate-800 bg-slate-900/45 p-4 md:p-5">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300/80">Priority Missions</div>
+                      <div class="mt-2 text-lg font-semibold text-white">What needs attention next</div>
+                    </div>
+                    <button @click="switchTab('tasks')" class="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-[10px] text-slate-300 transition hover:border-slate-500">View All</button>
+                  </div>
+                  <div class="mt-4 space-y-3" x-show="dashboardPriorityMissions().length">
+                    <template x-for="task in dashboardPriorityMissions()" :key="task.id">
+                      <button @click="switchTab('tasks')"
+                              class="w-full rounded-2xl border px-4 py-3 text-left transition press-scale"
+                              :class="{
+                                'border-rose-500/20 bg-rose-500/10 mission-glow-urgent': task.priority === 'urgent',
+                                'border-amber-500/20 bg-amber-500/5 mission-glow-high': task.priority === 'high',
+                                'border-blue-500/20 bg-blue-500/5 mission-glow-medium': task.priority === 'medium',
+                                'border-slate-800 bg-slate-950/65 hover:border-slate-700': !['urgent','high','medium'].includes(task.priority)
+                              }">
+                        <div class="flex items-start gap-3">
+                          <div class="mt-1 h-2.5 w-2.5 shrink-0 rounded-full"
+                               :class="task.priority === 'urgent' ? 'bg-rose-400' : task.priority === 'high' ? 'bg-amber-400' : 'bg-slate-500'"></div>
+                          <div class="min-w-0 flex-1">
+                            <div class="truncate text-sm font-medium text-slate-100" x-text="task.title"></div>
+                            <div class="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                              <span x-text="task.project_name || 'No workspace'"></span>
+                              <span class="uppercase tracking-[0.16em]" x-text="task.priority"></span>
+                              <!-- Assignee chip -->
+                              <span x-show="task.assigned_user_id"
+                                    class="flex items-center gap-1 rounded-full border border-violet-500/20 bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-300">
+                                <span class="w-3 h-3 rounded-full bg-violet-500/40 flex items-center justify-center text-[8px]">👤</span>
+                                <span>Assigned</span>
+                              </span>
+                              <span x-show="task.status === 'in_progress'"
+                                    class="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-300">In progress</span>
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    </template>
+                  </div>
+                  <div x-show="!dashboardPriorityMissions().length" class="mt-4 rounded-2xl border border-dashed border-slate-800 bg-slate-950/60 px-4 py-5 text-sm text-slate-500">
+                    No urgent or high-priority missions right now. Axon will surface the next safe move here when something changes.
+                  </div>
+                </section>
+              </div>
+
+              <!-- Recent Timeline + Runtime Signals — compact collapsible pair -->
+              <div class="grid gap-3 lg:grid-cols-2" x-data="{ tlOpen: false, rsOpen: false }">
+
+                <!-- Recent Timeline -->
+                <section class="rounded-2xl border border-slate-800 bg-slate-900/45 overflow-hidden">
+                  <div class="flex items-center gap-2 px-4 py-2.5">
+                    <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500 shrink-0">Timeline</span>
+                    <span class="text-slate-700 shrink-0">·</span>
+                    <!-- latest item preview -->
+                    <span class="text-[11px] text-slate-400 truncate flex-1"
+                          x-text="dashRecentActivity[0] ? (dashRecentActivity[0].event_type === 'scan' ? scanTriggerLabel(dashRecentActivity[0].summary) : (dashRecentActivity[0].summary || dashRecentActivity[0].event_type)) : 'No recent events'"></span>
+                    <span class="text-[10px] text-slate-600 shrink-0"
+                          x-text="dashRecentActivity[0] ? timeAgo(dashRecentActivity[0].created_at) : ''"></span>
+                    <div class="flex items-center gap-1 ml-1 shrink-0">
+                      <button @click="switchTab('activity')"
+                              class="rounded-lg border border-slate-700/60 bg-slate-800/60 px-2 py-0.5 text-[10px] text-slate-400 hover:text-slate-200 transition">All</button>
+                      <button @click="tlOpen = !tlOpen"
+                              class="w-6 h-6 flex items-center justify-center rounded-lg text-slate-600 hover:text-slate-300 hover:bg-slate-800 transition"
+                              :title="tlOpen ? 'Collapse' : 'Show history'">
+                        <svg class="w-3.5 h-3.5 transition-transform duration-200" :class="tlOpen ? 'rotate-180' : ''" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <div x-show="tlOpen" x-collapse class="border-t border-slate-800/60">
+                    <div class="px-3 py-2 space-y-1.5 max-h-56 overflow-y-auto">
+                      <template x-for="a in dashRecentActivity" :key="a.id">
+                        <div class="flex items-center gap-2.5 rounded-xl border border-slate-800/80 bg-slate-950/50 px-3 py-2">
+                          <span class="text-sm shrink-0" x-text="eventIcon(a.event_type)"></span>
+                          <div class="min-w-0 flex-1">
+                            <div class="truncate text-[12px] text-slate-200"
+                                 x-text="a.event_type === 'scan' ? scanTriggerLabel(a.summary) : (a.summary || a.event_type)"></div>
+                            <div class="text-[10px] text-slate-600"
+                                 x-text="a.event_type === 'scan' ? (a.summary || 'Scan') : (a.project_name || 'General')"></div>
+                          </div>
+                          <span class="shrink-0 text-[10px] text-slate-600" x-text="timeAgo(a.created_at)"></span>
+                        </div>
+                      </template>
+                      <div x-show="!dashRecentActivity.length" class="py-4 text-center text-[11px] text-slate-600">No recent activity</div>
+                    </div>
+                  </div>
+                </section>
+
+                <!-- Runtime Signals -->
+                <section class="rounded-2xl border border-slate-800 bg-slate-900/45 overflow-hidden">
+                  <div class="flex items-center gap-2 px-4 py-2.5">
+                    <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500 shrink-0">Runtime</span>
+                    <span class="text-slate-700 shrink-0">·</span>
+                    <!-- inline badges -->
+                    <div class="flex items-center gap-1.5 flex-1 min-w-0 overflow-hidden">
+                      <template x-for="badge in runtimeProviderBadges()" :key="badge.label">
+                        <span class="rounded-full border px-2 py-0.5 text-[9px] shrink-0"
+                              :class="runtimeProviderBadgeClass(badge.tone)"
+                              x-text="badge.label"></span>
+                      </template>
+                    </div>
+                    <button @click="rsOpen = !rsOpen"
+                            class="w-6 h-6 flex items-center justify-center rounded-lg text-slate-600 hover:text-slate-300 hover:bg-slate-800 transition ml-1 shrink-0"
+                            :title="rsOpen ? 'Collapse' : 'Show details'">
+                      <svg class="w-3.5 h-3.5 transition-transform duration-200" :class="rsOpen ? 'rotate-180' : ''" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                  </div>
+                  <div x-show="rsOpen" x-collapse class="border-t border-slate-800/60">
+                    <div class="px-3 py-3 grid gap-2 sm:grid-cols-2">
+                      <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5">
+                        <div class="text-[10px] uppercase tracking-[0.16em] text-slate-600">Connection</div>
+                        <div class="mt-1 text-[12px] font-medium text-slate-200"
+                             x-text="connectionStatusBadges().map(i=>i.label).join(' · ') || 'Local only'"></div>
+                        <div class="mt-0.5 text-[10px] text-slate-600"
+                             x-text="liveFeed.connected ? 'Live feed connected' : 'Live feed idle'"></div>
+                      </div>
+                      <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5">
+                        <div class="text-[10px] uppercase tracking-[0.16em] text-slate-600">Memory</div>
+                        <div class="mt-1 text-[12px] font-medium text-slate-200" x-text="runtimeStatus.memory_state || 'Ready'"></div>
+                        <div class="mt-0.5 text-[10px] text-slate-600" x-text="memoryOverviewText()"></div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+
+              <!-- ── Local Tools — compact collapsible ──────── -->
+              <section x-data="{ ltOpen: false }"
+                       class="rounded-2xl border border-amber-500/15 bg-slate-900/50 overflow-hidden">
+                <!-- Header row — always visible -->
+                <div class="flex items-center gap-2 px-4 py-2.5">
+                  <!-- Label + badges -->
+                  <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300/70 shrink-0">Local Tools</span>
+                  <span class="text-slate-700 shrink-0">·</span>
+                  <span class="text-[11px] font-medium text-slate-300 truncate">Machine Access</span>
+                  <span class="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[9px] text-emerald-400 shrink-0 hidden sm:inline">Sandboxed</span>
+                  <span class="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[9px] text-amber-400 shrink-0 hidden md:inline"
+                        x-text="(settingsForm.terminal_default_mode || 'read_only').replace(/_/g,' ')"></span>
+
+                  <!-- Quick actions row -->
+                  <div class="ml-auto flex items-center gap-1 shrink-0">
+                    <button @click="activeTab='chat'; toggleLocalToolsPanel()"
+                            class="flex items-center gap-1 rounded-lg border border-slate-700/60 bg-slate-800/60 px-2.5 py-1 text-[11px] text-slate-300 hover:border-amber-500/40 hover:text-amber-200 transition press-scale">
+                      🗂 Files
+                    </button>
+                    <button @click="activeTab='chat'; toggleTerminalMode(true)"
+                            class="flex items-center gap-1 rounded-lg border border-slate-700/60 bg-slate-800/60 px-2.5 py-1 text-[11px] text-slate-300 hover:border-amber-500/40 hover:text-amber-200 transition press-scale">
+                      ⌨ Shell
+                    </button>
+                    <button @click="runScan()"
+                            class="hidden md:flex items-center gap-1 rounded-lg border border-slate-700/60 bg-slate-800/60 px-2.5 py-1 text-[11px] text-slate-300 hover:border-blue-500/40 hover:text-blue-200 transition press-scale">
+                      🔍 Scan
+                    </button>
+                    <button @click="refreshDesktopPreview(true)"
+                            class="hidden lg:flex items-center gap-1 rounded-lg border border-slate-700/60 bg-slate-800/60 px-2.5 py-1 text-[11px] text-slate-300 hover:border-cyan-500/40 hover:text-cyan-200 transition press-scale">
+                      🖥 Preview
+                    </button>
+                    <!-- expand chevron -->
+                    <button @click="ltOpen = !ltOpen"
+                            class="ml-1 w-6 h-6 flex items-center justify-center rounded-lg text-slate-600 hover:text-slate-300 hover:bg-slate-800 transition"
+                            :title="ltOpen ? 'Collapse' : 'More options'">
+                      <svg class="w-3.5 h-3.5 transition-transform duration-200" :class="ltOpen ? 'rotate-180' : ''" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Expanded details — collapsed by default -->
+                <div x-show="ltOpen" x-collapse class="border-t border-slate-800/60 px-4 py-3">
+                  <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                    <button @click="activeTab='chat'; ltOpen=false"
+                            class="flex flex-col items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/60 px-2 py-2.5 text-center transition hover:border-amber-500/30 hover:bg-amber-500/8 press-scale group">
+                      <span class="text-lg">🗂️</span>
+                      <span class="text-[10px] text-slate-400 group-hover:text-amber-200">Browse</span>
+                    </button>
+                    <button @click="activeTab='chat'; ltOpen=false"
+                            class="flex flex-col items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/60 px-2 py-2.5 text-center transition hover:border-amber-500/30 hover:bg-amber-500/8 press-scale group">
+                      <span class="text-lg">📖</span>
+                      <span class="text-[10px] text-slate-400 group-hover:text-amber-200">Read</span>
+                    </button>
+                    <button @click="activeTab='chat'; ltOpen=false"
+                            class="flex flex-col items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/60 px-2 py-2.5 text-center transition hover:border-amber-500/30 hover:bg-amber-500/8 press-scale group">
+                      <span class="text-lg">✏️</span>
+                      <span class="text-[10px] text-slate-400 group-hover:text-amber-200">Write</span>
+                    </button>
+                    <button @click="activeTab='chat'; toggleTerminalMode(true); ltOpen=false"
+                            class="flex flex-col items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/60 px-2 py-2.5 text-center transition hover:border-amber-500/30 hover:bg-amber-500/8 press-scale group">
+                      <span class="text-lg">⌨️</span>
+                      <span class="text-[10px] text-slate-400 group-hover:text-amber-200">Terminal</span>
+                    </button>
+                    <button @click="runScan(); ltOpen=false"
+                            class="flex flex-col items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/60 px-2 py-2.5 text-center transition hover:border-blue-500/30 hover:bg-blue-500/8 press-scale group">
+                      <span class="text-lg">🔍</span>
+                      <span class="text-[10px] text-slate-400 group-hover:text-blue-200">Scan</span>
+                    </button>
+                    <button @click="refreshDesktopPreview(true); ltOpen=false"
+                            class="flex flex-col items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/60 px-2 py-2.5 text-center transition hover:border-cyan-500/30 hover:bg-cyan-500/8 press-scale group">
+                      <span class="text-lg">🖥️</span>
+                      <span class="text-[10px] text-slate-400 group-hover:text-cyan-200">Preview</span>
+                    </button>
+                  </div>
+                  <div class="mt-2.5 text-[10px] text-slate-600">
+                    Sandboxed to home directory. Terminal: <span class="text-amber-500/70" x-text="(settingsForm.terminal_default_mode || 'read_only').replace(/_/g,' ')"></span>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <aside class="hidden xl:block">
+              <div class="sticky top-6 space-y-3">
+
+                <!-- A. Operator Status -->
+                <section class="hero-card rounded-[24px] border border-cyan-500/18 bg-slate-900/80 p-4 shadow-[0_16px_60px_rgba(8,145,178,0.10)] backdrop-blur">
+                  <div class="flex items-center justify-between gap-2">
+                    <div class="text-[10px] font-semibold uppercase tracking-[0.22em] text-cyan-300/70">Axon Live</div>
+                    <div class="flex items-center gap-1.5">
+                      <span class="h-1.5 w-1.5 rounded-full animate-pulse"
+                            :class="liveOperator.active ? 'bg-emerald-400' : 'bg-slate-600'"></span>
+                      <span class="rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.16em]"
+                            :class="phaseChipClass(liveOperator.phase || agentProgressState || 'observe')"
+                            x-text="phaseLabel(liveOperator.phase || agentProgressState || 'observe')"></span>
+                    </div>
+                  </div>
+                  <div class="mt-3 font-semibold text-slate-100 leading-snug" x-text="liveOperator.title || 'Standing by'"></div>
+                  <div class="mt-1 text-[11px] text-slate-400 leading-5" x-text="liveOperator.detail || 'Axon Live shows what Axon is doing right now.'"></div>
+                  <div class="mt-3 h-1 overflow-hidden rounded-full bg-slate-950/90">
+                    <div class="h-full rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-cyan-300 transition-all duration-500"
+                         :style="`width:${operatorProgressWidth()}`"></div>
+                  </div>
+                  <div class="mt-2 flex items-center justify-between text-[10px] text-slate-500">
+                    <span x-text="liveOperator.startedAt ? 'Started ' + timeAgo(liveOperator.startedAt) : 'Waiting for a task'"></span>
+                    <span class="truncate max-w-[100px]" x-text="liveOperator.workspaceName || chatProject?.name || 'Global'"></span>
+                  </div>
+                </section>
+
+                <!-- B. Recent Steps -->
+                <section class="rounded-[24px] border border-slate-800 bg-slate-900/60 p-4">
+                  <div class="flex items-center justify-between gap-2 mb-3">
+                    <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Recent Steps</div>
+                    <span class="text-[10px] text-slate-600" x-text="`${dashboardLiveEntries().length} entries`"></span>
+                  </div>
+                  <div class="space-y-2 max-h-[240px] overflow-y-auto pr-0.5 no-scrollbar">
+                    <template x-if="!dashboardLiveEntries().length">
+                      <div class="rounded-xl border border-dashed border-slate-800 bg-slate-950/70 px-3 py-3 text-[11px] text-slate-500">
+                        Steps appear here as Axon works through a request.
+                      </div>
+                    </template>
+                    <template x-for="entry in dashboardLiveEntries()" :key="entry.id">
+                      <div class="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2.5">
+                        <div class="flex items-center justify-between gap-1.5">
+                          <span class="rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.14em]"
+                                :class="phaseChipClass(entry.phase || 'observe')"
+                                x-text="phaseLabel(entry.phase || 'observe')"></span>
+                          <span class="text-[10px] text-slate-500 shrink-0" x-text="timeAgo(entry.at || entry.created_at)"></span>
+                        </div>
+                        <div class="mt-1.5 text-[11px] font-medium text-slate-100 leading-tight" x-text="entry.title"></div>
+                        <div x-show="entry.detail" class="mt-0.5 text-[10px] text-slate-400 leading-4 line-clamp-2" x-text="entry.detail"></div>
+                      </div>
+                    </template>
+                  </div>
+                </section>
+
+                <!-- C. Desktop Preview / Proof of Work -->
+                <section class="rounded-[24px] border border-slate-800 bg-slate-900/60 p-4">
+                  <div class="flex items-center justify-between gap-2 mb-3">
+                    <div>
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Desktop Preview</div>
+                      <div class="text-[10px] text-slate-500 mt-0.5">Proof that work is happening</div>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                      <span class="rounded-full border border-slate-700 px-2 py-0.5 text-[9px]"
+                            :class="desktopPreview.url ? 'text-emerald-400 border-emerald-500/20' : (desktopPreview.loading ? 'text-amber-400 border-amber-500/20' : 'text-slate-500')"
+                            x-text="desktopPreview.url ? 'Live' : (desktopPreview.loading ? 'Refreshing' : (desktopPreview.error ? 'Error' : 'Ready'))"></span>
+                      <button @click="refreshDesktopPreview(true)"
+                              class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-[10px] text-slate-300 transition hover:border-slate-500">
+                        ↻
+                      </button>
+                    </div>
+                  </div>
+                  <div class="overflow-hidden rounded-xl border border-slate-800 bg-slate-950/80 aspect-video flex items-center justify-center">
+                    <img x-show="desktopPreview.url" :src="desktopPreview.url" alt="Live desktop preview" class="h-full w-full object-cover" />
+                    <div x-show="!desktopPreview.url && desktopPreview.loading" class="text-[11px] text-slate-400">Capturing desktop…</div>
+                    <div x-show="!desktopPreview.url && !desktopPreview.loading && !desktopPreview.error" class="px-4 text-center text-[11px] text-slate-500">Refresh to capture the desktop state.</div>
+                    <div x-show="desktopPreview.error" class="px-4 text-center text-[11px] text-amber-300" x-text="desktopPreview.error"></div>
+                  </div>
+                  <div class="mt-2 flex items-center justify-between text-[10px] text-slate-500">
+                    <span x-text="desktopPreview.lastUpdated ? 'Updated ' + timeAgo(desktopPreview.lastUpdated) : 'Not yet captured'"></span>
+                    <span x-show="liveOperator.workspaceName" x-text="liveOperator.workspaceName" class="truncate max-w-[100px]"></span>
+                  </div>
+                </section>
+
+                <!-- D. Runtime / Connection -->
+                <section class="rounded-[24px] border border-slate-800 bg-slate-900/60 p-4">
+                  <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400 mb-3">Runtime · Connection</div>
+                  <div class="flex flex-wrap gap-1.5 mb-3">
+                    <template x-for="badge in connectionStatusBadges()" :key="badge.key">
+                      <span class="rounded-full border px-2 py-0.5 text-[10px]"
+                            :class="connectionBadgeClass(badge.state)"
+                            x-text="badge.label"></span>
+                    </template>
+                    <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400"
+                          x-text="runtimeStatus.runtime_label || backendBadge()"></span>
+                  </div>
+                  <div class="space-y-2">
+                    <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                      <div class="text-[10px] uppercase tracking-wide text-slate-500">Model</div>
+                      <div class="mt-1 text-[11px] font-medium text-slate-100" x-text="runtimeStatus.active_model || composerModelSummary() || 'Awaiting model selection'"></div>
+                    </div>
+                    <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                      <div class="text-[10px] uppercase tracking-wide text-slate-500">Live feed</div>
+                      <div class="mt-1 flex items-center gap-1.5">
+                        <span class="h-1.5 w-1.5 rounded-full" :class="liveFeed.connected ? 'bg-emerald-400' : 'bg-slate-600'"></span>
+                        <span class="text-[11px] font-medium text-slate-100"
+                              x-text="liveFeed.connected ? 'Connected' : (liveFeed.reconnecting ? 'Reconnecting…' : 'Idle')"></span>
+                      </div>
+                      <div x-show="liveFeed.latest?.at" class="mt-0.5 text-[10px] text-slate-500" x-text="'Updated ' + timeAgo(liveFeed.latest?.at)"></div>
+                    </div>
+                  </div>
+                </section>
+
+                <!-- E. Pending Approvals -->
+                <section x-show="terminal.approvalRequired" class="rounded-[24px] border border-amber-500/25 bg-amber-500/8 p-4">
+                  <div class="flex items-center gap-2 mb-3">
+                    <span class="text-amber-400 text-base">⚠️</span>
+                    <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300">Approval Required</div>
+                  </div>
+                  <div class="text-[11px] text-slate-300 mb-2">Axon wants to run a terminal command:</div>
+                  <div class="rounded-xl border border-amber-500/20 bg-slate-950/70 px-3 py-2 font-mono text-[11px] text-amber-200 break-all" x-text="terminal.pendingCommand"></div>
+                  <div class="mt-3 flex gap-2">
+                    <button @click="activeTab = 'chat'; executeTerminalCommand(true)"
+                            class="flex-1 rounded-xl bg-emerald-600/20 border border-emerald-500/30 px-3 py-2 text-[11px] font-semibold text-emerald-300 transition hover:bg-emerald-600/30">
+                      Approve
+                    </button>
+                    <button @click="terminal.approvalRequired = false; terminal.pendingCommand = ''"
+                            class="flex-1 rounded-xl bg-rose-600/20 border border-rose-500/30 px-3 py-2 text-[11px] font-semibold text-rose-300 transition hover:bg-rose-600/30">
+                      Reject
+                    </button>
+                    <button @click="activeTab = 'chat'; toggleTerminalMode(true)"
+                            class="rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-[11px] text-slate-300 transition hover:border-slate-500">
+                      Inspect
+                    </button>
+                  </div>
+                </section>
+
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════════════════════════════════

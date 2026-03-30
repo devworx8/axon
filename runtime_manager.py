@@ -4,11 +4,60 @@ Runtime snapshot helpers for Axon.
 
 from __future__ import annotations
 
-from model_router import ModelRouterConfig, local_model_cards, resolve_model_for_role
+from model_router import LOCAL_MODELS_ENABLED, ModelRouterConfig, local_model_cards, resolve_model_for_role
 from agent_registry import active_agents_count, lifecycle_phases, registered_agents
 from permissions_guard import default_permission_cards
 import gpu_guard
 import provider_registry
+
+
+# API providers whose models support vision without a separate vision_model setting
+_VISION_CAPABLE_API_PROVIDERS = {
+    "anthropic", "claude", "openai", "gpt", "deepseek", "gemini", "mistral",
+}
+
+# Ollama model families that support vision natively
+_VISION_CAPABLE_OLLAMA_FAMILIES = (
+    "llava", "llava-phi", "bakllava", "moondream", "cogvlm",
+    "minicpm-v", "qwen-vl", "qwen2-vl", "qwen2.5-vl",
+    "internvl", "phi3-vision", "phi-3-vision",
+)
+
+
+def _build_vision_status(settings: dict) -> dict:
+    """Determine vision readiness across all backends."""
+    explicit_model = (settings.get("vision_model") or "").strip()
+    if explicit_model:
+        return {"model": explicit_model, "ready": True, "runtime_label": "Local Ollama"}
+
+    backend = (settings.get("ai_backend") or "ollama").lower()
+
+    if backend == "api":
+        # API-backed models (Claude, DeepSeek, OpenAI, etc.) include vision natively
+        api_model = (settings.get("api_model") or "").strip()
+        provider = (settings.get("api_provider") or "").lower()
+        label = provider.capitalize() if provider else "API"
+        # Check if the provider is known to support vision
+        vision_ready = any(p in provider for p in _VISION_CAPABLE_API_PROVIDERS) or bool(api_model)
+        return {
+            "model": api_model or label,
+            "ready": vision_ready,
+            "runtime_label": f"{label} (built-in vision)" if vision_ready else "API — vision unknown",
+        }
+
+    if backend == "cli":
+        return {"model": "Claude CLI", "ready": True, "runtime_label": "Claude CLI (built-in vision)"}
+
+    # Ollama: check if the active model name contains a vision family keyword
+    ollama_model = (settings.get("ollama_model") or "").strip().lower()
+    vision_via_ollama = any(fam in ollama_model for fam in _VISION_CAPABLE_OLLAMA_FAMILIES)
+    if vision_via_ollama:
+        return {
+            "model": ollama_model,
+            "ready": True,
+            "runtime_label": "Local Ollama (vision-capable model)",
+        }
+    return {"model": "", "ready": False, "runtime_label": "Not configured"}
 
 
 def _setting_enabled(value) -> bool:
@@ -29,12 +78,11 @@ def build_router_config(settings: dict) -> ModelRouterConfig:
     }
     return ModelRouterConfig(
         selected_models=selected,
-        preferred_runtime=(settings.get("ai_backend") or "ollama"),
-        allow_cloud=_setting_enabled(settings.get("cloud_agents_enabled")),
+        preferred_runtime=(settings.get("ai_backend") or "api"),
+        allow_cloud=True,
         adapter_enabled={
             "openai_gpts": _setting_enabled(settings.get("openai_gpts_enabled")),
             "gemini_gems": _setting_enabled(settings.get("gemini_gems_enabled")),
-            "generic_api": _setting_enabled(settings.get("generic_api_enabled")),
         },
     )
 
@@ -79,18 +127,19 @@ def build_runtime_status(
         or settings.get("ollama_model")
         or code_route.get("selected_model")
         or code_route.get("default_family")
-        or "Saved default"
+        or "deepseek-chat"
     )
 
-    if ollama_running:
+    backend = settings.get("ai_backend") or "api"
+    if backend == "api":
+        runtime_state = "active"
+        runtime_label = "Cloud API"
+    elif backend == "cli":
+        runtime_state = "active"
+        runtime_label = "CLI Agent"
+    elif ollama_running:
         runtime_state = "active"
         runtime_label = "Local Ollama"
-    elif settings.get("ai_backend") == "cli":
-        runtime_state = "warning"
-        runtime_label = "CLI Agent"
-    elif settings.get("ai_backend") == "api":
-        runtime_state = "warning"
-        runtime_label = "External API"
     else:
         runtime_state = "degraded"
         runtime_label = "Runtime offline"
@@ -107,16 +156,13 @@ def build_runtime_status(
         "phases": lifecycle_phases(),
         "agents": registered_agents(),
         "local_models": local_models,
+        "local_models_enabled": LOCAL_MODELS_ENABLED,
         "cloud_agents": provider_registry.cloud_adapter_cards(settings),
         "api_providers": provider_registry.api_provider_cards(settings),
         "selected_api_provider": provider_registry.runtime_api_config(settings),
         "permissions": default_permission_cards(),
         "gpu_guard": gpu_profile,
-        "vision_status": {
-            "model": settings.get("vision_model", "") or "",
-            "ready": bool(settings.get("vision_model", "")),
-            "runtime_label": "Local Ollama" if settings.get("vision_model") else "Not configured",
-        },
+        "vision_status": _build_vision_status(settings),
         "resource_bank": {
             "count": resource_count,
             "storage_path": settings.get("resource_storage_path", "~/.devbrain/resources") or "~/.devbrain/resources",

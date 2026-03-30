@@ -1,0 +1,53 @@
+<!-- ── Auth Lock Screen ── -->
+
+<div x-show="!authenticated" x-cloak class="fixed inset-0 z-[100] bg-slate-950 flex items-center justify-center">
+  <div class="w-full max-w-sm px-6 text-center">
+    <!-- Logo -->
+    <div class="fade-in-up mb-8">
+      <div class="w-20 h-20 mx-auto rounded-[26px] bg-gradient-to-br from-sky-500 via-blue-600 to-cyan-300 flex items-center justify-center text-4xl shadow-2xl shadow-cyan-500/20 mb-4 border border-white/10">✦</div>
+      <h1 class="text-2xl font-bold text-white">Axon</h1>
+      <p class="text-sm text-slate-400 mt-1" x-text="authMode === 'setup' ? 'Secure local access' : 'Secure local access'"></p>
+      <p class="text-xs uppercase tracking-[0.28em] text-slate-500 mt-3">Encrypted. Private. On-device.</p>
+    </div>
+
+    <!-- PIN dots display -->
+    <div class="fade-in-up-delay mb-6">
+      <div class="flex justify-center gap-3 mb-2">
+        <template x-for="i in (authMode === 'setup' && authSetupStep === 2 ? authConfirmPin.length || authPinLength : authPinLength)" :key="'dot-'+i">
+          <div class="w-3.5 h-3.5 rounded-full transition-all duration-200 ring-1 ring-white/5"
+               :class="(authMode === 'setup' && authSetupStep === 2 ? authConfirmPin : authPin).length >= i ? 'bg-cyan-400 scale-125 shadow-[0_0_18px_rgba(34,211,238,0.45)]' : 'bg-slate-700'">
+          </div>
+        </template>
+      </div>
+      <p x-show="authMode === 'setup' && authSetupStep === 2" class="text-xs text-blue-400 mt-2">Confirm your PIN</p>
+    </div>
+
+    <!-- Number pad -->
+    <div class="fade-in-up-delay2">
+      <div class="grid grid-cols-3 gap-3 max-w-[260px] mx-auto">
+        <template x-for="n in [1,2,3,4,5,6,7,8,9]" :key="'key-'+n">
+          <button @click="authKeyPress(String(n))"
+                  class="h-16 rounded-2xl bg-slate-800/80 hover:bg-slate-700 active:bg-blue-600/30 text-2xl font-semibold text-white transition-all press-scale">
+            <span x-text="n"></span>
+          </button>
+        </template>
+        <!-- Bottom row: backspace, 0, submit -->
+        <button @click="authBackspace()" class="h-16 rounded-2xl bg-slate-800/50 hover:bg-slate-700 text-xl text-slate-400 transition-all press-scale">⌫</button>
+        <button @click="authKeyPress('0')" class="h-16 rounded-2xl bg-slate-800/80 hover:bg-slate-700 active:bg-blue-600/30 text-2xl font-semibold text-white transition-all press-scale">0</button>
+        <button @click="authSubmit()" :disabled="authLoading"
+                class="h-16 rounded-2xl text-xl font-semibold transition-all press-scale"
+                :class="(authMode === 'setup' && authSetupStep === 2 ? authConfirmPin : authPin).length >= 4 ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-slate-800/30 text-slate-600'">
+          <span x-show="!authLoading" x-text="authMode === 'setup' ? (authSetupStep === 2 ? '✓' : '→') : '→'"></span>
+          <span x-show="authLoading" class="inline-block w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+        </button>
+      </div>
+
+      <!-- Error message -->
+      <p x-show="authError" x-text="authError" class="text-red-400 text-sm mt-4 transition-all"></p>
+
+      <!-- Skip option when no PIN is set (first use) -->
+      <button x-show="authMode === 'setup' && isLocalhost" @click="authSkip()" class="mt-6 text-sm text-slate-500 hover:text-slate-300 underline">Skip for now</button>
+      <p x-show="authMode === 'setup' && !isLocalhost" class="mt-6 text-xs text-amber-400/80">🔒 Remote access detected — PIN is required</p>
+    </div>
+  </div>
+</div>

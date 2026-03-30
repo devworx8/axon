@@ -34,6 +34,12 @@ function axonChatMixin() {
     handleComposerEnter(event) {
       if (!event) return;
       if (event.isComposing || event.keyCode === 229) return;
+      // If slash menu is open, Enter applies the selected command
+      if (this.slashMenu?.open && this.slashMenu.filtered.length) {
+        event.preventDefault();
+        this.applySlashCommand(this.slashMenu.filtered[this.slashMenu.selectedIdx || 0]);
+        return;
+      }
       if (event.shiftKey) {
         requestAnimationFrame(() => this.resetChatComposerHeight());
         return;
@@ -54,44 +60,240 @@ function axonChatMixin() {
       });
     },
 
-    scrollChat() {
-      // Don't force scroll if the user has manually scrolled up to read
-      if (this._userScrolled) return;
-      if (this._scrollRaf) return;
-      this._scrollRaf = requestAnimationFrame(() => {
-        this._scrollRaf = null;
+    /* ── Slash-command palette ──────────────────────────────────── */
+
+    _SLASH_COMMANDS: [
+      { name: '/explain',    icon: '💡', desc: 'Explain this code / concept',         template: 'Explain: ' },
+      { name: '/refactor',   icon: '♻️', desc: 'Refactor for clarity & performance',   template: 'Refactor this code:\n\n```\n\n```' },
+      { name: '/debug',      icon: '🐛', desc: 'Find and fix the bug',                 template: 'Debug this:\n\n```\n\n```\n\nError: ' },
+      { name: '/test',       icon: '🧪', desc: 'Write unit tests',                     template: 'Write tests for:\n\n```\n\n```' },
+      { name: '/docs',       icon: '📝', desc: 'Generate docstrings / comments',       template: 'Add documentation to:\n\n```\n\n```' },
+      { name: '/review',     icon: '🔍', desc: 'Code review with suggestions',         template: 'Review this code:\n\n```\n\n```' },
+      { name: '/split',      icon: '✂️', desc: 'Split into modular architecture',      template: 'Refactor into modular architecture:\n\n```\n\n```\n\nSplit into: ' },
+      { name: '/types',      icon: '🏷️', desc: 'Add type annotations',                 template: 'Add type annotations to:\n\n```\n\n```' },
+      { name: '/fix',        icon: '🔧', desc: 'Fix the error shown',                  template: 'Fix this error:\n\n```\n\n```\n\nError:\n```\n\n```' },
+      { name: '/optimize',   icon: '⚡', desc: 'Optimize for speed / memory',          template: 'Optimize this code:\n\n```\n\n```' },
+      { name: '/convert',    icon: '🔄', desc: 'Convert to another language/format',   template: 'Convert this to ' },
+      { name: '/summarize',  icon: '📋', desc: 'Summarize the attached content',       template: 'Summarize: ' },
+    ],
+
+    onComposerInput(e) {
+      const val = e.target.value;
+      const slash = val.match(/^(\/\w*)$/);
+      if (slash) {
+        const q = slash[1].toLowerCase();
+        this.slashMenu.query = q;
+        this.slashMenu.filtered = this._SLASH_COMMANDS.filter(c => c.name.startsWith(q));
+        this.slashMenu.selectedIdx = 0;
+        this.slashMenu.open = this.slashMenu.filtered.length > 0;
+      } else {
+        this.slashMenu.open = false;
+      }
+    },
+
+    applySlashCommand(cmd) {
+      this.chatInput = cmd.template;
+      this.slashMenu.open = false;
+      this.$nextTick(() => {
+        const ta = this.$refs.chatComposer;
+        if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+        this.resetChatComposerHeight && this.resetChatComposerHeight();
+      });
+    },
+
+    handleComposerTab(e) {
+      // Navigate slash menu with Tab, or insert 2-space indent when in code context
+      if (this.slashMenu.open) {
+        this.slashMenu.selectedIdx = (this.slashMenu.selectedIdx + 1) % (this.slashMenu.filtered.length || 1);
+        return;
+      }
+      // Insert indent when textarea has code-like content
+      const ta = e.target;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const val = ta.value;
+      ta.value = val.slice(0, start) + '  ' + val.slice(end);
+      ta.selectionStart = ta.selectionEnd = start + 2;
+      this.chatInput = ta.value;
+    },
+
+    /* ── Image paste handler ─────────────────────────────────────── */
+
+    async handleComposerPaste(e) {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (!item.type.startsWith('image/')) continue;
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) continue;
+        await this._uploadPastedImage(file);
+        break;
+      }
+    },
+
+    async _uploadPastedImage(file) {
+      try {
+        const fd = new FormData();
+        fd.append('file', file, `paste-${Date.now()}.png`);
+        if (this.chatProjectId) fd.append('workspace_id', this.chatProjectId);
+        const res = await fetch('/api/resources/upload', {
+          method: 'POST',
+          headers: this.authToken ? { Authorization: `Bearer ${this.authToken}` } : {},
+          body: fd,
+        });
+        if (!res.ok) { this.showToast('Image upload failed'); return; }
+        const data = await res.json();
+        if (data?.resource) {
+          this.selectedResources = [...(this.selectedResources || []), data.resource];
+          this.showToast('Image attached ✓');
+        }
+      } catch (err) {
+        this.showToast('Could not upload pasted image');
+      }
+    },
+
+    scrollChat(force = false) {
+      if (!force && this._userScrolled) return;
+      if (this._scrollRaf) cancelAnimationFrame(this._scrollRaf);
+      if (this._scrollTimers?.length) {
+        this._scrollTimers.forEach(timer => clearTimeout(timer));
+        this._scrollTimers = [];
+      }
+      if (force) {
+        this._userScrolled = false;
+        this.showScrollToBottom = false;
+      }
+      const applyScroll = () => {
         const el = document.getElementById('chat-messages');
         if (!el) return;
+        if (!force && this._userScrolled) return;
+        const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        if (!force && distFromBottom > 200) return;
         el.scrollTop = el.scrollHeight;
-        // If container hidden or not rendered, retry with escalating delays
-        if (el.scrollHeight <= 0) {
-          [150, 400, 800].forEach(ms => {
-            setTimeout(() => { if (!this._userScrolled) el.scrollTop = el.scrollHeight; }, ms);
-          });
-        }
+        this.showScrollToBottom = false;
+      };
+      this._scrollRaf = requestAnimationFrame(() => {
+        this._scrollRaf = null;
+        applyScroll();
       });
+      if (force) {
+        this._scrollTimers = [80, 220, 500].map(ms => setTimeout(applyScroll, ms));
+      }
+    },
+
+    jumpChatToBottom() {
+      this.scrollChat(true);
     },
 
     onChatScroll(e) {
       const el = e?.target || document.getElementById('chat-messages');
       if (!el) return;
-      // User is considered "scrolled up" if they're more than 140px from the bottom
-      this._userScrolled = (el.scrollHeight - el.scrollTop - el.clientHeight) > 140;
+      // User is considered "scrolled up" if more than 200px from the bottom
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      this._userScrolled = dist > 200;
+      // Show/hide the jump-to-bottom button
+      this.showScrollToBottom = this._userScrolled && this.chatLoading;
     },
 
     /* ── Mode resolution ──────────────────────────────────────── */
 
     resolveChatMode(msg) {
       const preferred = this.composerPreferredMode(msg);
-      if (preferred) return preferred;
-      return this.agentMode || this.shouldAutoUseAgent(msg) ? 'agent' : 'chat';
+      if (preferred) {
+        return preferred === 'agent' && !this.currentBackendSupportsAgent() ? 'chat' : preferred;
+      }
+      return this.currentBackendSupportsAgent() && (this.agentMode || this.shouldAutoUseAgent(msg))
+        ? 'agent'
+        : 'chat';
+    },
+
+    resetPrimaryConversationModes() {
+      if (!this.composerOptions) this.composerOptions = {};
+      this.businessMode = false;
+      this.agentMode = false;
+      this.composerOptions.intelligence_mode = 'ask';
+      this.composerOptions.action_mode = '';
+      this.composerOptions.agent_role = '';
+    },
+
+    setConversationModeAsk() {
+      this.resetPrimaryConversationModes();
+    },
+
+    setConversationModeAgent() {
+      this.resetPrimaryConversationModes();
+      this.agentMode = true;
+      if (this.usesOllamaBackend() && this.ollamaModels.length === 0) {
+        this.loadOllamaModels();
+      }
+    },
+
+    setConversationModeCode() {
+      this.resetPrimaryConversationModes();
+      this.composerOptions.intelligence_mode = 'analyze';
+      this.composerOptions.action_mode = 'generate';
+    },
+
+    setConversationModeResearch() {
+      this.resetPrimaryConversationModes();
+      this.composerOptions.intelligence_mode = 'deep_research';
+    },
+
+    isPrimaryConversationMode(mode) {
+      const opts = this.normalizedComposerOptions();
+      if (mode === 'business') return !!this.businessMode;
+      if (mode === 'agent') return !!this.agentMode && !this.businessMode;
+      if (mode === 'code') {
+        return !this.businessMode && !this.agentMode
+          && opts.intelligence_mode === 'analyze'
+          && opts.action_mode === 'generate';
+      }
+      if (mode === 'research') {
+        return !this.businessMode && !this.agentMode
+          && opts.intelligence_mode === 'deep_research';
+      }
+      return !this.businessMode
+        && !this.agentMode
+        && opts.intelligence_mode === 'ask'
+        && !opts.action_mode
+        && !opts.agent_role;
+    },
+
+    effectiveChatMode(msg, mode = '') {
+      let effectiveMode = mode || this.resolveChatMode(msg);
+      if (effectiveMode !== 'agent' && this.shouldAutoUseAgent(msg) && this.currentBackendSupportsAgent()) {
+        effectiveMode = 'agent';
+      }
+      return effectiveMode;
+    },
+
+    isAutoRoutedAgent(msg = '') {
+      if (!this.currentBackendSupportsAgent()) return false;
+      if (this.businessMode || this.agentMode) return false;
+      const preferred = this.composerPreferredMode(msg);
+      if (preferred) return false;
+      return this.shouldAutoUseAgent(msg);
+    },
+
+    composerExecutionMode(msg = '') {
+      const effective = this.effectiveChatMode(msg);
+      if (effective === 'agent' && this.isAutoRoutedAgent(msg)) return 'agent-auto';
+      return effective;
+    },
+
+    composerExecutionLabel(msg = '') {
+      const executionMode = this.composerExecutionMode(msg);
+      if (executionMode === 'agent-auto') return 'Auto-routed to local operator';
+      if (executionMode === 'agent') return 'Local operator active';
+      if (!this.usesOllamaBackend()) return 'External runtime active';
+      return 'Chat response mode';
     },
 
     toggleAgentMode(force = null) {
-      this.agentMode = typeof force === 'boolean' ? force : !this.agentMode;
-      if (this.agentMode && this.usesOllamaBackend() && this.ollamaModels.length === 0) {
-        this.loadOllamaModels();
-      }
+      const enabled = typeof force === 'boolean' ? force : !this.agentMode;
+      if (enabled) this.setConversationModeAgent();
+      else this.setConversationModeAsk();
     },
 
     setAgentStage(phase) {
@@ -101,11 +303,14 @@ function axonChatMixin() {
     /* ── Business mode ────────────────────────────────────────── */
 
     toggleBusinessMode(force = null) {
-      this.businessMode = typeof force === 'boolean' ? force : !this.businessMode;
-      if (this.businessMode) {
-        this.agentMode = false;
+      const enabled = typeof force === 'boolean' ? force : !this.businessMode;
+      if (enabled) {
+        this.resetPrimaryConversationModes();
+        this.businessMode = true;
         this.composerOptions.intelligence_mode = 'build_brief';
         this.composerOptions.action_mode = 'generate';
+      } else {
+        this.setConversationModeAsk();
       }
     },
 
@@ -472,7 +677,17 @@ function axonChatMixin() {
     },
 
     async streamChatMessage(msg, mode, respId, resourceIds = []) {
-      const endpoint = mode === 'agent' ? '/api/agent' : '/api/chat/stream';
+      const needsLocalTools = this.shouldAutoUseAgent(msg);
+      let effectiveMode = this.effectiveChatMode(msg, mode);
+      if (effectiveMode === 'chat' && needsLocalTools && !this.currentBackendSupportsAgent()) {
+        this.updateLiveOperator('chat', {
+          type: 'error',
+          message: 'This request needs local tools, but the current runtime cannot execute operator actions.',
+        });
+        throw new Error('This request needs local tools. Switch to an agent-capable runtime to run it safely.');
+      }
+
+      const endpoint = effectiveMode === 'agent' ? '/api/agent' : '/api/chat/stream';
       const payload = {
         message: msg,
         project_id: this.chatProjectId ? parseInt(this.chatProjectId) : null,
@@ -503,11 +718,11 @@ function axonChatMixin() {
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
-      if (mode === 'agent') {
+      if (effectiveMode === 'agent') {
         this.setAgentStage('plan');
-        this.updateLiveOperator(mode, { type: 'text' });
+        this.updateLiveOperator(effectiveMode, { type: 'text' });
       } else {
-        this.updateLiveOperator(mode, { chunk: 'stream-open' });
+        this.updateLiveOperator(effectiveMode, { chunk: 'stream-open' });
       }
 
       while (true) {
@@ -524,17 +739,17 @@ function axonChatMixin() {
             if (idx < 0) continue;
             this.ensureAssistantMessageBlocks(this.chatMessages[idx]);
 
-            if (mode === 'agent') {
+            if (effectiveMode === 'agent') {
               if (data.type === 'thinking') {
                 this.setAgentStage('plan');
                 this.appendThinkingBlock(this.chatMessages[idx], data.chunk);
-                this.updateLiveOperator(mode, { type: 'text' });
+                this.updateLiveOperator(effectiveMode, { type: 'text' });
                 this.scrollChat();
               } else if (data.type === 'text') {
                 this.finalizeThinkingBlocks(this.chatMessages[idx]);
                 if (this.chatMessages[idx].agentEvents?.length) this.setAgentStage('verify');
                 this.chatMessages[idx].content += data.chunk;
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(effectiveMode, data);
                 this.scrollChat();
               } else if (data.type === 'tool_call' || data.type === 'tool_result') {
                 this.setAgentStage(data.type === 'tool_call' ? 'execute' : 'verify');
@@ -545,7 +760,7 @@ function axonChatMixin() {
                 } else {
                   this.resolveWorkingBlock(this.chatMessages[idx], data);
                 }
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(effectiveMode, data);
                 this.scrollChat();
               } else if (data.type === 'done') {
                 this.setAgentStage('verify');
@@ -556,7 +771,7 @@ function axonChatMixin() {
                 if (typeof this.autoSpeakResponse === 'function') {
                   this.autoSpeakResponse(this.chatMessages[idx].content);
                 }
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(effectiveMode, data);
               } else if (data.type === 'error') {
                 this.setAgentStage('recover');
                 this.finalizeThinkingBlocks(this.chatMessages[idx]);
@@ -565,12 +780,12 @@ function axonChatMixin() {
                 this.chatMessages[idx].streaming = false;
                 this.chatMessages[idx].error = true;
                 this.chatMessages[idx].retryMsg = msg;
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(effectiveMode, data);
               }
             } else {
               if (data.chunk) {
                 this.chatMessages[idx].content += data.chunk;
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(effectiveMode, data);
                 this.scrollChat();
               }
               if (data.done) {
@@ -579,7 +794,7 @@ function axonChatMixin() {
                 if (typeof this.autoSpeakResponse === 'function') {
                   this.autoSpeakResponse(this.chatMessages[idx].content);
                 }
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(effectiveMode, data);
               }
               if (data.error) {
                 this.chatMessages[idx].content += `\n⚠️ ${data.error}`;
@@ -672,7 +887,7 @@ function axonChatMixin() {
         });
         // Use requestAnimationFrame to ensure DOM is rendered and visible before scrolling
         this.$nextTick(() => {
-          requestAnimationFrame(() => this.scrollChat());
+          requestAnimationFrame(() => this.scrollChat(true));
         });
       } catch(e) {
         this.chatMessages = [];
@@ -733,7 +948,7 @@ function axonChatMixin() {
       }
       const msg = this.chatInput.trim();
       if (!msg || this.chatLoading) return;
-      const mode = this.resolveChatMode(msg);
+      const mode = this.effectiveChatMode(msg);
       const researchPack = this.currentResearchPack();
       const packResources = researchPack?.resources || [];
       const attachedResources = this.mergeUniqueResources([...packResources, ...this.selectedResources]);
@@ -796,7 +1011,7 @@ function axonChatMixin() {
     async retryChat(errorMsg) {
       const msg = errorMsg.retryMsg;
       if (!msg) return;
-      const mode = errorMsg.mode || this.resolveChatMode(msg);
+      const mode = this.effectiveChatMode(msg, errorMsg.mode || this.resolveChatMode(msg));
       const researchPack = this.currentResearchPack();
       const resourceIds = (errorMsg.retryResources && errorMsg.retryResources.length)
         ? errorMsg.retryResources

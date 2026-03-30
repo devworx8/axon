@@ -48,9 +48,21 @@ class ProviderSpec:
 
 PROVIDERS: tuple[ProviderSpec, ...] = (
     ProviderSpec(
+        provider_id="deepseek",
+        label="DeepSeek",
+        description="Default runtime — high-capability code and reasoning via OpenAI-compatible API.",
+        transport="openai_compatible",
+        key_setting="deepseek_api_key",
+        base_url_setting="deepseek_base_url",
+        model_setting="deepseek_api_model",
+        default_base_url="https://api.deepseek.com/v1",
+        default_model="deepseek-chat",
+        model_placeholder="deepseek-chat",
+    ),
+    ProviderSpec(
         provider_id="anthropic",
         label="Anthropic",
-        description="Current external runtime path for Axon's API-backed mode.",
+        description="Claude models — premium runtime for complex agentic and reasoning tasks.",
         transport="anthropic",
         key_setting="anthropic_api_key",
         base_url_setting="anthropic_base_url",
@@ -60,56 +72,17 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_placeholder="claude-sonnet-4-5",
     ),
     ProviderSpec(
-        provider_id="openai_gpts",
-        label="OpenAI GPTs",
-        description="Optional external adapter for GPT-style agents and OpenAI-compatible runtimes.",
-        transport="openai_compatible",
-        key_setting="openai_api_key",
-        base_url_setting="openai_base_url",
-        model_setting="openai_api_model",
-        default_base_url="https://api.openai.com/v1",
-        default_model="gpt-4.1-mini",
-        adapter_setting="openai_gpts_enabled",
-        model_placeholder="gpt-4.1-mini",
-    ),
-    ProviderSpec(
         provider_id="gemini_gems",
-        label="Gemini Gems",
-        description="Optional external adapter for Gemini Gem-style specialist flows.",
+        label="Gemini",
+        description="Gemini models — fallback runtime and specialist flows.",
         transport="gemini",
         key_setting="gemini_api_key",
         base_url_setting="gemini_base_url",
         model_setting="gemini_api_model",
         default_base_url="https://generativelanguage.googleapis.com/v1beta",
-        default_model="gemini-2.5-flash",
+        default_model="gemini-2.5-pro",
         adapter_setting="gemini_gems_enabled",
-        model_placeholder="gemini-2.5-flash",
-    ),
-    ProviderSpec(
-        provider_id="deepseek",
-        label="DeepSeek",
-        description="DeepSeek AI — high-capability reasoning and code models via OpenAI-compatible API.",
-        transport="openai_compatible",
-        key_setting="deepseek_api_key",
-        base_url_setting="deepseek_base_url",
-        model_setting="deepseek_api_model",
-        default_base_url="https://api.deepseek.com/v1",
-        default_model="deepseek-chat",
-        adapter_setting="deepseek_enabled",
-        model_placeholder="deepseek-chat",
-    ),
-    ProviderSpec(
-        provider_id="generic_api",
-        label="API Models",
-        description="Optional external adapter for OpenAI-compatible API providers with a custom base URL.",
-        transport="openai_compatible",
-        key_setting="generic_api_key",
-        base_url_setting="generic_api_url",
-        model_setting="generic_api_model",
-        default_base_url="",
-        default_model="",
-        adapter_setting="generic_api_enabled",
-        model_placeholder="provider/model-name",
+        model_placeholder="gemini-2.5-pro",
     ),
 )
 
@@ -159,8 +132,8 @@ def provider_state(spec: ProviderSpec, settings: dict, *, selected_api_provider:
 
 
 def selected_api_provider_id(settings: dict) -> str:
-    provider_id = (settings.get("api_provider") or "anthropic").strip()
-    return provider_id if provider_id in PROVIDER_BY_ID else "anthropic"
+    provider_id = (settings.get("api_provider") or "deepseek").strip()
+    return provider_id if provider_id in PROVIDER_BY_ID else "deepseek"
 
 
 def api_provider_cards(settings: dict) -> list[dict]:

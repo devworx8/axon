@@ -1,15 +1,22 @@
 """
 Axon model routing primitives.
 
-Local-first by default, with optional cloud adapters that stay disabled until
-the operator explicitly turns them on.
+Cloud-first by default. Local models are gated behind LOCAL_MODELS_ENABLED
+and will be re-enabled once a stronger GPU or dedicated server is available.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable
+
+# ── Local model gate ─────────────────────────────────────────────────────────
+# Set AXON_LOCAL_MODELS=1 in .env or environment to enable Ollama-based local
+# model routing. When False, all model resolution returns empty and the system
+# relies entirely on cloud API providers (DeepSeek / Claude / Gemini).
+LOCAL_MODELS_ENABLED: bool = os.environ.get("AXON_LOCAL_MODELS", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class ModelRole(str, Enum):
@@ -42,8 +49,8 @@ class CloudAdapter:
 @dataclass
 class ModelRouterConfig:
     selected_models: dict[str, str] = field(default_factory=dict)
-    preferred_runtime: str = "ollama"
-    allow_cloud: bool = False
+    preferred_runtime: str = "api"
+    allow_cloud: bool = True
     adapter_enabled: dict[str, bool] = field(default_factory=dict)
 
 
@@ -90,22 +97,19 @@ CLOUD_ADAPTERS: tuple[CloudAdapter, ...] = (
     CloudAdapter(
         adapter_id="openai_gpts",
         label="OpenAI GPTs",
-        description="External cloud adapter for GPT-based operator flows.",
+        description="External cloud adapter for GPT-based specialist flows.",
     ),
     CloudAdapter(
         adapter_id="gemini_gems",
         label="Gemini Gems",
-        description="External cloud adapter for Gemini Gem workflows.",
-    ),
-    CloudAdapter(
-        adapter_id="generic_api",
-        label="API Models",
-        description="External adapter for arbitrary provider APIs.",
+        description="Fallback cloud adapter for Gemini Gem specialist flows.",
     ),
 )
 
 
 def local_model_cards(config: ModelRouterConfig | None = None) -> list[dict]:
+    if not LOCAL_MODELS_ENABLED:
+        return []
     config = config or ModelRouterConfig()
     cards: list[dict] = []
     for route in LOCAL_MODEL_ROUTES:
@@ -143,6 +147,15 @@ def resolve_model_for_role(
     available_models: Iterable[str],
     config: ModelRouterConfig | None = None,
 ) -> dict:
+    if not LOCAL_MODELS_ENABLED:
+        role_value = role.value if isinstance(role, ModelRole) else str(role)
+        return {
+            "role": role_value,
+            "runtime": "api",
+            "selected_model": "",
+            "matched": False,
+            "source": "local_models_disabled",
+        }
     config = config or ModelRouterConfig()
     role_value = role.value if isinstance(role, ModelRole) else str(role)
     normalized = [name.lower() for name in available_models]

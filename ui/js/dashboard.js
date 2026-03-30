@@ -17,10 +17,9 @@ function axonDashboardMixin() {
     },
 
     toggleLocalToolsPanel() {
-      this.composerOptions.terminal_mode = !this.composerOptions.terminal_mode;
-      if (this.composerOptions.terminal_mode && !this.terminal.sessions.length) {
-        this.createTerminalSession();
-      }
+      this.composerOptions.terminal_mode = true;
+      this.terminal.panelOpen = true;
+      this.ensureTerminalSession();
     },
 
     async loadLatestDigest() {
@@ -169,7 +168,7 @@ function axonDashboardMixin() {
 
     dashboardLiveEntries() {
       if ((this.liveOperatorFeed || []).length) {
-        return [...this.liveOperatorFeed].slice(-6).reverse();
+        return [...this.liveOperatorFeed].slice(-6);
       }
       return (this.dashRecentActivity || []).slice(0, 6).map(item => ({
         id: `activity-${item.id}`,
@@ -201,6 +200,19 @@ function axonDashboardMixin() {
 
     usesOllamaBackend() {
       return (this.settingsForm?.ai_backend || '').toLowerCase() === 'ollama';
+    },
+
+    currentBackendId() {
+      return (
+        (this.settingsForm?.ai_backend || this.runtimeStatus?.backend || 'api')
+          .toString()
+          .trim()
+          .toLowerCase()
+      );
+    },
+
+    currentBackendSupportsAgent() {
+      return ['ollama', 'api', 'cli'].includes(this.currentBackendId());
     },
 
     activeChatModel() {
@@ -1347,8 +1359,10 @@ function axonDashboardMixin() {
       const enabled = typeof force === 'boolean' ? force : !this.composerOptions.terminal_mode;
       this.composerOptions.terminal_mode = enabled;
       this.terminal.panelOpen = enabled;
+      // Auto-widen panel for terminal, shrink back when hidden
+      if (enabled && this.consolePanelWidth < 520) this.consolePanelWidth = 520;
+      else if (!enabled && this.consolePanelWidth > 420) this.consolePanelWidth = 420;
       if (!enabled) return;
-      await this.loadTerminalSessions();
       await this.ensureTerminalSession();
     },
 
@@ -1386,11 +1400,13 @@ function axonDashboardMixin() {
     },
 
     async ensureTerminalSession() {
+      // Always sync with server to avoid creating duplicates
+      await this.loadTerminalSessions();
       if (this.terminal.activeSessionId) {
         await this.loadTerminalSessionDetail(this.terminal.activeSessionId, { silent: true });
         return;
       }
-      await this.createTerminalSession();
+      // Don't auto-create — let the user explicitly click "New session"
     },
 
     async createTerminalSession() {
@@ -1487,20 +1503,36 @@ function axonDashboardMixin() {
     async closeTerminalSession(sessionId) {
       if (!sessionId) return;
       // Kill PTY if it's the active one
-      if (this.ptyConnected && Number(this.terminal.activeSessionId) === Number(sessionId)) {
+      if (this.ptyConnected && (Number(this.terminal.activeSessionId) === Number(sessionId) || String(this._ptySessionId || '') === String(sessionId))) {
         this.disconnectPty();
       }
       try {
         await this.api('DELETE', `/api/terminal/sessions/${sessionId}`);
         this.terminal.sessions = (this.terminal.sessions || []).filter(s => Number(s.id) !== Number(sessionId));
         if (Number(this.terminal.activeSessionId) === Number(sessionId)) {
-          this.terminal.activeSessionId = this.terminal.sessions[0]?.id || null;
+          const nextSession = this.terminal.sessions[0] || null;
+          this.terminal.activeSessionId = nextSession?.id || null;
           this.terminal.sessionDetail = null;
+          if (nextSession?.id) {
+            await this.loadTerminalSessionDetail(nextSession.id);
+          }
         }
         this.showToast('Session closed');
       } catch (e) {
         this.showToast(`Close failed: ${e.message}`);
       }
+    },
+
+    async killAllTerminalSessions() {
+      if (this.ptyConnected) this.disconnectPty();
+      const sessions = [...(this.terminal.sessions || [])];
+      for (const s of sessions) {
+        try { await this.api('DELETE', `/api/terminal/sessions/${s.id}`); } catch (_) {}
+      }
+      this.terminal.sessions = [];
+      this.terminal.activeSessionId = null;
+      this.terminal.sessionDetail = null;
+      this.showToast(`Killed ${sessions.length} session(s)`);
     },
 
     async connectLiveFeed() {
@@ -1887,7 +1919,7 @@ function axonDashboardMixin() {
 
     shouldAutoUseAgent(msg) {
       const text = (msg || '').trim();
-      if (!text || !this.usesOllamaBackend()) return false;
+      if (!text || !this.currentBackendSupportsAgent()) return false;
       const lower = text.toLowerCase();
       const explainers = ['how do i', 'how can i', 'what is', 'why is', 'explain', 'teach me'];
       if (explainers.some(prefix => lower.startsWith(prefix))) return false;
@@ -1903,8 +1935,12 @@ function axonDashboardMixin() {
 
     resolveChatMode(msg) {
       const preferred = this.composerPreferredMode(msg);
-      if (preferred) return preferred;
-      return this.agentMode || this.shouldAutoUseAgent(msg) ? 'agent' : 'chat';
+      if (preferred) {
+        return preferred === 'agent' && !this.currentBackendSupportsAgent() ? 'chat' : preferred;
+      }
+      return this.currentBackendSupportsAgent() && (this.agentMode || this.shouldAutoUseAgent(msg))
+        ? 'agent'
+        : 'chat';
     },
 
     createAssistantPlaceholder(respId, mode, retryResources = []) {
@@ -1922,7 +1958,20 @@ function axonDashboardMixin() {
     },
 
     async streamChatMessage(msg, mode, respId, resourceIds = []) {
-      const endpoint = mode === 'agent' ? '/api/agent' : '/api/chat/stream';
+      let effectiveMode = mode;
+      const needsLocalTools = this.shouldAutoUseAgent(msg);
+      if (effectiveMode !== 'agent' && needsLocalTools && this.currentBackendSupportsAgent()) {
+        effectiveMode = 'agent';
+      }
+      if (effectiveMode === 'chat' && needsLocalTools && !this.currentBackendSupportsAgent()) {
+        this.updateLiveOperator('chat', {
+          type: 'error',
+          message: 'This request needs local tools, but the current runtime cannot execute operator actions.',
+        });
+        throw new Error('This request needs local tools. Switch to an agent-capable runtime to run it safely.');
+      }
+
+      const endpoint = effectiveMode === 'agent' ? '/api/agent' : '/api/chat/stream';
       const payload = {
         message: msg,
         project_id: this.chatProjectId ? parseInt(this.chatProjectId) : null,
@@ -1939,23 +1988,23 @@ function axonDashboardMixin() {
 
       if (resp.status === 401) {
         this.handleAuthRequired();
-        this.updateLiveOperator(mode, { type: 'error', message: 'Session expired.' });
+        this.updateLiveOperator(effectiveMode, { type: 'error', message: 'Session expired.' });
         throw new Error('Session expired');
       }
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-        this.updateLiveOperator(mode, { type: 'error', message: err.detail || resp.statusText });
+        this.updateLiveOperator(effectiveMode, { type: 'error', message: err.detail || resp.statusText });
         throw new Error(err.detail || resp.statusText);
       }
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
-      if (mode === 'agent') {
+      if (effectiveMode === 'agent') {
         this.setAgentStage('plan');
-        this.updateLiveOperator(mode, { type: 'text' });
+        this.updateLiveOperator(effectiveMode, { type: 'text' });
       } else {
-        this.updateLiveOperator(mode, { chunk: 'stream-open' });
+        this.updateLiveOperator(effectiveMode, { chunk: 'stream-open' });
       }
 
       while (true) {
@@ -1971,33 +2020,33 @@ function axonDashboardMixin() {
             const idx = this.chatMessages.findIndex(m => m.id === respId);
             if (idx < 0) continue;
 
-            if (mode === 'agent') {
+            if (effectiveMode === 'agent') {
               if (data.type === 'text') {
                 if (this.chatMessages[idx].agentEvents?.length) this.setAgentStage('verify');
                 this.chatMessages[idx].content += data.chunk;
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(effectiveMode, data);
                 this.scrollChat();
               } else if (data.type === 'tool_call' || data.type === 'tool_result') {
                 this.setAgentStage(data.type === 'tool_call' ? 'execute' : 'verify');
                 this.chatMessages[idx].agentEvents.push(data);
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(effectiveMode, data);
                 this.scrollChat();
               } else if (data.type === 'done') {
                 this.setAgentStage('verify');
                 this.chatMessages[idx].streaming = false;
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(effectiveMode, data);
               } else if (data.type === 'error') {
                 this.setAgentStage('recover');
                 this.chatMessages[idx].content += `\n⚠️ ${data.message}`;
                 this.chatMessages[idx].streaming = false;
                 this.chatMessages[idx].error = true;
                 this.chatMessages[idx].retryMsg = msg;
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(effectiveMode, data);
               }
             } else {
               if (data.chunk) {
                 this.chatMessages[idx].content += data.chunk;
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(effectiveMode, data);
                 this.scrollChat();
               }
               if (data.done) {
@@ -2066,13 +2115,20 @@ function axonDashboardMixin() {
 
       const container = wrapEl.querySelector('#axon-xterm');
       term.open(container);
-      fitAddon.fit();
+      // Defer fit — container needs at least one paint cycle to have real pixel dimensions.
+      // Immediate fit() when panel is freshly shown produces ~3 rows (height not yet resolved).
+      setTimeout(() => { try { fitAddon.fit(); } catch(_) {} }, 50);
+      setTimeout(() => { try { fitAddon.fit(); } catch(_) {} }, 200);
 
       this._xtermInst = term;
       this._xtermFit = fitAddon;
 
-      // Handle resize
-      const ro = new ResizeObserver(() => { try { fitAddon.fit(); } catch(_) {} });
+      // Handle resize (covers drag-handle and window resize)
+      const ro = new ResizeObserver(() => {
+        // Small debounce to avoid excessive fit() during drag
+        clearTimeout(this._xtermRoTimer);
+        this._xtermRoTimer = setTimeout(() => { try { fitAddon.fit(); } catch(_) {} }, 30);
+      });
       ro.observe(container);
 
       // Forward user input to PTY WebSocket
@@ -2113,12 +2169,9 @@ function axonDashboardMixin() {
         try { this._xtermFit.fit(); } catch(_) {}
       }
 
-      // Make sure a terminal session exists (for context/cwd tracking)
-      if (!this.terminal.activeSessionId) {
-        await this.createTerminalSession();
-      }
-
-      const sessionId = this._ptySessionId || ('pty-' + Date.now());
+      // Use active session ID if one exists, otherwise use a transient PTY ID.
+      // Do NOT auto-create DB sessions here — user must click "New session" explicitly.
+      const sessionId = String(this.terminal.activeSessionId || this._ptySessionId || ('pty-' + Date.now()));
       this._ptySessionId = sessionId;
 
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -2129,12 +2182,14 @@ function axonDashboardMixin() {
         this.ptyConnected = true;
         if (this._xtermInst) {
           this._xtermInst.clear();
+          this._xtermInst.writeln('\x1b[90mConnected to Axon interactive shell\x1b[0m');
           // Send initial resize
           const { cols, rows } = this._xtermInst;
           ws.send(JSON.stringify({ type: 'resize', cols, rows }));
           // Fit after a tick (dimensions stabilise)
           setTimeout(() => {
             try { this._xtermFit && this._xtermFit.fit(); } catch(_) {}
+            this.focusXterm();
           }, 100);
         }
       };
@@ -2147,6 +2202,11 @@ function axonDashboardMixin() {
             const arr = new Uint8Array(bytes.length);
             for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
             this._xtermInst.write(arr);
+          } else if (msg.type === 'error') {
+            if (this._xtermInst) {
+              this._xtermInst.writeln(`\r\n\x1b[31m[${msg.message || 'Interactive shell error'}]\x1b[0m`);
+            }
+            this.showToast(msg.message || 'Interactive shell error');
           } else if (msg.type === 'exit') {
             if (this._xtermInst) {
               this._xtermInst.writeln(`\r\n\x1b[90m[Process exited with code ${msg.code ?? '?'}]\x1b[0m`);
@@ -2178,6 +2238,12 @@ function axonDashboardMixin() {
         this._ptyWs = null;
       }
       this.ptyConnected = false;
+    },
+
+    focusXterm() {
+      try {
+        if (this._xtermInst) this._xtermInst.focus();
+      } catch (_) {}
     },
 
   };

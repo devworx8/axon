@@ -95,9 +95,17 @@ function axonProjectsMixin() {
     },
 
     openProjectChat(p) {
+      const alreadyInChat = this.activeTab === 'chat';
       this.chatProjectId = String(p.id);
       this.chatProject = p;
+      this._userScrolled = false;
+      this.showScrollToBottom = false;
       this.activeTab = 'chat';
+      if (alreadyInChat && typeof this.loadChatHistory === 'function') {
+        this.loadChatHistory();
+      } else {
+        this.$nextTick(() => requestAnimationFrame(() => this.scrollChat?.(true)));
+      }
     },
 
     editProjectNote(p) {

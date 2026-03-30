@@ -40,8 +40,6 @@ function axonSettingsMixin() {
           cloud_agents_enabled: this.settingEnabled(s.cloud_agents_enabled),
           openai_gpts_enabled: this.settingEnabled(s.openai_gpts_enabled),
           gemini_gems_enabled: this.settingEnabled(s.gemini_gems_enabled),
-          deepseek_enabled: this.settingEnabled(s.deepseek_enabled),
-          generic_api_enabled: this.settingEnabled(s.generic_api_enabled),
           openai_api_key: '',
           openai_base_url: s.openai_base_url || '',
           openai_api_model: s.openai_api_model || '',
@@ -51,9 +49,6 @@ function axonSettingsMixin() {
           deepseek_api_key: '',
           deepseek_base_url: s.deepseek_base_url || '',
           deepseek_api_model: s.deepseek_api_model || '',
-          generic_api_key: '',
-          generic_api_url: s.generic_api_url || '',
-          generic_api_model: s.generic_api_model || '',
           github_token: '',   // never pre-fill secrets
           slack_webhook_url: s.slack_webhook_url || '',
           webhook_urls: s.webhook_urls || '',
@@ -79,7 +74,6 @@ function axonSettingsMixin() {
         this.settingsForm._openaiKeyHint = s.openai_api_key_set ? s.openai_api_key : '';
         this.settingsForm._geminiKeyHint = s.gemini_api_key_set ? s.gemini_api_key : '';
         this.settingsForm._deepseekKeyHint = s.deepseek_api_key_set ? s.deepseek_api_key : '';
-        this.settingsForm._genericKeyHint = s.generic_api_key_set ? s.generic_api_key : '';
         this.settingsForm._azureSpeechKeyHint = s.azure_speech_key_set ? s.azure_speech_key : '';
         this.settingsForm._cloudflareTunnelTokenHint = s.cloudflare_tunnel_token_set ? s.cloudflare_tunnel_token : '';
         if (s.github_token_set) {
@@ -147,8 +141,6 @@ function axonSettingsMixin() {
       payload.cloud_agents_enabled = !!this.settingsForm.cloud_agents_enabled;
       payload.openai_gpts_enabled = !!this.settingsForm.openai_gpts_enabled;
       payload.gemini_gems_enabled = !!this.settingsForm.gemini_gems_enabled;
-      payload.deepseek_enabled = !!this.settingsForm.deepseek_enabled;
-      payload.generic_api_enabled = !!this.settingsForm.generic_api_enabled;
       if (this.settingsForm.openai_api_key) payload.openai_api_key = this.settingsForm.openai_api_key;
       payload.openai_base_url = this.settingsForm.openai_base_url || '';
       payload.openai_api_model = this.settingsForm.openai_api_model || '';
@@ -158,9 +150,6 @@ function axonSettingsMixin() {
       if (this.settingsForm.deepseek_api_key) payload.deepseek_api_key = this.settingsForm.deepseek_api_key;
       payload.deepseek_base_url = this.settingsForm.deepseek_base_url || '';
       payload.deepseek_api_model = this.settingsForm.deepseek_api_model || '';
-      if (this.settingsForm.generic_api_key) payload.generic_api_key = this.settingsForm.generic_api_key;
-      payload.generic_api_url = this.settingsForm.generic_api_url || '';
-      payload.generic_api_model = this.settingsForm.generic_api_model || '';
       if (this.settingsForm.github_token) payload.github_token = this.settingsForm.github_token;
       payload.slack_webhook_url = this.settingsForm.slack_webhook_url || '';
       payload.webhook_urls = this.settingsForm.webhook_urls || '';

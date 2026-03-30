@@ -50,6 +50,22 @@ axon
 
 Open `http://localhost:7734` and finish setup in `Settings -> Runtime`.
 
+## Engineering guardrails
+
+Axon is under active anti-monolith refactor. Start here before major changes:
+
+- [`AGENTS.md`](AGENTS.md)
+- [`docs/engineering/guardrails.md`](docs/engineering/guardrails.md)
+- [`docs/architecture/refactor-roadmap.md`](docs/architecture/refactor-roadmap.md)
+- [`docs/architecture/module-map.md`](docs/architecture/module-map.md)
+
+Guardrail scripts:
+
+```bash
+python3 scripts/guardrails/check_file_sizes.py
+python3 scripts/guardrails/check_boundaries.py
+```
+
 ## Safety notes
 
 - Runtime state lives locally in `~/.devbrain/devbrain.db` and is intentionally gitignored.

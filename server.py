@@ -46,6 +46,7 @@ import gpu_guard
 import provider_registry
 import resource_bank
 import memory_engine
+from axon_api import ui_renderer
 from model_router import resolve_model_for_role
 
 PORT = 7734
@@ -559,6 +560,17 @@ async def lifespan(app: FastAPI):
         settings = await devdb.get_all_settings(conn)
         scan_hours = int(settings.get("scan_interval_hours", 6))
         digest_hour = int(settings.get("morning_digest_hour", 8))
+        # Clean up stale terminal sessions from previous runs.
+        # PTY processes don't survive a server restart, so any session left
+        # in the DB with status "running" or "idle" is stale. Delete them so
+        # they don't keep appearing as phantom tabs in the UI.
+        try:
+            await conn.execute(
+                "DELETE FROM terminal_sessions WHERE status IN ('running', 'idle', 'pending')"
+            )
+            await conn.commit()
+        except Exception:
+            pass  # table may not exist yet on first run
 
     scheduler = sched_module.setup_scheduler(
         scan_interval_hours=scan_hours,
@@ -748,26 +760,13 @@ async def auth_remove(body: PinLogin):
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
-    ui_file = UI_DIR / "index.html"
-    if not ui_file.exists():
-        return HTMLResponse("<h1>Axon UI not found</h1><p>Run install.sh again.</p>", status_code=404)
-    html = ui_file.read_text().replace("__AXON_BUILD_VERSION__", _SW_CACHE_VERSION)
-    return HTMLResponse(
-        html,
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
-    )
+    return ui_renderer.render_index(UI_DIR, _SW_CACHE_VERSION)
 
 
 @app.get("/manual", response_class=HTMLResponse)
 @app.get("/manual.html", response_class=HTMLResponse)
 async def serve_manual():
-    manual_file = UI_DIR / "manual.html"
-    if not manual_file.exists():
-        return HTMLResponse("<h1>Manual not found</h1>", status_code=404)
-    return HTMLResponse(
-        manual_file.read_text().replace("__AXON_BUILD_VERSION__", _SW_CACHE_VERSION),
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
-    )
+    return ui_renderer.render_manual(UI_DIR, _SW_CACHE_VERSION)
 
 
 # ─── Projects ────────────────────────────────────────────────────────────────
@@ -1134,10 +1133,10 @@ async def suggest_tasks():
 
 async def _ai_params(settings: dict, conn=None) -> dict:
     """Extract AI backend params from settings dict, resolving keys from vault when available."""
-    backend = settings.get("ai_backend", "ollama")
+    backend = settings.get("ai_backend", "api")
     api_runtime = provider_registry.runtime_api_config(settings)
     api_key = api_runtime.get("api_key", "")
-    provider_id = api_runtime.get("provider_id", "anthropic")
+    provider_id = api_runtime.get("provider_id", "deepseek")
 
     # Resolve API key from vault when unlocked
     if devvault.VaultSession.is_unlocked() and (not api_key or api_key == "set"):
@@ -1447,6 +1446,10 @@ async def _resource_bundle(
     context_parts = ["## Attached Resources"]
     image_paths: list[str] = []
     vision_model = (settings.get("vision_model") or "").strip()
+    # For API/CLI backends, vision is built-in — no separate vision_model needed
+    _backend = (settings.get("ai_backend") or "api").lower()
+    if not vision_model and _backend in ("api", "cli"):
+        vision_model = settings.get("api_model") or settings.get("ollama_model") or "api"
 
     for resource in resources:
         await devdb.touch_resource_used(conn, resource["id"])
@@ -2401,10 +2404,10 @@ async def chat_stream(body: ChatMessage, request: Request):
         settings = await devdb.get_all_settings(conn)
         composer_options = _composer_options_dict(body.composer_options)
         ai = await _effective_ai_params(settings, composer_options, conn=conn, requested_model=body.model or "")
-        settings = {**settings, "ai_backend": ai.get("backend", settings.get("ai_backend", "ollama"))}
+        settings = {**settings, "ai_backend": ai.get("backend", settings.get("ai_backend", "api"))}
         if ai.get("ollama_model"):
             settings["ollama_model"] = ai["ollama_model"]
-        backend = settings.get("ai_backend", "ollama")
+        backend = settings.get("ai_backend", "api")
 
         # Load context + history
         projects = [dict(r) for r in await devdb.get_projects(conn, status="active")]
@@ -2863,66 +2866,6 @@ async def chat_stream(body: ChatMessage, request: Request):
             # Fall through to normal chat
     # ── end Playbook intent interception (streaming) ─────────────────────
 
-    if backend != "ollama":
-        # Fall back to non-streaming for API/CLI — emit single SSE event
-        try:
-            _set_live_operator(
-                active=True,
-                mode="chat",
-                phase="plan",
-                title="Preparing the reply",
-                detail="Axon is using the configured non-local stream path.",
-                workspace_id=body.project_id,
-                preserve_started=True,
-            )
-            result = await brain.chat(
-                body.message,
-                history,
-                merged_context_block,
-                project_name=project_name,
-                resource_context=resource_bundle["context_block"],
-                resource_image_paths=resource_bundle["image_paths"],
-                vision_model=resource_bundle["vision_model"],
-                **ai,
-            )
-            # Persist messages to DB (was missing — messages lost on refresh)
-            stored_user_message_api = _stored_message_with_resources(body.message, resource_bundle["resources"])
-            async with devdb.get_db() as _api_conn:
-                await devdb.save_message(_api_conn, "user", stored_user_message_api, project_id=body.project_id)
-                await devdb.save_message(_api_conn, "assistant", result["content"], project_id=body.project_id, tokens=result.get("tokens", 0))
-                await devdb.log_event(_api_conn, "chat", body.message[:100], project_id=body.project_id)
-
-            async def _buffered():
-                for warning in resource_bundle["warnings"]:
-                    yield {"data": _json.dumps({"chunk": f"⚠️ {warning}\n\n"})}
-                yield {"data": _json.dumps({"chunk": result["content"]})}
-                _set_live_operator(
-                    active=False,
-                    mode="chat",
-                    phase="verify",
-                    title="Reply complete",
-                    detail="Axon finished the response.",
-                    summary=result["content"][:180],
-                    workspace_id=body.project_id,
-                )
-                yield {"data": _json.dumps({"done": True, "tokens": result["tokens"]})}
-            return EventSourceResponse(_buffered())
-        except Exception as exc:
-            _err_msg = str(exc)
-            _set_live_operator(
-                active=False,
-                mode="chat",
-                phase="recover",
-                title="Reply interrupted",
-                detail=_err_msg,
-                summary=body.message[:120],
-                workspace_id=body.project_id,
-            )
-            async def _err():
-                yield {"data": _json.dumps({"error": _err_msg})}
-            return EventSourceResponse(_err())
-
-    # Ollama: true streaming
     ollama_url = settings.get("ollama_url", "")
     ollama_model = settings.get("ollama_model", "")
     full_content: list[str] = []
@@ -2941,6 +2884,11 @@ async def chat_stream(body: ChatMessage, request: Request):
                 resource_context=resource_bundle["context_block"],
                 resource_image_paths=resource_bundle["image_paths"],
                 vision_model=resource_bundle["vision_model"],
+                backend=backend,
+                api_key=ai.get("api_key", ""),
+                api_provider=ai.get("api_provider", ""),
+                api_base_url=ai.get("api_base_url", ""),
+                api_model=ai.get("api_model", ""),
                 ollama_url=ollama_url, ollama_model=ollama_model,
             ):
                 if not started_stream:
@@ -2949,7 +2897,11 @@ async def chat_stream(body: ChatMessage, request: Request):
                         mode="chat",
                         phase="execute",
                         title="Writing the reply",
-                        detail="Axon is streaming the answer live.",
+                        detail=(
+                            "Axon is streaming the answer live."
+                            if backend == "ollama"
+                            else "Axon is streaming the external provider response live."
+                        ),
                         workspace_id=body.project_id,
                         preserve_started=True,
                     )
@@ -3010,17 +2962,17 @@ async def agent_endpoint(body: AgentRequest, request: Request):
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
         composer_options = _composer_options_dict(body.composer_options)
-        backend = settings.get("ai_backend", "ollama")
+        backend = settings.get("ai_backend", "api")
         if backend != "ollama" and str(composer_options.get("external_mode") or "").lower() == "disable_external_calls":
             backend = "ollama"
             settings["ai_backend"] = "ollama"
 
-        # Resolve API credentials for non-Ollama agent mode
+        # Resolve API credentials for API backend; CLI backend needs no API key
         _agent_api_key = ""
         _agent_api_base = ""
         _agent_api_model = ""
         _agent_api_provider = ""
-        if backend != "ollama":
+        if backend == "api":
             _agent_api_cfg = provider_registry.runtime_api_config(settings)
             _agent_api_key = _agent_api_cfg.get("api_key", "")
             if not _agent_api_key and devvault.VaultSession.is_unlocked():
@@ -3111,6 +3063,8 @@ async def agent_endpoint(body: AgentRequest, request: Request):
                 api_base_url=_agent_api_base,
                 api_model=_agent_api_model,
                 api_provider=_agent_api_provider,
+                cli_path=ai.get("cli_path", ""),
+                backend=backend,
             ):
                 if event.get("type") == "text":
                     collected_text.append(event["chunk"])
@@ -3241,14 +3195,13 @@ async def get_activity(limit: int = 30):
 async def get_settings():
     async with devdb.get_db() as conn:
         s = await devdb.get_all_settings(conn)
-        s["ai_backend"] = s.get("ai_backend") or "ollama"
+        s["ai_backend"] = s.get("ai_backend") or "api"
         s["api_provider"] = provider_registry.selected_api_provider_id(s)
         s["ollama_runtime_mode"] = _stored_ollama_runtime_mode(s)
         for key in (
             "cloud_agents_enabled",
             "openai_gpts_enabled",
             "gemini_gems_enabled",
-            "generic_api_enabled",
             "resource_url_import_enabled",
             "live_feed_enabled",
             "stable_domain_enabled",
@@ -3264,17 +3217,15 @@ async def get_settings():
             s[key] = str(s.get(key, "")).strip().lower() in {"1", "true", "yes", "on"}
         for key_name in (
             "anthropic_api_key",
-            "openai_api_key",
             "gemini_api_key",
             "deepseek_api_key",
-            "generic_api_key",
             "azure_speech_key",
             "cloudflare_tunnel_token",
         ):
             raw = s.get(key_name, "")
             s[f"{key_name}_set"] = bool(raw)
             s[key_name] = provider_registry.mask_secret(raw) if raw else ""
-        s["api_key_set"] = s.get("anthropic_api_key_set", False)
+        s["api_key_set"] = s.get("deepseek_api_key_set", False)
         if s.get("github_token"):
             token = s["github_token"]
             s["github_token"] = token[:4] + "..." + token[-4:] if len(token) > 10 else "set"
@@ -3740,7 +3691,7 @@ async def _build_live_snapshot() -> dict:
         "operator": dict(_live_operator_snapshot),
         "runtime": {
             "runtime_label": (
-                "Local Ollama" if settings.get("ai_backend", "ollama") == "ollama"
+                "Local Ollama" if settings.get("ai_backend", "api") == "ollama"
                 else "External API" if settings.get("ai_backend") == "api"
                 else "CLI Agent" if settings.get("ai_backend") == "cli"
                 else "Runtime offline"
@@ -4582,10 +4533,11 @@ class TerminalCommandBody(BaseModel):
 async def _resolve_terminal_cwd(conn, session_row, requested_cwd: Optional[str] = None) -> Path:
     if requested_cwd:
         return _safe_path(requested_cwd)
-    session_cwd = (session_row.get("cwd") or "").strip()
+    row = dict(session_row) if session_row is not None else {}
+    session_cwd = str(row.get("cwd") or "").strip()
     if session_cwd:
         return _safe_path(session_cwd)
-    workspace_id = session_row.get("workspace_id")
+    workspace_id = row.get("workspace_id")
     if workspace_id:
         proj = await devdb.get_project(conn, int(workspace_id))
         if proj and proj.get("path"):
@@ -4909,6 +4861,20 @@ async def get_terminal_session(session_id: int, limit: int = 160):
     )
 
 
+@app.patch("/api/terminal/sessions/{session_id}")
+async def patch_terminal_session(session_id: int, request: Request):
+    body = await request.json()
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "Title is required")
+    async with devdb.get_db() as conn:
+        row = await devdb.get_terminal_session(conn, session_id)
+        if not row:
+            raise HTTPException(404, "Terminal session not found")
+        await devdb.update_terminal_session(conn, session_id, title=title)
+    return {"ok": True, "title": title}
+
+
 @app.post("/api/terminal/sessions/{session_id}/execute")
 async def terminal_execute(session_id: int, body: TerminalCommandBody):
     return await _terminal_execute_request(session_id, body, approved=bool(body.approved))
@@ -4965,12 +4931,20 @@ async def terminal_stop(session_id: int):
 async def close_terminal_session(session_id: int):
     """Close/terminate a terminal session (kills running process, marks closed)."""
     # Kill PTY if active
-    pty_info = _pty_sessions.get(session_id)
+    pty_key = str(session_id)
+    pty_info = _pty_sessions.get(pty_key) or _pty_sessions.get(session_id)
     if pty_info:
         try:
-            pty_info["proc"].terminate()
+            pty_info["alive"] = False
+            pty_proc = pty_info.get("pty") or pty_info.get("proc")
+            if pty_proc and pty_proc.isalive():
+                pty_proc.terminate(force=True)
         except Exception:
             pass
+        task = pty_info.get("task")
+        if task:
+            task.cancel()
+        _pty_sessions.pop(pty_key, None)
         _pty_sessions.pop(session_id, None)
     # Kill subprocess process if active
     entry = _terminal_processes.pop(session_id, None)
@@ -5024,10 +4998,18 @@ async def pty_websocket(websocket: WebSocket, session_id: str):
 
     cols, rows = 220, 50
     shell = os.environ.get("SHELL", "/bin/bash")
+    shell_name = Path(shell).name
+    shell_argv = [shell]
+    if shell_name in {"bash", "zsh"}:
+        shell_argv.extend(["-i", "-l"])
+    elif shell_name == "fish":
+        shell_argv.append("-i")
+    else:
+        shell_argv.append("--login")
     home = str(Path.home())
 
     pty_proc = PtyProcess.spawn(
-        [shell, "--login"],
+        shell_argv,
         dimensions=(rows, cols),
         env={**os.environ, "TERM": "xterm-256color"},
         cwd=home,
@@ -5035,6 +5017,18 @@ async def pty_websocket(websocket: WebSocket, session_id: str):
 
     entry = {"pty": pty_proc, "ws": websocket, "alive": True}
     _pty_sessions[session_id] = entry
+
+    def _pty_write_input(raw):
+        if raw is None:
+            return
+        if isinstance(raw, str):
+            payload = raw.encode("utf-8", errors="ignore")
+        elif isinstance(raw, (bytes, bytearray)):
+            payload = bytes(raw)
+        else:
+            payload = str(raw).encode("utf-8", errors="ignore")
+        if payload:
+            pty_proc.write(payload)
 
     async def _read_pty():
         loop = asyncio.get_event_loop()
@@ -5075,10 +5069,19 @@ async def pty_websocket(websocket: WebSocket, session_id: str):
                 elif parsed.get("type") == "ping":
                     await websocket.send_json({"type": "pong"})
                 elif parsed.get("type") == "input":
-                    pty_proc.write(parsed.get("data", ""))
-            except (_json.JSONDecodeError, ValueError):
+                    _pty_write_input(parsed.get("data", ""))
+            except _json.JSONDecodeError:
                 # Plain text input (keystroke)
-                pty_proc.write(msg)
+                _pty_write_input(msg)
+            except ValueError:
+                continue
+            except Exception as exc:
+                try:
+                    await websocket.send_json({"type": "error", "message": f"PTY input failed: {exc}"})
+                except Exception:
+                    pass
+                if not pty_proc.isalive():
+                    break
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -5886,132 +5889,27 @@ _SW_CACHE_VERSION = f"axon-{int(_startup_time.time())}"
 
 @app.get("/manifest.json")
 async def pwa_manifest():
-    from fastapi.responses import JSONResponse
-    return JSONResponse({
-        "id": "/",
-        "name": "Axon",
-        "short_name": "Axon",
-        "description": "Local AI Operator — console, workspaces, missions, secure vault",
-        "start_url": "/",
-        "scope": "/",
-        "display": "standalone",
-        "background_color": "#020617",
-        "theme_color": "#0f172a",
-        "orientation": "portrait-primary",
-        "icons": [
-            {
-                "src": "/icons/icon-192.png",
-                "sizes": "192x192",
-                "type": "image/png",
-                "purpose": "any"
-            },
-            {
-                "src": "/icons/icon-512.png",
-                "sizes": "512x512",
-                "type": "image/png",
-                "purpose": "any maskable"
-            }
-        ],
-        "categories": ["productivity", "developer-tools"],
-        "shortcuts": [
-            {"name": "Console", "url": "/", "description": "Open Axon Console"},
-            {"name": "Missions", "url": "/", "description": "Review active missions"},
-        ]
-    })
+    return ui_renderer.render_manifest()
 
 
 @app.get("/styles.css")
 async def serve_styles():
-    css_path = UI_DIR / "styles.css"
-    if not css_path.exists():
-        return Response("/* not found */", media_type="text/css", status_code=404)
-    return FileResponse(css_path, media_type="text/css", headers={"Cache-Control": "no-cache"})
+    return ui_renderer.render_styles(UI_DIR)
 
 @app.get("/js/{filename:path}")
 async def serve_js(filename: str):
-    import re as _re
-    if not _re.match(r'^[a-zA-Z0-9_\-]+\.js$', filename):
-        return Response("// not found", media_type="application/javascript", status_code=404)
-    js_path = UI_DIR / "js" / filename
-    if not js_path.exists():
-        return Response("// not found", media_type="application/javascript", status_code=404)
-    return FileResponse(js_path, media_type="application/javascript", headers={"Cache-Control": "no-cache"})
+    return ui_renderer.render_js(UI_DIR, filename)
 
 @app.get("/icons/{filename}")
 async def serve_icon(filename: str):
     """Serve PWA icon PNG files."""
-    from fastapi.responses import FileResponse
-    icon_path = UI_DIR / "icons" / filename
-    if not icon_path.exists() or not filename.endswith(".png"):
-        raise HTTPException(404, "Icon not found")
-    return FileResponse(str(icon_path), media_type="image/png")
+    return ui_renderer.render_icon(UI_DIR, filename)
 
 
 @app.get("/sw.js")
 async def service_worker():
-    """Service worker — PWA install support.
-    Strategy:
-      - HTML pages (/): network-first (always fresh, fallback to cache if offline)
-      - API calls (/api/*): network-only (never cache live data)
-      - Static assets (icons, manifest): cache-first (immutable)
-    Cache version is set once at server startup — stable until restart.
-    """
-    from fastapi.responses import Response as FastAPIResponse
-    cache_version = _SW_CACHE_VERSION
-    sw_code = f"""
-const CACHE = '{cache_version}';
-const STATIC = ['/icons/icon-192.png', '/icons/icon-512.png', '/manifest.json'];
-
-self.addEventListener('install', e => {{
-  // Pre-cache only truly static assets (icons never change)
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(STATIC)));
-  self.skipWaiting();
-}});
-
-self.addEventListener('activate', e => {{
-  // Delete ALL old caches (previous versions)
-  e.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
-    ).then(() => clients.claim())
-  );
-}});
-
-self.addEventListener('fetch', e => {{
-  const url = new URL(e.request.url);
-
-  // API calls: network-only, never cache
-  if (url.pathname.startsWith('/api/')) {{
-    e.respondWith(fetch(e.request));
-    return;
-  }}
-
-  // Static assets (icons): cache-first
-  if (url.pathname.startsWith('/icons/')) {{
-    e.respondWith(
-      caches.match(e.request).then(cached => cached || fetch(e.request))
-    );
-    return;
-  }}
-
-  // HTML pages: network-first, fall back to cache only if offline
-  e.respondWith(
-    fetch(e.request)
-      .then(res => {{
-        // Update cache with fresh response
-        const clone = res.clone();
-        caches.open(CACHE).then(c => c.put(e.request, clone));
-        return res;
-      }})
-      .catch(() => caches.match(e.request))
-  );
-}});
-"""
-    return FastAPIResponse(content=sw_code, media_type="application/javascript",
-                           headers={
-                               "Service-Worker-Allowed": "/",
-                               "Cache-Control": "no-store",  # SW itself must never be cached
-                           })
+    """Service worker — PWA install support."""
+    return ui_renderer.render_service_worker(_SW_CACHE_VERSION)
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
