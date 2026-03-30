@@ -52,7 +52,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
-  <link rel="stylesheet" href="/styles.css?v=20260329a">
+  <link rel="stylesheet" href="/styles.css?v=20260330b">
   <style>
     [x-cloak] { display: none !important; }
     /* xterm overrides to fit Axon dark theme */
@@ -157,14 +157,31 @@
               </template>
 
               <!-- CLI agent -->
-              <div class="border-t border-slate-800/80 mt-0.5">
-                <button @click="settingsForm.ai_backend='cli'; api('POST','/api/settings',{ai_backend:'cli'}).catch(()=>{}); chatModelOpen=false"
+              <div class="border-t border-slate-800/80 mt-0.5" x-data="{ cliExpanded: false }">
+                <button @click="if ((runtimeStatus.cli_environments||[]).length > 1) { cliExpanded = !cliExpanded } else { settingsForm.ai_backend='cli'; api('POST','/api/settings',{ai_backend:'cli'}).catch(()=>{}); chatModelOpen=false }"
                         :class="settingsForm.ai_backend==='cli' ? 'bg-amber-600/10 text-amber-300' : 'text-slate-300 hover:bg-slate-800/60'"
                         class="w-full text-left px-3 py-2 text-[13px] flex items-center gap-2.5 transition">
                   <div class="w-1.5 h-1.5 rounded-full shrink-0" :class="settingsForm.ai_backend==='cli' ? 'bg-amber-400' : 'bg-slate-700'"></div>
                   <span class="flex-1">CLI Agent</span>
                   <span class="text-[10px] text-slate-600 shrink-0">local bridge</span>
+                  <span x-show="(runtimeStatus.cli_environments||[]).length > 1"
+                        class="text-[10px] text-slate-500 transition-transform"
+                        :class="cliExpanded ? 'rotate-90' : ''">&rsaquo;</span>
                 </button>
+                <!-- CLI environment sub-list -->
+                <template x-if="cliExpanded && (runtimeStatus.cli_environments||[]).length > 1">
+                  <div class="border-t border-slate-800/60">
+                    <template x-for="env in (runtimeStatus.cli_environments||[])" :key="env.path">
+                      <button @click="settingsForm.ai_backend='cli'; settingsForm.claude_cli_path=env.path; api('POST','/api/settings',{ai_backend:'cli',claude_cli_path:env.path}).catch(()=>{}); chatModelOpen=false"
+                              :class="settingsForm.ai_backend==='cli' && (settingsForm.claude_cli_path||'')===env.path ? 'bg-amber-600/10 text-amber-200' : 'text-slate-400 hover:bg-slate-800/60'"
+                              class="w-full text-left pl-7 pr-3 py-1.5 text-[12px] flex items-center gap-2 transition">
+                        <span class="text-[10px]">&rsaquo;</span>
+                        <span class="flex-1 truncate" x-text="env.label"></span>
+                        <span class="text-[9px] text-slate-600 shrink-0" x-text="env.source"></span>
+                      </button>
+                    </template>
+                  </div>
+                </template>
               </div>
             </div>
           </div>
@@ -524,14 +541,31 @@
                   </div>
                 </template>
                 <!-- CLI agent -->
-                <div class="border-t border-slate-800/80 mt-0.5">
-                  <button @click="settingsForm.ai_backend='cli'; api('POST','/api/settings',{ai_backend:'cli'}).catch(()=>{}); composerModelOpen=false"
+                <div class="border-t border-slate-800/80 mt-0.5" x-data="{ cliExpanded: false }">
+                  <button @click="if ((runtimeStatus.cli_environments||[]).length > 1) { cliExpanded = !cliExpanded } else { settingsForm.ai_backend='cli'; api('POST','/api/settings',{ai_backend:'cli'}).catch(()=>{}); composerModelOpen=false }"
                           :class="settingsForm.ai_backend==='cli' ? 'bg-amber-600/10 text-amber-300' : 'text-slate-300 hover:bg-slate-800/60'"
                           class="w-full text-left px-3 py-2 text-[12px] flex items-center gap-2 transition">
                     <div class="w-1.5 h-1.5 rounded-full shrink-0" :class="settingsForm.ai_backend==='cli' ? 'bg-amber-400' : 'bg-slate-700'"></div>
                     <span class="flex-1">CLI Agent</span>
                     <span class="text-[10px] text-slate-600">local bridge</span>
+                    <span x-show="(runtimeStatus.cli_environments||[]).length > 1"
+                          class="text-[10px] text-slate-500 transition-transform"
+                          :class="cliExpanded ? 'rotate-90' : ''">&rsaquo;</span>
                   </button>
+                  <!-- CLI environment sub-list -->
+                  <template x-if="cliExpanded && (runtimeStatus.cli_environments||[]).length > 1">
+                    <div class="border-t border-slate-800/60">
+                      <template x-for="env in (runtimeStatus.cli_environments||[])" :key="env.path">
+                        <button @click="settingsForm.ai_backend='cli'; settingsForm.claude_cli_path=env.path; api('POST','/api/settings',{ai_backend:'cli',claude_cli_path:env.path}).catch(()=>{}); composerModelOpen=false"
+                                :class="settingsForm.ai_backend==='cli' && (settingsForm.claude_cli_path||'')===env.path ? 'bg-amber-600/10 text-amber-200' : 'text-slate-400 hover:bg-slate-800/60'"
+                                class="w-full text-left pl-7 pr-3 py-1.5 text-[11px] flex items-center gap-2 transition">
+                          <span class="text-[10px]">&rsaquo;</span>
+                          <span class="flex-1 truncate" x-text="env.label"></span>
+                          <span class="text-[9px] text-slate-600 shrink-0" x-text="env.source"></span>
+                        </button>
+                      </template>
+                    </div>
+                  </template>
                 </div>
               </div>
             </div>
@@ -3190,20 +3224,21 @@
 <!-- @include partials/modals.html -->
 
 <!-- ── Axon Modules ── -->
-<script src="/js/helpers.js?v=20260328e"></script>
-<script src="/js/auth.js?v=20260328e"></script>
-<script src="/js/dashboard.js?v=20260328e"></script>
-<script src="/js/chat.js?v=20260328e"></script>
-<script src="/js/voice.js?v=20260328e"></script>
-<script src="/js/settings.js?v=20260328e"></script>
-<script src="/js/resources.js?v=20260328e"></script>
-<script src="/js/projects.js?v=20260328e"></script>
-<script src="/js/tasks.js?v=20260328e"></script>
-<script src="/js/notifications.js?v=20260328e"></script>
-<script src="/js/mobile.js?v=20260328e"></script>
-<script src="/js/vault.js?v=20260328e"></script>
-<script src="/js/files.js?v=20260328e"></script>
-<script src="/js/models.js?v=20260328e"></script>
+<script src="/js/helpers.js?v=20260330b"></script>
+<script src="/js/codeblocks.js?v=20260330b"></script>
+<script src="/js/auth.js?v=20260330b"></script>
+<script src="/js/dashboard.js?v=20260330b"></script>
+<script src="/js/chat.js?v=20260330b"></script>
+<script src="/js/voice.js?v=20260330b"></script>
+<script src="/js/settings.js?v=20260330b"></script>
+<script src="/js/resources.js?v=20260330b"></script>
+<script src="/js/projects.js?v=20260330b"></script>
+<script src="/js/tasks.js?v=20260330b"></script>
+<script src="/js/notifications.js?v=20260330b"></script>
+<script src="/js/mobile.js?v=20260330b"></script>
+<script src="/js/vault.js?v=20260330b"></script>
+<script src="/js/files.js?v=20260330b"></script>
+<script src="/js/models.js?v=20260330b"></script>
 
 <script>
 function devbrain() {
@@ -3714,6 +3749,7 @@ function devbrain() {
     },
 
     async _bootApp() {
+      this.initCodeblocks();
       this.refreshVoiceCapability();
       this.loadVoiceStatus();
       if (!this.voiceCapabilityBound) {
@@ -3862,6 +3898,7 @@ function devbrain() {
   // (Object.assign evaluates getters and copies the result as a dead value).
   const mixins = [
     axonHelpersMixin(),
+    axonCodeblocksMixin(),
     axonAuthMixin(),
     axonDashboardMixin(),
     axonChatMixin(),

@@ -19,7 +19,7 @@ function axonHelpersMixin() {
       const template = document.createElement('template');
       template.innerHTML = html;
       const allowedTags = new Set([
-        'A', 'ARTICLE', 'B', 'BLOCKQUOTE', 'BR', 'CODE', 'DEL', 'DIV', 'EM', 'H1', 'H2', 'H3', 'H4',
+        'A', 'ARTICLE', 'B', 'BLOCKQUOTE', 'BR', 'BUTTON', 'CODE', 'DEL', 'DIV', 'EM', 'H1', 'H2', 'H3', 'H4',
         'H5', 'H6', 'HR', 'I', 'LI', 'OL', 'P', 'PRE', 'S', 'SPAN', 'STRONG', 'TABLE', 'TBODY',
         'TD', 'TH', 'THEAD', 'TR', 'UL',
       ]);
@@ -48,12 +48,24 @@ function axonHelpersMixin() {
             return;
           }
           // Allow class on CODE/SPAN for syntax highlighting (hljs-*)
-          if (name === 'class' && (node.tagName === 'CODE' || node.tagName === 'SPAN')) {
-            // Only keep hljs-* and language-* classes
-            const safe = value.split(/\s+/).filter(c => /^(hljs|language-)/.test(c)).join(' ');
-            if (safe) { node.setAttribute('class', safe); } else { node.removeAttribute('class'); }
-            return;
+          // Allow class on DIV/PRE/BUTTON for axon code blocks (axon-cb*)
+          if (name === 'class') {
+            const tag = node.tagName;
+            if (tag === 'CODE' || tag === 'SPAN') {
+              const safe = value.split(/\s+/).filter(c => /^(hljs|language-)/.test(c)).join(' ');
+              if (safe) { node.setAttribute('class', safe); } else { node.removeAttribute('class'); }
+              return;
+            }
+            if (tag === 'DIV' || tag === 'PRE' || tag === 'BUTTON') {
+              const safe = value.split(/\s+/).filter(c => /^axon-cb/.test(c)).join(' ');
+              if (safe) { node.setAttribute('class', safe); } else { node.removeAttribute('class'); }
+              return;
+            }
           }
+          // Allow type/tabindex only on BUTTON (for code block copy)
+          if ((name === 'type' || name === 'tabindex') && node.tagName === 'BUTTON') return;
+          // Allow aria-hidden on DIV (line numbers)
+          if (name === 'aria-hidden' && node.tagName === 'DIV') return;
           if (name !== 'href' && name !== 'colspan' && name !== 'rowspan') {
             node.removeAttribute(attr.name);
           }
@@ -66,21 +78,14 @@ function axonHelpersMixin() {
     renderMd(text) {
       if (!text || typeof marked === 'undefined') return text || '';
       if (!this._markdownConfigured) {
-        // marked v15+ uses marked-highlight extension for syntax highlighting
-        if (typeof markedHighlight !== 'undefined' && typeof hljs !== 'undefined') {
-          marked.use(markedHighlight.markedHighlight({
-            langPrefix: 'hljs language-',
-            highlight(code, lang) {
-              if (lang && hljs.getLanguage(lang)) {
-                return hljs.highlight(code, { language: lang }).value;
-              }
-              return hljs.highlightAuto(code).value;
-            }
-          }));
-        }
+        // Use custom code block renderer (axon-codeblock) — handles hljs internally
+        const codeRenderer = typeof this.getCodeBlockRenderer === 'function'
+          ? this.getCodeBlockRenderer()
+          : {};
         marked.use({
           gfm: true,
           breaks: true,
+          renderer: codeRenderer,
         });
         this._markdownConfigured = true;
       }

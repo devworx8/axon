@@ -9,6 +9,7 @@ from agent_registry import active_agents_count, lifecycle_phases, registered_age
 from permissions_guard import default_permission_cards
 import gpu_guard
 import provider_registry
+import brain as _brain
 
 
 # API providers whose models support vision without a separate vision_model setting
@@ -160,6 +161,9 @@ def build_runtime_status(
         "cloud_agents": provider_registry.cloud_adapter_cards(settings),
         "api_providers": provider_registry.api_provider_cards(settings),
         "selected_api_provider": provider_registry.runtime_api_config(settings),
+        "cli_environments": _brain.discover_cli_environments(),
+        "cli_binary": settings.get("claude_cli_path") or (_brain._find_cli() or ""),
+        "cli_model": "",
         "permissions": default_permission_cards(),
         "gpu_guard": gpu_profile,
         "vision_status": _build_vision_status(settings),

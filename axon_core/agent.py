@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import sqlite3
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Optional
@@ -258,6 +259,101 @@ AGENT_TOOL_DEFS: list[dict[str, Any]] = [
             },
         },
     },
+    # ── Enhanced agentic tools ─────────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "plan_task",
+            "description": (
+                "Emit a structured execution plan at the START of any complex multi-step task. "
+                "Use this before starting work so the user can see your approach. "
+                "Steps should be concrete actions (read file X, edit Y, run test Z)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string", "description": "One-sentence description of what you are trying to accomplish"},
+                    "steps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Ordered list of concrete steps to complete the goal",
+                    },
+                },
+                "required": ["goal", "steps"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_subagent",
+            "description": (
+                "Spawn a focused sub-agent to handle a well-defined subtask in parallel. "
+                "The sub-agent has full tool access and runs its own ReAct loop. "
+                "Use this to delegate discrete subtasks like: "
+                "'read file X and summarise it', 'find all TODO comments in ~/project', "
+                "'check if function Y exists in codebase'. "
+                "Returns the sub-agent's answer. Max 15 iterations."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "The specific subtask for the sub-agent to complete"},
+                    "context": {"type": "string", "description": "Optional extra context to give the sub-agent", "default": ""},
+                    "max_iterations": {"type": "integer", "description": "Max ReAct iterations (1-15, default 10)", "default": 10},
+                },
+                "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "http_get",
+            "description": "Perform an HTTP GET request and return the response body (max 6 KB). Use for fetching documentation, APIs, or web content.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to fetch (must start with http:// or https://)"},
+                    "headers": {"type": "string", "description": "Optional request headers in 'Key: Value\\nKey2: Value2' format", "default": ""},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remember",
+            "description": (
+                "Persist a named note in agent memory. Use this to save important facts, decisions, "
+                "file paths, credentials, or any information you'll need in future sessions. "
+                "Notes survive console close and server restart."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Unique name for this note (e.g. 'project_db_url', 'api_key_name')"},
+                    "value": {"type": "string", "description": "The information to remember"},
+                },
+                "required": ["key", "value"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recall",
+            "description": "Search persisted agent memory notes. Returns all notes whose key or value matches your query.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search term to find in stored notes"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -300,6 +396,21 @@ def _canonical_tool_name(name: str, args: dict[str, Any] | None = None) -> str:
         "show_diff": "show_diff",
         "showdiff": "show_diff",
         "git_diff": "show_diff",
+        # enhanced agentic tools
+        "http": "http_get",
+        "http_get": "http_get",
+        "fetch": "http_get",
+        "get_url": "http_get",
+        "save_note": "remember",
+        "note": "remember",
+        "remember": "remember",
+        "recall": "recall",
+        "search_memory": "recall",
+        "plan": "plan_task",
+        "plan_task": "plan_task",
+        "subagent": "spawn_subagent",
+        "spawn_subagent": "spawn_subagent",
+        "delegate": "spawn_subagent",
     }
     if normalized == "using" and (args or {}).get("path"):
         return "read_file"
@@ -1073,57 +1184,81 @@ You can read and modify your own source code. You are a partner, not a chatbot.
 Axon core files: server.py (FastAPI routes), brain.py (agent loop + tools), ui/index.html (SPA), ui/js/ (Alpine.js modules).
 """
 
-    return f"""You are Axon Agent — a NEXT-GEN agentic AI coding assistant that uses tools to act on behalf of developers.
+    return f"""You are Axon — an elite autonomous AI agent embedded in a developer's local OS at ~/.devbrain/.
+You do not just answer questions — you TAKE ACTION using tools and report results.
+Your thinking and tool calls stream live in the Axon UI as you work.
 
 Available tools: {', '.join(tool_names)}
 
-To use a tool, output EXACTLY in this format (no extra text before it):
+═══════════════════════════════════════════════════════
+TOOL CALL FORMAT — output EXACTLY, no preamble:
 ACTION: tool_name
 ARGS: {{"arg1": "value1"}}
 
-When you have the final answer, output EXACTLY:
+Final answer format — output EXACTLY:
 ANSWER: your response here
+═══════════════════════════════════════════════════════
 
-## Coding Workflow — How to Make Real Code Changes
+## Agentic Operating Mode
 
-When the user asks you to fix, refactor, add, or change code, follow this multi-step pattern:
+You are NOT a chatbot. You are an autonomous agent. When given a task:
 
-1. **UNDERSTAND** — Read the relevant file(s) with `read_file` to understand the current code.
-2. **LOCATE** — Use `search_code` if you need to find where something is defined or used.
-3. **EDIT** — Use `edit_file` for targeted, surgical changes. This is your PRIMARY editing tool.
-   - `old_string` must match EXACTLY (including indentation, whitespace, line breaks).
-   - Include enough surrounding context in `old_string` to make it unique.
-   - `new_string` is the replacement (can be larger or smaller than old_string).
-   - For multi-line edits, include the full block in old_string and new_string.
-4. **VERIFY** — Use `show_diff` to review your changes, or `read_file` to confirm the edit landed.
-5. **TEST** — If applicable, run tests with `shell_cmd` (e.g., `python3 -c "import ast; ..."` for syntax check).
+1. **PLAN FIRST** (for complex tasks) — call `plan_task` with goal + steps before doing anything.
+   This shows the user your approach and keeps you on track.
+2. **ACT** — use tools to gather information, make changes, run commands.
+3. **VERIFY** — check your work: read the file back, run a test, show a diff.
+4. **REMEMBER** — use `remember` to save important facts (DB URLs, file paths, decisions).
+5. **DELEGATE** — use `spawn_subagent` for parallel or specialised subtasks.
+6. **ANSWER** — give a precise final answer with what changed, what succeeded, what was skipped.
 
-### Key Rules for `edit_file`:
-- ALWAYS read the file FIRST before editing — never guess at file contents.
-- Copy the exact text from the file for `old_string` — character-for-character, including indentation.
-- If your edit fails with "not found", re-read the file and try again with the exact text.
-- For multiple changes to the same file, make them one at a time (each edit_file call).
-- Use `write_file` ONLY for creating new files or complete rewrites. For modifications, ALWAYS use `edit_file`.
+### Multi-step reasoning loop:
+- After each tool result, decide: do I need more info? → use another tool
+- After N tools with enough data → emit ANSWER
+- Do NOT emit ANSWER until you have real results from tools to back it up
 
-### Tool Selection:
-- `edit_file` — Modify existing code (preferred for all code changes)
-- `write_file` — Create new files or complete file rewrites only
-- `read_file` — Read file contents before editing
-- `search_code` — Find code patterns across files
-- `show_diff` — Review changes after editing
-- `shell_cmd` — Run commands (git, tests, syntax checks, etc.)
-- `git_status` — Check repo state
-- `list_dir` — Browse directories
+## Coding Workflow — Code Changes
 
-## General Rules:
-- ALWAYS use tools when you need real data. Do NOT describe how the user could do it — DO IT.
-- If asked to find/search/read ANYTHING on the filesystem — use tools.
-- Chain multiple tool calls: read → edit → verify → answer.
-- After seeing tool results, either use another tool or give ANSWER.
-- Be a partner in ANSWER — direct, warm, technically sharp. Use markdown.
-- Never make up file contents, diffs, or command output.
-- Never claim you edited a file unless you actually used edit_file/write_file and got a success result.
-- All paths must start with ~ or /home/{os.getenv('USER', 'edp')}
+1. **READ** — `read_file` the target file first. Never guess at contents.
+2. **LOCATE** — `search_code` to find where a function/class is defined.
+3. **EDIT** — `edit_file` for targeted surgical changes (preferred over write_file for modifications).
+   - `old_string` must match character-for-character including indentation.
+   - Include enough surrounding context to make it unique.
+4. **VERIFY** — `show_diff` or `read_file` to confirm edit landed.
+5. **TEST** — `shell_cmd` for syntax checks: `python3 -c "import ast; ast.parse(open('file').read()); print('OK')"`
+
+### edit_file rules:
+- Read FIRST, then edit. Never guess at file contents.
+- If edit fails "not found", re-read and copy exact text.
+- Multiple changes: one edit_file call per change.
+- `write_file` only for new files or full rewrites.
+
+## Tool Reference
+
+| Tool | When to use |
+|------|------------|
+| `plan_task` | Start of any complex 3+ step task — show your plan |
+| `spawn_subagent` | Delegate a discrete subtask to a parallel agent |
+| `edit_file` | Surgical code changes (PREFERRED for modifications) |
+| `write_file` | New files or complete rewrites |
+| `read_file` | Read before editing or to verify |
+| `search_code` | Find patterns across codebase |
+| `shell_cmd` | Run git, tests, builds, syntax checks |
+| `git_status` | Check branch and uncommitted changes |
+| `show_diff` | Review edits after making them |
+| `http_get` | Fetch docs, APIs, web content |
+| `remember` | Persist key facts across sessions |
+| `recall` | Search your persisted memory |
+| `create_mission` | Create a task/mission to track work |
+| `list_missions` | Check what's open and in progress |
+
+## Iron Rules
+- ALWAYS use tools for real data — never make up file contents, command output, or diffs.
+- If you claim to edit a file, you MUST have called edit_file/write_file and received a success result.
+- Chain tools: read → edit → verify → answer.
+- Use `plan_task` at the start of anything with 3+ steps.
+- Use `spawn_subagent` to avoid getting bogged down in a single complex subtask.
+- Be warm, direct, technically precise. South African dev context (Rands R, UTC+2).
+- All paths: start with ~ or /home/{os.getenv('USER', 'edp')}
 {self_awareness}{axon_ctx}
 {('Context: ' + context_block[:800]) if context_block else ''}
 {('Project: ' + project_name) if project_name else ''}"""
@@ -1209,10 +1344,10 @@ def _guard_unverified_edit_claim(text: str, wrote_files: bool) -> str:
     if wrote_files or not _looks_like_unverified_edit_claim(cleaned):
         return cleaned
     return (
-        "Axon did not verify any real file edits in this run.\n\n"
-        "What happened instead: the model produced a work-log style answer without a successful "
+        "I did not verify any real file edits in this run.\n\n"
+        "What happened instead: I produced a work-log style answer without a successful "
         "`write_file` tool action behind it.\n\n"
-        "To make real changes, Axon must first inspect the code with tools, then call `write_file`, "
+        "To make real changes, I must first inspect the code with tools, then call `write_file`, "
         "and only after that report the exact file path it changed."
     )
 
@@ -1249,7 +1384,7 @@ async def run_agent(
     tools: list[str] | None = None,
     ollama_url: str = "",
     ollama_model: str = "",
-    max_iterations: int = 12,
+    max_iterations: int = 25,
     force_tool_mode: bool = False,
     api_key: str = "",
     api_base_url: str = "",
@@ -1266,7 +1401,41 @@ async def run_agent(
       {"type": "done",        "iterations": int}
 
     Uses ReAct text-based tool calling (reliable across all Ollama models).
+    Session state is auto-saved to SQLite on every iteration so the user can
+    say "please continue" after closing the console and pick up exactly where
+    they left off.
     """
+    # ── Session persistence setup ─────────────────────────────────────────────
+    try:
+        from axon_core.session_store import SessionStore, is_resume_request, new_session_id
+        _ss = SessionStore(deps.db_path)
+    except Exception:
+        _ss = None
+
+    session_id = new_session_id() if _ss else ""
+    tool_log: list[dict] = []
+    _resuming = False           # set True when restoring a previous session
+    _resumed_messages: list[dict[str, Any]] = []  # non-system messages to replay
+
+    # ── Resume: "please continue" detection ───────────────────────────────────
+    if _ss and is_resume_request(user_message):
+        prev = _ss.get_interrupted()
+        if prev:
+            yield {"type": "text", "chunk": (
+                f"♻️ **Resuming session** `{prev.session_id[:8]}…`\n"
+                f"Task: _{prev.task[:120]}_\n"
+                f"Last iteration: {prev.iteration}\n\n"
+            )}
+            session_id = prev.session_id
+            tool_log = prev.tool_log
+            _resuming = True
+            # Strip system-role messages — they will be rebuilt fresh below
+            _resumed_messages = [
+                m for m in prev.messages if m.get("role") in ("user", "assistant")
+            ]
+            # Replace user_message with the original task so the model stays on track
+            user_message = prev.task
+
     active_tool_names = list(deps.tool_registry.keys()) if tools is None else [
         t for t in tools if t in deps.tool_registry
     ]
@@ -1276,7 +1445,7 @@ async def run_agent(
     use_cli = backend == "cli"
     resolved_cli = deps.find_cli(cli_path) if use_cli else ""
 
-    if not force_tool_mode and _is_casual_conversation(user_message):
+    if not force_tool_mode and not _resuming and _is_casual_conversation(user_message):
         casual_system = (
             "You are Axon — a sharp, friendly AI copilot embedded in the user's local developer OS.\n"
             "The user is making casual conversation. Reply naturally and warmly, like a capable colleague.\n"
@@ -1476,12 +1645,29 @@ async def run_agent(
             messages.append({"role": "assistant", "content": full_text})
             messages.append({"role": "user", "content": f"Tool result for {tool_name}:\n{result[:4000]}\n\nContinue."})
 
+            # ── Auto-save session after each tool call ────────────────────────
+            tool_log.append({"name": tool_name, "args": tool_args, "result": str(result)[:500]})
+            if _ss and session_id:
+                _ss.save(
+                    session_id=session_id,
+                    task=user_message[:300],
+                    messages=messages,
+                    iteration=iteration,
+                    tool_log=tool_log,
+                    status="active",
+                    project_name=project_name,
+                    backend=backend or ("cli" if use_cli else ("api" if use_api else "ollama")),
+                )
+
         elif answer_match:
             answer = _guard_unverified_edit_claim(answer_match.group(1).strip(), wrote_files=wrote_files)
             if not answer or answer == "your response here":
                 yield {"type": "text", "chunk": "\n⚠️ Axon could not form a clean answer. Please retry the task."}
                 break
             yield {"type": "text", "chunk": answer}
+            # Mark session complete on clean answer
+            if _ss and session_id:
+                _ss.mark_complete(session_id)
             break
         else:
             guarded_text = _guard_unverified_edit_claim(clean_text, wrote_files=wrote_files)
@@ -1490,6 +1676,15 @@ async def run_agent(
             else:
                 yield {"type": "text", "chunk": "\n⚠️ Axon produced an invalid tool response. Please retry the task."}
             break
+
+    else:
+        # Hit max iterations — mark as interrupted so user can resume
+        if _ss and session_id:
+            _ss.mark_interrupted(session_id)
+        yield {"type": "text", "chunk": (
+            f"\n\n⏸️ **Paused at iteration limit ({max_iterations}).** "
+            "Say **'please continue'** to resume from where I left off."
+        )}
 
     yield {"type": "done", "iterations": iteration + 1}
 

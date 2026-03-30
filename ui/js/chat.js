@@ -1074,20 +1074,7 @@ function axonChatMixin() {
 
     /* ── Rendering helpers ────────────────────────────────────── */
 
-    renderMd(text) {
-      if (!text || typeof marked === 'undefined') return text || '';
-      if (!this._markdownConfigured) {
-        marked.setOptions({
-          gfm: true,
-          breaks: true,
-          headerIds: false,
-          mangle: false,
-        });
-        this._markdownConfigured = true;
-      }
-      const html = marked.parse(String(text || ''));
-      return this.sanitizeRenderedHtml(html);
-    },
+    // renderMd is provided by helpers.js mixin (with code block renderer)
 
     formatTime(iso) {
       if (!iso) return '';

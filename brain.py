@@ -17,7 +17,7 @@ import sqlite3
 import time
 import logging
 from pathlib import Path
-from typing import Optional, AsyncGenerator
+from typing import Any, Optional, AsyncGenerator
 import re as _re
 import anthropic
 import httpx
@@ -498,23 +498,25 @@ async def stream_chat(
 
     runtime = (backend or "ollama").strip().lower()
     if runtime == "cli":
-        result = await chat(
-            user_message,
-            history,
-            context_block=context_block,
-            project_name=project_name,
-            resource_context=resource_context,
-            resource_image_paths=resource_image_paths,
-            vision_model=vision_model,
-            backend="cli",
-            api_key=api_key,
-            api_provider=api_provider,
-            api_base_url=api_base_url,
-            api_model=api_model,
-            ollama_url=ollama_url,
-            ollama_model=ollama_model,
-        )
-        yield result["content"]
+        # Stream directly from the CLI binary — do NOT buffer via chat()
+        cli_system = SYSTEM_PROMPT
+        if _is_general_planning_request(user_message):
+            cli_system += (
+                "\n\nThis is a general planning or writing task."
+                "\nDo not inspect local files unless the user explicitly asks."
+            )
+        if context_block:
+            cli_system += f"\n\n{context_block[:2000]}"
+        if resource_context:
+            cli_system += f"\n\n{resource_context[:3000]}"
+        if project_name:
+            cli_system += f"\n\nCurrently focused on workspace: **{project_name}**"
+        cli_messages: list[dict] = [{"role": "system", "content": cli_system}]
+        for h in history[-6:]:
+            cli_messages.append({"role": h["role"], "content": h["content"][:600]})
+        cli_messages.append({"role": "user", "content": user_message})
+        async for chunk in _stream_cli(cli_messages, cli_path="", max_tokens=1500):
+            yield chunk
         return
 
     if runtime != "ollama":
@@ -970,6 +972,46 @@ def _normalize_tool_args(name: str, args: dict) -> dict:
     if name == "list_missions":
         return {k: v for k, v in normalized.items() if k in {"status", "project_id"}}
 
+    if name == "http_get":
+        return {k: v for k, v in normalized.items() if k in {"url", "headers"}}
+
+    if name == "remember":
+        if not normalized.get("key"):
+            for alias in ("name", "label", "id"):
+                if normalized.get(alias):
+                    normalized["key"] = normalized.pop(alias)
+                    break
+        if not normalized.get("value"):
+            for alias in ("content", "text", "note", "data"):
+                if normalized.get(alias):
+                    normalized["value"] = normalized.pop(alias)
+                    break
+        return {k: v for k, v in normalized.items() if k in {"key", "value"}}
+
+    if name == "recall":
+        if not normalized.get("query"):
+            for alias in ("key", "search", "term", "text"):
+                if normalized.get(alias):
+                    normalized["query"] = normalized.pop(alias)
+                    break
+        return {k: v for k, v in normalized.items() if k in {"query"}}
+
+    if name == "plan_task":
+        if not normalized.get("goal"):
+            for alias in ("title", "task", "objective"):
+                if normalized.get(alias):
+                    normalized["goal"] = normalized.pop(alias)
+                    break
+        return {k: v for k, v in normalized.items() if k in {"goal", "steps"}}
+
+    if name == "spawn_subagent":
+        if not normalized.get("task"):
+            for alias in ("prompt", "query", "goal", "subtask"):
+                if normalized.get(alias):
+                    normalized["task"] = normalized.pop(alias)
+                    break
+        return {k: v for k, v in normalized.items() if k in {"task", "context", "max_iterations"}}
+
     return normalized
 
 
@@ -1074,21 +1116,158 @@ def _tool_mission_list(status: str = None, project_id: int = None, **_kw) -> str
     return f"{len(tasks)} mission(s):\n" + "\n".join(lines)
 
 
+def _tool_http_get(url: str, headers: str = "") -> str:
+    """Perform an HTTP GET request and return the response body (max 6 KB)."""
+    import urllib.request as _req
+    import urllib.error as _err
+    if not url.startswith(("http://", "https://")):
+        return "ERROR: Only http:// and https:// URLs are allowed."
+    try:
+        req = _req.Request(url, headers={"User-Agent": "Axon/1.0 (axon-agent)"})
+        if headers:
+            # Accept simple "Key: Value\nKey2: Value2" format
+            for line in headers.splitlines():
+                if ":" in line:
+                    k, _, v = line.partition(":")
+                    req.add_header(k.strip(), v.strip())
+        with _req.urlopen(req, timeout=20) as resp:
+            ct = resp.headers.get("Content-Type", "")
+            raw = resp.read(6144)
+            body = raw.decode("utf-8", errors="replace")
+        return f"HTTP {resp.status} — {ct}\n\n{body}"
+    except _err.HTTPError as e:
+        return f"HTTP Error {e.code}: {e.reason}"
+    except Exception as exc:
+        return f"ERROR: {exc}"
+
+
+def _tool_remember(key: str, value: str) -> str:
+    """Persist a named note in agent memory for later recall across sessions."""
+    import sqlite3 as _sq
+    db = str(DEVBRAIN_DB_PATH)
+    try:
+        with _sq.connect(db, timeout=10) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS agent_notes (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            """)
+            conn.execute("""
+                INSERT INTO agent_notes (key, value, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+            """, (key.strip(), value.strip(), time.time()))
+            conn.commit()
+        return f"Remembered: [{key}] = {value[:120]}"
+    except Exception as exc:
+        return f"ERROR saving note: {exc}"
+
+
+def _tool_recall(query: str) -> str:
+    """Search persisted agent notes. Returns all notes whose key or value contains the query."""
+    import sqlite3 as _sq
+    db = str(DEVBRAIN_DB_PATH)
+    try:
+        with _sq.connect(db, timeout=10) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS agent_notes (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            """)
+            rows = conn.execute("""
+                SELECT key, value, updated_at FROM agent_notes
+                WHERE key LIKE ? OR value LIKE ?
+                ORDER BY updated_at DESC LIMIT 20
+            """, (f"%{query}%", f"%{query}%")).fetchall()
+        if not rows:
+            return f"No notes found matching '{query}'."
+        lines = [f"**{r[0]}**: {r[1][:200]}" for r in rows]
+        return "Agent memory:\n" + "\n".join(lines)
+    except Exception as exc:
+        return f"ERROR recalling notes: {exc}"
+
+
+def _tool_plan_task(goal: str, steps: Any = None) -> str:
+    """Emit a structured execution plan. Call this at the start of any complex multi-step task."""
+    if steps is None:
+        steps = []
+    if isinstance(steps, str):
+        # Allow newline-delimited list as string
+        steps = [s.strip() for s in steps.strip().splitlines() if s.strip()]
+    if not isinstance(steps, list):
+        steps = [str(steps)]
+    numbered = "\n".join(f"{i+1}. {s}" for i, s in enumerate(steps))
+    return f"## Plan: {goal}\n\n{numbered}\n\n*Executing step 1 next...*"
+
+
+def _tool_spawn_subagent(task: str, context: str = "", max_iterations: int = 10) -> str:
+    """Spawn a focused sub-agent to handle a specific subtask.
+
+    The sub-agent has access to all the same tools. Use this to parallelize work or
+    delegate a well-defined subtask (e.g., "read file X and summarise it",
+    "find all TODO comments in ~/project/src").
+
+    Returns the sub-agent's final answer as a string.
+    Max iterations is capped at 15 to prevent runaway loops.
+    """
+    from axon_core.agent import run_agent as _run_agent_fn
+    max_iterations = min(max(1, int(max_iterations)), 15)
+    collected_text: list[str] = []
+    tool_notes: list[str] = []
+    init_history: list[dict] = []
+    if context:
+        init_history.append({"role": "assistant", "content": f"Context provided: {context[:800]}"})
+
+    async def _run_sub():
+        async for event in _run_agent_fn(
+            task,
+            init_history,
+            deps=_agent_runtime_deps(),
+            max_iterations=max_iterations,
+            force_tool_mode=True,
+        ):
+            t = event.get("type", "")
+            if t == "text":
+                collected_text.append(event.get("chunk", ""))
+            elif t == "tool_result":
+                note = f"[{event.get('name', 'tool')}]: {str(event.get('result', ''))[:300]}"
+                tool_notes.append(note)
+
+    _run_async_from_sync(_run_sub())
+
+    answer = "".join(collected_text).strip()
+    if not answer:
+        answer = "(Sub-agent produced no text answer)"
+    if tool_notes:
+        notes_block = "\n".join(tool_notes[:10])
+        return f"**Sub-agent result:**\n{answer}\n\n**Tool trace:**\n{notes_block}"
+    return f"**Sub-agent result:**\n{answer}"
+
+
 _TOOL_REGISTRY = {
-    "read_file": _tool_read_file,
-    "list_dir": _tool_list_dir,
-    "shell_cmd": _tool_shell_cmd,
-    "git_status": _tool_git_status,
-    "search_code": _tool_search_code,
-    "write_file": _tool_write_file,
-    "delete_file": _tool_delete_file,
-    "edit_file": _tool_edit_file,
-    "show_diff": _tool_show_diff,
-    "append_file": _tool_append_file,
-    "create_file": _tool_create_file,
+    "read_file":      _tool_read_file,
+    "list_dir":       _tool_list_dir,
+    "shell_cmd":      _tool_shell_cmd,
+    "git_status":     _tool_git_status,
+    "search_code":    _tool_search_code,
+    "write_file":     _tool_write_file,
+    "delete_file":    _tool_delete_file,
+    "edit_file":      _tool_edit_file,
+    "show_diff":      _tool_show_diff,
+    "append_file":    _tool_append_file,
+    "create_file":    _tool_create_file,
     "create_mission": lambda **kw: _tool_mission_create(**kw),
     "update_mission": lambda **kw: _tool_mission_update(**kw),
-    "list_missions": lambda **kw: _tool_mission_list(**kw),
+    "list_missions":  lambda **kw: _tool_mission_list(**kw),
+    # ── Enhanced agentic tools ─────────────────────────────────────────────
+    "http_get":       _tool_http_get,
+    "remember":       _tool_remember,
+    "recall":         _tool_recall,
+    "plan_task":      _tool_plan_task,
+    "spawn_subagent": _tool_spawn_subagent,
 }
 
 # Legacy in-file agent implementation removed. The extracted runtime now lives
@@ -1171,6 +1350,86 @@ def _find_cli(override_path: str = "") -> str:
                 return m
 
     return ""
+
+
+def discover_cli_environments() -> list[dict]:
+    """Return all available CLI binaries with labels for the UI environment picker."""
+    import shutil as _shutil
+    import glob as _glob
+    import subprocess as _sp
+
+    seen: set[str] = set()
+    envs: list[dict] = []
+
+    def _add(path: str, source: str) -> None:
+        real = os.path.realpath(path)
+        if real in seen:
+            return
+        seen.add(real)
+        # Build a descriptive label based on source
+        if source == "vscode":
+            # Extract extension version: anthropic.claude-code-2.1.87-linux-x64
+            for seg in path.split("/"):
+                if seg.startswith("anthropic.claude-code-"):
+                    ver = seg.replace("anthropic.claude-code-", "").split("-linux")[0].split("-darwin")[0].split("-win")[0]
+                    label = f"VS Code extension ({ver})"
+                    break
+            else:
+                label = "VS Code extension"
+        elif source == "PATH":
+            label = f"claude (PATH)"
+        elif source == "local":
+            # Identify manager: nvm, volta, npm-global, etc.
+            if ".nvm/" in path:
+                label = "claude (nvm)"
+            elif ".volta/" in path:
+                label = "claude (volta)"
+            else:
+                label = f"claude ({path.split('/')[-3] if len(path.split('/')) > 3 else 'local'})"
+        else:
+            version = ""
+            for seg in path.split("/"):
+                if seg and seg[0].isdigit() and "." in seg:
+                    version = seg
+                    break
+            label = f"claude ({version})" if version else os.path.basename(path)
+        envs.append({"path": path, "label": label, "source": source})
+
+    # 1. Explicit default paths
+    for p in _DEFAULT_CLI_PATHS:
+        if p == "claude":
+            continue
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            _add(p, "default")
+
+    # 2. PATH lookup
+    found = _shutil.which("claude")
+    if found:
+        _add(found, "PATH")
+
+    # 3. Common install locations
+    home = os.path.expanduser("~")
+    for pattern in [
+        f"{home}/.nvm/versions/node/*/bin/claude",
+        f"{home}/.volta/bin/claude",
+        f"{home}/.npm-global/bin/claude",
+        f"{home}/.local/bin/claude",
+        f"{home}/bin/claude",
+    ]:
+        for m in sorted(_glob.glob(pattern), reverse=True):
+            if os.path.isfile(m) and os.access(m, os.X_OK):
+                _add(m, "local")
+
+    # 4. VSCode extension binaries
+    for pattern in [
+        f"{home}/.vscode/extensions/anthropic.claude-code-*/resources/native-binary/claude",
+        f"{home}/.vscode-server/extensions/anthropic.claude-code-*/resources/native-binary/claude",
+    ]:
+        for m in sorted(_glob.glob(pattern), reverse=True):
+            if os.path.isfile(m) and os.access(m, os.X_OK):
+                _add(m, "vscode")
+
+    return envs
 
 
 async def _stream_cli(
@@ -1396,7 +1655,7 @@ async def run_agent(
     tools: list[str] | None = None,
     ollama_url: str = "",
     ollama_model: str = "",
-    max_iterations: int = 12,
+    max_iterations: int = 25,
     force_tool_mode: bool = False,
     api_key: str = "",
     api_base_url: str = "",
