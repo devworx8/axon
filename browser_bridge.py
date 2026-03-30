@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
@@ -30,6 +31,32 @@ _log = logging.getLogger("axon.browser_bridge")
 # Lazy playwright import — only needed when bridge is active
 _playwright: Optional[Playwright] = None
 _lock = asyncio.Lock()
+_ALLOWED_ACTION_TYPES = {
+    "navigate",
+    "click",
+    "type",
+    "scroll",
+    "screenshot",
+    "inspect",
+    "wait",
+    "go_back",
+    "go_forward",
+    "evaluate",
+}
+_READ_ONLY_EVAL_DENY_RE = re.compile(
+    r"""
+    (?:
+        (?<![=!<>])=(?!=|>) |
+        \b(?:let|const|var|function|async|await|delete|fetch|XMLHttpRequest)\b |
+        \b(?:document\.write|window\.open|postMessage|dispatchEvent)\b |
+        \.(?:append|prepend|remove|replaceWith|click|submit|focus|blur|fill|type|setAttribute)\s*\( |
+        \b(?:localStorage|sessionStorage)\.setItem\s*\( |
+        \b(?:history\.(?:pushState|replaceState))\s*\( |
+        \b(?:window|document|location)\.location\s*=
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
 
 async def _ensure_playwright():
@@ -44,6 +71,15 @@ async def _ensure_playwright():
         raise RuntimeError(
             "Playwright is not installed. Run: pip install playwright && playwright install chromium"
         )
+
+
+def _is_safe_read_only_evaluate(script: str) -> bool:
+    sample = str(script or "").strip()
+    if not sample or len(sample) > 1200:
+        return False
+    if _READ_ONLY_EVAL_DENY_RE.search(sample):
+        return False
+    return any(marker in sample.lower() for marker in ("document", "window", "location", "queryselector", "innertext"))
 
 
 class BrowserBridge:
@@ -100,6 +136,7 @@ class BrowserBridge:
 
     async def stop(self):
         """Shut down the browser."""
+        global _playwright
         async with _lock:
             if self._browser:
                 try:
@@ -111,9 +148,11 @@ class BrowserBridge:
                     await _playwright.stop()
                 except Exception:
                     pass
+                _playwright = None
             self._browser = None
             self._context = None
             self._page = None
+            self._cached_title = ""
             self._started = False
             _log.info("Browser bridge stopped")
 
@@ -132,6 +171,8 @@ class BrowserBridge:
         target = action.get("target", "")
         value = action.get("value", "")
         url = action.get("url", "")
+        if action_type not in _ALLOWED_ACTION_TYPES:
+            return {"success": False, "result": f"Unknown action_type: {action_type}", "screenshot": None}
 
         try:
             if action_type == "navigate":
@@ -204,12 +245,10 @@ class BrowserBridge:
             elif action_type == "evaluate":
                 if not value:
                     return {"success": False, "result": "No JavaScript expression provided", "screenshot": None}
-                # Safety: limit eval to read-only inspections
+                if not _is_safe_read_only_evaluate(value):
+                    return {"success": False, "result": "Unsafe evaluate payload blocked. Use inspect or an approved browser action instead.", "screenshot": None}
                 result = await self._page.evaluate(value)
                 return {"success": True, "result": str(result)[:5000], "screenshot": None}
-
-            else:
-                return {"success": False, "result": f"Unknown action_type: {action_type}", "screenshot": None}
 
         except Exception as exc:
             return {"success": False, "result": f"Action failed: {exc}", "screenshot": None}

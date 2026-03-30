@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 
@@ -144,4 +145,3 @@ Violating these rules is the worst failure mode. Zero tolerance.
 {self_awareness}{axon_ctx}
 {('Context: ' + context_block[:800]) if context_block else ''}
 {('Project: ' + project_name) if project_name else ''}"""
-

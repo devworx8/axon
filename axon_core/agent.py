@@ -153,7 +153,9 @@ async def run_agent(
             "Do NOT use tools, do NOT list files, do NOT run commands, do NOT produce reports."
         )
         messages: list[dict[str, Any]] = [{"role": "system", "content": casual_system}]
-        messages.extend(_filtered_general_history(history, db_path=deps.db_path))
+        messages.extend(
+            _filtered_general_history(history, db_path=deps.db_path, workspace_path=workspace_path)
+        )
         messages.append({"role": "user", "content": user_message})
         if use_cli:
             async for chunk in deps.stream_cli(messages, cli_path=resolved_cli, max_tokens=300):
@@ -178,7 +180,11 @@ async def run_agent(
         yield {"type": "done", "iterations": 0}
         return
 
-    if not force_tool_mode and not _resuming and _is_general_planning_request(user_message):
+    if not force_tool_mode and not _resuming and _is_general_planning_request(
+        user_message,
+        db_path=deps.db_path,
+        workspace_path=workspace_path,
+    ):
         system = (
             "You are Axon, a calm and practical AI operator.\n"
             "This request is a general planning or writing task, not a local tool task.\n"
@@ -188,7 +194,9 @@ async def run_agent(
         if resource_context:
             system += f"\n\nUse these attached resources when they are relevant:\n{resource_context[:5000]}"
         messages = [{"role": "system", "content": system}]
-        messages.extend(_filtered_general_history(history, db_path=deps.db_path))
+        messages.extend(
+            _filtered_general_history(history, db_path=deps.db_path, workspace_path=workspace_path)
+        )
         messages.append({"role": "user", "content": user_message})
 
         if use_cli:

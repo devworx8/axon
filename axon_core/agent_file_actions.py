@@ -9,6 +9,7 @@ from .agent_paths import (
     _extract_path_from_text,
     _recent_file_path,
     _recent_repo_path,
+    _repo_root_path,
     _resolve_user_path,
     _workspace_root_path,
 )
@@ -147,6 +148,28 @@ def _format_file_write_answer(
     return "\n\n".join(pieces)
 
 
+def _format_file_read_answer(*, path: str, content: str, user_message: str) -> str:
+    resolved = os.path.realpath(os.path.expanduser(path))
+    pieces = [f"Here is `{resolved}`:"]
+
+    tail_count = _requested_tail_line_count(user_message)
+    if tail_count:
+        lines = content.splitlines()
+        tail = lines[-tail_count:] if lines else [content]
+        rendered = "\n".join(tail).strip("\n")
+        pieces.append(f"Last {tail_count} lines:\n```\n{rendered}\n```")
+    else:
+        rendered = content.strip("\n")
+        if len(rendered) > 12000:
+            rendered = rendered[:12000].rstrip() + "\n... (truncated)"
+        pieces.append(f"```\n{rendered}\n```")
+
+    if "absolute path" in user_message.lower():
+        pieces.append(f"Absolute path: `{resolved}`")
+
+    return "\n\n".join(pieces)
+
+
 def _format_file_edit_answer(
     *,
     action: str,
@@ -201,6 +224,7 @@ def _direct_agent_action(
     Returns (tool_name, args, tool_result, final_answer) or None.
     """
     lower = user_message.lower()
+    tail_count = _requested_tail_line_count(user_message)
 
     power_phrases = (
         "reboot", "restart the system", "restart my system", "restart the machine",
@@ -222,8 +246,9 @@ def _direct_agent_action(
     lower_has_file_action = any(term in lower for term in (
         "file", "append", "replace", "change", "edit", "rewrite", "overwrite",
         "update", "set", "delete", "remove", "rm", "absolute path", "verify",
-        "exists", "content",
-    ))
+        "exists", "content", "read file", "open file", "show me the file",
+        "show the file", "show me the content", "show the content", "tail ",
+    )) or tail_count > 0 or lower.startswith("read ") or lower.startswith("open ")
     if not path and lower_has_git:
         path = _recent_repo_path(history, project_name, db_path=deps.db_path, workspace_path=workspace_path)
     if not path and lower_has_file_action:
@@ -235,6 +260,7 @@ def _direct_agent_action(
 
     if path:
         path = _resolve_user_path(path, workspace_path=workspace_path)
+    repo_path = _repo_root_path(path, workspace_path=workspace_path) if path and lower_has_git else None
 
     if not path:
         return None
@@ -374,14 +400,15 @@ def _direct_agent_action(
         "what branches", "which branches",
     )
     if any(phrase in lower for phrase in branch_list_phrases):
+        git_path = repo_path or path
         tool_name = "shell_cmd"
-        tool_args: dict[str, Any] = {"cmd": "git branch --all --no-color", "cwd": path, "timeout": 15}
+        tool_args: dict[str, Any] = {"cmd": "git branch --all --no-color", "cwd": git_path, "timeout": 15}
         tool_result = _execute_tool(tool_name, tool_args, deps)
         if tool_result.startswith("ERROR:"):
             return tool_name, tool_args, tool_result, tool_result
         branches = [line.rstrip() for line in tool_result.splitlines() if line.strip()]
         visible = "\n".join(f"- {line}" for line in branches[:80]) if branches else "- (no branches found)"
-        answer = f"Here are the branches in `{os.path.realpath(os.path.expanduser(path))}`:\n{visible}"
+        answer = f"Here are the branches in `{os.path.realpath(os.path.expanduser(git_path))}`:\n{visible}"
         return tool_name, tool_args, tool_result, answer
 
     status_phrases = (
@@ -390,7 +417,7 @@ def _direct_agent_action(
     )
     if any(phrase in lower for phrase in status_phrases):
         tool_name = "git_status"
-        tool_args = {"path": path}
+        tool_args = {"path": repo_path or path}
         tool_result = _execute_tool(tool_name, tool_args, deps)
         if tool_result.startswith("ERROR:"):
             return tool_name, tool_args, tool_result, tool_result
@@ -399,8 +426,9 @@ def _direct_agent_action(
     branch_verify_match = _re.search(r'\b(?:verify|confirm|check)\b.*?\b(?:the )?([a-z0-9._/-]+)\s+branch\b', lower)
     current_branch_phrases = ("current branch", "which branch", "what branch", "verify this is the branch")
     if branch_verify_match or any(phrase in lower for phrase in current_branch_phrases):
+        git_path = repo_path or path
         tool_name = "shell_cmd"
-        tool_args: dict[str, Any] = {"cmd": "git branch --show-current", "cwd": path, "timeout": 15}
+        tool_args: dict[str, Any] = {"cmd": "git branch --show-current", "cwd": git_path, "timeout": 15}
         tool_result = _execute_tool(tool_name, tool_args, deps)
         if tool_result.startswith("ERROR:"):
             return tool_name, tool_args, tool_result, tool_result
@@ -408,11 +436,25 @@ def _direct_agent_action(
         target_branch = branch_verify_match.group(1).strip() if branch_verify_match else ""
         if target_branch:
             if current_branch == target_branch:
-                answer = f"Yes — `{os.path.realpath(os.path.expanduser(path))}` is currently on the `{current_branch}` branch."
+                answer = f"Yes — `{os.path.realpath(os.path.expanduser(git_path))}` is currently on the `{current_branch}` branch."
             else:
-                answer = f"No — `{os.path.realpath(os.path.expanduser(path))}` is on `{current_branch}`, not `{target_branch}`."
+                answer = f"No — `{os.path.realpath(os.path.expanduser(git_path))}` is on `{current_branch}`, not `{target_branch}`."
         else:
-            answer = f"`{os.path.realpath(os.path.expanduser(path))}` is currently on the `{current_branch}` branch."
+            answer = f"`{os.path.realpath(os.path.expanduser(git_path))}` is currently on the `{current_branch}` branch."
+        return tool_name, tool_args, tool_result, answer
+
+    read_phrases = (
+        "read file", "open file", "show me the file", "show the file",
+        "show me the content", "show the content", "tail ",
+    )
+    wants_read = any(phrase in lower for phrase in read_phrases) or tail_count > 0 or lower.startswith("read ")
+    if wants_read and (Path(path).is_file() or bool(Path(path).suffix)):
+        tool_name = "read_file"
+        tool_args = {"path": path}
+        tool_result = _execute_tool(tool_name, tool_args, deps)
+        if tool_result.startswith("ERROR:"):
+            return tool_name, tool_args, tool_result, tool_result
+        answer = _format_file_read_answer(path=path, content=tool_result, user_message=user_message)
         return tool_name, tool_args, tool_result, answer
 
     listing_phrases = (

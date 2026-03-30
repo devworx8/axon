@@ -479,8 +479,8 @@ async def stream_chat(
             "Run it in Agent mode or let Axon auto-route it to the local operator."
         )
         return
-    if _is_general_planning_request(user_message):
-        history = _filtered_general_history(history)
+    if _is_general_planning_request(user_message, db_path=DEVBRAIN_DB_PATH, workspace_path=workspace_path):
+        history = _filtered_general_history(history, db_path=DEVBRAIN_DB_PATH, workspace_path=workspace_path)
         system += (
             "\n\nThis is a general planning, writing, or research task."
             "\nDo not assume repository or file context unless the user explicitly asks for local data."
@@ -501,7 +501,7 @@ async def stream_chat(
     if runtime == "cli":
         # Stream directly from the CLI binary — do NOT buffer via chat()
         cli_system = SYSTEM_PROMPT
-        if _is_general_planning_request(user_message):
+        if _is_general_planning_request(user_message, db_path=DEVBRAIN_DB_PATH, workspace_path=workspace_path):
             cli_system += (
                 "\n\nThis is a general planning or writing task."
                 "\nDo not inspect local files unless the user explicitly asks."
@@ -654,6 +654,23 @@ def _resolve_hidden_path(path: str) -> str:
     return path
 
 
+def _resolve_git_work_dir(path: str = "") -> str:
+    """Normalize file/repo inputs into a directory suitable for git commands."""
+    raw = str(path or "").strip()
+    candidate = _resolve_agent_path(raw, default_to_workspace=True) if raw else _workspace_root()
+    if os.path.isfile(candidate):
+        candidate = os.path.dirname(candidate)
+    elif not os.path.exists(candidate) and os.path.splitext(candidate)[1]:
+        candidate = os.path.dirname(candidate)
+
+    probe = Path(candidate)
+    while probe != probe.parent:
+        if (probe / ".git").exists():
+            return str(probe)
+        probe = probe.parent
+    return candidate
+
+
 def _edit_is_allowed(path: str) -> bool:
     """Return True if this absolute path is cleared for writing/editing/deletion."""
     if _ALLOW_ALL_EDITS:
@@ -779,6 +796,8 @@ def _tool_shell_cmd(cmd: str, cwd: str = "", timeout: int = 15) -> str:
         # Return structured blocked signal so the UI can offer an approval dialog
         return f"BLOCKED_CMD:{base_cmd}:{cmd}"
     work_dir = _resolve_agent_path(cwd, default_to_workspace=True) if cwd else _workspace_root()
+    if os.path.isfile(work_dir):
+        work_dir = os.path.dirname(work_dir)
     if not work_dir.startswith(_HOME):
         return "ERROR: cwd must be within home directory."
     if not os.path.isdir(work_dir):
@@ -802,11 +821,13 @@ def _tool_shell_cmd(cmd: str, cwd: str = "", timeout: int = 15) -> str:
 
 def _tool_git_status(path: str = "") -> str:
     """Get git status + recent log for a directory."""
-    p = _resolve_agent_path(path)
+    p = _resolve_git_work_dir(path)
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory."
     if not os.path.exists(p):
         return f"ERROR: Path not found: {p}"
+    if not os.path.isdir(p):
+        return f"ERROR: Repo path is not a directory: {p}"
     status = _tool_shell_cmd(f"git status --short", cwd=p)
     log = _tool_shell_cmd(f"git log --oneline -10", cwd=p)
     branch = _tool_shell_cmd(f"git branch --show-current", cwd=p)
@@ -994,6 +1015,8 @@ def _normalize_tool_args(name: str, args: dict) -> dict:
                     break
         for alias in ("cwd", "dir", "directory", "repo", "repository", "file"):
             normalized.pop(alias, None)
+        if name == "git_status" and normalized.get("path"):
+            normalized["path"] = _resolve_git_work_dir(str(normalized["path"]))
         allowed = {"path"}
         if name == "read_file":
             allowed.add("max_kb")
@@ -2268,8 +2291,8 @@ async def chat(
             ),
             "tokens": 0,
         }
-    if _is_general_planning_request(user_message):
-        history = _filtered_general_history(history)
+    if _is_general_planning_request(user_message, db_path=DEVBRAIN_DB_PATH, workspace_path=workspace_path):
+        history = _filtered_general_history(history, db_path=DEVBRAIN_DB_PATH, workspace_path=workspace_path)
         system += (
             "\n\nThis is a general planning, writing, or research task."
             "\nDo not assume repository, file, or git context unless the user explicitly asks for local data."

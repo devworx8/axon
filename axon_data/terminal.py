@@ -75,6 +75,21 @@ async def update_terminal_session(db: aiosqlite.Connection, session_id: int, **f
     await db.commit()
 
 
+async def mark_terminal_sessions_stopped(db: aiosqlite.Connection):
+    await db.execute(
+        """
+        UPDATE terminal_sessions
+        SET status = 'stopped',
+            active_command = '',
+            pending_command = '',
+            pid = 0,
+            updated_at = datetime('now')
+        WHERE COALESCE(status, '') != 'closed'
+        """
+    )
+    await db.commit()
+
+
 async def add_terminal_event(
     db: aiosqlite.Connection,
     *,

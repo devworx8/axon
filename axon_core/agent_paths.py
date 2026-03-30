@@ -10,6 +10,37 @@ from typing import Optional
 DEFAULT_DEVBRAIN_DB_PATH = Path.home() / ".devbrain" / "devbrain.db"
 
 
+def _match_workspace_candidate(candidate: str, workspace_path: str = "") -> Optional[str]:
+    workspace_root = _workspace_root_path(workspace_path)
+    if not workspace_root or not workspace_root.exists() or not workspace_root.is_dir():
+        return None
+
+    resolved = Path(_resolve_user_path(candidate, workspace_path=workspace_path))
+    if resolved.exists():
+        return str(resolved)
+
+    # For bare file names like "agent.py", try a unique basename match inside
+    # the selected workspace before falling back to project-name heuristics.
+    if "/" in candidate or "\\" in candidate or not Path(candidate).suffix:
+        return None
+
+    ignored_dirs = {".git", "__pycache__", "node_modules", ".venv", ".mypy_cache"}
+    matches: list[Path] = []
+    try:
+        for match in workspace_root.rglob(candidate):
+            if match.name != candidate:
+                continue
+            if any(part in ignored_dirs for part in match.parts):
+                continue
+            matches.append(match.resolve())
+            if len(matches) > 1:
+                return None
+    except Exception:
+        return None
+
+    return str(matches[0]) if matches else None
+
+
 def _project_name_pattern(name: str) -> str:
     parts = [part for part in _re.split(r"[^a-z0-9]+", (name or "").lower()) if part]
     if not parts:
@@ -78,6 +109,41 @@ def _extract_path_from_text(
         candidate = relative_candidates[0].rstrip(".,:;!?`")
         return _resolve_user_path(candidate, workspace_path=workspace_path)
 
+    workspace_root = _workspace_root_path(workspace_path)
+    if workspace_root and workspace_root.exists() and workspace_root.is_dir():
+        seen: set[str] = set()
+        workspace_patterns = (
+            r'\b(?:last|tail)\s+\d+\s+lines?\s+(?:of|from)\s+[`"\']?([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)',
+            r'\b(?:read|open|edit|rewrite|overwrite|update|delete|remove|show|tail|cat)\s+'
+            r'(?:the\s+)?(?:file\s+)?[`"\']?([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)',
+            r'\b(?:in|inside|within|under|from|at|on|for)\s+[`"\']?([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)',
+            r'\b(?:file|files|folder|folders|directory|directories|path|repo|repository)\s+'
+            r'[`"\']?([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)',
+        )
+        ignored = {
+            "the", "this", "that", "it", "them",
+            "file", "files", "folder", "folders",
+            "directory", "directories", "path",
+            "repo", "repository", "workspace",
+            "content", "status", "branch", "commit",
+        }
+        for pattern in workspace_patterns:
+            for match in _re.finditer(pattern, text, flags=_re.IGNORECASE):
+                candidate = match.group(1).rstrip(".,:;!?`'\"")
+                lower_candidate = candidate.lower()
+                if (
+                    not candidate
+                    or candidate in seen
+                    or lower_candidate in ignored
+                    or candidate in {".", ".."}
+                    or candidate.startswith(("~", "/", "./", "../"))
+                ):
+                    continue
+                seen.add(candidate)
+                matched = _match_workspace_candidate(candidate, workspace_path=workspace_path)
+                if matched:
+                    return matched
+
     lower = text.lower()
     common_paths = [
         ("desktop", "~/Desktop"),
@@ -96,6 +162,32 @@ def _extract_path_from_text(
     return _resolve_project_path_from_text(text, db_path=db_path)
 
 
+def _repo_root_path(path: str, workspace_path: str = "") -> Optional[str]:
+    """Resolve a repo-friendly working directory for git operations.
+
+    If the path points to a file, use its parent directory. If the path lives
+    inside a git repo, return the repo root; otherwise return the nearest
+    existing directory.
+    """
+    raw = (path or "").strip()
+    if not raw:
+        return None
+
+    candidate = Path(_resolve_user_path(raw, workspace_path=workspace_path))
+    if candidate.exists() and candidate.is_file():
+        candidate = candidate.parent
+    elif not candidate.exists() and candidate.suffix:
+        candidate = candidate.parent
+
+    nearest_dir = candidate if candidate.is_dir() else candidate.parent
+    probe = nearest_dir
+    while probe and probe != probe.parent:
+        if (probe / ".git").exists():
+            return str(probe)
+        probe = probe.parent
+    return str(nearest_dir) if str(nearest_dir) else None
+
+
 def _recent_repo_path(
     history: list[dict[str, object]] | None = None,
     project_name: Optional[str] = None,
@@ -106,13 +198,13 @@ def _recent_repo_path(
     if project_name:
         project_path = _resolve_project_path_from_text(project_name, db_path=db_path)
         if project_path:
-            return _resolve_user_path(project_path, workspace_path=workspace_path)
+            return _repo_root_path(project_path, workspace_path=workspace_path) or _resolve_user_path(project_path, workspace_path=workspace_path)
 
     for item in reversed(history or []):
         content = str(item.get("content", "") or "")
         path = _extract_path_from_text(content, db_path=db_path, workspace_path=workspace_path)
         if path:
-            return path
+            return _repo_root_path(path, workspace_path=workspace_path) or path
     return None
 
 

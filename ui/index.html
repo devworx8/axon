@@ -4196,53 +4196,91 @@ function devbrain() {
 window.axon = devbrain;
 
 // ── Command approval bridge (called from inline renderToolBlock buttons) ──────
+function __axonApp() {
+  return window.axon?._x_dataStack?.[0] ?? Alpine?.store?.('root') ?? null;
+}
+
+function __axonAuthHeaders(extra = {}) {
+  const app = __axonApp();
+  if (app?.authHeaders) return app.authHeaders(extra);
+  const headers = { ...extra };
+  const token = localStorage.getItem('axon-token')
+    || localStorage.getItem('devbrain-token')
+    || localStorage.getItem('devbrain_token')
+    || '';
+  if (token) {
+    headers['X-Axon-Token'] = token;
+    headers['X-DevBrain-Token'] = token;
+  }
+  return headers;
+}
+
+async function __axonPost(path, body) {
+  const app = __axonApp();
+  if (app?.api) return app.api('POST', path, body);
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: __axonAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body || {}),
+  });
+  if (res.status === 401) {
+    app?.handleAuthRequired?.();
+    throw new Error('Session expired');
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || res.statusText || 'Request failed');
+  return data;
+}
+
+function __axonToast(message, { error = false } = {}) {
+  const app = __axonApp();
+  if (app?.showToast) {
+    app.showToast(message);
+    return;
+  }
+  const t = document.createElement('div');
+  t.textContent = message;
+  Object.assign(t.style, {
+    position:'fixed', bottom:'80px', left:'50%', transform:'translateX(-50%)',
+    background: error ? '#7f1d1d' : '#1e293b',
+    color: error ? '#fecaca' : '#4ade80',
+    padding:'8px 16px', borderRadius:'12px',
+    fontSize:'12px', zIndex:9999,
+    border: error ? '1px solid rgba(248,113,113,0.35)' : '1px solid rgba(74,222,128,0.3)',
+    boxShadow:'0 4px 20px rgba(0,0,0,0.4)'
+  });
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 4000);
+}
+
 window.__axon = {
   allowCommand(command, allowAll, persist) {
-    const app = window.axon?._x_dataStack?.[0] ?? Alpine?.store?.('root') ?? null;
-    fetch('/api/agent/allow-command', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command: command || '', allow_all: !!allowAll, persist: !!persist }),
-    }).then(r => r.json()).then(data => {
+    __axonPost('/api/agent/allow-command', {
+      command: command || '',
+      allow_all: !!allowAll,
+      persist: !!persist,
+    }).then(() => {
       const label = allowAll ? 'All commands allowed' : `'${command}' allowed${persist ? ' (saved)' : ' (session)'}`;
-      // Show toast if the Alpine instance is reachable
-      const inst = document.querySelector('[x-data]')?.__x;
-      if (inst?.showToast) inst.showToast(`✓ ${label} — say "please continue" to retry`);
-      else {
-        const t = document.createElement('div');
-        t.textContent = `✓ ${label} — say "please continue" to retry`;
-        Object.assign(t.style, {
-          position:'fixed', bottom:'80px', left:'50%', transform:'translateX(-50%)',
-          background:'#1e293b', color:'#4ade80', padding:'8px 16px', borderRadius:'12px',
-          fontSize:'12px', zIndex:9999, border:'1px solid rgba(74,222,128,0.3)',
-          boxShadow:'0 4px 20px rgba(0,0,0,0.4)'
-        });
-        document.body.appendChild(t);
-        setTimeout(() => t.remove(), 4000);
-      }
-    }).catch(e => console.error('allow-command failed:', e));
+      __axonToast(`✓ ${label} — say "please continue" to retry`);
+    }).catch(e => {
+      __axonToast(`Allow command failed: ${e.message || e}`, { error: true });
+      console.error('allow-command failed:', e);
+    });
   },
 
   allowEdit(path, scope) {
-    fetch('/api/agent/allow-edit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: path || '', scope: scope || 'file' }),
-    }).then(r => r.json()).then(data => {
+    __axonPost('/api/agent/allow-edit', {
+      path: path || '',
+      scope: scope || 'file',
+    }).then(() => {
       const label = scope === 'session' ? 'All file edits allowed this session'
                   : scope === 'repo'    ? `Repo allowed for edits`
                                         : `File allowed for edits`;
-      const t = document.createElement('div');
-      t.textContent = `✓ ${label} — say "please continue" to retry`;
-      Object.assign(t.style, {
-        position:'fixed', bottom:'80px', left:'50%', transform:'translateX(-50%)',
-        background:'#1e293b', color:'#4ade80', padding:'8px 16px', borderRadius:'12px',
-        fontSize:'12px', zIndex:9999, border:'1px solid rgba(74,222,128,0.3)',
-        boxShadow:'0 4px 20px rgba(0,0,0,0.4)'
-      });
-      document.body.appendChild(t);
-      setTimeout(() => t.remove(), 4000);
-    }).catch(e => console.error('allow-edit failed:', e));
+      __axonToast(`✓ ${label} — say "please continue" to retry`);
+    }).catch(e => {
+      __axonToast(`Allow edit failed: ${e.message || e}`, { error: true });
+      console.error('allow-edit failed:', e);
+    });
   }
 };
 </script>

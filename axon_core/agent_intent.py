@@ -15,10 +15,14 @@ def _contains_phrase(text: str, phrase: str) -> bool:
     return bool(_re.search(rf"(?<![a-z0-9]){_re.escape(token)}(?![a-z0-9])", lower))
 
 
-def _has_local_operator_markers(text: str, db_path: Path = DEFAULT_DEVBRAIN_DB_PATH) -> bool:
+def _has_local_operator_markers(
+    text: str,
+    db_path: Path = DEFAULT_DEVBRAIN_DB_PATH,
+    workspace_path: str = "",
+) -> bool:
     lower = (text or "").lower()
     return (
-        bool(_extract_path_from_text(text or "", db_path=db_path))
+        bool(_extract_path_from_text(text or "", db_path=db_path, workspace_path=workspace_path))
         or "action:" in lower
         or "args:" in lower
         or "answer:" in lower
@@ -34,19 +38,24 @@ def _has_local_operator_markers(text: str, db_path: Path = DEFAULT_DEVBRAIN_DB_P
 def _filtered_general_history(
     history: list[dict[str, Any]] | None = None,
     db_path: Path = DEFAULT_DEVBRAIN_DB_PATH,
+    workspace_path: str = "",
 ) -> list[dict[str, Any]]:
     filtered: list[dict[str, Any]] = []
     for item in history or []:
         content = str(item.get("content", "") or "")
         if not content.strip():
             continue
-        if _has_local_operator_markers(content, db_path=db_path):
+        if _has_local_operator_markers(content, db_path=db_path, workspace_path=workspace_path):
             continue
         filtered.append({"role": item.get("role", "user"), "content": content[:500]})
     return filtered[-4:]
 
 
-def _is_general_planning_request(user_message: str) -> bool:
+def _is_general_planning_request(
+    user_message: str,
+    db_path: Path = DEFAULT_DEVBRAIN_DB_PATH,
+    workspace_path: str = "",
+) -> bool:
     lower = (user_message or "").strip().lower()
     if not lower:
         return False
@@ -58,7 +67,7 @@ def _is_general_planning_request(user_message: str) -> bool:
     )
     if any(_contains_phrase(lower, term) for term in local_action_terms):
         return False
-    if _extract_path_from_text(user_message):
+    if _extract_path_from_text(user_message, db_path=db_path, workspace_path=workspace_path):
         return False
 
     business_terms = (
@@ -125,7 +134,7 @@ def _requires_local_operator_execution(
     if not lower:
         return False
 
-    if _is_casual_conversation(raw) or _is_general_planning_request(raw):
+    if _is_casual_conversation(raw) or _is_general_planning_request(raw, db_path=db_path, workspace_path=workspace_path):
         return False
 
     if _extract_path_from_text(raw, db_path=db_path, workspace_path=workspace_path):

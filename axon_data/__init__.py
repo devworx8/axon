@@ -61,6 +61,7 @@ from .terminal import (
     get_terminal_session,
     list_terminal_events,
     list_terminal_sessions,
+    mark_terminal_sessions_stopped,
     update_terminal_session,
 )
 from .webhooks import (
@@ -130,6 +131,7 @@ __all__ = [
     "list_terminal_sessions",
     "get_terminal_session",
     "update_terminal_session",
+    "mark_terminal_sessions_stopped",
     "add_terminal_event",
     "list_terminal_events",
     "enqueue_webhook",

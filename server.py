@@ -282,6 +282,92 @@ def _next_browser_action_id() -> int:
     return current
 
 
+_BROWSER_ALLOWED_ACTION_TYPES = {
+    "navigate",
+    "click",
+    "type",
+    "scroll",
+    "screenshot",
+    "inspect",
+    "wait",
+    "go_back",
+    "go_forward",
+    "evaluate",
+}
+_BROWSER_DIRECT_READ_ONLY_TYPES = {"inspect", "screenshot", "wait"}
+
+
+def _normalize_browser_action_payload(action: dict[str, object]) -> dict[str, object]:
+    action_type = str(action.get("action_type") or "inspect").strip().lower()
+    if action_type not in _BROWSER_ALLOWED_ACTION_TYPES:
+        raise HTTPException(400, f"Unsupported browser action_type: {action_type}")
+
+    risk = str(action.get("risk") or "medium").strip().lower()
+    if risk not in {"low", "medium", "high"}:
+        risk = "medium"
+
+    normalized: dict[str, object] = {
+        "action_type": action_type,
+        "summary": str(action.get("summary") or "Browser action requested").strip() or "Browser action requested",
+        "target": str(action.get("target") or "").strip(),
+        "value": str(action.get("value") or "").strip(),
+        "url": str(action.get("url") or "").strip(),
+        "risk": risk,
+        "scope": str(action.get("scope") or "browser_act").strip().lower() or "browser_act",
+        "requires_confirmation": bool(action.get("requires_confirmation", True)),
+        "metadata": action.get("metadata") if isinstance(action.get("metadata"), dict) else {},
+    }
+    for key in ("id", "created_at", "updated_at", "status", "executed_at", "execution_result"):
+        if key not in action or action.get(key) is None:
+            continue
+        normalized[key] = action.get(key)
+    return normalized
+
+
+def _find_approved_browser_action(proposal_id: int) -> Optional[dict]:
+    for item in _browser_action_state["history"] or []:
+        if int(item.get("id") or 0) == proposal_id and str(item.get("status") or "") == "approved":
+            return item
+    return None
+
+
+def _is_chat_history_db_corruption(exc: Exception) -> bool:
+    if not isinstance(exc, _sqlite3.DatabaseError):
+        return False
+    text = str(exc).lower()
+    return (
+        "database disk image is malformed" in text
+        or "file is not a database" in text
+        or "database or disk is full" in text
+        or "malformed" in text
+    )
+
+
+def _chat_history_db_detail() -> str:
+    return (
+        "Chat history is temporarily unavailable because the Axon database needs repair or restore. "
+        "Export a backup if possible, then run an integrity check on ~/.devbrain/devbrain.db."
+    )
+
+
+async def _load_chat_history_rows(
+    conn,
+    *,
+    project_id: Optional[int] = None,
+    limit: int = 20,
+    degrade_to_empty: bool = False,
+):
+    try:
+        return await devdb.get_chat_history(conn, project_id=project_id, limit=limit)
+    except _sqlite3.DatabaseError as exc:
+        if not _is_chat_history_db_corruption(exc):
+            raise
+        print(f"[Axon] Chat history read failed: {exc}")
+        if degrade_to_empty:
+            return []
+        raise HTTPException(503, _chat_history_db_detail())
+
+
 def _python_module_available(name: str) -> bool:
     try:
         return importlib.util.find_spec(name) is not None
@@ -560,14 +646,10 @@ async def lifespan(app: FastAPI):
         settings = await devdb.get_all_settings(conn)
         scan_hours = int(settings.get("scan_interval_hours", 6))
         digest_hour = int(settings.get("morning_digest_hour", 8))
-        # Clean up ALL stale terminal sessions from previous runs.
-        # PTY processes never survive a server restart regardless of their
-        # recorded status. Leaving "done" sessions also causes phantom
-        # "Console Terminal" tabs to pile up across restarts.
-        # Wipe everything so the user starts with a clean terminal panel.
+        # PTY processes never survive a server restart, but their transcript
+        # history is still useful. Preserve sessions and mark them stopped.
         try:
-            await conn.execute("DELETE FROM terminal_sessions")
-            await conn.commit()
+            await devdb.mark_terminal_sessions_stopped(conn)
         except Exception:
             pass  # table may not exist yet on first run
 
@@ -1961,7 +2043,7 @@ async def chat(body: ChatMessage):
         context_block = brain._build_context_block(projects, tasks, prompts_list)
 
         # Load history
-        history_rows = await devdb.get_chat_history(conn, project_id=body.project_id)
+        history_rows = await _load_chat_history_rows(conn, project_id=body.project_id, degrade_to_empty=True)
         history = [{"role": r["role"], "content": r["content"]} for r in history_rows]
 
         # Get project scope if present
@@ -2447,7 +2529,7 @@ async def chat(body: ChatMessage):
 @app.get("/api/chat/history")
 async def get_chat_history(project_id: Optional[int] = None, limit: int = 30):
     async with devdb.get_db() as conn:
-        rows = await devdb.get_chat_history(conn, project_id=project_id, limit=limit)
+        rows = await _load_chat_history_rows(conn, project_id=project_id, limit=limit)
         return [{"role": r["role"], "content": r["content"],
                  "created_at": r["created_at"], "tokens_used": r["tokens_used"]} for r in rows]
 
@@ -2478,7 +2560,7 @@ async def chat_stream(body: ChatMessage, request: Request):
         tasks = [dict(r) for r in await devdb.get_tasks(conn, status="open")]
         prompts_list = [dict(r) for r in await devdb.get_prompts(conn)]
         context_block = brain._build_context_block(projects, tasks, prompts_list)
-        history_rows = await devdb.get_chat_history(conn, project_id=body.project_id)
+        history_rows = await _load_chat_history_rows(conn, project_id=body.project_id, degrade_to_empty=True)
         history = [{"role": r["role"], "content": r["content"]} for r in history_rows]
         project_name = None
         workspace_path = ""
@@ -3062,7 +3144,7 @@ async def agent_endpoint(body: AgentRequest, request: Request):
         tasks = [dict(r) for r in await devdb.get_tasks(conn, status="open")]
         prompts_list = [dict(r) for r in await devdb.get_prompts(conn)]
         context_block = brain._build_context_block(projects, tasks, prompts_list)
-        history_rows = await devdb.get_chat_history(conn, project_id=body.project_id)
+        history_rows = await _load_chat_history_rows(conn, project_id=body.project_id, degrade_to_empty=True)
         history = [{"role": r["role"], "content": r["content"]} for r in history_rows]
         project_name = None
         workspace_path = ""
@@ -3932,21 +4014,23 @@ async def update_browser_session(body: BrowserSessionUpdate):
 @app.post("/api/browser/actions/propose")
 async def create_browser_action_proposal(body: BrowserActionProposalCreate):
     created_at = _now_iso()
-    proposal = {
-        "id": _next_browser_action_id(),
-        "action_type": str(body.action_type or "inspect").strip().lower(),
-        "summary": str(body.summary or "Browser action requested").strip(),
-        "target": str(body.target or "").strip(),
-        "value": str(body.value or "").strip(),
-        "url": str(body.url or "").strip(),
-        "risk": str(body.risk or "medium").strip().lower(),
-        "scope": str(body.scope or "browser_act").strip().lower(),
-        "requires_confirmation": bool(body.requires_confirmation if body.requires_confirmation is not None else True),
-        "metadata": body.metadata or {},
-        "status": "pending",
-        "created_at": created_at,
-        "updated_at": created_at,
-    }
+    proposal = _normalize_browser_action_payload(
+        {
+            "id": _next_browser_action_id(),
+            "action_type": body.action_type,
+            "summary": body.summary,
+            "target": body.target,
+            "value": body.value,
+            "url": body.url,
+            "risk": body.risk,
+            "scope": body.scope,
+            "requires_confirmation": bool(body.requires_confirmation if body.requires_confirmation is not None else True),
+            "metadata": body.metadata or {},
+            "status": "pending",
+            "created_at": created_at,
+            "updated_at": created_at,
+        }
+    )
     _browser_action_state["proposals"] = [proposal, *(_browser_action_state["proposals"] or [])]
     return {"created": True, "proposal": proposal, **_serialize_browser_action_state()}
 
@@ -4018,14 +4102,33 @@ async def browser_bridge_status():
 
 @app.post("/api/browser/bridge/execute")
 async def browser_bridge_execute(request: Request):
-    """Execute an approved browser action via the Playwright bridge."""
+    """Replay an approved browser action, or a read-only inspect action in inspect_auto mode."""
     try:
         import browser_bridge
         bridge = browser_bridge.get_bridge()
         if not bridge.is_running:
             raise HTTPException(400, "Browser bridge is not running. Start it first.")
         body = await request.json()
-        result = await bridge.execute_action(body)
+
+        proposal_id = int(body.get("proposal_id") or body.get("id") or 0)
+        approved_action = _find_approved_browser_action(proposal_id) if proposal_id else None
+        if approved_action:
+            execution_target = _normalize_browser_action_payload(approved_action)
+        else:
+            execution_target = _normalize_browser_action_payload(body)
+            session_mode = str(_browser_action_state["session"].get("mode") or "approval_required")
+            if session_mode != "inspect_auto" or str(execution_target.get("action_type")) not in _BROWSER_DIRECT_READ_ONLY_TYPES:
+                raise HTTPException(
+                    403,
+                    "Direct browser execution is limited to read-only inspect actions in inspect_auto mode. "
+                    "Approve a proposal first for browser mutations.",
+                )
+
+        result = await bridge.execute_action(execution_target)
+        if approved_action is not None:
+            approved_action["execution_result"] = result
+            approved_action["executed_at"] = _now_iso()
+            approved_action["updated_at"] = approved_action["executed_at"]
         return result
     except HTTPException:
         raise
@@ -4055,8 +4158,9 @@ async def approve_and_execute_browser_action(proposal_id: int):
             import browser_bridge
             bridge = browser_bridge.get_bridge()
             if bridge.is_running:
-                execution_result = await bridge.execute_action(updated)
+                execution_result = await bridge.execute_action(_normalize_browser_action_payload(updated))
                 updated["execution_result"] = execution_result
+                updated["executed_at"] = _now_iso()
         except Exception:
             pass
 
@@ -5751,7 +5855,7 @@ async def backup_export():
         memory = [dict(r) for r in await devdb.list_memory_items(conn, limit=5000)]
         resources = [dict(r) for r in await devdb.list_resources(conn, limit=5000)]
         settings = await devdb.get_all_settings(conn)
-        chat = [dict(r) for r in await devdb.get_chat_history(conn, limit=10000)]
+        chat = [dict(r) for r in await _load_chat_history_rows(conn, limit=10000, degrade_to_empty=True)]
 
     # Strip sensitive settings
     for key in ("auth_pin_hash", "vault_key_hash"):

@@ -139,18 +139,26 @@ function axonChatMixin() {
         if (this.chatProjectId) fd.append('workspace_id', this.chatProjectId);
         const res = await fetch('/api/resources/upload', {
           method: 'POST',
-          headers: this.authToken ? { Authorization: `Bearer ${this.authToken}` } : {},
+          headers: this.authHeaders(),
           body: fd,
         });
-        if (!res.ok) { this.showToast('Image upload failed'); return; }
-        const data = await res.json();
+        if (res.status === 401) {
+          this.handleAuthRequired();
+          this.showToast('Session expired — sign in again');
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          this.showToast(data.detail || 'Image upload failed');
+          return;
+        }
         const item = (data?.items || [])[0];
         if (item) {
           this.selectedResources = [...(this.selectedResources || []), item];
           this.showToast('Image attached ✓');
         }
       } catch (err) {
-        this.showToast('Could not upload pasted image');
+        this.showToast(`Could not upload pasted image: ${err.message || 'request failed'}`);
       }
     },
 
