@@ -31,23 +31,28 @@ class VaultSession:
     """Singleton holding the in-memory unlock state."""
     _key: Optional[bytes] = None          # AES-256 key (32 bytes)
     _unlocked_at: Optional[float] = None  # epoch seconds
-    SESSION_TTL = 86400                   # auto-lock after 24 hours
+    _session_ttl: int = 86400             # active TTL for this session (seconds)
+
+    DEFAULT_TTL  = 3600   # 1 hour  — standard unlock (no remember-me)
+    EXTENDED_TTL = 86400  # 24 hours — remember-me unlock
 
     @classmethod
-    def unlock(cls, key: bytes):
+    def unlock(cls, key: bytes, session_ttl: int = DEFAULT_TTL):
         cls._key = key
         cls._unlocked_at = time.time()
+        cls._session_ttl = max(300, int(session_ttl))  # floor at 5 minutes
 
     @classmethod
     def lock(cls):
         cls._key = None
         cls._unlocked_at = None
+        cls._session_ttl = cls.DEFAULT_TTL
 
     @classmethod
     def is_unlocked(cls) -> bool:
         if cls._key is None:
             return False
-        if time.time() - cls._unlocked_at > cls.SESSION_TTL:
+        if time.time() - cls._unlocked_at > cls._session_ttl:
             cls.lock()
             return False
         return True
@@ -58,6 +63,13 @@ class VaultSession:
             return None
         cls._unlocked_at = time.time()  # refresh TTL on activity
         return cls._key
+
+    @classmethod
+    def ttl_remaining(cls) -> int:
+        """Seconds until auto-lock, or 0 if already locked."""
+        if not cls.is_unlocked():
+            return 0
+        return max(0, int(cls._session_ttl - (time.time() - cls._unlocked_at)))
 
 
 # ─── Key derivation ───────────────────────────────────────────────────────────
@@ -187,7 +199,7 @@ async def setup_vault(db, master_password: str) -> dict:
     return {"totp_secret": totp_secret, "qr_data_uri": qr}
 
 
-async def unlock_vault(db, master_password: str, totp_code: str) -> tuple[bool, str]:
+async def unlock_vault(db, master_password: str, totp_code: str, session_ttl: int = VaultSession.DEFAULT_TTL) -> tuple[bool, str]:
     """
     Verify master password + TOTP code and unlock the vault.
     Returns (success: bool, error_message: str).
@@ -218,7 +230,7 @@ async def unlock_vault(db, master_password: str, totp_code: str) -> tuple[bool, 
     if not verify_totp(totp_secret, totp_code.strip()):
         return False, "Invalid 2FA code"
 
-    VaultSession.unlock(key)
+    VaultSession.unlock(key, session_ttl=session_ttl)
     return True, ""
 
 

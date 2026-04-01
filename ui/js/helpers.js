@@ -278,7 +278,7 @@ function axonHelpersMixin() {
         return `<div style="border-top:1px solid rgba(30,41,59,0.8)">` +
           `<div style="padding:3px 12px;background:rgba(2,6,23,0.55)">` +
           `<span style="font-size:9px;text-transform:uppercase;letter-spacing:.12em;color:${labelColor};font-family:monospace">${label}</span></div>` +
-          `<pre style="margin:0;padding:8px 12px;font-size:11px;line-height:1.6;overflow-x:auto;background:${bg}">` +
+          `<pre style="margin:0;padding:8px 12px;font-size:11px;line-height:1.6;overflow-x:auto;overflow-y:auto;max-height:240px;background:${bg}">` +
           `<code class="hljs language-${esc(lang)}">${highlighted}</code></pre></div>`;
       };
 
@@ -295,29 +295,28 @@ function axonHelpersMixin() {
         `<div style="border-top:1px solid rgba(16,185,129,0.15);padding:5px 12px;background:rgba(6,78,59,0.2)">` +
         `<span style="font-size:10px;color:#34d399;font-family:monospace">✓ ${esc(msg)}</span></div>`;
 
-      // Blocked file-edit gate UI
+      // Blocked file-edit gate UI — Claude-style approval banner
       const blockedEditHtml = (op, filePath) => {
-        const shortPath = filePath.split('/').slice(-2).join('/');
-        const opLabel = { write: 'write', edit: 'edit', delete: 'delete', append: 'append', create: 'create' }[op] || op;
-        return `<div style="border-top:1px solid rgba(245,158,11,0.3);padding:10px 12px;background:rgba(120,53,15,0.25)">
-          <div style="font-size:11px;color:#fbbf24;margin-bottom:8px">
-            🔒 <strong>${opLabel}</strong> blocked — <code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:4px">${esc(shortPath)}</code> requires your approval.
+        const shortPath = filePath.replace(/^\/home\/[^/]+/, '~').split('/').slice(-3).join('/');
+        const opLabel = { write: 'Write', edit: 'Edit', delete: 'Delete', append: 'Append', create: 'Create' }[op] || op;
+        return `<div class="axon-approval">
+          <div class="axon-approval__header">
+            <svg class="axon-approval__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            <div class="axon-approval__info">
+              <div class="axon-approval__title">Allow Axon to ${esc(opLabel.toLowerCase())} this file?</div>
+              <code class="axon-approval__path">${esc(shortPath)}</code>
+              <div class="axon-approval__subtitle">This step is paused until you approve or deny the file action.</div>
+            </div>
           </div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap">
-            <button onclick="window.__axon?.allowEdit('${esc(filePath)}','file')"
-              style="padding:4px 10px;font-size:10px;border-radius:8px;border:1px solid rgba(245,158,11,0.4);background:rgba(245,158,11,0.15);color:#fbbf24;cursor:pointer">
-              Allow this file
+          <div class="axon-approval__actions">
+            <button onclick="window.__axon_approve(this,'edit','${esc(filePath)}','file')" class="axon-approval__btn axon-approval__btn--primary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="w-3.5 h-3.5"><polyline points="20 6 9 17 4 12"/></svg>
+              <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow once</span><span class="axon-approval__btn-meta">Retry just this file step</span></span>
             </button>
-            <button onclick="window.__axon?.allowEdit('${esc(filePath)}','repo')"
-              style="padding:4px 10px;font-size:10px;border-radius:8px;border:1px solid rgba(34,197,94,0.4);background:rgba(34,197,94,0.15);color:#4ade80;cursor:pointer">
-              Allow this repo
-            </button>
-            <button onclick="window.__axon?.allowEdit('','session')"
-              style="padding:4px 10px;font-size:10px;border-radius:8px;border:1px solid rgba(99,102,241,0.4);background:rgba(99,102,241,0.1);color:#a5b4fc;cursor:pointer">
-              Allow all edits this session
-            </button>
+            <button onclick="window.__axon_approve(this,'edit-all')" class="axon-approval__btn axon-approval__btn--allow-all"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow for task</span><span class="axon-approval__btn-meta">Approve remaining edits in this run</span></span></button>
+            <button onclick="window.__axon_approve(this,'edit','${esc(filePath)}','repo')" class="axon-approval__btn axon-approval__btn--secondary"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow for repo</span><span class="axon-approval__btn-meta">Approve edits under this repo root</span></span></button>
+            <button onclick="window.__axon_deny(this)" class="axon-approval__btn axon-approval__btn--deny"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Deny</span><span class="axon-approval__btn-meta">Keep the task paused</span></span></button>
           </div>
-          <div style="font-size:9px;color:#6b7280;margin-top:6px">After allowing, say <em>please continue</em> to retry.</div>
         </div>`;
       };
 
@@ -331,29 +330,61 @@ function axonHelpersMixin() {
           const parts = result.split(':');
           const blockedName = parts[1] || cmd.split(' ')[0];
           const fullCmd = parts.slice(2).join(':') || cmd;
-          html += `<div style="border-top:1px solid rgba(245,158,11,0.3);padding:10px 12px;background:rgba(120,53,15,0.25)">
-            <div style="font-size:11px;color:#fbbf24;margin-bottom:8px">
-              ⚠️ Command <code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:4px">${esc(blockedName)}</code> is not in the allowed list.
+          html += `<div class="axon-approval">
+            <div class="axon-approval__header">
+              <svg class="axon-approval__icon axon-approval__icon--cmd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg>
+              <div class="axon-approval__info">
+                <div class="axon-approval__title">Allow Axon to run this command?</div>
+                <code class="axon-approval__path">${esc(blockedName)}</code>
+                <div class="axon-approval__subtitle">The command is blocked by Axon's shell allowlist until you approve it.</div>
+              </div>
             </div>
-            <div style="display:flex;gap:6px;flex-wrap:wrap">
-              <button onclick="window.__axon?.allowCommand('${esc(blockedName)}',false,false)"
-                style="padding:4px 10px;font-size:10px;border-radius:8px;border:1px solid rgba(245,158,11,0.4);background:rgba(245,158,11,0.15);color:#fbbf24;cursor:pointer">
-                Allow this session
+            <div class="axon-approval__actions">
+              <button onclick="window.__axon_approve(this,'cmd','${esc(blockedName)}',false,false)" class="axon-approval__btn axon-approval__btn--primary">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="w-3.5 h-3.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow once</span><span class="axon-approval__btn-meta">Retry this exact command</span></span>
               </button>
-              <button onclick="window.__axon?.allowCommand('${esc(blockedName)}',false,true)"
-                style="padding:4px 10px;font-size:10px;border-radius:8px;border:1px solid rgba(34,197,94,0.4);background:rgba(34,197,94,0.15);color:#4ade80;cursor:pointer">
-                Allow permanently
-              </button>
-              <button onclick="window.__axon?.allowCommand('',true,false)"
-                style="padding:4px 10px;font-size:10px;border-radius:8px;border:1px solid rgba(99,102,241,0.4);background:rgba(99,102,241,0.1);color:#a5b4fc;cursor:pointer">
-                Allow all commands
-              </button>
+              <button onclick="window.__axon_approve(this,'cmd-all')" class="axon-approval__btn axon-approval__btn--allow-all"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow for task</span><span class="axon-approval__btn-meta">Approve shell commands in this run</span></span></button>
+              <button onclick="window.__axon_approve(this,'cmd','${esc(blockedName)}',false,true)" class="axon-approval__btn axon-approval__btn--secondary"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Persist command</span><span class="axon-approval__btn-meta">Save to future Axon sessions</span></span></button>
+              <button onclick="window.__axon_deny(this)" class="axon-approval__btn axon-approval__btn--deny"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Deny</span><span class="axon-approval__btn-meta">Keep the task paused</span></span></button>
             </div>
-            <div style="font-size:9px;color:#6b7280;margin-top:6px">After allowing, say <em>please continue</em> to retry.</div>
           </div>`;
         } else if (result) {
           html += section(result.slice(0, 1200), 'plaintext', 'output', false);
         } else if (isRunning && cmd) html += runningRow();
+
+      } else if (name === 'shell_bg') {
+        const cmd = args.cmd || args.command || '';
+        if (cmd) html += section(cmd, 'bash', '$ background', true);
+        if (result && result.startsWith('BLOCKED_CMD:')) {
+          const parts = result.split(':');
+          const blockedName = parts[1] || cmd.split(' ')[0];
+          html += `<div class="axon-approval">
+            <div class="axon-approval__header">
+              <svg class="axon-approval__icon axon-approval__icon--cmd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg>
+              <div class="axon-approval__info">
+                <div class="axon-approval__title">Allow Axon to run this command?</div>
+                <code class="axon-approval__path">${esc(blockedName)}</code>
+                <div class="axon-approval__subtitle">The command is blocked by Axon's shell allowlist until you approve it.</div>
+              </div>
+            </div>
+            <div class="axon-approval__actions">
+              <button onclick="window.__axon_approve(this,'cmd','${esc(blockedName)}',false,false)" class="axon-approval__btn axon-approval__btn--primary">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="w-3.5 h-3.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow once</span><span class="axon-approval__btn-meta">Retry this exact command</span></span>
+              </button>
+              <button onclick="window.__axon_approve(this,'cmd-all')" class="axon-approval__btn axon-approval__btn--allow-all"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow for task</span><span class="axon-approval__btn-meta">Approve shell commands in this run</span></span></button>
+              <button onclick="window.__axon_approve(this,'cmd','${esc(blockedName)}',false,true)" class="axon-approval__btn axon-approval__btn--secondary"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Persist command</span><span class="axon-approval__btn-meta">Save to future Axon sessions</span></span></button>
+              <button onclick="window.__axon_deny(this)" class="axon-approval__btn axon-approval__btn--deny"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Deny</span><span class="axon-approval__btn-meta">Keep the task paused</span></span></button>
+            </div>
+          </div>`;
+        } else if (result) html += section(result.slice(0, 2000), 'plaintext', 'process output', false);
+        else if (isRunning && cmd) html += runningRow();
+
+      } else if (name === 'shell_bg_check') {
+        const pidLabel = args.pid ? `PID ${args.pid}` : 'process';
+        if (result) html += section(result.slice(0, 2000), 'plaintext', pidLabel, false);
+        else if (isRunning) html += runningRow();
 
       } else if (name === 'write_file' || name === 'edit_file' || name === 'delete_file' || name === 'append_file' || name === 'create_file') {
         const lang = extToLang(args.path || '');
@@ -400,12 +431,56 @@ function axonHelpersMixin() {
 
     toolPreview(name, args) {
       if (!name || !args) return '';
-      if (name === 'shell_cmd') return String(args.cmd || args.command || '').split('\n')[0].slice(0, 60);
+      if (name === 'shell_cmd' || name === 'shell_bg') return String(args.cmd || args.command || '').split('\n')[0].slice(0, 60);
+      if (name === 'shell_bg_check') return args.pid ? `PID ${args.pid}` : '';
       if (name === 'write_file' || name === 'read_file') return String(args.path || '').split('/').slice(-2).join('/');
       if (name === 'list_dir') return String(args.path || '').replace(/^\/home\/[^/]+/, '~');
       if (name === 'search_code' || name === 'search_files') return String(args.query || args.pattern || '').slice(0, 50);
       const keys = Object.keys(args);
       return keys.length === 1 ? String(args[keys[0]] || '').slice(0, 50) : '';
+    },
+
+    /* ── Cowork sidebar: Progress Steps ── */
+    coworkSteps() {
+      const msgs = this.chatMessages || [];
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const msg = msgs[i];
+        if (msg.role === 'assistant' && msg.workingBlocks?.length) {
+          return msg.workingBlocks.map((b, idx) => ({
+            num: idx + 1,
+            label: this.prettyToolName(b.name),
+            detail: this.toolPreview(b.name, b.args),
+            status: b.status,
+          }));
+        }
+      }
+      return [];
+    },
+
+    /* ── Cowork sidebar: Working Files ── */
+    coworkFiles() {
+      const msgs = this.chatMessages || [];
+      const fileMap = new Map();
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const msg = msgs[i];
+        if (msg.role === 'assistant' && msg.workingBlocks?.length) {
+          for (const b of msg.workingBlocks) {
+            const a = b.args || {};
+            const p = a.path || a.file_path || a.filepath || '';
+            if (!p) continue;
+            const act = (b.name === 'write_file' || b.name === 'edit_file') ? 'edited'
+                      : b.name === 'read_file' ? 'read'
+                      : b.name === 'list_dir' ? 'listed' : 'used';
+            if (!fileMap.has(p) || act === 'edited') fileMap.set(p, act);
+          }
+          break;
+        }
+      }
+      return [...fileMap.entries()].map(([path, action]) => ({
+        path,
+        short: path.replace(/^\/home\/[^/]+/, '~').split('/').slice(-3).join('/'),
+        action,
+      }));
     },
 
   };

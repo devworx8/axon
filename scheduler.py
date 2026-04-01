@@ -12,6 +12,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from axon_core.cli_command import cli_session_persistence_enabled
+
 # Scheduler is a singleton — created once in server.py
 scheduler: Optional[AsyncIOScheduler] = None
 
@@ -97,6 +99,9 @@ async def job_morning_digest():
             backend = settings.get("ai_backend", "ollama")
             api_key = settings.get("anthropic_api_key", "")
             cli_path = settings.get("claude_cli_path", "")
+            cli_session_persistence = cli_session_persistence_enabled(
+                settings.get("claude_cli_session_persistence_enabled")
+            )
 
             if backend == "api" and not api_key:
                 print("[Axon] No Anthropic API key — skipping morning brief")
@@ -111,7 +116,10 @@ async def job_morning_digest():
 
             digest = await brain.generate_digest(
                 projects, tasks, activity,
-                api_key=api_key, backend=backend, cli_path=cli_path
+                api_key=api_key,
+                backend=backend,
+                cli_path=cli_path,
+                cli_session_persistence=cli_session_persistence,
             )
 
             await devdb.log_event(conn, "digest", digest[:200] + "..." if len(digest) > 200 else digest)

@@ -6,9 +6,47 @@ function axonVaultMixin() {
   return {
 
     // ── Vault ──────────────────────────────────────────────────────
+    defaultVaultRememberMe() {
+      try {
+        return localStorage.getItem('axon.vaultRememberMe') === 'true';
+      } catch (_) {
+        return false;
+      }
+    },
+
+    persistVaultRememberChoice() {
+      try {
+        localStorage.setItem('axon.vaultRememberMe', this.vaultUnlockForm?.remember_me ? 'true' : 'false');
+      } catch (_) {}
+    },
+
+    resetVaultUnlockForm({ preserveRemember = true } = {}) {
+      const remember = preserveRemember
+        ? !!this.vaultUnlockForm?.remember_me
+        : this.defaultVaultRememberMe();
+      this.vaultUnlockForm = { master_password: '', totp_code: '', remember_me: remember };
+    },
+
+    vaultSessionLabel() {
+      const seconds = Number(this.vault?.ttl_remaining || 0);
+      if (!seconds) return 'Session active';
+      if (seconds >= 86400) return 'Auto-lock in ~24h';
+      if (seconds >= 3600) return `Auto-lock in ~${Math.max(1, Math.round(seconds / 3600))}h`;
+      if (seconds >= 60) return `Auto-lock in ~${Math.max(1, Math.round(seconds / 60))}m`;
+      return `Auto-lock in ~${seconds}s`;
+    },
+
     async loadVaultStatus() {
       try {
         this.vault = await this.api('GET', '/api/vault/status');
+        this.vault.ttl_remaining = Number(this.vault?.ttl_remaining || 0);
+        if (!this.vaultUnlockForm || typeof this.vaultUnlockForm.remember_me === 'undefined') {
+          this.resetVaultUnlockForm({ preserveRemember: false });
+        }
+        if (this.vault.dev_bypass) {
+          this.vaultSecrets = [];
+          return;
+        }
         if (this.vault.is_unlocked) await this.loadVaultSecrets();
       } catch(e) {}
     },
@@ -28,6 +66,9 @@ function axonVaultMixin() {
         // Store password for confirm step
         this.vaultUnlockForm.master_password = this.vaultSetupForm.master_password;
         this.vaultUnlockForm.totp_code = '';
+        if (typeof this.vaultUnlockForm.remember_me === 'undefined') {
+          this.vaultUnlockForm.remember_me = this.defaultVaultRememberMe();
+        }
       } catch(e) { this.showToast('Setup failed: ' + e.message); }
       this.vaultSubmitting = false;
     },
@@ -35,17 +76,21 @@ function axonVaultMixin() {
     async confirmSetup() {
       this.vaultSubmitting = true;
       try {
-        await this.api('POST', '/api/vault/unlock', {
+        this.persistVaultRememberChoice();
+        const result = await this.api('POST', '/api/vault/unlock', {
           master_password: this.vaultUnlockForm.master_password,
           totp_code: this.vaultUnlockForm.totp_code,
+          remember_me: !!this.vaultUnlockForm.remember_me,
         });
         this.vault.is_setup = true;
         this.vault.is_unlocked = true;
+        this.vault.ttl_remaining = Number(result?.session_ttl || 0);
         this.vaultSetupResult = null;
         this.vaultSetupForm = { master_password: '', confirm_password: '' };
-        this.vaultUnlockForm = { master_password: '', totp_code: '' };
+        const label = result?.ttl_label || (this.vaultUnlockForm.remember_me ? '24 hours' : '1 hour');
+        this.resetVaultUnlockForm();
         await this.loadVaultSecrets();
-        this.showToast('Vault unlocked 🔓');
+        this.showToast(`Vault unlocked 🔓 · Session valid for ${label}`);
       } catch(e) { this.showToast('2FA verification failed: ' + e.message); }
       this.vaultSubmitting = false;
     },
@@ -53,14 +98,18 @@ function axonVaultMixin() {
     async unlockVault() {
       this.vaultSubmitting = true;
       try {
-        await this.api('POST', '/api/vault/unlock', {
+        this.persistVaultRememberChoice();
+        const result = await this.api('POST', '/api/vault/unlock', {
           master_password: this.vaultUnlockForm.master_password,
           totp_code: this.vaultUnlockForm.totp_code,
+          remember_me: !!this.vaultUnlockForm.remember_me,
         });
         this.vault.is_unlocked = true;
-        this.vaultUnlockForm = { master_password: '', totp_code: '' };
+        this.vault.ttl_remaining = Number(result?.session_ttl || 0);
+        const label = result?.ttl_label || (this.vaultUnlockForm.remember_me ? '24 hours' : '1 hour');
+        this.resetVaultUnlockForm();
         await this.loadVaultSecrets();
-        this.showToast('Vault unlocked 🔓');
+        this.showToast(`Vault unlocked 🔓 · Session valid for ${label}`);
       } catch(e) { this.showToast('Unlock failed: ' + e.message); }
       this.vaultSubmitting = false;
     },
@@ -73,11 +122,13 @@ function axonVaultMixin() {
       try {
         await this.api('POST', '/api/vault/lock');
         this.vault.is_unlocked = false;
+        this.vault.ttl_remaining = 0;
         this.vaultSecrets = [];
         this.viewingSecret = null;
         this.viewingSecretId = null;
         this.editingSecretId = null;
         this.showVaultAddForm = false;
+        this.resetVaultUnlockForm();
         this.showToast('Vault locked 🔒');
       } catch(e) {}
     },

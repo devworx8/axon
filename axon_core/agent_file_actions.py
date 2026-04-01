@@ -16,6 +16,14 @@ from .agent_paths import (
 from .agent_toolspecs import AgentRuntimeDeps, _execute_tool
 
 
+def _tool_result_needs_attention(result: str) -> bool:
+    return isinstance(result, str) and (
+        result.startswith("ERROR:")
+        or result.startswith("BLOCKED_EDIT:")
+        or result.startswith("BLOCKED_CMD:")
+    )
+
+
 def _parse_list_dir_entries(result: str) -> list[tuple[str, str]]:
     """Parse list_dir output into (kind, name) pairs."""
     entries: list[tuple[str, str]] = []
@@ -86,6 +94,70 @@ def _strip_wrapping_quotes(text: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'", "`"}:
         return value[1:-1]
     return value
+
+
+def _mentions_workspace_root(user_message: str) -> bool:
+    lower = (user_message or "").lower()
+    root_phrases = (
+        "workspace root",
+        "project root",
+        "repo root",
+        "repository root",
+        "root of the workspace",
+        "root of the project",
+        "root of the repo",
+        "root of the repository",
+    )
+    return any(phrase in lower for phrase in root_phrases)
+
+
+def _extract_named_file_hint(user_message: str) -> Optional[str]:
+    patterns = (
+        r"\b(?:file|document)\s+(?:named|called)\s+[`\"']?([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)",
+        r"\b(?:named|called)\s+[`\"']?([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)",
+        r"\b(?:create|write|edit|rewrite|overwrite|update|delete|remove)\s+"
+        r"(?:a\s+)?(?:file\s+)?[`\"']?([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)",
+    )
+    for pattern in patterns:
+        match = _re.search(pattern, user_message, flags=_re.IGNORECASE)
+        if not match:
+            continue
+        candidate = match.group(1).strip().rstrip(".,:;!?`'\"")
+        if not candidate or candidate.lower() in {"workspace", "project", "repo", "repository"}:
+            continue
+        if "/" in candidate or "." in Path(candidate).name:
+            return candidate
+    return None
+
+
+def _is_mutating_file_request(user_message: str) -> bool:
+    lower = (user_message or "").lower()
+    mutate_phrases = (
+        "create a file",
+        "create file",
+        "make a file",
+        "make file",
+        "write a file",
+        "write file",
+        "save a file",
+        "edit a file",
+        "edit file",
+        "rewrite a file",
+        "rewrite file",
+        "overwrite a file",
+        "overwrite file",
+        "update the file",
+        "update file",
+        "append the line",
+        "append line",
+        "append ",
+        "replace ",
+        "change ",
+        "delete file",
+        "remove file",
+        "rm ",
+    )
+    return any(phrase in lower for phrase in mutate_phrases)
 
 
 def _extract_replace_strings(user_message: str) -> tuple[Optional[str], Optional[str]]:
@@ -281,6 +353,17 @@ def _direct_agent_action(
     wants_overwrite = any(phrase in lower for phrase in overwrite_phrases)
     wants_replace = any(phrase in lower for phrase in replace_phrases)
     wants_delete = any(phrase in lower for phrase in delete_phrases)
+    workspace_root_requested = _mentions_workspace_root(user_message)
+    filename_hint = _extract_named_file_hint(user_message)
+
+    if workspace_path and filename_hint and workspace_root_requested:
+        path = _resolve_user_path(filename_hint, workspace_path=workspace_path)
+    elif workspace_path and filename_hint and not path and _is_mutating_file_request(user_message):
+        path = _resolve_user_path(filename_hint, workspace_path=workspace_path)
+    elif workspace_path and workspace_root_requested and (not path or Path(str(path)).name == ".devbrain"):
+        workspace_root = _workspace_root_path(workspace_path)
+        if workspace_root:
+            path = str(workspace_root)
 
     if wants_append:
         content = _extract_append_content(user_message)
@@ -290,7 +373,7 @@ def _direct_agent_action(
             tool_name = "append_file"
             tool_args = {"path": path, "content": content}
             tool_result = _execute_tool(tool_name, tool_args, deps)
-            if tool_result.startswith("ERROR:"):
+            if _tool_result_needs_attention(tool_result):
                 return tool_name, tool_args, tool_result, tool_result
             resolved = os.path.realpath(os.path.expanduser(path))
             try:
@@ -315,7 +398,7 @@ def _direct_agent_action(
                 "new_string": new_string,
             }
             tool_result = _execute_tool(tool_name, tool_args, deps)
-            if tool_result.startswith("ERROR:"):
+            if _tool_result_needs_attention(tool_result):
                 return tool_name, tool_args, tool_result, tool_result
             resolved = os.path.realpath(os.path.expanduser(path))
             try:
@@ -336,7 +419,7 @@ def _direct_agent_action(
         tool_name = "delete_file"
         tool_args = {"path": path}
         tool_result = _execute_tool(tool_name, tool_args, deps)
-        if tool_result.startswith("ERROR:"):
+        if _tool_result_needs_attention(tool_result):
             return tool_name, tool_args, tool_result, tool_result
         answer = _format_file_delete_answer(path=path, user_message=user_message)
         return tool_name, tool_args, tool_result, answer
@@ -356,7 +439,7 @@ def _direct_agent_action(
         tool_name = "write_file"
         tool_args = {"path": path, "content": content}
         tool_result = _execute_tool(tool_name, tool_args, deps)
-        if tool_result.startswith("ERROR:"):
+        if _tool_result_needs_attention(tool_result):
             return tool_name, tool_args, tool_result, tool_result
         try:
             verified = Path(resolved).read_text(encoding="utf-8", errors="replace")
@@ -380,7 +463,7 @@ def _direct_agent_action(
                 tool_name = "write_file"
                 tool_args = {"path": path, "content": content}
                 tool_result = _execute_tool(tool_name, tool_args, deps)
-            if tool_result.startswith("ERROR:"):
+            if _tool_result_needs_attention(tool_result):
                 return tool_name, tool_args, tool_result, tool_result
             resolved = os.path.realpath(os.path.expanduser(path))
             try:

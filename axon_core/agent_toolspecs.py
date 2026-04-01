@@ -17,6 +17,8 @@ class AgentRuntimeDeps:
     stream_ollama_chat: Callable[..., AsyncGenerator[str, None]]
     ollama_execution_profile_sync: Callable[..., dict[str, Any]]
     ollama_message_with_images: Callable[[str, Optional[list[str]]], dict[str, Any]]
+    api_message_with_images: Callable[[str, Optional[list[str]]], dict[str, Any]]
+    cli_message_with_images: Callable[[str, Optional[list[str]]], dict[str, Any]]
     find_cli: Callable[[str], str]
     ollama_default_model: str
     ollama_agent_model: str
@@ -57,15 +59,45 @@ AGENT_TOOL_DEFS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "shell_cmd",
-            "description": "Run an allowlisted shell command (git, ls, grep, python3, etc.) and return output.",
+            "description": "Run a shell command and return output. For builds or dev servers, set timeout=60 or higher. Use shell_bg for long-running servers that should keep running.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "cmd": {"type": "string", "description": "Shell command to run"},
                     "cwd": {"type": "string", "description": "Working directory (default: home)", "default": "~"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 15)", "default": 15},
+                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 30, use 60+ for builds)", "default": 30},
                 },
                 "required": ["cmd"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "shell_bg",
+            "description": "Start a long-running background process (dev servers, watchers). Returns initial output after a few seconds. Use shell_bg_check to see later output.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "cmd": {"type": "string", "description": "Command to run in background (e.g. 'npm run dev', 'next dev')"},
+                    "cwd": {"type": "string", "description": "Working directory", "default": "~"},
+                    "wait_seconds": {"type": "integer", "description": "Seconds to wait for initial output (default 8)", "default": 8},
+                },
+                "required": ["cmd"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "shell_bg_check",
+            "description": "Check output from a running background process started with shell_bg. Returns recent output and whether it's still running.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pid": {"type": "integer", "description": "Process ID returned by shell_bg"},
+                },
+                "required": ["pid"],
             },
         },
     },
@@ -313,6 +345,24 @@ AGENT_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "generate_image",
+            "description": "Generate an image with a configured image-capable provider and store it as an Axon resource.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Text prompt describing the image to generate"},
+                    "aspect_ratio": {"type": "string", "description": "Optional aspect ratio like 1:1, 16:9, 9:16", "default": "1:1"},
+                    "image_size": {"type": "string", "description": "Optional size like 512, 1K, 2K, 4K", "default": "1K"},
+                    "workspace_id": {"type": "integer", "description": "Optional workspace/project ID to associate the generated image with"},
+                    "title": {"type": "string", "description": "Optional resource title for the generated image", "default": ""},
+                },
+                "required": ["prompt"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "remember",
             "description": (
                 "Persist a named note in agent memory. Use this to save important facts, decisions, "
@@ -495,6 +545,13 @@ def _canonical_tool_name(name: str, args: dict[str, Any] | None = None) -> str:
         "shell": "shell_cmd",
         "shell_cmd": "shell_cmd",
         "shellcmd": "shell_cmd",
+        "shell_bg": "shell_bg",
+        "shellbg": "shell_bg",
+        "shell_background": "shell_bg",
+        "background": "shell_bg",
+        "shell_bg_check": "shell_bg_check",
+        "shellbgcheck": "shell_bg_check",
+        "bg_check": "shell_bg_check",
         "edit": "edit_file",
         "edit_file": "edit_file",
         "editfile": "edit_file",
@@ -509,6 +566,11 @@ def _canonical_tool_name(name: str, args: dict[str, Any] | None = None) -> str:
         "http_get": "http_get",
         "fetch": "http_get",
         "get_url": "http_get",
+        "image": "generate_image",
+        "generate_image": "generate_image",
+        "image_gen": "generate_image",
+        "imagegen": "generate_image",
+        "create_image": "generate_image",
         "save_note": "remember",
         "note": "remember",
         "remember": "remember",
@@ -555,10 +617,34 @@ def _execute_tool(name: str, args: dict[str, Any], deps: AgentRuntimeDeps) -> st
     fn = deps.tool_registry.get(canonical_name)
     if not fn:
         return f"ERROR: Unknown tool '{name}'"
+    normalized = deps.normalize_tool_args(canonical_name, args)
     try:
-        return fn(**deps.normalize_tool_args(canonical_name, args))
+        return fn(**normalized)
     except TypeError as e:
-        return f"ERROR: Bad arguments for {canonical_name}: {e}"
+        example = _TOOL_ARG_EXAMPLES.get(canonical_name, "")
+        hint = f"\nExample:\nACTION: {canonical_name}\nARGS: {example}" if example else ""
+        received = ", ".join(sorted(normalized.keys())) if normalized else "none"
+        return f"ERROR: Bad arguments for {canonical_name}: {e}\nReceived keys: {received}{hint}"
     except Exception as e:
         return f"ERROR: {canonical_name} failed: {e}"
+
+
+_TOOL_ARG_EXAMPLES: dict[str, str] = {
+    "shell_cmd":    '{"cmd": "ls -la", "cwd": "~/project"}',
+    "shell_bg":     '{"cmd": "npm run dev", "cwd": "~/project"}',
+    "read_file":    '{"path": "~/project/src/app.tsx"}',
+    "write_file":   '{"path": "~/project/file.ts", "content": "file contents here"}',
+    "edit_file":    '{"path": "~/project/file.ts", "old_string": "exact old text", "new_string": "replacement text"}',
+    "search_code":  '{"pattern": "function_name", "path": "~/project"}',
+    "list_dir":     '{"path": "~/project/src"}',
+    "delete_file":  '{"path": "~/project/old_file.ts"}',
+    "git_status":   '{"path": "~/project"}',
+    "show_diff":    '{"path": "~/project"}',
+    "http_get":     '{"url": "http://localhost:3000"}',
+    "generate_image": '{"prompt": "A clean isometric landing page hero illustration of a futuristic AI workspace", "aspect_ratio": "16:9", "image_size": "1K"}',
+    "plan_task":    '{"goal": "Fix the login page", "steps": ["Read the file", "Find the bug", "Fix it"]}',
+    "remember":     '{"key": "db_url", "value": "postgres://localhost/mydb"}',
+    "recall":       '{"query": "database"}',
+    "glob_files":   '{"pattern": "**/*.tsx", "path": "~/project"}',
+}
 

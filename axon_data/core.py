@@ -324,6 +324,7 @@ async def init_db():
                 ('projects_root', '~/Desktop'),
                 ('ai_backend', 'ollama'),
                 ('claude_cli_path', ''),
+                ('claude_cli_session_persistence_enabled', '0'),
                 ('vault_salt', ''),
                 ('vault_pw_hash', ''),
                 ('vault_totp_enc', ''),

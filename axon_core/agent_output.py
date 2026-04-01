@@ -3,6 +3,13 @@ from __future__ import annotations
 import json
 import re as _re
 
+_EVIDENCE_SECTION_HEADINGS = (
+    "Verified In This Run",
+    "Inferred From Repo State",
+    "Not Yet Verified",
+    "Next Action Not Yet Taken",
+)
+
 
 def _sanitize_agent_text(text: str) -> str:
     """Remove leaked internal ReAct instructions before showing text to the user."""
@@ -39,8 +46,10 @@ _FAKE_PROGRESS_LINE_RE = _re.compile(
 _FAKE_PROGRESS_BAR_RE = _re.compile(r'[█▓░]{3,}.*\d+\s*%')
 
 
-_MISSING_SPACE_AFTER_PUNCT = _re.compile(r'([.!?])([A-Za-z])')
-_MISSING_SPACE_AFTER_COMMA = _re.compile(r',([A-Za-z])')
+_MISSING_SPACE_AFTER_PUNCT  = _re.compile(r'([.!?])([A-Za-z])')
+_MISSING_SPACE_AFTER_COMMA  = _re.compile(r',([A-Za-z])')
+_MISSING_SPACE_AFTER_COLON  = _re.compile(r':([A-Za-z])(?![/\\])')   # skip :// URLs
+_MISSING_SPACE_AFTER_SEMI   = _re.compile(r';([A-Za-z])')
 
 
 def _normalize_thinking_spacing(text: str) -> str:
@@ -57,6 +66,8 @@ def _normalize_thinking_spacing(text: str) -> str:
             continue
         line = _MISSING_SPACE_AFTER_PUNCT.sub(r"\1 \2", line)
         line = _MISSING_SPACE_AFTER_COMMA.sub(r", \1", line)
+        line = _MISSING_SPACE_AFTER_COLON.sub(r": \1", line)
+        line = _MISSING_SPACE_AFTER_SEMI.sub(r"; \1", line)
         out_lines.append(line)
     return "\n".join(out_lines)
 
@@ -133,6 +144,101 @@ def _tool_log_mentions(tool_log: list[dict], keywords: tuple[str, ...]) -> bool:
     return any(any(keyword in _tool_log_entry_text(entry) for keyword in lowered) for entry in tool_log)
 
 
+def _has_required_evidence_sections(text: str) -> bool:
+    sample = (text or "").lower()
+    return all(heading.lower() in sample for heading in _EVIDENCE_SECTION_HEADINGS)
+
+
+def _looks_like_checkpoint_or_audit_summary(user_message: str, text: str) -> bool:
+    request_text = (user_message or "").lower()
+    answer_text = (text or "").lower()
+    request_markers = (
+        "review your previous answer",
+        "unsupported assumptions",
+        "invented details",
+        "confidence rating",
+        "current checkpoint",
+        "repo state",
+        "what changed",
+        "reconstruct",
+        "audit",
+        "checkpoint",
+        "verify the claims",
+        "verify the last response",
+    )
+    answer_markers = (
+        "what changed",
+        "current checkpoint",
+        "rewritten answer",
+        "unsupported or too strong",
+        "unsupported assumptions",
+        "repo state",
+        "i'm reconstructing",
+    )
+    return any(marker in request_text for marker in request_markers) or any(
+        marker in answer_text for marker in answer_markers
+    )
+
+
+def _needs_evidence_section_repair(user_message: str, text: str) -> bool:
+    sample = (text or "").strip()
+    if not sample:
+        return False
+    if _has_required_evidence_sections(sample):
+        return False
+    return _looks_like_checkpoint_or_audit_summary(user_message, sample)
+
+
+def _tool_receipt_summary(tool_log: list[dict]) -> str:
+    if not tool_log:
+        return "- No tool receipts were recorded in this run."
+
+    lines: list[str] = []
+    for entry in tool_log[-8:]:
+        name = str(entry.get("name", "") or "tool")
+        args = entry.get("args") or {}
+        result = str(entry.get("result", "") or "").replace("\n", " ").strip()
+        result_preview = result[:120] + ("…" if len(result) > 120 else "")
+        if isinstance(args, dict):
+            if name == "shell_cmd":
+                detail = str(args.get("cmd", "")).strip()
+            elif name in {"read_file", "write_file", "edit_file", "append_file", "create_file", "delete_file"}:
+                detail = str(args.get("path", "")).strip()
+            elif name == "search_code":
+                detail = str(args.get("pattern", "")).strip()
+            elif name == "show_diff":
+                detail = str(args.get("path", "") or args.get("cwd", "")).strip()
+            else:
+                detail = json.dumps(args, sort_keys=True)[:120]
+        else:
+            detail = str(args)[:120]
+        detail = detail or "(no args)"
+        lines.append(f"- {name}: {detail} -> {result_preview or '(no result preview)'}")
+    return "\n".join(lines)
+
+
+def _build_evidence_repair_prompt(user_message: str, tool_log: list[dict]) -> str:
+    return (
+        "STOP. This is a checkpoint/audit/verification summary and it must separate evidence levels.\n\n"
+        "Re-answer using EXACTLY these headings:\n"
+        "Verified In This Run\n"
+        "Inferred From Repo State\n"
+        "Not Yet Verified\n"
+        "Next Action Not Yet Taken\n\n"
+        "Rules:\n"
+        "- Only put a claim under 'Verified In This Run' if this run's tool results support it.\n"
+        "- Put interpretations, likely direction, and commit/file-shape guesses under 'Inferred From Repo State'.\n"
+        "- Put unresolved checks, missing reruns, and environment-sensitive claims under 'Not Yet Verified'.\n"
+        "- If you did not actually continue implementation yet, say so under 'Next Action Not Yet Taken'.\n"
+        "- No chain-of-thought, no 'I'm reconstructing...' narration, no blended checkpoint story.\n\n"
+        f"Original user request:\n{(user_message or '').strip()[:600] or '(none)'}\n\n"
+        "Recent tool receipts from this run:\n"
+        f"{_tool_receipt_summary(tool_log)}\n\n"
+        "Now emit only:\n"
+        "ANSWER: ..."
+    )
+
+
 def _extract_json_object_after(prefix: str, text: str) -> str | None:
     marker = _re.search(rf"(?m)^\s*{_re.escape(prefix)}\s*:\s*", text)
     if not marker:
@@ -174,7 +280,10 @@ def _fallback_parse_flat_object(raw: str) -> dict[str, object]:
     ):
         token = value.strip()
         if token.startswith('"') and token.endswith('"'):
-            parsed[key] = bytes(token[1:-1], "utf-8").decode("unicode_escape")
+            try:
+                parsed[key] = json.loads(token)
+            except Exception:
+                parsed[key] = token[1:-1].replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
         elif token.lower() == "true":
             parsed[key] = True
         elif token.lower() == "false":
@@ -339,6 +448,86 @@ def _guard_unverified_edit_claim(text: str, wrote_files: bool, tool_log: list[di
     )
 
 
+def _sanitize_json_string_literals(raw: str) -> str:
+    """Fix unescaped control characters inside JSON string values.
+
+    Models (especially DeepSeek) often emit JSON with literal newlines, tabs,
+    and carriage returns inside string values, which breaks json.loads().
+    Walk the string and escape any control characters that appear while we are
+    inside a JSON string literal.
+    """
+    out: list[str] = []
+    in_string = False
+    escaped = False
+    for ch in raw:
+        if in_string:
+            if escaped:
+                out.append(ch)
+                escaped = False
+                continue
+            if ch == "\\":
+                out.append(ch)
+                escaped = True
+                continue
+            if ch == '"':
+                in_string = False
+                out.append(ch)
+                continue
+            # Escape control characters that are illegal in JSON strings
+            if ch == "\n":
+                out.append("\\n")
+                continue
+            if ch == "\r":
+                out.append("\\r")
+                continue
+            if ch == "\t":
+                out.append("\\t")
+                continue
+            out.append(ch)
+        else:
+            if ch == '"':
+                in_string = True
+            out.append(ch)
+    return "".join(out)
+
+
+def _extract_write_args_structural(after_action: str) -> dict[str, object]:
+    """Last-resort extraction for write_file/edit_file when JSON parsing completely fails.
+
+    Looks for known key patterns like "path": "...", then extracts the content
+    value by finding the last string value in the JSON blob (typically the longest
+    multi-line value is the file content).
+    """
+    args: dict[str, object] = {}
+    # Extract path — look for "path": "..." or path: "..."
+    path_match = _re.search(r'["\']?path["\']?\s*:\s*"([^"]+)"', after_action)
+    if not path_match:
+        path_match = _re.search(r'["\']?(?:file|target)["\']?\s*:\s*"([^"]+)"', after_action)
+    if path_match:
+        args["path"] = path_match.group(1)
+
+    # For edit_file, extract old_string
+    old_match = _re.search(r'["\']?old_string["\']?\s*:\s*"((?:[^"\\]|\\.)*)"', after_action, _re.DOTALL)
+    if old_match:
+        args["old_string"] = old_match.group(1).replace("\\n", "\n").replace("\\t", "\t")
+
+    # For edit_file, extract new_string
+    new_match = _re.search(r'["\']?new_string["\']?\s*:\s*"((?:[^"\\]|\\.)*)"', after_action, _re.DOTALL)
+    if new_match:
+        args["new_string"] = new_match.group(1).replace("\\n", "\n").replace("\\t", "\t")
+
+    # Extract content — look for "content": "..." or content between triple backticks
+    content_match = _re.search(r'["\']?content["\']?\s*:\s*"((?:[^"\\]|\\.)*)"', after_action, _re.DOTALL)
+    if content_match:
+        args["content"] = content_match.group(1).replace("\\n", "\n").replace("\\t", "\t")
+    elif "content" not in args:
+        # Try code block: content: ```...```
+        code_match = _re.search(r'["\']?content["\']?\s*:\s*```\w*\n([\s\S]*?)```', after_action)
+        if code_match:
+            args["content"] = code_match.group(1)
+
+    return args
+
 def _parse_react_action(text: str) -> tuple[str, dict[str, object]] | None:
     """Parse ACTION/ARGS from ReAct-formatted text. Returns (tool_name, args) or None."""
     action_match = _re.search(r"(?m)^\s*ACTION:\s*(\w+)", text)
@@ -348,10 +537,87 @@ def _parse_react_action(text: str) -> tuple[str, dict[str, object]] | None:
     if tool_name == "tool_name":
         return None
     args: dict[str, object] = {}
+
+    # Primary: ARGS: { ... } on its own line
     args_blob = _extract_json_object_after("ARGS", text)
     if args_blob:
         try:
             args = json.loads(args_blob)
         except json.JSONDecodeError:
-            args = _fallback_parse_flat_object(args_blob)
+            # Try sanitizing unescaped newlines/tabs inside JSON strings
+            sanitized = _sanitize_json_string_literals(args_blob)
+            try:
+                args = json.loads(sanitized)
+            except json.JSONDecodeError:
+                args = _fallback_parse_flat_object(args_blob)
+
+    # Fallback 1: any JSON object after the ACTION line (some models skip the ARGS: label)
+    if not args:
+        after_action = text[action_match.end():]
+        brace = after_action.find("{")
+        if brace >= 0:
+            candidate = _extract_json_object_after_pos(after_action, brace)
+            if candidate:
+                try:
+                    parsed = json.loads(candidate)
+                    if isinstance(parsed, dict) and parsed:
+                        args = parsed
+                except json.JSONDecodeError:
+                    sanitized = _sanitize_json_string_literals(candidate)
+                    try:
+                        parsed = json.loads(sanitized)
+                        if isinstance(parsed, dict) and parsed:
+                            args = parsed
+                    except json.JSONDecodeError:
+                        fb = _fallback_parse_flat_object(candidate)
+                        if fb:
+                            args = fb
+
+    # Fallback 2: ```json code block anywhere after ACTION
+    if not args:
+        code_match = _re.search(r"```(?:json)?\s*\n(\{[\s\S]*?\})\s*\n```", text[action_match.end():])
+        if code_match:
+            try:
+                parsed = json.loads(code_match.group(1))
+                if isinstance(parsed, dict) and parsed:
+                    args = parsed
+            except json.JSONDecodeError:
+                sanitized = _sanitize_json_string_literals(code_match.group(1))
+                try:
+                    parsed = json.loads(sanitized)
+                    if isinstance(parsed, dict) and parsed:
+                        args = parsed
+                except json.JSONDecodeError:
+                    pass
+
+    # Fallback 3 — structural extraction for write_file / edit_file with multi-line content
+    if not args and tool_name in ("write_file", "write", "edit_file", "edit", "append_file"):
+        args = _extract_write_args_structural(text[action_match.end():])
+
     return tool_name, args
+
+
+def _extract_json_object_after_pos(text: str, start: int) -> str | None:
+    """Extract balanced JSON object starting at position `start`."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : idx + 1]
+    return None

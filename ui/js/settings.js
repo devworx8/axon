@@ -18,6 +18,8 @@ function axonSettingsMixin() {
           ai_backend: s.ai_backend || 'ollama',
           api_provider: s.api_provider || 'deepseek',
           claude_cli_path: s.claude_cli_path || '',
+          claude_cli_model: s.claude_cli_model || '',
+          claude_cli_session_persistence_enabled: this.settingEnabled(s.claude_cli_session_persistence_enabled ?? true),
           ollama_url: s.ollama_url || '',
           ollama_runtime_mode: s.ollama_runtime_mode || 'gpu_default',
           ollama_model: s.ollama_model || '',
@@ -121,6 +123,8 @@ function axonSettingsMixin() {
       if (this.settingsForm.ai_backend) payload.ai_backend = this.settingsForm.ai_backend;
       payload.api_provider = this.settingsForm.api_provider || 'deepseek';
       payload.claude_cli_path = this.settingsForm.claude_cli_path || '';
+      payload.claude_cli_model = this.settingsForm.claude_cli_model || '';
+      payload.claude_cli_session_persistence_enabled = !!this.settingsForm.claude_cli_session_persistence_enabled;
       payload.ollama_url = this.settingsForm.ollama_url || '';
       payload.ollama_runtime_mode = this.settingsForm.ollama_runtime_mode || 'gpu_default';
       payload.ollama_model = this.settingsForm.ollama_model || '';

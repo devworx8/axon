@@ -6,13 +6,16 @@ that now live in dedicated axon_core modules.
 
 from __future__ import annotations
 
-import asyncio
 import re as _re
+from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
+from .agent_blocked_actions import blocked_tool_retry_prompt
+from .async_workers import run_sync_agent_call
 from .agent_file_actions import (
     _direct_agent_action,
     _extract_append_content,
+    _is_mutating_file_request,
     _extract_replace_strings,
     _extract_requested_content,
     _format_file_delete_answer,
@@ -33,8 +36,10 @@ from .agent_intent import (
     _requires_local_operator_execution,
 )
 from .agent_output import (
+    _build_evidence_repair_prompt,
     _filter_thinking_chunk,
     _guard_unverified_edit_claim,
+    _needs_evidence_section_repair,
     _looks_like_hallucinated_execution,
     _looks_like_unverified_edit_claim,
     _parse_react_action,
@@ -55,6 +60,121 @@ from .agent_toolspecs import (
     _canonical_tool_name,
     _execute_tool,
 )
+
+
+def _blocked_tool_event(tool_name: str, tool_args: dict[str, Any], result: str) -> Optional[dict[str, Any]]:
+    if not isinstance(result, str):
+        return None
+    if result.startswith("BLOCKED_EDIT:"):
+        _, operation, target = result.split(":", 2)
+        action = operation or tool_name.replace("_file", "")
+        return {
+            "type": "approval_required",
+            "kind": "edit",
+            "tool_name": tool_name,
+            "action": action,
+            "path": target,
+            "args": tool_args,
+            "message": f"Approval required before Axon can {action} `{target}`.",
+        }
+    if result.startswith("BLOCKED_CMD:"):
+        _, command_name, full_command = result.split(":", 2)
+        return {
+            "type": "approval_required",
+            "kind": "command",
+            "tool_name": tool_name,
+            "command": command_name,
+            "full_command": full_command,
+            "args": tool_args,
+            "message": f"Approval required before Axon can run `{full_command}`.",
+        }
+    return None
+
+
+def _tool_followup_message(
+    tool_name: str,
+    result: str,
+    *,
+    active_tool_names: list[str],
+    workspace_path: str,
+) -> str:
+    preview = str(result or "").strip()
+    if len(preview) > 1200:
+        preview = preview[:1200] + "\n...[truncated]"
+    workspace_note = workspace_path or "cwd"
+    return (
+        f"Tool result for {tool_name}:\n{preview}\n\n"
+        f"Workspace: {workspace_note}.\n"
+        f"You are still operating inside {workspace_note}.\n"
+        "Do not invent foreign toolsets or OAuth-only tools. "
+        "If another action is needed, emit exactly one valid ACTION/ARGS pair."
+    )
+
+
+def _is_cli_rate_limit_error(message: str) -> bool:
+    lower = str(message or "").strip().lower()
+    return any(token in lower for token in (
+        "rate limit", "rate_limit", "hit your limit", "usage limit",
+        "hit your usage limit", "try again at", "get more access",
+    ))
+
+
+def _coerce_message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            for key in ("text", "thinking"):
+                value = block.get(key)
+                if isinstance(value, str) and value:
+                    parts.append(value)
+        return "\n".join(parts)
+    if isinstance(content, dict):
+        for key in ("text", "thinking"):
+            value = content.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return ""
+
+
+def _rewrite_messages_for_backend(
+    messages: list[dict[str, Any]],
+    *,
+    backend: str,
+    deps: AgentRuntimeDeps,
+    user_message: str,
+    resource_image_paths: Optional[list[str]],
+) -> list[dict[str, Any]]:
+    rewritten: list[dict[str, Any]] = []
+    user_indexes = [
+        index for index, message in enumerate(messages)
+        if str(message.get("role") or "") == "user"
+    ]
+    final_user_index = user_indexes[-1] if user_indexes else -1
+
+    for index, message in enumerate(messages):
+        role = str(message.get("role") or "user")
+        content = message.get("content", "")
+        if role != "user" or index != final_user_index:
+            if isinstance(content, list):
+                rewritten.append({"role": role, "content": _coerce_message_text(content)})
+            else:
+                rewritten.append({"role": role, "content": content})
+            continue
+
+        if isinstance(content, list):
+            if backend == "api":
+                rewritten.append(deps.api_message_with_images(user_message, resource_image_paths))
+            elif backend == "ollama":
+                rewritten.append(deps.ollama_message_with_images(user_message, resource_image_paths))
+            else:
+                rewritten.append(message)
+        else:
+            rewritten.append({"role": role, "content": content})
+    return rewritten
 
 
 async def run_agent(
@@ -79,6 +199,8 @@ async def run_agent(
     api_model: str = "",
     api_provider: str = "",
     cli_path: str = "",
+    cli_model: str = "",
+    cli_session_persistence: bool = False,
     backend: str = "",
 ) -> AsyncGenerator[dict[str, Any], None]:
     """
@@ -135,15 +257,117 @@ async def run_agent(
                 m for m in prev.messages if m.get("role") in ("user", "assistant")
             ]
             user_message = prev.task
+        else:
+            # No interrupted session found — tell the user directly instead of
+            # letting the LLM see "please continue" and ask what to continue.
+            yield {
+                "type": "text",
+                "chunk": (
+                    "No paused session found to resume. "
+                    "Tell me what you'd like to work on and I'll get started."
+                ),
+            }
+            yield {"type": "done", "iterations": 0}
+            return
 
-    active_tool_names = list(deps.tool_registry.keys()) if tools is None else [
+    active_tool_names = sorted(deps.tool_registry.keys()) if tools is None else [
         tool_name for tool_name in tools if tool_name in deps.tool_registry
     ]
     wrote_files = False
 
-    use_api = bool(api_key and api_base_url)
-    use_cli = backend == "cli"
+    backend_mode = str(backend or "").strip().lower()
+    use_cli = backend_mode == "cli"
+    if backend_mode == "api":
+        use_api = bool(api_key and api_base_url)
+    elif backend_mode in {"cli", "ollama"}:
+        use_api = False
+    else:
+        # Backward-compatible fallback for older callers that do not pass an
+        # explicit backend but still supply API credentials.
+        use_api = bool(api_key and api_base_url)
     resolved_cli = deps.find_cli(cli_path) if use_cli else ""
+    # Autonomous operator runs must stay isolated from any external Claude Code
+    # conversation state. Plain chat can reuse sessions, but the agent loop
+    # should remain self-contained until Axon manages its own session ids.
+    agent_cli_session_persistence = False
+
+    async def _stream_cli_with_fallback(
+        local_messages: list[dict[str, Any]],
+        *,
+        max_tokens: int,
+        purpose: str,
+    ) -> AsyncGenerator[str, None]:
+        try:
+            async for chunk in deps.stream_cli(
+                local_messages,
+                cli_path=resolved_cli,
+                max_tokens=max_tokens,
+                model=cli_model,
+                allow_session_persistence=agent_cli_session_persistence,
+            ):
+                yield chunk
+            return
+        except Exception as exc:
+            if not _is_cli_rate_limit_error(str(exc)):
+                raise
+
+        if api_key and api_base_url:
+            fallback_label = api_provider or "API"
+            fallback_model = api_model or "configured model"
+            yield (
+                f"⚠️ Claude CLI hit a rate limit. Switching this {purpose} turn to "
+                f"{fallback_label} (`{fallback_model}`).\n\n"
+            )
+            api_messages = _rewrite_messages_for_backend(
+                local_messages,
+                backend="api",
+                deps=deps,
+                user_message=user_message,
+                resource_image_paths=resource_image_paths,
+            )
+            async for chunk in deps.stream_api_chat(
+                messages=api_messages,
+                api_key=api_key,
+                api_base_url=api_base_url,
+                api_model=api_model,
+                max_tokens=max_tokens,
+            ):
+                yield chunk
+            return
+
+        if ollama_url or ollama_model:
+            fallback_model = vision_model or ollama_model or deps.ollama_default_model
+            yield (
+                f"⚠️ Claude CLI hit a rate limit. Switching this {purpose} turn to "
+                f"Local Ollama (`{fallback_model}`).\n\n"
+            )
+            execution = await run_sync_agent_call(
+                deps.ollama_execution_profile_sync,
+                fallback_model,
+                ollama_url,
+                streaming=True,
+                purpose="chat",
+            )
+            ollama_messages = _rewrite_messages_for_backend(
+                local_messages,
+                backend="ollama",
+                deps=deps,
+                user_message=user_message,
+                resource_image_paths=resource_image_paths,
+            )
+            if execution.get("note"):
+                yield f"⚠️ {execution['note']}\n\n"
+            async for chunk in deps.stream_ollama_chat(
+                messages=ollama_messages,
+                model=execution["model"],
+                ollama_url=ollama_url,
+                max_tokens=max_tokens,
+                purpose="chat",
+            ):
+                yield chunk
+            return
+
+        raise RuntimeError("Claude CLI hit a rate limit.")
 
     if not force_tool_mode and not _resuming and _is_casual_conversation(user_message):
         casual_system = (
@@ -156,9 +380,9 @@ async def run_agent(
         messages.extend(
             _filtered_general_history(history, db_path=deps.db_path, workspace_path=workspace_path)
         )
-        messages.append({"role": "user", "content": user_message})
+        messages.append(deps.cli_message_with_images(user_message, resource_image_paths) if use_cli else {"role": "user", "content": user_message})
         if use_cli:
-            async for chunk in deps.stream_cli(messages, cli_path=resolved_cli, max_tokens=300):
+            async for chunk in _stream_cli_with_fallback(messages, max_tokens=1200, purpose="casual"):
                 yield {"type": "text", "chunk": chunk}
         elif use_api:
             async for chunk in deps.stream_api_chat(
@@ -197,12 +421,13 @@ async def run_agent(
         messages.extend(
             _filtered_general_history(history, db_path=deps.db_path, workspace_path=workspace_path)
         )
-        messages.append({"role": "user", "content": user_message})
 
         if use_cli:
-            async for chunk in deps.stream_cli(messages, cli_path=resolved_cli, max_tokens=1200):
+            messages.append(deps.cli_message_with_images(user_message, resource_image_paths))
+            async for chunk in _stream_cli_with_fallback(messages, max_tokens=3000, purpose="planning"):
                 yield {"type": "text", "chunk": chunk}
         elif use_api:
+            messages.append(deps.api_message_with_images(user_message, resource_image_paths))
             async for chunk in deps.stream_api_chat(
                 messages=messages,
                 api_key=api_key,
@@ -212,14 +437,14 @@ async def run_agent(
             ):
                 yield {"type": "text", "chunk": chunk}
         else:
-            execution = await asyncio.to_thread(
+            execution = await run_sync_agent_call(
                 deps.ollama_execution_profile_sync,
                 vision_model or ollama_model or deps.ollama_default_model,
                 ollama_url,
                 streaming=True,
                 purpose="chat",
             )
-            messages[-1] = deps.ollama_message_with_images(user_message, resource_image_paths)
+            messages.append(deps.ollama_message_with_images(user_message, resource_image_paths))
             if execution.get("note"):
                 yield {"type": "text", "chunk": f"⚠️ {execution['note']}\n\n"}
             async for chunk in deps.stream_ollama_chat(
@@ -233,8 +458,17 @@ async def run_agent(
         yield {"type": "done", "iterations": 1}
         return
 
-    if not _resuming:
-        direct_action = _direct_agent_action(
+    # Synthetic/internal callers (for example mission sandbox runs) should stay
+    # on the full ReAct path instead of letting the user-message heuristics
+    # reinterpret a generated prompt as a direct local file command.
+    if not force_tool_mode and not _resuming:
+        selected_cli_name = Path(resolved_cli).name.lower() if resolved_cli else ""
+        defer_mutating_request_to_cli = bool(
+            use_cli
+            and selected_cli_name == "codex"
+            and _is_mutating_file_request(user_message)
+        )
+        direct_action = None if defer_mutating_request_to_cli else _direct_agent_action(
             user_message,
             history=history,
             project_name=project_name,
@@ -244,7 +478,24 @@ async def run_agent(
         if direct_action:
             tool_name, tool_args, result, answer = direct_action
             yield {"type": "tool_call", "name": tool_name, "args": tool_args}
-            yield {"type": "tool_result", "name": tool_name, "result": result[:4000]}
+            yield {"type": "tool_result", "name": tool_name, "result": result[:2500]}
+            blocked = _blocked_tool_event(tool_name, tool_args, str(result))
+            if blocked:
+                tool_log.append({"name": tool_name, "args": tool_args, "result": str(result)[:500]})
+                if _ss and session_id:
+                    _ss.save(
+                        session_id=session_id,
+                        task=user_message[:300],
+                        messages=[],
+                        iteration=0,
+                        tool_log=tool_log,
+                        status="approval_required",
+                        project_name=project_name,
+                        backend=backend or ("cli" if use_cli else ("api" if use_api else "ollama")),
+                        metadata={k: v for k, v in blocked.items() if k != "type"},
+                    )
+                yield blocked
+                return
             yield {"type": "text", "chunk": answer}
             yield {"type": "done", "iterations": 1}
             return
@@ -266,14 +517,14 @@ async def run_agent(
 
     if use_cli:
         if _need_user_append:
-            messages.append({"role": "user", "content": user_message})
+            messages.append(deps.cli_message_with_images(user_message, resource_image_paths))
         execution = None
     elif use_api:
         if _need_user_append:
-            messages.append({"role": "user", "content": user_message})
+            messages.append(deps.api_message_with_images(user_message, resource_image_paths))
         execution = None
     else:
-        execution = await asyncio.to_thread(
+        execution = await run_sync_agent_call(
             deps.ollama_execution_profile_sync,
             vision_model or ollama_model or deps.ollama_agent_model,
             ollama_url,
@@ -284,7 +535,33 @@ async def run_agent(
             messages.append(deps.ollama_message_with_images(user_message, resource_image_paths))
 
     iteration = 0
+    tool_arg_repair_attempts = 0
+    blocked_tool_repair_attempts = 0
+    evidence_section_repair_attempts = 0
+    # Resolve brain module once for steer message injection
+    _brain_mod = None
+    try:
+        import importlib
+        _brain_mod = importlib.import_module("brain")
+    except Exception:
+        pass
+
     for iteration in range(max_iterations):
+        # ── Steer: inject any guidance messages from the UI ──
+        _steer_msgs = getattr(deps, "_agent_steer_messages", None) or []
+        if not _steer_msgs and hasattr(deps, "__wrapped__"):
+            _steer_msgs = getattr(deps.__wrapped__, "_agent_steer_messages", [])
+        # Also check brain module directly
+        if _brain_mod is not None:
+            _steer_msgs = getattr(_brain_mod, "_agent_steer_messages", []) or _steer_msgs
+        if _steer_msgs:
+            steer_text = "\n".join(f"[User guidance]: {m}" for m in _steer_msgs)
+            messages.append({"role": "user", "content": steer_text})
+            if _brain_mod is not None:
+                try:
+                    _brain_mod._agent_steer_messages = []
+                except Exception:
+                    pass
         full_text = ""
         streamed_up_to = 0
         found_action_live = False
@@ -292,7 +569,7 @@ async def run_agent(
 
             async def _token_source() -> AsyncGenerator[str, None]:
                 if use_cli:
-                    async for chunk in deps.stream_cli(messages, cli_path=resolved_cli, max_tokens=4096):
+                    async for chunk in deps.stream_cli(messages, cli_path=resolved_cli, max_tokens=2400, model=cli_model, allow_session_persistence=agent_cli_session_persistence):
                         yield chunk
                 elif use_api:
                     async for chunk in deps.stream_api_chat(
@@ -331,19 +608,106 @@ async def run_agent(
                             streamed_up_to = pos
                             break
                     if not found_action_live:
-                        safe_end = max(streamed_up_to, len(full_text) - 10)
-                        new_text = _filter_thinking_chunk(full_text[streamed_up_to:safe_end], strip=False)
-                        if new_text.strip():
-                            yield {"type": "thinking", "chunk": new_text}
-                            streamed_up_to = safe_end
+                        # Use a larger buffer and only emit on word boundaries to
+                        # prevent sub-word token fragments reaching the client
+                        # (DeepSeek streams character-by-character, causing broken
+                        # words like "bl ock ed" if chunked naively).
+                        buf_size = max(80, len(full_text) // 8)
+                        safe_end = max(streamed_up_to, len(full_text) - buf_size)
+                        if safe_end > streamed_up_to:
+                            # Snap to last whitespace to avoid mid-word splits
+                            candidate = full_text[streamed_up_to:safe_end]
+                            last_ws = candidate.rfind(' ')
+                            if last_ws > 0:
+                                safe_end = streamed_up_to + last_ws + 1
+                            new_text = _filter_thinking_chunk(full_text[streamed_up_to:safe_end], strip=False)
+                            if new_text.strip():
+                                yield {"type": "thinking", "chunk": new_text}
+                                streamed_up_to = safe_end
 
         except Exception as exc:
-            provider_label = api_provider or ("CLI" if use_cli else ("API" if use_api else "Ollama"))
-            yield {"type": "text", "chunk": f"\n⚠️ {provider_label} error: {exc}"}
-            break
+            provider_label = "CLI" if use_cli else (api_provider or ("API" if use_api else "Ollama"))
+            exc_lower = str(exc).lower()
+            if use_cli and _is_cli_rate_limit_error(exc_lower):
+                if api_key and api_base_url:
+                    fallback_label = api_provider or "API"
+                    fallback_model = api_model or "configured model"
+                    yield {
+                        "type": "thinking",
+                        "chunk": (
+                            f"\n⏳ Claude CLI hit a rate limit — switching this task to "
+                            f"{fallback_label} (`{fallback_model}`)…\n"
+                        ),
+                    }
+                    use_cli = False
+                    use_api = True
+                    if _brain_mod is not None and hasattr(_brain_mod, "_update_agent_runtime_context"):
+                        try:
+                            _brain_mod._update_agent_runtime_context(backend="api")
+                        except Exception:
+                            pass
+                    messages = _rewrite_messages_for_backend(
+                        messages,
+                        backend="api",
+                        deps=deps,
+                        user_message=user_message,
+                        resource_image_paths=resource_image_paths,
+                    )
+                    continue
+                if ollama_url or ollama_model:
+                    fallback_model = ollama_model or deps.ollama_agent_model
+                    yield {
+                        "type": "thinking",
+                        "chunk": (
+                            f"\n⏳ Claude CLI hit a rate limit — switching this task to "
+                            f"Local Ollama (`{fallback_model}`)…\n"
+                        ),
+                    }
+                    use_cli = False
+                    use_api = False
+                    execution = await run_sync_agent_call(
+                        deps.ollama_execution_profile_sync,
+                        vision_model or ollama_model or deps.ollama_agent_model,
+                        ollama_url,
+                        streaming=True,
+                        purpose="agent",
+                    )
+                    if _brain_mod is not None and hasattr(_brain_mod, "_update_agent_runtime_context"):
+                        try:
+                            _brain_mod._update_agent_runtime_context(backend="ollama")
+                        except Exception:
+                            pass
+                    messages = _rewrite_messages_for_backend(
+                        messages,
+                        backend="ollama",
+                        deps=deps,
+                        user_message=user_message,
+                        resource_image_paths=resource_image_paths,
+                    )
+                    continue
+            # ── Unrecoverable error ──────────────────────────────────────────
+            if _ss and session_id:
+                persisted_messages = list(messages)
+                persisted_error = f"⚠️ {provider_label} error: {exc}"
+                if full_text.strip():
+                    persisted_messages.append({"role": "assistant", "content": full_text.strip()})
+                persisted_messages.append({"role": "assistant", "content": persisted_error})
+                _ss.save(
+                    session_id=session_id,
+                    task=user_message[:300],
+                    messages=persisted_messages,
+                    iteration=iteration,
+                    tool_log=tool_log,
+                    status="interrupted",
+                    project_name=project_name,
+                    backend=backend or ("cli" if use_cli else ("api" if use_api else "ollama")),
+                    metadata={"error_message": str(exc), "provider": provider_label.lower()},
+                )
+            yield {"type": "error", "message": f"{provider_label} error: {exc}"}
+            return
 
         if not full_text.strip():
-            yield {"type": "text", "chunk": "\n⚠️ Empty response from model."}
+            yield {"type": "error", "message": "Empty response from model."}
             break
 
         action = _parse_react_action(full_text)
@@ -359,16 +723,84 @@ async def run_agent(
                     yield {"type": "thinking", "chunk": think_text}
 
             yield {"type": "tool_call", "name": tool_name, "args": tool_args}
-            result = await asyncio.to_thread(_execute_tool, tool_name, tool_args, deps)
-            if tool_name in ("write_file", "edit_file") and not str(result).startswith("ERROR:"):
+            result = await run_sync_agent_call(_execute_tool, tool_name, tool_args, deps)
+            blocked = _blocked_tool_event(tool_name, tool_args, str(result))
+            if tool_name in ("write_file", "edit_file") and not blocked and not str(result).startswith("ERROR:"):
                 wrote_files = True
-            yield {"type": "tool_result", "name": tool_name, "result": result[:4000]}
+            yield {"type": "tool_result", "name": tool_name, "result": result[:2500]}
+
+            tool_log.append({"name": tool_name, "args": tool_args, "result": str(result)[:500]})
+
+            if str(result).startswith("ERROR: Bad arguments for") and tool_arg_repair_attempts < 1:
+                tool_arg_repair_attempts += 1
+                messages.append({"role": "assistant", "content": full_text})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Your last tool call failed due to malformed or missing arguments.\n\n"
+                            f"Tool: {tool_name}\n"
+                            f"Error: {result[:2000]}\n\n"
+                            "Re-emit exactly one corrected tool call now.\n"
+                            "Output only:\n"
+                            f"ACTION: {tool_name}\n"
+                            "ARGS: {valid JSON object}\n"
+                            "Do not include explanation, thinking, or ANSWER."
+                        ),
+                    }
+                )
+                continue
+
+            repair_prompt = None
+            if blocked and blocked_tool_repair_attempts < 1:
+                repair_prompt = blocked_tool_retry_prompt(tool_name, tool_args, str(result))
+            if repair_prompt:
+                blocked_tool_repair_attempts += 1
+                yield {
+                    "type": "thinking",
+                    "chunk": "⚠️ Rewriting the blocked shell command to use `cwd` and retrying.\n",
+                }
+                messages.append({"role": "assistant", "content": full_text})
+                messages.append({"role": "user", "content": repair_prompt})
+                continue
+
+            if blocked:
+                messages.append({"role": "assistant", "content": full_text})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Tool result for {tool_name}:\n{result[:4000]}\n\n"
+                            "Approval is required for that action. Stop now and wait for the user to "
+                            "approve or deny it. Do not assume the action ran."
+                        ),
+                    }
+                )
+                if _ss and session_id:
+                    _ss.save(
+                        session_id=session_id,
+                        task=user_message[:300],
+                        messages=messages,
+                        iteration=iteration,
+                        tool_log=tool_log,
+                        status="approval_required",
+                        project_name=project_name,
+                        backend=backend or ("cli" if use_cli else ("api" if use_api else "ollama")),
+                        metadata={k: v for k, v in blocked.items() if k != "type"},
+                    )
+                yield blocked
+                return
 
             messages.append({"role": "assistant", "content": full_text})
             messages.append(
                 {
                     "role": "user",
-                    "content": f"Tool result for {tool_name}:\n{result[:4000]}\n\nContinue.",
+                    "content": _tool_followup_message(
+                        tool_name,
+                        result,
+                        active_tool_names=active_tool_names,
+                        workspace_path=workspace_path,
+                    ),
                 }
             )
 
@@ -383,7 +815,7 @@ async def run_agent(
                 "max_iterations": max_iterations,
             }
 
-            if context_compact and _ctx_pct >= 70 and len(messages) > 8:
+            if context_compact and _ctx_pct >= 50 and len(messages) > 8:
                 system_msgs = [message for message in messages if message.get("role") == "system"]
                 non_system = [message for message in messages if message.get("role") != "system"]
                 recent_msgs = non_system[-6:]
@@ -414,7 +846,6 @@ async def run_agent(
                         "chunk": f"📦 Context compacted ({_ctx_pct}% full) — continuing…\n",
                     }
 
-            tool_log.append({"name": tool_name, "args": tool_args, "result": str(result)[:500]})
             if _ss and session_id:
                 _ss.save(
                     session_id=session_id,
@@ -436,6 +867,21 @@ async def run_agent(
             if not answer or answer == "your response here":
                 yield {"type": "text", "chunk": "\n⚠️ Axon could not form a clean answer. Please retry the task."}
                 break
+            if _needs_evidence_section_repair(user_message, answer):
+                if evidence_section_repair_attempts < 1:
+                    evidence_section_repair_attempts += 1
+                    yield {
+                        "type": "thinking",
+                        "chunk": "⚠️ Tightening the checkpoint summary — separating verified facts from inferred context.\n",
+                    }
+                    messages.append({"role": "assistant", "content": full_text})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": _build_evidence_repair_prompt(user_message, tool_log),
+                        }
+                    )
+                    continue
             yield {"type": "text", "chunk": answer}
             if _ss and session_id:
                 _ss.mark_complete(session_id)
@@ -447,6 +893,21 @@ async def run_agent(
                 tool_log=tool_log,
             )
             if guarded_text:
+                if _needs_evidence_section_repair(user_message, guarded_text):
+                    if evidence_section_repair_attempts < 1:
+                        evidence_section_repair_attempts += 1
+                        yield {
+                            "type": "thinking",
+                            "chunk": "⚠️ Tightening the checkpoint summary — separating verified facts from inferred context.\n",
+                        }
+                        messages.append({"role": "assistant", "content": full_text})
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": _build_evidence_repair_prompt(user_message, tool_log),
+                            }
+                        )
+                        continue
                 yield {"type": "text", "chunk": guarded_text}
                 break
             if iteration < max_iterations - 1:

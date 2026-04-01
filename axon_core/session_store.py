@@ -24,9 +24,12 @@ import json
 import sqlite3
 import time
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+from axon_data.sqlite_utils import managed_connection
 
 DEFAULT_DB = Path.home() / ".devbrain" / "devbrain.db"
 
@@ -46,6 +49,8 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
 )
 """
 
+_MEMORY_FALLBACK_SESSIONS: dict[str, "AgentSession"] = {}
+
 
 @dataclass
 class AgentSession:
@@ -54,7 +59,7 @@ class AgentSession:
     messages: list[dict]
     iteration: int
     tool_log: list[dict]
-    status: str                   # "active" | "completed" | "interrupted"
+    status: str                   # "active" | "completed" | "interrupted" | "approval_required"
     project_name: Optional[str]
     backend: str
     created_at: float
@@ -91,10 +96,8 @@ class SessionStore:
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _connect(self):
+        return managed_connection(self.db_path, timeout=10, row_factory=sqlite3.Row)
 
     def _ensure_table(self):
         try:
@@ -103,6 +106,32 @@ class SessionStore:
                 conn.commit()
         except Exception:
             pass  # DB not ready yet — will retry on first write
+
+    @staticmethod
+    def _remember_fallback(session: AgentSession):
+        _MEMORY_FALLBACK_SESSIONS[session.session_id] = deepcopy(session)
+
+    @staticmethod
+    def _set_fallback_status(session_id: str, status: str):
+        session = _MEMORY_FALLBACK_SESSIONS.get(session_id)
+        if not session:
+            return
+        session.status = status
+        session.updated_at = time.time()
+        _MEMORY_FALLBACK_SESSIONS[session_id] = deepcopy(session)
+
+    @staticmethod
+    def _fallback_recent(*statuses: str, max_age_hours: float = 48.0) -> Optional[AgentSession]:
+        cutoff = time.time() - max_age_hours * 3600
+        candidates = [
+            deepcopy(session)
+            for session in _MEMORY_FALLBACK_SESSIONS.values()
+            if session.status in statuses and session.updated_at >= cutoff
+        ]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item.updated_at, reverse=True)
+        return candidates[0]
 
     # ── Write ─────────────────────────────────────────────────────────────────
 
@@ -120,6 +149,23 @@ class SessionStore:
     ) -> str:
         """Upsert a session record.  Returns session_id."""
         now = time.time()
+        session = AgentSession(
+            session_id=session_id,
+            task=task,
+            messages=deepcopy(messages[-40:]),
+            iteration=iteration,
+            tool_log=deepcopy(tool_log[-30:]),
+            status=status,
+            project_name=project_name,
+            backend=backend,
+            created_at=now,
+            updated_at=now,
+            metadata=deepcopy(metadata or {}),
+        )
+        existing = _MEMORY_FALLBACK_SESSIONS.get(session_id)
+        if existing:
+            session.created_at = existing.created_at
+        self._remember_fallback(session)
         try:
             with self._connect() as conn:
                 conn.execute(_CREATE_SQL)
@@ -163,6 +209,7 @@ class SessionStore:
         self._set_status(session_id, "interrupted")
 
     def _set_status(self, session_id: str, status: str):
+        self._set_fallback_status(session_id, status)
         try:
             with self._connect() as conn:
                 conn.execute(
@@ -191,25 +238,46 @@ class SessionStore:
                 ).fetchone()
         except Exception:
             return None
-        return self._row_to_session(row) if row else None
+        return self._row_to_session(row) if row else self._fallback_recent("active", max_age_hours=max_age_hours)
 
-    def get_interrupted(self, max_age_hours: float = 48.0) -> Optional[AgentSession]:
-        """Return the most-recently interrupted session that can be resumed."""
-        cutoff = time.time() - max_age_hours * 3600
+    def get_interrupted(self, max_age_hours: float = 8.0) -> Optional[AgentSession]:
+        """Return the most recent resumable session, preferring paused sessions over stale active ones."""
+        paused_cutoff = time.time() - max_age_hours * 3600
+        active_cutoff = time.time() - min(max_age_hours, 2.0) * 3600
         try:
             with self._connect() as conn:
-                row = conn.execute(
+                paused_row = conn.execute(
                     """
                     SELECT * FROM agent_sessions
-                    WHERE status IN ('active', 'interrupted') AND updated_at >= ?
+                    WHERE status IN ('interrupted', 'approval_required') AND updated_at >= ?
                     ORDER BY updated_at DESC
                     LIMIT 1
                     """,
-                    (cutoff,),
+                    (paused_cutoff,),
+                ).fetchone()
+                if paused_row:
+                    return self._row_to_session(paused_row)
+
+                active_row = conn.execute(
+                    """
+                    SELECT * FROM agent_sessions
+                    WHERE status = 'active' AND updated_at >= ?
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (active_cutoff,),
                 ).fetchone()
         except Exception:
-            return None
-        return self._row_to_session(row) if row else None
+            fallback = self._fallback_recent("interrupted", "approval_required", max_age_hours=max_age_hours)
+            if fallback:
+                return fallback
+            return self._fallback_recent("active", max_age_hours=min(max_age_hours, 2.0))
+        if active_row:
+            return self._row_to_session(active_row)
+        fallback = self._fallback_recent("interrupted", "approval_required", max_age_hours=max_age_hours)
+        if fallback:
+            return fallback
+        return self._fallback_recent("active", max_age_hours=min(max_age_hours, 2.0))
 
     def get_by_id(self, session_id: str) -> Optional[AgentSession]:
         try:
@@ -219,8 +287,12 @@ class SessionStore:
                     (session_id,),
                 ).fetchone()
         except Exception:
-            return None
-        return self._row_to_session(row) if row else None
+            session = _MEMORY_FALLBACK_SESSIONS.get(session_id)
+            return deepcopy(session) if session else None
+        if row:
+            return self._row_to_session(row)
+        session = _MEMORY_FALLBACK_SESSIONS.get(session_id)
+        return deepcopy(session) if session else None
 
     def list_recent(self, limit: int = 10) -> list[AgentSession]:
         try:
@@ -230,8 +302,19 @@ class SessionStore:
                     (limit,),
                 ).fetchall()
         except Exception:
-            return []
-        return [self._row_to_session(r) for r in rows]
+            rows = []
+        sessions = [self._row_to_session(r) for r in rows]
+        seen = {session.session_id for session in sessions}
+        fallback = [
+            deepcopy(session)
+            for session in sorted(
+                _MEMORY_FALLBACK_SESSIONS.values(),
+                key=lambda item: item.updated_at,
+                reverse=True,
+            )
+            if session.session_id not in seen
+        ]
+        return (sessions + fallback)[:limit]
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
@@ -266,12 +349,19 @@ _RESUME_PHRASES = (
     "carry on",
     "continue working",
     "resume where",
+    "go ahead",
+    "proceed",
 )
+
+# Also match bare "continue" as an exact match
+_RESUME_EXACT = ("continue", "go", "yes continue", "yes", "ok", "ok continue")
 
 
 def is_resume_request(text: str) -> bool:
     """True if the user's message is asking to continue a previous session."""
     lower = text.lower().strip()
+    if lower in _RESUME_EXACT:
+        return True
     return any(phrase in lower for phrase in _RESUME_PHRASES)
 
 

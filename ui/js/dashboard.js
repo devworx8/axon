@@ -110,6 +110,9 @@ function axonDashboardMixin() {
           this.connectionState = status.connection;
           this.connectionState.domain_checked_at = new Date().toISOString();
         }
+        if (this.settingsForm && typeof status.cli_model === 'string' && (this.settingsForm.ai_backend || '').toLowerCase() === 'cli') {
+          this.settingsForm.claude_cli_model = status.cli_model || '';
+        }
       } catch (e) {
         this.runtimeStatus = {
           ...this.runtimeStatus,
@@ -128,8 +131,12 @@ function axonDashboardMixin() {
         },
         {
           label: 'Active Model',
-          value: this.runtimeStatus.active_model || this.activeChatModel() || 'Waiting',
-          tone: this.runtimeStatus.active_model ? 'ok' : 'neutral',
+          value: this.usesOllamaBackend()
+            ? (this.runtimeStatus.active_model || this.activeChatModel() || 'Waiting')
+            : ((this.settingsForm?.ai_backend || '').toLowerCase() === 'cli'
+              ? this.activeCliModelLabel()
+              : (this.runtimeStatus.active_model || this.selectedApiProviderModel() || 'Waiting')),
+          tone: (this.runtimeStatus.active_model || this.runtimeStatus.cli_model || this.selectedApiProviderModel()) ? 'ok' : 'neutral',
         },
         {
           label: 'Secure Vault',
@@ -224,6 +231,7 @@ function axonDashboardMixin() {
       const icons = {
         ollama: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M7 15c0-3.314 2.239-6 5-6s5 2.686 5 6-2.239 4-5 4-5-.686-5-4z"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 10c-.333-2 1-5 3-5 1.48 0 2.44 1.12 3 2.5M10 14h.01M14 14h.01"/></svg>`,
         cli: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6.75h16v10.5H4z"/><path stroke-linecap="round" stroke-linejoin="round" d="m8 10 2 2-2 2m5 0h3"/></svg>`,
+        codex: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3.5 17.5 6v6L12 15.5 6.5 12V6L12 3.5z"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v8M8.5 10 15.5 14M15.5 10 8.5 14"/></svg>`,
         anthropic: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="m6 18 6-12 6 12"/><path stroke-linecap="round" stroke-linejoin="round" d="M8.5 13h7"/></svg>`,
         openai_gpts: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3.5 17.5 6v6L12 15.5 6.5 12V6L12 3.5z"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v8M8.5 10 15.5 14M15.5 10 8.5 14"/></svg>`,
         gemini_gems: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="m12 2 2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2L12 2Z"/></svg>`,
@@ -235,6 +243,7 @@ function axonDashboardMixin() {
     providerIdentityTone(providerId = '') {
       if (providerId === 'ollama') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
       if (providerId === 'cli') return 'border-green-500/20 bg-green-500/10 text-green-200';
+      if (providerId === 'codex') return 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200';
       if (providerId === 'anthropic') return 'border-orange-500/20 bg-orange-500/10 text-orange-200';
       if (providerId === 'openai_gpts') return 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200';
       if (providerId === 'gemini_gems') return 'border-indigo-500/20 bg-indigo-500/10 text-indigo-200';
@@ -260,10 +269,10 @@ function axonDashboardMixin() {
         };
       }
       return {
-        providerId: 'cli',
-        providerLabel: 'CLI Agent',
-        modelLabel: this.runtimeStatus?.active_model || this.settingsForm?.code_model || this.settingsForm?.ollama_model || 'Saved default',
-        transportLabel: 'Local bridge',
+        providerId: this.cliRuntimeId() === 'codex' ? 'codex' : 'cli',
+        providerLabel: this.cliRuntimeName(),
+        modelLabel: this.activeCliModelLabel(),
+        transportLabel: this.cliRuntimeId() === 'codex' ? 'Local extension' : 'Local bridge',
       };
     },
 
@@ -326,7 +335,7 @@ function axonDashboardMixin() {
     backendBadge() {
       const backend = (this.settingsForm?.ai_backend || 'ollama').toLowerCase();
       if (backend === 'ollama') return 'Local Ollama';
-      if (backend === 'cli') return 'CLI Agent';
+      if (backend === 'cli') return this.cliRuntimeName();
       return this.selectedApiProviderLabel();
     },
 
@@ -366,6 +375,237 @@ function axonDashboardMixin() {
       return transport;
     },
 
+    cliModelOptions() {
+      const options = Array.isArray(this.runtimeStatus?.cli_models) ? [...this.runtimeStatus.cli_models] : [];
+      const selected = String(this.settingsForm?.claude_cli_model || this.runtimeStatus?.cli_model || '').trim();
+      if (selected && !options.some(item => String(item?.id || '') === selected)) {
+        options.push({ id: selected, label: selected, description: 'Saved custom model' });
+      }
+      if (options.length) return options;
+      if (this.cliRuntimeId() === 'codex') {
+        return [{ id: '', label: 'Codex default' }];
+      }
+      return [
+        { id: '', label: 'Claude default' },
+        { id: 'sonnet', label: 'Sonnet' },
+        { id: 'opus', label: 'Opus' },
+        { id: 'haiku', label: 'Haiku' },
+        { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6' },
+        { id: 'claude-opus-4-5', label: 'claude-opus-4-5' },
+        { id: 'claude-haiku-4-5', label: 'claude-haiku-4-5' },
+      ];
+    },
+
+    cliModelLabel(modelId = '') {
+      const selected = String(modelId || '').trim();
+      const option = this.cliModelOptions().find(item => String(item.id || '') === selected);
+      if (option?.label) return option.label;
+      return selected || (this.cliRuntimeId() === 'codex' ? 'Codex default' : 'Claude default');
+    },
+
+    activeCliModelLabel() {
+      const selected = this.settingsForm?.claude_cli_model || this.runtimeStatus?.cli_model || '';
+      return this.cliModelLabel(selected);
+    },
+
+    async saveCliModelQuiet() {
+      try {
+        await this.api('POST', '/api/settings', {
+          claude_cli_model: this.settingsForm.claude_cli_model || '',
+        });
+        await this.loadRuntimeStatus();
+      } catch (e) {
+        this.showToast('Failed to update CLI model');
+      }
+    },
+
+    cliRuntimeInfo() {
+      return this.runtimeStatus?.cli_runtime || { auth: {}, selected_environment: {} };
+    },
+
+    cliRuntimeId() {
+      return this.cliRuntimeInfo()?.runtime_id || 'claude';
+    },
+
+    cliRuntimeName() {
+      return this.cliRuntimeInfo()?.runtime_name || (this.cliRuntimeId() === 'codex' ? 'Codex CLI' : 'Claude CLI');
+    },
+
+    cliRuntimeBinaryName() {
+      const fallback = this.cliRuntimeId() === 'codex' ? 'codex' : 'claude';
+      const path = this.settingsForm?.claude_cli_path || this.cliRuntimeInfo().binary || this.runtimeStatus?.cli_binary || fallback;
+      return String(path || fallback).split('/').pop() || fallback;
+    },
+
+    cliRuntimeSourceSummary() {
+      const info = this.cliRuntimeInfo();
+      const runtimeName = this.cliRuntimeName();
+      if (!info.installed) {
+        return info.install_available
+          ? `${runtimeName} is not installed yet. Axon can install it and then auto-detect it.`
+          : `${runtimeName} is not installed and npm is not currently available in Axon's environment.`;
+      }
+      const env = info.selected_environment || {};
+      if (info.manual_override_path) {
+        return `Using manual override${env.label ? ` · ${env.label}` : ''}`;
+      }
+      if (info.using_auto_discovery) {
+        return `Auto-detected${env.label ? ` · ${env.label}` : ''}`;
+      }
+      return env.label || 'Detected locally';
+    },
+
+    cliRuntimeAuthSummary() {
+      const info = this.cliRuntimeInfo();
+      const auth = info.auth || {};
+      if (this.cliCooldownSummary()) return this.cliCooldownSummary();
+      if (!info.installed) return `Install ${this.cliRuntimeName()} to use its local login.`;
+      if (auth.logged_in) return auth.message || 'Signed in';
+      return auth.message || 'Not signed in';
+    },
+
+    cliCooldownSummary() {
+      const remaining = Number(this.runtimeStatus?.cli_cooldown_remaining_seconds || 0);
+      if (!(remaining > 0)) return '';
+      return `Claude CLI is cooling down for about ${Math.ceil(remaining)}s after a rate limit. Axon will use a fallback runtime until it clears.`;
+    },
+
+    codexRuntimeInfo() {
+      return this.runtimeStatus?.codex_runtime || { auth: {} };
+    },
+
+    codexRuntimeAuthSummary() {
+      const info = this.codexRuntimeInfo();
+      const auth = info.auth || {};
+      if (!info.installed) {
+        return info.install_available
+          ? 'Codex CLI is not installed yet. Axon can install it via npm.'
+          : 'Codex CLI is not installed and npm is not currently available in Axon\'s environment.';
+      }
+      return auth.message || 'Codex CLI is installed.';
+    },
+
+    async refreshClaudeCliStatus(silent = false) {
+      try {
+        await this.loadRuntimeStatus();
+        if (!silent) this.showToast(`${this.cliRuntimeName()} status refreshed`);
+      } catch (e) {
+        if (!silent) this.showToast(`Refresh failed: ${e.message || e}`);
+      }
+    },
+
+    async useAutoDetectedCli() {
+      try {
+        this.settingsForm.claude_cli_path = '';
+        await this.api('POST', '/api/settings', { claude_cli_path: '' });
+        await this.loadRuntimeStatus();
+        this.showToast('CLI runtime will now use auto-discovery');
+      } catch (e) {
+        this.showToast(`Failed to clear CLI override: ${e.message || e}`);
+      }
+    },
+
+    async selectCliEnvironment(env) {
+      const nextPath = env?.path || '';
+      const nextFamily = String(env?.family || '');
+      const currentFamily = this.cliRuntimeId();
+      this.settingsForm.ai_backend = 'cli';
+      this.settingsForm.claude_cli_path = nextPath;
+      if (nextFamily && currentFamily && nextFamily !== currentFamily) {
+        this.settingsForm.claude_cli_model = '';
+      }
+      try {
+        await this.api('POST', '/api/settings', {
+          ai_backend: 'cli',
+          claude_cli_path: nextPath,
+          claude_cli_model: this.settingsForm.claude_cli_model || '',
+        });
+        await this.loadRuntimeStatus();
+      } catch (_) {}
+    },
+
+    async _copyCommandPreview(text) {
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (_) {
+        // Ignore clipboard failures; the prepared command is still shown in the UI.
+      }
+    },
+
+    async installClaudeCli() {
+      if (this.cliRuntimeActionLoading?.install) return;
+      this.cliRuntimeActionLoading.install = true;
+      this.cliRuntimeActionResult = null;
+      try {
+        const endpoint = this.cliRuntimeId() === 'codex' ? '/api/runtime/codex/install' : '/api/runtime/cli/install';
+        const res = await this.api('POST', endpoint, {});
+        this.cliRuntimeActionResult = res;
+        if (res.command_preview) await this._copyCommandPreview(res.command_preview);
+        await this.loadRuntimeStatus();
+        this.showToast(res.message || `${this.cliRuntimeName()} install finished`);
+      } catch (e) {
+        this.cliRuntimeActionResult = { status: 'error', message: e.message || `${this.cliRuntimeName()} install failed` };
+        this.showToast(`${this.cliRuntimeName()} install failed: ${e.message || e}`);
+      }
+      this.cliRuntimeActionLoading.install = false;
+    },
+
+    async loginClaudeCli() {
+      if (this.cliRuntimeActionLoading?.login) return;
+      this.cliRuntimeActionLoading.login = true;
+      this.cliRuntimeActionResult = null;
+      try {
+        const endpoint = this.cliRuntimeId() === 'codex' ? '/api/runtime/codex/login' : '/api/runtime/cli/login';
+        const payload = this.cliRuntimeId() === 'codex'
+          ? {}
+          : { mode: 'claudeai', email: this.currentUser?.email || '' };
+        const res = await this.api('POST', endpoint, payload);
+        this.cliRuntimeActionResult = res;
+        if (res.command_preview) await this._copyCommandPreview(res.command_preview);
+        await this.loadRuntimeStatus();
+        this.showToast(res.message || `${this.cliRuntimeName()} login command prepared`);
+      } catch (e) {
+        this.cliRuntimeActionResult = { status: 'error', message: e.message || `${this.cliRuntimeName()} login failed` };
+        this.showToast(`${this.cliRuntimeName()} login failed: ${e.message || e}`);
+      }
+      this.cliRuntimeActionLoading.login = false;
+    },
+
+    async installCodexCli() {
+      if (this.cliRuntimeActionLoading?.codex_install) return;
+      this.cliRuntimeActionLoading.codex_install = true;
+      this.codexRuntimeActionResult = null;
+      try {
+        const res = await this.api('POST', '/api/runtime/codex/install', {});
+        this.codexRuntimeActionResult = res;
+        if (res.command_preview) await this._copyCommandPreview(res.command_preview);
+        await this.loadRuntimeStatus();
+        this.showToast(res.message || 'Codex CLI install finished');
+      } catch (e) {
+        this.codexRuntimeActionResult = { status: 'error', message: e.message || 'Codex CLI install failed' };
+        this.showToast(`Codex CLI install failed: ${e.message || e}`);
+      }
+      this.cliRuntimeActionLoading.codex_install = false;
+    },
+
+    async loginCodexCli() {
+      if (this.cliRuntimeActionLoading?.codex_login) return;
+      this.cliRuntimeActionLoading.codex_login = true;
+      this.codexRuntimeActionResult = null;
+      try {
+        const res = await this.api('POST', '/api/runtime/codex/login', {});
+        this.codexRuntimeActionResult = res;
+        if (res.command_preview) await this._copyCommandPreview(res.command_preview);
+        await this.loadRuntimeStatus();
+        this.showToast(res.message || 'Codex CLI login command prepared');
+      } catch (e) {
+        this.codexRuntimeActionResult = { status: 'error', message: e.message || 'Codex CLI login failed' };
+        this.showToast(`Codex CLI login failed: ${e.message || e}`);
+      }
+      this.cliRuntimeActionLoading.codex_login = false;
+    },
+
     consoleRuntimeLabel() {
       const backend = (this.settingsForm?.ai_backend || 'ollama').toLowerCase();
       if (backend === 'ollama') {
@@ -376,7 +616,7 @@ function axonDashboardMixin() {
         const model = this.selectedApiProviderModel();
         return model ? `${provider} · ${model}` : provider;
       }
-      return 'CLI agent';
+      return `${this.cliRuntimeName()} · ${this.activeCliModelLabel()}`;
     },
 
     composerEnvLabel() {
@@ -428,14 +668,15 @@ function axonDashboardMixin() {
         const model = this.selectedApiProviderModel();
         return model ? `${provider} · ${model}` : provider;
       }
-      return 'CLI Agent';
+      return `${this.cliRuntimeName()} · ${this.activeCliModelLabel()}`;
     },
 
     browserActionRiskClass(risk) {
+      // Kept for legacy callers; the new perm-card system uses inline :class bindings
       const value = String(risk || 'medium').toLowerCase();
-      if (value === 'high') return 'border-rose-500/20 bg-rose-500/10 text-rose-200';
-      if (value === 'low') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
-      return 'border-amber-500/20 bg-amber-500/10 text-amber-200';
+      if (value === 'high')   return 'border-rose-500/30 bg-rose-500/12 text-rose-200';
+      if (value === 'low')    return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200';
+      return 'border-amber-500/25 bg-amber-500/10 text-amber-200';
     },
 
     browserActionScopeLabel(scope) {
@@ -447,12 +688,15 @@ function axonDashboardMixin() {
 
     browserActionIcon(actionType) {
       const value = String(actionType || '').toLowerCase();
-      if (value.includes('navigate') || value.includes('open')) return '↗';
-      if (value.includes('click') || value.includes('press')) return '⌖';
-      if (value.includes('type') || value.includes('fill')) return '⌨';
-      if (value.includes('inspect') || value.includes('snapshot')) return '◫';
-      if (value.includes('submit')) return '⤴';
-      return '◦';
+      if (value.includes('navigate') || value.includes('open'))    return '🌐';
+      if (value.includes('submit') || value.includes('form'))       return '📤';
+      if (value.includes('click') || value.includes('press'))       return '👆';
+      if (value.includes('type') || value.includes('fill') || value.includes('input')) return '⌨️';
+      if (value.includes('scroll'))                                 return '↕️';
+      if (value.includes('screenshot') || value.includes('snapshot')) return '📸';
+      if (value.includes('inspect') || value.includes('read'))      return '🔍';
+      if (value.includes('download') || value.includes('file'))     return '📥';
+      return '🖱️';
     },
 
     async loadBrowserActions() {
@@ -468,6 +712,33 @@ function axonDashboardMixin() {
         this.browserActions.loading = false;
         this.showToast(`Browser actions unavailable: ${e.message || e}`);
       }
+    },
+
+    async loadServerLogs(tail = null) {
+      this.serverLogs.loading = true;
+      this.serverLogs.error = '';
+      try {
+        const lines = Number(tail || this.serverLogs.tail || 200);
+        const payload = await this.api('GET', `/api/server/logs?tail=${encodeURIComponent(lines)}`);
+        this.serverLogs = {
+          ...this.serverLogs,
+          open: true,
+          loading: false,
+          path: payload.path || '',
+          text: payload.text || '',
+          available: !!payload.available,
+          tail: lines,
+        };
+      } catch (e) {
+        this.serverLogs.loading = false;
+        this.serverLogs.error = e.message || 'Server logs unavailable';
+        this.showToast(`Server logs unavailable: ${e.message || e}`);
+      }
+    },
+
+    async openServerLogs() {
+      this.serverLogs.open = true;
+      await this.loadServerLogs(this.serverLogs.tail || 200);
     },
 
     async approveBrowserAction(id) {
@@ -543,8 +814,8 @@ function axonDashboardMixin() {
           tone: this.runtimeStatus.runtime_state === 'active' ? 'ok' : 'warn',
         },
         {
-          label: `Model ${this.runtimeStatus.active_model || this.selectedApiProviderModel() || 'pending'}`,
-          tone: (this.runtimeStatus.active_model || this.selectedApiProviderModel()) ? 'neutral' : 'warn',
+          label: `Model ${((this.settingsForm?.ai_backend || '').toLowerCase() === 'cli') ? this.activeCliModelLabel() : (this.runtimeStatus.active_model || this.selectedApiProviderModel() || 'pending')}`,
+          tone: (((this.settingsForm?.ai_backend || '').toLowerCase() === 'cli') ? this.activeCliModelLabel() : (this.runtimeStatus.active_model || this.selectedApiProviderModel())) ? 'neutral' : 'warn',
         },
       ];
       if (!this.usesOllamaBackend()) {
@@ -632,7 +903,89 @@ function axonDashboardMixin() {
 
     activeApiProviderCard() {
       const id = this.settingsForm?.api_provider || 'deepseek';
-      return (this.runtimeStatus.api_providers || []).find(provider => provider.id === id) || null;
+      return this.runtimeApiProviders().find(provider => provider.id === id) || null;
+    },
+
+    runtimeApiProviders() {
+      const builtins = [
+        {
+          id: 'deepseek',
+          label: 'DeepSeek',
+          transport: 'openai_compatible',
+          default_base_url: 'https://api.deepseek.com/v1',
+          default_model: 'deepseek-reasoner',
+          model: this.settingsForm?.deepseek_api_model || 'deepseek-reasoner',
+          configured: !!(this.settingsForm?._deepseekKeyHint || this.settingsForm?.deepseek_api_key),
+        },
+        {
+          id: 'anthropic',
+          label: 'Anthropic',
+          transport: 'anthropic',
+          default_base_url: 'https://api.anthropic.com/v1',
+          default_model: 'claude-sonnet-4-5',
+          model: this.settingsForm?.anthropic_api_model || 'claude-sonnet-4-5',
+          configured: !!(this.settingsForm?._anthropicKeyHint || this.settingsForm?.anthropic_api_key),
+        },
+        {
+          id: 'gemini_gems',
+          label: 'Gemini',
+          transport: 'gemini',
+          default_base_url: 'https://generativelanguage.googleapis.com/v1beta',
+          default_model: 'gemini-2.5-pro',
+          model: this.settingsForm?.gemini_api_model || 'gemini-2.5-pro',
+          configured: !!(this.settingsForm?._geminiKeyHint || this.settingsForm?.gemini_api_key),
+        },
+      ];
+
+      const runtime = Array.isArray(this.runtimeStatus?.api_providers) ? this.runtimeStatus.api_providers : [];
+      const selected = this.runtimeStatus?.selected_api_provider || {};
+      const selectedId = selected.provider_id || this.settingsForm?.api_provider || 'deepseek';
+      const orderedIds = builtins.map(provider => provider.id);
+      const byId = new Map();
+
+      for (const provider of builtins) {
+        byId.set(provider.id, {
+          ...provider,
+          enabled: provider.id === selectedId,
+          selected: provider.id === selectedId,
+          external: true,
+        });
+      }
+
+      for (const provider of runtime) {
+        if (!provider?.id) continue;
+        const merged = {
+          ...(byId.get(provider.id) || {}),
+          ...provider,
+        };
+        merged.enabled = provider.id === selectedId;
+        merged.selected = provider.id === selectedId;
+        byId.set(provider.id, merged);
+        if (!orderedIds.includes(provider.id)) orderedIds.push(provider.id);
+      }
+
+      if (selectedId) {
+        const existing = byId.get(selectedId) || {};
+        byId.set(selectedId, {
+          id: selectedId,
+          label: selected.provider_label || existing.label || selectedId,
+          transport: selected.transport || existing.transport || 'api',
+          base_url: selected.api_base_url || existing.base_url || existing.default_base_url || '',
+          default_base_url: existing.default_base_url || selected.api_base_url || '',
+          model: selected.api_model || existing.model || existing.default_model || '',
+          default_model: existing.default_model || selected.api_model || '',
+          configured: typeof existing.configured === 'boolean' ? existing.configured : true,
+          external: true,
+          enabled: true,
+          selected: true,
+          ...existing,
+        });
+        if (!orderedIds.includes(selectedId)) orderedIds.unshift(selectedId);
+      }
+
+      return orderedIds
+        .map(id => byId.get(id))
+        .filter(Boolean);
     },
 
     providerValue(providerId, kind) {
@@ -666,7 +1019,7 @@ function axonDashboardMixin() {
     },
 
     providerRuntimeHint(providerId) {
-      const card = (this.runtimeStatus.api_providers || []).find(provider => provider.id === providerId)
+      const card = this.runtimeApiProviders().find(provider => provider.id === providerId)
         || (this.runtimeStatus.cloud_agents || []).find(provider => provider.id === providerId);
       if (!card) return 'External adapter configuration stays isolated from local-only workflows.';
       const base = card.base_url || card.default_base_url || 'custom endpoint';
@@ -736,7 +1089,7 @@ function axonDashboardMixin() {
     },
 
     async testCloudProvider(providerId) {
-      const card = (this.runtimeStatus.api_providers || []).find(provider => provider.id === providerId)
+      const card = this.runtimeApiProviders().find(provider => provider.id === providerId)
         || (this.runtimeStatus.cloud_agents || []).find(provider => provider.id === providerId);
       if (!card) return;
       this.cloudProviderTests[providerId] = { ok: false, message: 'Testing…' };
@@ -852,7 +1205,10 @@ function axonDashboardMixin() {
 
     openComposerMenu() {
       this.showComposerMenu = !this.showComposerMenu;
-      if (this.showComposerMenu) this.showResourcePicker = false;
+      if (this.showComposerMenu) {
+        this.showResourcePicker = false;
+        if (this.isMobile) this.showConsoleDetails = false;
+      }
     },
 
     normalizedComposerOptions() {
@@ -1219,6 +1575,17 @@ function axonDashboardMixin() {
           detail: event.message || 'Axon hit an error and stopped safely.',
         };
         this.pushLiveOperatorFeed('recover', 'Needs attention', event.message || 'Axon hit an error and stopped safely.');
+        return;
+      }
+      if (event.type === 'approval_required') {
+        this.liveOperator = {
+          ...this.liveOperator,
+          active: true,
+          phase: 'recover',
+          title: 'Awaiting approval',
+          detail: event.message || 'Axon paused until you approve or deny the blocked action.',
+        };
+        this.pushLiveOperatorFeed('recover', 'Awaiting approval', event.message || 'Axon paused until you approve or deny the blocked action.');
       }
     },
 
@@ -1273,6 +1640,10 @@ function axonDashboardMixin() {
         if (ct.includes('application/json')) {
           const body = await resp.json();
           const msg = body.message || body.detail || 'Desktop preview unavailable';
+          if (body.status === 'no_display' || body.status === 'capture_failed') {
+            this.desktopPreview.enabled = false;
+            this.stopDesktopPreview();
+          }
           throw new Error(body.status === 'no_display'
             ? '🖥️ Screen capture unavailable in this environment'
             : msg);
@@ -1668,7 +2039,10 @@ function axonDashboardMixin() {
 
     async openResourcePicker() {
       this.showResourcePicker = !this.showResourcePicker;
-      if (this.showResourcePicker) this.showComposerMenu = false;
+      if (this.showResourcePicker) {
+        this.showComposerMenu = false;
+        if (this.isMobile) this.showConsoleDetails = false;
+      }
       if (this.showResourcePicker && !this.resources.length) {
         await this.loadResources();
       }
@@ -1705,6 +2079,31 @@ function axonDashboardMixin() {
 
     resourceChipLabel(resource) {
       return resource?.title || resource?.name || `Resource ${resource?.id || ''}`.trim();
+    },
+
+    resourceContentUrl(id) {
+      const base = '/api/resources/' + id + '/content';
+      return this.authToken ? base + '?token=' + encodeURIComponent(this.authToken) : base;
+    },
+
+    extractGeneratedResource(resultText) {
+      const text = String(resultText || '');
+      const idMatch = text.match(/resource\s+#(\d+)/i);
+      if (!idMatch) return null;
+      const titleMatch = text.match(/resource\s+#\d+\s*:\s*([^\n]+)/i);
+      return {
+        id: Number(idMatch[1]),
+        kind: 'image',
+        title: (titleMatch?.[1] || 'Generated image').trim(),
+      };
+    },
+
+    attachGeneratedResource(message, resultText) {
+      const resource = this.extractGeneratedResource(resultText);
+      if (!resource) return;
+      if (!Array.isArray(message.resources)) message.resources = [];
+      if (message.resources.some(item => Number(item?.id) === resource.id)) return;
+      message.resources.push(resource);
     },
 
     resourceStatusClass(status) {
@@ -1998,6 +2397,7 @@ function axonDashboardMixin() {
         mode,
         modelLabel: this.assistantRuntimeLabel(),
         agentEvents: mode === 'agent' ? [] : undefined,
+        resources: [],
         retryResources,
       };
     },
@@ -2074,6 +2474,9 @@ function axonDashboardMixin() {
               } else if (data.type === 'tool_call' || data.type === 'tool_result') {
                 this.setAgentStage(data.type === 'tool_call' ? 'execute' : 'verify');
                 this.chatMessages[idx].agentEvents.push(data);
+                if (data.type === 'tool_result' && data.name === 'generate_image') {
+                  this.attachGeneratedResource(this.chatMessages[idx], data.result);
+                }
                 this.updateLiveOperator(effectiveMode, data);
                 this.scrollChat();
               } else if (data.type === 'context_usage') {
@@ -2091,6 +2494,13 @@ function axonDashboardMixin() {
                 this.chatMessages[idx].error = true;
                 this.chatMessages[idx].retryMsg = msg;
                 this.updateLiveOperator(effectiveMode, data);
+              } else if (data.type === 'approval_required') {
+                this.setAgentStage('recover');
+                this.chatMessages[idx].streaming = false;
+                this.chatMessages[idx].pendingApproval = data;
+                this.updateLiveOperator(effectiveMode, data);
+                this.checkInterruptedSession?.();
+                this.showToast(data.message || 'Approval required to continue this task');
               }
             } else {
               if (data.chunk) {

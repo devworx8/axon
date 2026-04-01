@@ -130,6 +130,33 @@ def _item_row(
     }
 
 
+def _sanitize_memory_refs(
+    item: dict,
+    *,
+    valid_workspace_ids: set[int],
+    valid_mission_ids: set[int],
+) -> dict:
+    sanitized = dict(item)
+
+    workspace_id = sanitized.get("workspace_id")
+    if workspace_id is not None:
+        try:
+            workspace_value = int(workspace_id)
+        except Exception:
+            workspace_value = None
+        sanitized["workspace_id"] = workspace_value if workspace_value in valid_workspace_ids else None
+
+    mission_id = sanitized.get("mission_id")
+    if mission_id is not None:
+        try:
+            mission_value = int(mission_id)
+        except Exception:
+            mission_value = None
+        sanitized["mission_id"] = mission_value if mission_value in valid_mission_ids else None
+
+    return sanitized
+
+
 async def sync_memory_layers(conn, settings: dict) -> dict:
     """
     Rebuild curated memory items from the current Axon runtime.
@@ -143,6 +170,8 @@ async def sync_memory_layers(conn, settings: dict) -> dict:
     activity = [dict(row) for row in await devdb.get_activity(conn, limit=80)]
     existing_rows = await devdb.list_memory_items(conn, limit=2000)
     existing_map = {row["memory_key"]: dict(row) for row in existing_rows}
+    valid_workspace_ids = {int(project["id"]) for project in projects if project.get("id") is not None}
+    valid_mission_ids = {int(task["id"]) for task in tasks if task.get("id") is not None}
 
     items: list[dict] = []
 
@@ -313,8 +342,13 @@ async def sync_memory_layers(conn, settings: dict) -> dict:
 
     keys_by_layer: dict[str, list[str]] = {layer: [] for layer in LAYER_ORDER}
     for item in prepared_items:
-        await devdb.upsert_memory_item(conn, **item, commit=False)
-        keys_by_layer.setdefault(item["layer"], []).append(item["memory_key"])
+        sanitized_item = _sanitize_memory_refs(
+            item,
+            valid_workspace_ids=valid_workspace_ids,
+            valid_mission_ids=valid_mission_ids,
+        )
+        await devdb.upsert_memory_item(conn, **sanitized_item, commit=False)
+        keys_by_layer.setdefault(sanitized_item["layer"], []).append(sanitized_item["memory_key"])
 
     for layer in LAYER_ORDER:
         await devdb.delete_stale_memory_items(conn, layer=layer, keep_keys=keys_by_layer.get(layer, []), commit=False)

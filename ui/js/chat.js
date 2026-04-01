@@ -8,6 +8,7 @@ function axonChatMixin() {
     /* ── Composer helpers ─────────────────────────────────────── */
 
     chatComposerPlaceholder() {
+      if (this.chatLoading) return 'Steer agent or add to queue…';
       if (this.businessMode) {
         if (this.businessView === 'quote') return 'Create a quote for Khanyisa with line items, discount, and total...';
         if (this.businessView === 'client') return 'Draft a client profile, follow-up email, or billing summary...';
@@ -162,6 +163,23 @@ function axonChatMixin() {
       }
     },
 
+    async handleComposerDrop(e) {
+      const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type.startsWith('image/'));
+      if (!files.length) return;
+      for (const file of files) {
+        await this._uploadPastedImage(file);
+      }
+    },
+
+    async handleImageUpload(event) {
+      const files = Array.from(event?.target?.files || []).filter(f => f.type.startsWith('image/'));
+      if (!files.length) return;
+      for (const file of files) {
+        await this._uploadPastedImage(file);
+      }
+      if (event?.target) event.target.value = '';
+    },
+
     scrollChat(force = false) {
       if (!force && this._userScrolled) return;
       if (this._scrollRaf) cancelAnimationFrame(this._scrollRaf);
@@ -228,6 +246,7 @@ function axonChatMixin() {
 
     setConversationModeAsk() {
       this.resetPrimaryConversationModes();
+      this.persistConversationModePreference();
     },
 
     setConversationModeAgent() {
@@ -236,17 +255,20 @@ function axonChatMixin() {
       if (this.usesOllamaBackend() && this.ollamaModels.length === 0) {
         this.loadOllamaModels();
       }
+      this.persistConversationModePreference();
     },
 
     setConversationModeCode() {
       this.resetPrimaryConversationModes();
       this.composerOptions.intelligence_mode = 'analyze';
       this.composerOptions.action_mode = 'generate';
+      this.persistConversationModePreference();
     },
 
     setConversationModeResearch() {
       this.resetPrimaryConversationModes();
       this.composerOptions.intelligence_mode = 'deep_research';
+      this.persistConversationModePreference();
     },
 
     isPrimaryConversationMode(mode) {
@@ -309,6 +331,120 @@ function axonChatMixin() {
       if (this.agentLifecycle.includes(phase)) this.agentProgressState = phase;
     },
 
+    activePrimaryConversationMode() {
+      if (this.businessMode) return 'business';
+      if (this.agentMode) return 'agent';
+      const opts = this.normalizedComposerOptions();
+      if (opts.intelligence_mode === 'analyze' && opts.action_mode === 'generate') return 'code';
+      if (opts.intelligence_mode === 'deep_research') return 'research';
+      return 'ask';
+    },
+
+    persistConversationModePreference() {
+      try {
+        localStorage.setItem('axon.consoleMode', this.activePrimaryConversationMode());
+      } catch (_) {}
+    },
+
+    restoreConversationModePreference() {
+      let saved = '';
+      try {
+        saved = String(localStorage.getItem('axon.consoleMode') || '').trim().toLowerCase();
+      } catch (_) {}
+      if (!saved) return;
+      if (saved === 'business') {
+        this.toggleBusinessMode(true);
+        return;
+      }
+      if (saved === 'agent') {
+        if (this.currentBackendSupportsAgent()) this.setConversationModeAgent();
+        else this.setConversationModeAsk();
+        return;
+      }
+      if (saved === 'code') {
+        this.setConversationModeCode();
+        return;
+      }
+      if (saved === 'research') {
+        this.setConversationModeResearch();
+        return;
+      }
+      this.setConversationModeAsk();
+    },
+
+    setConsoleZoom(value) {
+      const numeric = Number(value || 1);
+      const next = Math.max(0.9, Math.min(1.45, Math.round(numeric * 100) / 100));
+      this.consoleZoom = next;
+      try {
+        localStorage.setItem('axon.consoleZoom', String(next));
+      } catch (_) {}
+    },
+
+    adjustConsoleZoom(delta = 0) {
+      this.setConsoleZoom((Number(this.consoleZoom || 1) || 1) + Number(delta || 0));
+    },
+
+    resetConsoleZoom() {
+      this.setConsoleZoom(1);
+    },
+
+    consoleZoomPercent() {
+      return `${Math.round((Number(this.consoleZoom || 1) || 1) * 100)}%`;
+    },
+
+    consoleZoomStyle() {
+      const zoom = Math.max(0.9, Math.min(1.45, Number(this.consoleZoom || 1) || 1));
+      return `zoom:${zoom};`;
+    },
+
+    clarificationQuestionFor(msg = '', requestedMode = '') {
+      const text = String(msg || '').trim();
+      if (!text) return '';
+      const lower = text.toLowerCase();
+      const effectiveMode = requestedMode || this.effectiveChatMode(text);
+      const actionable = effectiveMode === 'agent' || this.shouldAutoUseAgent(text);
+      if (!actionable) return '';
+
+      const hasWorkspace = !!this.chatProjectId;
+      const hasInterruptedSession = !!this.interruptedSession;
+      const pronounTargetOnly = /^(please\s+)?(continue|fix|check|scan|run|open|review|inspect|look at|work on|do|update|change|build|deploy|test|read|write)\s+(it|this|that|there|here)\b/i.test(text);
+      const bareContinue = /^(please\s+)?continue\b[.!?]*$/i.test(text);
+      const workspaceIntent = /\b(project|repo|repository|workspace|codebase|scan|inspect|fix|run|build|deploy|test)\b/i.test(lower);
+
+      // "continue" / "please continue" always goes to the server —
+      // the backend session store decides whether there's something to resume.
+      if (bareContinue) return '';
+      if (pronounTargetOnly) {
+        return 'What should I apply that to? Give me the workspace, file, repo, branch, or task target and I will continue.';
+      }
+      if (!hasWorkspace && workspaceIntent) {
+        return 'Which workspace should I use for that? Pick one in the workspace selector or name the project first.';
+      }
+      return '';
+    },
+
+    addLocalClarificationExchange(msg, question, mode, resources = []) {
+      const createdAt = new Date().toISOString();
+      this.chatMessages.push({
+        id: Date.now(),
+        role: 'user',
+        content: msg,
+        created_at: createdAt,
+        mode,
+        resources,
+      });
+      this.chatMessages.push({
+        id: Date.now() + 1,
+        role: 'assistant',
+        content: question,
+        created_at: new Date().toISOString(),
+        mode: 'chat',
+        resources: [],
+      });
+      this.scrollChat(true);
+    },
+
     /* ── Business mode ────────────────────────────────────────── */
 
     toggleBusinessMode(force = null) {
@@ -321,6 +457,7 @@ function axonChatMixin() {
       } else {
         this.setConversationModeAsk();
       }
+      this.persistConversationModePreference();
     },
 
     setBusinessView(view) {
@@ -483,6 +620,10 @@ function axonChatMixin() {
           tool: event.name || '',
         };
         this.pushLiveOperatorFeed('execute', `Running ${this.prettyToolName(event.name)}`, event.args ? JSON.stringify(event.args).slice(0, 96) : 'Using a local operator tool.');
+        // Mirror shell commands to the integrated terminal
+        if ((event.name === 'shell_cmd' || event.name === 'shell_bg') && event.args?.cmd) {
+          this._mirrorShellToTerminal(event.args.cmd, event.args.cwd);
+        }
         return;
       }
       if (event.type === 'tool_result') {
@@ -495,6 +636,14 @@ function axonChatMixin() {
           tool: event.name || this.liveOperator.tool,
         };
         this.pushLiveOperatorFeed('verify', `Checking ${this.prettyToolName(event.name)}`, (event.result || 'Axon is reviewing the tool output.').slice(0, 120));
+        // Mirror shell output to the integrated terminal
+        if ((event.name === 'shell_cmd' || event.name === 'shell_bg' || event.name === 'shell_bg_check') && event.result) {
+          this._mirrorShellResultToTerminal(event.result);
+        }
+        // Auto-detect dev server URL from shell_bg output
+        if ((event.name === 'shell_bg' || event.name === 'shell_bg_check') && event.result) {
+          this._detectDevServerUrl(event.result);
+        }
         return;
       }
       if (event.type === 'text') {
@@ -536,6 +685,17 @@ function axonChatMixin() {
           detail: event.message || 'Axon hit an error and stopped safely.',
         };
         this.pushLiveOperatorFeed('recover', 'Needs attention', event.message || 'Axon hit an error and stopped safely.');
+        return;
+      }
+      if (event.type === 'approval_required') {
+        this.liveOperator = {
+          ...this.liveOperator,
+          active: true,
+          phase: 'recover',
+          title: 'Awaiting approval',
+          detail: event.message || 'Axon paused until you approve or deny the blocked action.',
+        };
+        this.pushLiveOperatorFeed('recover', 'Awaiting approval', event.message || 'Axon paused until you approve or deny the blocked action.');
       }
     },
 
@@ -593,7 +753,7 @@ function axonChatMixin() {
 
     chronologicalAgentBlocks(message) {
       this.ensureAssistantMessageBlocks(message);
-      return [
+      const blocks = [
         ...(message.thinkingBlocks || []).map(block => ({ kind: 'thinking', block })),
         ...(message.workingBlocks || []).map(block => ({ kind: 'working', block })),
       ].sort((left, right) => {
@@ -601,6 +761,11 @@ function axonChatMixin() {
         if (orderDelta !== 0) return orderDelta;
         return String(left.block?.createdAt || '').localeCompare(String(right.block?.createdAt || ''));
       });
+      let stepNum = 0;
+      for (const entry of blocks) {
+        if (entry.kind === 'working') entry.stepNum = ++stepNum;
+      }
+      return blocks;
     },
 
     appendThinkingBlock(message, chunk) {
@@ -609,11 +774,11 @@ function axonChatMixin() {
       this.ensureAssistantMessageBlocks(message);
       const last = message.thinkingBlocks[message.thinkingBlocks.length - 1];
       if (last && last.status === 'active') {
-        // Chunks are accumulated text slices, not raw BPE sub-word tokens.
-        // The server may strip boundary whitespace, so repair word seams.
-        if (last.content.length && /[a-zA-Z0-9,]$/.test(last.content) && /^[a-zA-Z0-9]/.test(text)) {
-          last.content += ' ';
-        }
+        // Append directly — the server handles spacing normalisation via
+        // _normalize_thinking_spacing() in agent_output.py. Do NOT insert
+        // spaces here: streaming providers like DeepSeek emit sub-word
+        // tokens (individual characters), and injecting spaces between them
+        // creates the "N o w I h a v e" broken-word artefact.
         last.content += text;
         last.updatedAt = new Date().toISOString();
         return;
@@ -699,8 +864,29 @@ function axonChatMixin() {
         thinkingBlocks: [],
         workingBlocks: [],
         agentEvents: mode === 'agent' ? [] : undefined,
+        resources: [],
         retryResources,
       };
+    },
+
+    extractGeneratedResource(resultText) {
+      const text = String(resultText || '');
+      const idMatch = text.match(/resource\s+#(\d+)/i);
+      if (!idMatch) return null;
+      const titleMatch = text.match(/resource\s+#\d+\s*:\s*([^\n]+)/i);
+      return {
+        id: Number(idMatch[1]),
+        kind: 'image',
+        title: (titleMatch?.[1] || 'Generated image').trim(),
+      };
+    },
+
+    attachGeneratedResource(message, resultText) {
+      const resource = this.extractGeneratedResource(resultText);
+      if (!resource) return;
+      if (!Array.isArray(message.resources)) message.resources = [];
+      if (message.resources.some(item => Number(item?.id) === resource.id)) return;
+      message.resources.push(resource);
     },
 
     stopGeneration() {
@@ -800,6 +986,9 @@ function axonChatMixin() {
                   this.appendWorkingBlock(this.chatMessages[idx], data);
                 } else {
                   this.resolveWorkingBlock(this.chatMessages[idx], data);
+                  if (data.name === 'generate_image') {
+                    this.attachGeneratedResource(this.chatMessages[idx], data.result);
+                  }
                 }
                 this.updateLiveOperator(effectiveMode, data);
                 this.scrollChat();
@@ -826,6 +1015,15 @@ function axonChatMixin() {
                 this.chatMessages[idx].error = true;
                 this.chatMessages[idx].retryMsg = msg;
                 this.updateLiveOperator(effectiveMode, data);
+              } else if (data.type === 'approval_required') {
+                this.setAgentStage('recover');
+                this.finalizeThinkingBlocks(this.chatMessages[idx]);
+                this.finalizeWorkingBlocks(this.chatMessages[idx]);
+                this.chatMessages[idx].streaming = false;
+                this.chatMessages[idx].pendingApproval = data;
+                this.updateLiveOperator(effectiveMode, data);
+                this.checkInterruptedSession();
+                this.showToast(data.message || 'Approval required to continue this task');
               }
             } else {
               if (data.chunk) {
@@ -859,6 +1057,13 @@ function axonChatMixin() {
         this.finalizeThinkingBlocks(this.chatMessages[idx]);
         this.finalizeWorkingBlocks(this.chatMessages[idx]);
         this.chatMessages[idx].streaming = false;
+        // Mark as error if response is empty or only contains a warning
+        const trimmed = (this.chatMessages[idx].content || '').trim();
+        if ((!trimmed || /^⚠️?\s*(Empty response|error)/i.test(trimmed)) && !this.chatMessages[idx].pendingApproval) {
+          this.chatMessages[idx].error = true;
+          this.chatMessages[idx].retryMsg = msg;
+          if (!trimmed) this.chatMessages[idx].content = '⚠️ Empty response from model.';
+        }
         this.rememberOperatorOutcome(mode, this.chatMessages[idx]);
         // Detect mission creation in response and trigger notification
         this._checkMissionNotification(this.chatMessages[idx].content);
@@ -954,9 +1159,52 @@ function axonChatMixin() {
         const data = await this.api('GET', '/api/agent/sessions/interrupted');
         this.interruptedSession = data.session || null;
         this.resumeBannerDismissed = false;
+        this.injectInterruptedSessionMessage();
       } catch(e) {
         this.interruptedSession = null;
+        this.removeInterruptedSessionMessages();
       }
+    },
+
+    interruptedSessionMessageContent(session) {
+      if (!session) return '';
+      const task = session.task || 'Previous task';
+      const assistant = String(session.last_assistant_message || '').trim();
+      const error = String(session.error_message || '').trim();
+      if (assistant) return assistant;
+      if (session.status === 'approval_required') {
+        const approval = session.approval || {};
+        const detail = approval.message || 'Approval is required before Axon can continue this task.';
+        return `⚠️ ${detail}\n\nTask: **${task}**`;
+      }
+      if (error) {
+        return `⚠️ Agent error: ${error}\n\nTask: **${task}**\n\nReload restored the paused session. Use **Resume** or say **please continue** to continue from here.`;
+      }
+      return `⚠️ This agent session was interrupted before it finished.\n\nTask: **${task}**\n\nUse **Resume** or say **please continue** to continue from here.`;
+    },
+
+    removeInterruptedSessionMessages() {
+      this.chatMessages = (this.chatMessages || []).filter(message => !message.interruptedSessionNotice);
+    },
+
+    injectInterruptedSessionMessage() {
+      this.removeInterruptedSessionMessages();
+      const session = this.interruptedSession;
+      if (!session) return;
+      const content = this.interruptedSessionMessageContent(session);
+      if (!content) return;
+      this.chatMessages.push({
+        id: `interrupted-${session.session_id}`,
+        role: 'assistant',
+        content,
+        created_at: session.updated_at ? new Date(session.updated_at * 1000).toISOString() : new Date().toISOString(),
+        mode: 'agent',
+        error: session.status === 'interrupted',
+        pendingApproval: session.status === 'approval_required' ? session.approval : null,
+        interruptedSessionNotice: true,
+        resources: [],
+      });
+      this.$nextTick(() => requestAnimationFrame(() => this.scrollChat(true)));
     },
 
     /* ── User message continuity actions ─────────────────────────────── */
@@ -983,6 +1231,7 @@ function axonChatMixin() {
     async quickResume() {
       // Inject "please continue" as a user message to resume the last agent session
       if (this.chatLoading) return;
+      this.removeInterruptedSessionMessages();
       this.interruptedSession = null;
       this.resumeBannerDismissed = true;
       this.chatInput = 'please continue';
@@ -1084,6 +1333,110 @@ function axonChatMixin() {
       }
     },
 
+    /* ── Silent auto-continue — no visible user bubble ── */
+    async sendChatSilent(message, forceMode) {
+      const msg = (message || '').trim();
+      if (!msg) return;
+      const started = Date.now();
+      while (this.chatLoading && (Date.now() - started) < 5000) {
+        await new Promise(resolve => setTimeout(resolve, 120));
+      }
+      if (this.chatLoading) {
+        this.showToast('Axon is still finishing the previous step. Try continue again in a moment.');
+        return;
+      }
+      const mode = forceMode || this.effectiveChatMode(msg);
+      this.chatLoading = true;
+      this.beginLiveOperator(mode, msg);
+      const respId = Date.now() + 1;
+      this.chatMessages.push(this.createAssistantPlaceholder(respId, mode, []));
+      this.scrollChat();
+      try {
+        await this.streamChatMessage(msg, mode, respId, []);
+      } catch(e) {
+        if (e.name === 'AbortError') { this.chatLoading = false; return; }
+        const idx = this.chatMessages.findIndex(m => m.id === respId);
+        if (idx >= 0) {
+          this.chatMessages[idx].content = `⚠️ ${e.message}`;
+          this.chatMessages[idx].streaming = false;
+          this.chatMessages[idx].error = true;
+        }
+      }
+      this.chatLoading = false;
+      this.scrollChat();
+      this._processQueue();
+    },
+
+    /* ── Message queue — add to queue while agent is working ── */
+    _messageQueue: [],
+
+    enqueueMessage(msg) {
+      const text = (msg || '').trim();
+      if (!text) return;
+      if (!Array.isArray(this._messageQueue)) this._messageQueue = [];
+      this._messageQueue.push(text);
+      this.showToast(`Queued: "${text.slice(0, 40)}${text.length > 40 ? '…' : ''}" (${this._messageQueue.length} in queue)`);
+    },
+
+    _processQueue() {
+      if (!Array.isArray(this._messageQueue) || !this._messageQueue.length) return;
+      if (this.chatLoading) return;
+      const next = this._messageQueue.shift();
+      if (next) {
+        this.chatInput = next;
+        this.$nextTick(() => this.sendChat());
+      }
+    },
+
+    /* ── Steer — send guidance to running agent ── */
+    async steerAgent(guidance) {
+      const text = (guidance || '').trim();
+      if (!text) return;
+      try {
+        await this.api('POST', '/api/agent/steer', { message: text });
+        this.showToast(`Steered: "${text.slice(0, 50)}…"`);
+      } catch(e) {
+        // Fallback: steer not supported by backend, queue instead
+        this.enqueueMessage(text);
+      }
+    },
+
+    /* ── Terminal mirroring — echo agent shell commands to xterm ── */
+    _mirrorShellToTerminal(cmd, cwd) {
+      try {
+        const term = this._xtermInst;
+        if (!term) return;
+        const prefix = cwd ? `\x1b[90m${cwd}$\x1b[0m ` : '\x1b[90m$\x1b[0m ';
+        term.writeln('');
+        term.writeln(prefix + '\x1b[1;36m' + (cmd || '') + '\x1b[0m');
+      } catch(e) { /* terminal not ready — safe to ignore */ }
+    },
+
+    _mirrorShellResultToTerminal(result) {
+      try {
+        if (!result || result.startsWith('BLOCKED_CMD:')) return;
+        const term = this._xtermInst;
+        if (!term) return;
+        const lines = result.split('\n').slice(0, 40);
+        lines.forEach(l => term.writeln(l));
+        if (result.split('\n').length > 40) term.writeln('\x1b[90m… (truncated)\x1b[0m');
+      } catch(e) { /* terminal not ready — safe to ignore */ }
+    },
+
+    _detectDevServerUrl(result) {
+      try {
+        if (!result || this.devPreview.url) return;
+        // Match common dev server URL patterns, exclude Axon's own port (7734)
+        const matches = result.match(/https?:\/\/(?:localhost|127\.0\.0\.1):(\d{2,5})/g) || [];
+        const url = matches.find(u => !u.includes(':7734'));
+        if (url) {
+          this.devPreview.url = url;
+          this.devPreview.visible = true;
+          this.panelBrowserOpen = true;
+        }
+      } catch(e) { /* safe to ignore */ }
+    },
+
     async sendChat() {
       if (this.businessMode && !this.chatInput?.trim()) {
         this.chatInput = this.businessComposerPrompt(this.businessView || 'invoice');
@@ -1098,6 +1451,19 @@ function axonChatMixin() {
       const packResources = researchPack?.resources || [];
       const attachedResources = this.mergeUniqueResources([...packResources, ...this.selectedResources]);
       const attachedResourceIds = attachedResources.map(resource => Number(resource.id)).filter(Boolean);
+      const clarification = this.clarificationQuestionFor(msg, mode);
+      if (clarification) {
+        this.chatInput = '';
+        this.followUpSuggestions = [];
+        if (!this.composerOptions.pin_context) {
+          this.selectedResources = [];
+        }
+        this.showResourcePicker = false;
+        this.showComposerMenu = false;
+        this.resetChatComposerHeight();
+        this.addLocalClarificationExchange(msg, clarification, mode, attachedResources);
+        return;
+      }
       this.setAgentStage(mode === 'agent' ? 'observe' : 'observe');
 
       this.chatInput = '';
@@ -1157,6 +1523,7 @@ function axonChatMixin() {
 
       this.chatLoading = false;
       this.scrollChat();
+      this._processQueue();
     },
 
     async retryChat(errorMsg) {

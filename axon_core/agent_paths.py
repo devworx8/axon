@@ -6,6 +6,8 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
+from axon_data.sqlite_utils import managed_connection
+
 
 DEFAULT_DEVBRAIN_DB_PATH = Path.home() / ".devbrain" / "devbrain.db"
 
@@ -75,7 +77,7 @@ def _resolve_project_path_from_text(text: str, db_path: Path = DEFAULT_DEVBRAIN_
 
     lower = text.lower()
     try:
-        with sqlite3.connect(str(db_path)) as conn:
+        with managed_connection(db_path, row_factory=None) as conn:
             rows = conn.execute(
                 "SELECT name, path FROM projects "
                 "WHERE COALESCE(status, 'active') != 'archived' "

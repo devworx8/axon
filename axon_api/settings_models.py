@@ -1,0 +1,80 @@
+from __future__ import annotations
+
+from typing import Optional
+
+from pydantic import BaseModel
+
+
+class SettingsUpdate(BaseModel):
+    anthropic_api_key: Optional[str] = None
+    anthropic_base_url: Optional[str] = None
+    anthropic_api_model: Optional[str] = None
+    scan_interval_hours: Optional[str] = None
+    morning_digest_hour: Optional[str] = None
+    projects_root: Optional[str] = None
+    notify_desktop: Optional[str] = None
+    ai_backend: Optional[str] = None
+    api_provider: Optional[str] = None
+    claude_cli_path: Optional[str] = None
+    claude_cli_model: Optional[str] = None
+    claude_cli_session_persistence_enabled: Optional[bool] = None
+    ollama_url: Optional[str] = None
+    ollama_runtime_mode: Optional[str] = None
+    ollama_model: Optional[str] = None
+    code_model: Optional[str] = None
+    general_model: Optional[str] = None
+    reasoning_model: Optional[str] = None
+    embeddings_model: Optional[str] = None
+    vision_model: Optional[str] = None
+    resource_storage_path: Optional[str] = None
+    resource_upload_max_mb: Optional[str] = None
+    resource_url_import_enabled: Optional[bool] = None
+    live_feed_enabled: Optional[bool] = None
+    stable_domain_enabled: Optional[bool] = None
+    stable_domain: Optional[str] = None
+    public_base_url: Optional[str] = None
+    tunnel_mode: Optional[str] = None
+    cloudflare_tunnel_token: Optional[str] = None
+    terminal_default_mode: Optional[str] = None
+    terminal_command_timeout_seconds: Optional[str] = None
+    cloud_agents_enabled: Optional[bool] = None
+    openai_gpts_enabled: Optional[bool] = None
+    gemini_gems_enabled: Optional[bool] = None
+    deepseek_enabled: Optional[bool] = None
+    generic_api_enabled: Optional[bool] = None
+    openai_api_key: Optional[str] = None
+    openai_base_url: Optional[str] = None
+    openai_api_model: Optional[str] = None
+    gemini_api_key: Optional[str] = None
+    gemini_base_url: Optional[str] = None
+    gemini_api_model: Optional[str] = None
+    deepseek_api_key: Optional[str] = None
+    deepseek_base_url: Optional[str] = None
+    deepseek_api_model: Optional[str] = None
+    generic_api_key: Optional[str] = None
+    generic_api_url: Optional[str] = None
+    generic_api_model: Optional[str] = None
+    github_token: Optional[str] = None
+    slack_webhook_url: Optional[str] = None
+    webhook_urls: Optional[str] = None
+    webhook_secret: Optional[str] = None
+    azure_speech_key: Optional[str] = None
+    azure_speech_region: Optional[str] = None
+    azure_voice: Optional[str] = None
+    local_stt_model: Optional[str] = None
+    local_stt_language: Optional[str] = None
+    local_tts_model_path: Optional[str] = None
+    local_tts_config_path: Optional[str] = None
+    alerts_enabled: Optional[bool] = None
+    alerts_desktop: Optional[bool] = None
+    alerts_mobile: Optional[bool] = None
+    alerts_missions: Optional[bool] = None
+    alerts_runtime: Optional[bool] = None
+    alerts_morning_brief: Optional[bool] = None
+    alerts_tunnel: Optional[bool] = None
+    dash_bridge_enabled: Optional[bool] = None
+    dash_bridge_url: Optional[str] = None
+    dash_bridge_token: Optional[str] = None
+    dash_bridge_mode: Optional[str] = None
+    max_agent_iterations: Optional[str] = None
+    context_compact_enabled: Optional[bool] = None

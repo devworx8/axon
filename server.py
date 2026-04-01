@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 import time as _time
 import wave
+import textwrap
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -31,6 +32,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 import uvicorn
 import json as _json
+from PIL import Image, ImageDraw
 
 # Add devbrain dir to path
 sys.path.insert(0, str(Path.home() / ".devbrain"))
@@ -46,6 +48,11 @@ import gpu_guard
 import provider_registry
 import resource_bank
 import memory_engine
+from axon_api.settings_models import SettingsUpdate
+from axon_api.services import claude_cli_runtime, codex_cli_runtime
+from axon_core.cli_command import cli_session_persistence_enabled
+from axon_api.services import task_sandboxes as task_sandbox_service
+from axon_core.vision_runtime import auto_route_vision_runtime
 from axon_api import ui_renderer
 from model_router import resolve_model_for_role
 
@@ -115,6 +122,7 @@ _live_operator_snapshot = {
 _terminal_processes: dict[int, dict] = {}
 # PTY WebSocket sessions: session_id → {pty, ws_set, task}
 _pty_sessions: dict[str, dict] = {}
+_task_sandbox_runs: dict[int, asyncio.Task] = {}
 _domain_probe_cache = {
     "url": "",
     "active": False,
@@ -707,11 +715,27 @@ import secrets as _secrets
 # In-memory session store: { token_str: expiry_datetime }
 _auth_sessions: dict[str, datetime] = {}
 _AUTH_SESSION_HOURS = 72  # sessions last 3 days
+_LOCALHOST_NAMES = {"localhost", "127.0.0.1", "::1"}
 
 # Rate-limit login attempts: { ip_str: (fail_count, last_attempt_time) }
 _login_attempts: dict[str, tuple[int, float]] = {}
 _LOGIN_MAX_ATTEMPTS = 5
 _LOGIN_LOCKOUT_SECONDS = 300  # 5-minute lockout after 5 failures
+
+
+def _env_flag(name: str, default: str) -> bool:
+    return os.getenv(name, default).strip().lower() not in {"0", "false", "no", "off"}
+
+
+_LEGACY_DEV_LOCAL_BYPASS = _env_flag("AXON_DEV_LOCAL_BYPASS", "1")
+_DEV_LOCAL_AUTH_BYPASS = _env_flag(
+    "AXON_DEV_LOCAL_AUTH_BYPASS",
+    "1" if _LEGACY_DEV_LOCAL_BYPASS else "0",
+)
+_DEV_LOCAL_VAULT_BYPASS = _env_flag(
+    "AXON_DEV_LOCAL_VAULT_BYPASS",
+    "0",
+)
 
 
 def _extract_session_token(request: Request) -> str:
@@ -727,6 +751,22 @@ def _extract_session_token(request: Request) -> str:
 def _hash_pin(pin: str) -> str:
     """SHA-256 hash a PIN with a fixed app salt."""
     return hashlib.sha256(f"devbrain-pin-{pin}".encode()).hexdigest()
+
+
+def _request_is_localhost(request: Request | None = None) -> bool:
+    if request is None:
+        return False
+    host = str(getattr(request.url, "hostname", "") or "").strip().strip("[]").lower()
+    client = str(getattr(getattr(request, "client", None), "host", "") or "").strip().strip("[]").lower()
+    return host in _LOCALHOST_NAMES or client in _LOCALHOST_NAMES
+
+
+def _dev_local_auth_bypass_active(request: Request | None = None) -> bool:
+    return _DEV_LOCAL_AUTH_BYPASS and _request_is_localhost(request)
+
+
+def _dev_local_vault_bypass_active(request: Request | None = None) -> bool:
+    return _DEV_LOCAL_VAULT_BYPASS and _request_is_localhost(request)
 
 def _create_session() -> str:
     """Create a new session token, store it, and return it."""
@@ -763,6 +803,9 @@ async def auth_middleware(request: Request, call_next):
     if path in _AUTH_EXEMPT or path.startswith(_AUTH_EXEMPT_PREFIXES):
         return await call_next(request)
 
+    if _dev_local_auth_bypass_active(request):
+        return await call_next(request)
+
     # Check if auth is enabled (PIN is set)
     async with devdb.get_db() as conn:
         pin_hash = await devdb.get_setting(conn, "auth_pin_hash")
@@ -788,12 +831,19 @@ class PinLogin(BaseModel):
 @app.get("/api/auth/status")
 async def auth_status(request: Request):
     """Check if auth is enabled and if current session is valid."""
+    if _dev_local_auth_bypass_active(request):
+        return {
+            "auth_enabled": False,
+            "session_valid": True,
+            "dev_bypass": True,
+        }
     async with devdb.get_db() as conn:
         pin_hash = await devdb.get_setting(conn, "auth_pin_hash")
     token = _extract_session_token(request)
     return {
         "auth_enabled": bool(pin_hash),
         "session_valid": (not pin_hash) or bool(token and _valid_session(token)),
+        "dev_bypass": False,
     }
 
 @app.post("/api/auth/setup")
@@ -1267,28 +1317,574 @@ async def suggest_tasks():
         return {"suggestions": suggestions}
 
 
+def _serialize_task_sandbox(meta: dict | None, *, include_report: bool = False) -> dict | None:
+    if not meta:
+        return None
+    item = dict(meta)
+    changed_files = list(item.get("changed_files") or [])
+    item["changed_files"] = changed_files if include_report else changed_files[:10]
+    item["changed_files_count"] = len(changed_files)
+    item["has_report"] = bool(item.get("report_markdown"))
+    if not include_report:
+        item.pop("report_markdown", None)
+    return item
+
+
+async def _get_task_with_project(conn, task_id: int):
+    cur = await conn.execute(
+        """
+        SELECT t.*, pr.name AS project_name
+        FROM tasks t
+        LEFT JOIN projects pr ON pr.id = t.project_id
+        WHERE t.id = ?
+        """,
+        (task_id,),
+    )
+    return await cur.fetchone()
+
+
+class TaskSandboxRunRequest(BaseModel):
+    backend: Optional[str] = None
+    api_provider: Optional[str] = None
+    api_model: Optional[str] = None
+    cli_path: Optional[str] = None
+    cli_model: Optional[str] = None
+    cli_session_persistence_enabled: Optional[bool] = None
+    ollama_model: Optional[str] = None
+
+
+def _task_sandbox_runtime_override(payload: TaskSandboxRunRequest | None) -> dict[str, str]:
+    if not payload:
+        return {}
+    backend = str(payload.backend or "").strip().lower()
+    override: dict[str, str] = {}
+    if backend in {"api", "cli", "ollama"}:
+        override["backend"] = backend
+    provider_id = str(payload.api_provider or "").strip().lower()
+    if provider_id in provider_registry.PROVIDER_BY_ID:
+        override["api_provider"] = provider_id
+    if payload.api_model:
+        override["api_model"] = str(payload.api_model).strip()
+    if payload.cli_path:
+        override["cli_path"] = str(payload.cli_path).strip()
+    if payload.cli_model:
+        override["cli_model"] = str(payload.cli_model).strip()
+    if payload.cli_session_persistence_enabled is not None:
+        override["cli_session_persistence_enabled"] = bool(payload.cli_session_persistence_enabled)
+    if payload.ollama_model:
+        override["ollama_model"] = str(payload.ollama_model).strip()
+    return override
+
+
+async def _task_sandbox_ai_params(
+    settings: dict,
+    *,
+    conn,
+    runtime_override: dict[str, str] | None = None,
+) -> dict:
+    merged = dict(settings)
+    runtime_override = runtime_override or {}
+    backend = str(runtime_override.get("backend") or merged.get("ai_backend") or "api").strip().lower()
+    if backend not in {"api", "cli", "ollama"}:
+        backend = str(merged.get("ai_backend") or "api").strip().lower() or "api"
+    merged["ai_backend"] = backend
+
+    if backend == "api":
+        provider_id = str(runtime_override.get("api_provider") or provider_registry.selected_api_provider_id(merged)).strip().lower()
+        if provider_id not in provider_registry.PROVIDER_BY_ID:
+            provider_id = provider_registry.selected_api_provider_id(merged)
+        spec = provider_registry.PROVIDER_BY_ID[provider_id]
+        merged["api_provider"] = provider_id
+        if "api_model" in runtime_override:
+            merged[spec.model_setting] = runtime_override.get("api_model", "")
+    elif backend == "cli":
+        if "cli_path" in runtime_override:
+            merged["claude_cli_path"] = runtime_override.get("cli_path", "")
+        if "cli_model" in runtime_override:
+            merged["claude_cli_model"] = runtime_override.get("cli_model", "")
+        if "cli_session_persistence_enabled" in runtime_override:
+            merged["claude_cli_session_persistence_enabled"] = "1" if runtime_override.get("cli_session_persistence_enabled") else "0"
+    elif backend == "ollama":
+        if "ollama_model" in runtime_override:
+            merged["ollama_model"] = runtime_override.get("ollama_model", "")
+
+    requested_model = ""
+    if backend == "api":
+        requested_model = runtime_override.get("api_model", "")
+    elif backend == "cli":
+        requested_model = runtime_override.get("cli_model", "")
+    elif backend == "ollama":
+        requested_model = runtime_override.get("ollama_model", "")
+
+    return await _effective_ai_params(
+        merged,
+        {},
+        conn=conn,
+        agent_request=True,
+        requested_model=requested_model,
+    )
+
+
+def _task_sandbox_prompt(task: dict, sandbox_meta: dict) -> str:
+    title = str(task.get("title") or f"Mission {task.get('id')}")
+    detail = str(task.get("detail") or "").strip()
+    lines = [
+        f"Complete this mission inside the current sandbox workspace: {title}",
+        "",
+        "You are in Axon Auto mode inside an isolated git worktree sandbox.",
+        f"Sandbox path: {sandbox_meta.get('sandbox_path')}",
+        f"Source workspace: {sandbox_meta.get('source_path')}",
+        "",
+        "Rules:",
+        "- Only inspect and edit files inside the sandbox path.",
+        "- Do not merge, rebase, push, or modify the source workspace.",
+        "- Work autonomously until the mission is complete or clearly blocked.",
+        "- Treat edits and local shell work inside the sandbox as pre-approved. Do not stop to ask for routine permission.",
+        "- Do not stop at a plan or commentary. The mission is only complete once the requested repo change or concrete diagnostic output exists in the sandbox and has been verified.",
+        "- Run concrete checks that fit the workspace before stopping.",
+        "- Ask the user only if the mission itself is ambiguous, required credentials are missing, or external access beyond the sandbox is required.",
+        "- End with a concise handoff covering what changed, what still remains, and what should be reviewed before merge.",
+    ]
+    if detail:
+        lines.extend(["", "Mission details:", detail])
+    return "\n".join(lines).strip()
+
+
+def _task_sandbox_live_operator(task: dict, event: dict):
+    event_type = event.get("type")
+    workspace_id = task.get("project_id")
+    if event_type == "tool_call":
+        _set_live_operator(
+            active=True,
+            mode="agent",
+            phase="execute",
+            title=f"Sandbox: {str(event.get('name') or 'tool').replace('_', ' ')}",
+            detail=_json.dumps(event.get("args") or {})[:180],
+            tool=event.get("name", ""),
+            workspace_id=workspace_id,
+            preserve_started=True,
+        )
+    elif event_type == "tool_result":
+        _set_live_operator(
+            active=True,
+            mode="agent",
+            phase="verify",
+            title=f"Reviewing {str(event.get('name') or 'tool').replace('_', ' ')}",
+            detail=str(event.get("result") or "")[:180],
+            tool=event.get("name", ""),
+            workspace_id=workspace_id,
+            preserve_started=True,
+        )
+    elif event_type == "text":
+        _set_live_operator(
+            active=True,
+            mode="agent",
+            phase="verify",
+            title="Writing sandbox handoff",
+            detail="Axon is turning the sandbox run into a reviewable report.",
+            workspace_id=workspace_id,
+            preserve_started=True,
+        )
+    elif event_type == "thinking":
+        _set_live_operator(
+            active=True,
+            mode="agent",
+            phase="plan",
+            title="Planning inside sandbox",
+            detail=str(event.get("chunk") or "")[:180],
+            workspace_id=workspace_id,
+            preserve_started=True,
+        )
+    elif event_type == "approval_required":
+        _set_live_operator(
+            active=False,
+            mode="agent",
+            phase="recover",
+            title="Sandbox awaiting approval",
+            detail=str(event.get("message") or "Axon paused for approval inside the sandbox.")[:180],
+            summary=task.get("title", "")[:120],
+            workspace_id=workspace_id,
+        )
+    elif event_type == "error":
+        _set_live_operator(
+            active=False,
+            mode="agent",
+            phase="recover",
+            title="Sandbox needs attention",
+            detail=str(event.get("message") or "Axon stopped inside the sandbox.")[:180],
+            summary=task.get("title", "")[:120],
+            workspace_id=workspace_id,
+        )
+
+
+async def _run_task_sandbox_background(
+    task: dict,
+    project: dict,
+    sandbox_meta: dict,
+    *,
+    resume: bool = False,
+    runtime_override: dict[str, str] | None = None,
+):
+    task_id = int(task["id"])
+    task_title = str(task.get("title") or "")
+    prompt = "please continue" if resume else _task_sandbox_prompt(task, sandbox_meta)
+    max_iterations = 75
+    context_compact = True
+    final_output_parts: list[str] = []
+    approval_message = ""
+    run_error = ""
+    starting_commit = ""
+    permission_state = brain.agent_capture_permission_state()
+    autonomous_shell_cmds = ("rm", "chmod", "ln")
+
+    try:
+        async with devdb.get_db() as conn:
+            settings = await devdb.get_all_settings(conn)
+            ai = await _task_sandbox_ai_params(settings, conn=conn, runtime_override=runtime_override)
+            projects = [dict(r) for r in await devdb.get_projects(conn, status="active")]
+            tasks = [dict(r) for r in await devdb.get_tasks(conn, status="open")]
+            prompts_list = [dict(r) for r in await devdb.get_prompts(conn)]
+            context_block = brain._build_context_block(projects, tasks, prompts_list)
+            max_iterations = max(10, min(200, int(settings.get("max_agent_iterations") or "75")))
+            context_compact = str(settings.get("context_compact_enabled", "1")).strip().lower() in {"1", "true", "yes", "on"}
+            if str(task.get("status") or "").lower() == "open":
+                await devdb.update_task_status(conn, task_id, "in_progress")
+
+        sandbox_meta = await asyncio.to_thread(task_sandbox_service.ensure_task_sandbox, task, project)
+        sandbox_meta = await asyncio.to_thread(task_sandbox_service.refresh_task_sandbox, task_id, task_title) or sandbox_meta
+        starting_commit = str(sandbox_meta.get("latest_commit") or "")
+        sandbox_meta.update(
+            {
+                "mode": "auto",
+                "autonomous": True,
+                "status": "running",
+                "last_error": "",
+                "last_run_started_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+                "run_prompt": prompt,
+            }
+        )
+        await asyncio.to_thread(task_sandbox_service.write_task_sandbox, sandbox_meta)
+
+        brain.agent_allow_edit(sandbox_meta["sandbox_path"], scope="repo")
+        for cmd_name in autonomous_shell_cmds:
+            brain.agent_allow_command(cmd_name)
+
+        _set_live_operator(
+            active=True,
+            mode="agent",
+            phase="execute",
+            title="Running mission sandbox",
+            detail=str(task.get("title") or "Mission")[:180],
+            summary=str(task.get("title") or "")[:120],
+            workspace_id=task.get("project_id"),
+        )
+
+        async for event in brain.run_agent(
+            prompt,
+            [],
+            context_block,
+            project_name=project.get("name"),
+            workspace_path=sandbox_meta["sandbox_path"],
+            ollama_url=ai.get("ollama_url", ""),
+            ollama_model=ai.get("ollama_model", ""),
+            max_iterations=max_iterations,
+            context_compact=context_compact,
+            api_key=ai.get("api_key", ""),
+            api_base_url=ai.get("api_base_url", ""),
+            api_model=ai.get("api_model", ""),
+            api_provider=ai.get("api_provider", ""),
+            cli_path=ai.get("cli_path", ""),
+            cli_model=ai.get("cli_model", ""),
+            cli_session_persistence=bool(ai.get("cli_session_persistence", False)),
+            backend=ai.get("backend", ""),
+            force_tool_mode=True,
+        ):
+            _task_sandbox_live_operator(task, event)
+            if event.get("type") == "text":
+                final_output_parts.append(str(event.get("chunk") or ""))
+            elif event.get("type") == "approval_required":
+                approval_message = str(event.get("message") or "Approval required to continue the sandbox run.")
+                break
+            elif event.get("type") == "error":
+                run_error = str(event.get("message") or "Sandbox run failed.")
+                break
+
+        sandbox_meta = await asyncio.to_thread(task_sandbox_service.read_task_sandbox, task_id, task_title)
+        sandbox_meta = sandbox_meta or {}
+        sandbox_meta.update(
+            {
+                "task_id": task_id,
+                "task_title": task_title,
+                "project_id": task.get("project_id"),
+                "project_name": project.get("name") or "",
+                "final_output": "".join(final_output_parts).strip(),
+                "last_run_completed_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            }
+        )
+        if approval_message:
+            sandbox_meta["status"] = "approval_required"
+            sandbox_meta["last_error"] = approval_message
+            _set_live_operator(
+                active=False,
+                mode="agent",
+                phase="recover",
+                title="Sandbox awaiting approval",
+                detail=approval_message[:180],
+                summary=str(task.get("title") or "")[:120],
+                workspace_id=task.get("project_id"),
+            )
+        elif run_error:
+            sandbox_meta["status"] = "error"
+            sandbox_meta["last_error"] = run_error
+            _set_live_operator(
+                active=False,
+                mode="agent",
+                phase="recover",
+                title="Sandbox needs attention",
+                detail=run_error[:180],
+                summary=str(task.get("title") or "")[:120],
+                workspace_id=task.get("project_id"),
+            )
+        else:
+            sandbox_meta["status"] = "completed"
+            sandbox_meta["last_error"] = ""
+            _set_live_operator(
+                active=False,
+                mode="agent",
+                phase="verify",
+                title="Sandbox report ready",
+                detail="Axon finished the isolated mission run and prepared a review handoff.",
+                summary=str(task.get("title") or "")[:120],
+                workspace_id=task.get("project_id"),
+            )
+        await asyncio.to_thread(task_sandbox_service.write_task_sandbox, sandbox_meta)
+        refreshed_meta = await asyncio.to_thread(task_sandbox_service.refresh_task_sandbox, task_id, task_title)
+        if not approval_message and not run_error:
+            refreshed_meta = refreshed_meta or await asyncio.to_thread(task_sandbox_service.read_task_sandbox, task_id, task_title) or {}
+            ending_commit = str(refreshed_meta.get("latest_commit") or "")
+            final_output = str(refreshed_meta.get("final_output") or "").strip()
+            changed_files = list(refreshed_meta.get("changed_files") or [])
+            commit_changed = bool(starting_commit and ending_commit and ending_commit != starting_commit)
+            meaningful_completion = bool(final_output or changed_files or commit_changed)
+            if final_output.startswith("ERROR:"):
+                refreshed_meta["status"] = "error"
+                refreshed_meta["last_error"] = final_output
+                await asyncio.to_thread(task_sandbox_service.write_task_sandbox, refreshed_meta)
+                await asyncio.to_thread(task_sandbox_service.refresh_task_sandbox, task_id, task_title)
+                _set_live_operator(
+                    active=False,
+                    mode="agent",
+                    phase="recover",
+                    title="Sandbox needs attention",
+                    detail=final_output[:180],
+                    summary=task_title[:120],
+                    workspace_id=task.get("project_id"),
+                )
+            elif not meaningful_completion:
+                refreshed_meta["status"] = "error"
+                refreshed_meta["last_error"] = (
+                    "Sandbox run finished without producing repository changes, a new commit, "
+                    "or a reviewable handoff."
+                )
+                await asyncio.to_thread(task_sandbox_service.write_task_sandbox, refreshed_meta)
+                await asyncio.to_thread(task_sandbox_service.refresh_task_sandbox, task_id, task_title)
+                _set_live_operator(
+                    active=False,
+                    mode="agent",
+                    phase="recover",
+                    title="Sandbox needs attention",
+                    detail=str(refreshed_meta["last_error"])[:180],
+                    summary=task_title[:120],
+                    workspace_id=task.get("project_id"),
+                )
+    except Exception as exc:
+        meta = await asyncio.to_thread(task_sandbox_service.read_task_sandbox, task_id, task_title)
+        meta = meta or {
+            "task_id": task_id,
+            "task_title": task_title,
+            "project_id": task.get("project_id"),
+            "project_name": project.get("name") or "",
+            "source_path": project.get("path") or "",
+            "sandbox_path": sandbox_meta.get("sandbox_path") or "",
+            "branch_name": sandbox_meta.get("branch_name") or "",
+            "base_branch": sandbox_meta.get("base_branch") or "",
+            "created_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        }
+        meta.update(
+            {
+                "status": "error",
+                "final_output": "".join(final_output_parts).strip(),
+                "last_error": str(exc),
+                "last_run_completed_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            }
+        )
+        await asyncio.to_thread(task_sandbox_service.write_task_sandbox, meta)
+        _set_live_operator(
+            active=False,
+            mode="agent",
+            phase="recover",
+            title="Sandbox needs attention",
+            detail=str(exc)[:180],
+            summary=str(task.get("title") or "")[:120],
+            workspace_id=task.get("project_id"),
+        )
+    finally:
+        brain.agent_restore_permission_state(permission_state)
+        _task_sandbox_runs.pop(task_id, None)
+
+
+async def _queue_task_sandbox_run(
+    task_id: int,
+    *,
+    resume: bool = False,
+    runtime_override: dict[str, str] | None = None,
+):
+    async with devdb.get_db() as conn:
+        row = await _get_task_with_project(conn, task_id)
+        if not row:
+            raise HTTPException(404, "Mission not found")
+        task = dict(row)
+        if not task.get("project_id"):
+            raise HTTPException(400, "Attach this mission to a workspace before using an isolated sandbox.")
+        project = await devdb.get_project(conn, int(task["project_id"]))
+        if not project:
+            raise HTTPException(400, "Workspace not found for this mission.")
+        project_dict = dict(project)
+
+    sandbox_meta = await asyncio.to_thread(task_sandbox_service.ensure_task_sandbox, task, project_dict)
+    current = _task_sandbox_runs.get(task_id)
+    if current and not current.done():
+        return {
+            "started": False,
+            "already_running": True,
+            "sandbox": _serialize_task_sandbox(sandbox_meta),
+        }
+
+    run_task = asyncio.create_task(
+        _run_task_sandbox_background(
+            task,
+            project_dict,
+            sandbox_meta,
+            resume=resume,
+            runtime_override=runtime_override,
+        )
+    )
+    _task_sandbox_runs[task_id] = run_task
+    return {
+        "started": True,
+        "resume": resume,
+        "sandbox": _serialize_task_sandbox(sandbox_meta),
+    }
+
+
+@app.get("/api/tasks/sandboxes")
+async def list_task_sandboxes():
+    rows = await asyncio.to_thread(task_sandbox_service.list_task_sandboxes)
+    return {"sandboxes": [_serialize_task_sandbox(item) for item in rows]}
+
+
+@app.get("/api/tasks/{task_id}/sandbox")
+async def get_task_sandbox(task_id: int):
+    async with devdb.get_db() as conn:
+        row = await _get_task_with_project(conn, task_id)
+    if not row:
+        raise HTTPException(404, "Mission not found")
+    sandbox = await asyncio.to_thread(task_sandbox_service.refresh_task_sandbox, task_id, str(row["title"]))
+    if not sandbox:
+        raise HTTPException(404, "Sandbox not created yet for this mission.")
+    return {"sandbox": _serialize_task_sandbox(sandbox, include_report=True)}
+
+
+@app.post("/api/tasks/{task_id}/sandbox/run")
+async def run_task_sandbox(task_id: int, body: TaskSandboxRunRequest | None = None):
+    return await _queue_task_sandbox_run(
+        task_id,
+        resume=False,
+        runtime_override=_task_sandbox_runtime_override(body),
+    )
+
+
+@app.post("/api/tasks/{task_id}/sandbox/continue")
+async def continue_task_sandbox(task_id: int, body: TaskSandboxRunRequest | None = None):
+    return await _queue_task_sandbox_run(
+        task_id,
+        resume=True,
+        runtime_override=_task_sandbox_runtime_override(body),
+    )
+
+
+@app.post("/api/tasks/{task_id}/sandbox/apply")
+async def apply_task_sandbox(task_id: int):
+    async with devdb.get_db() as conn:
+        row = await _get_task_with_project(conn, task_id)
+    if not row:
+        raise HTTPException(404, "Mission not found")
+    result = await asyncio.to_thread(task_sandbox_service.apply_task_sandbox, task_id, str(row["title"]))
+    sandbox = await asyncio.to_thread(task_sandbox_service.refresh_task_sandbox, task_id, str(row["title"]))
+    return {
+        "applied": True,
+        "summary": result.get("summary", ""),
+        "sandbox": _serialize_task_sandbox(sandbox, include_report=True),
+    }
+
+
+@app.delete("/api/tasks/{task_id}/sandbox")
+async def discard_task_sandbox(task_id: int):
+    async with devdb.get_db() as conn:
+        row = await _get_task_with_project(conn, task_id)
+    if not row:
+        raise HTTPException(404, "Mission not found")
+    result = await asyncio.to_thread(task_sandbox_service.discard_task_sandbox, task_id, str(row["title"]))
+    return result
+
+
 # ─── AI backend helper ────────────────────────────────────────────────────────
 
 async def _ai_params(settings: dict, conn=None) -> dict:
     """Extract AI backend params from settings dict, resolving keys from vault when available."""
     backend = settings.get("ai_backend", "api")
-    api_runtime = provider_registry.runtime_api_config(settings)
-    api_key = api_runtime.get("api_key", "")
-    provider_id = api_runtime.get("provider_id", "deepseek")
+    selected_provider_id = provider_registry.selected_api_provider_id(settings)
 
-    # Resolve API key from vault when unlocked
-    if devvault.VaultSession.is_unlocked() and (not api_key or api_key == "set"):
-        async def _resolve(db):
-            return await devvault.vault_resolve_provider_key(db, provider_id)
-        if conn:
-            vault_key = await _resolve(conn)
-        else:
-            async with devdb.get_db() as _conn:
-                vault_key = await _resolve(_conn)
-        if vault_key:
-            api_key = vault_key
+    async def _resolved_api_runtime(provider_id: str) -> tuple[dict, str]:
+        candidate_settings = dict(settings)
+        candidate_settings["api_provider"] = provider_id
+        runtime = provider_registry.runtime_api_config(candidate_settings)
+        resolved_key = runtime.get("api_key", "")
+
+        if devvault.VaultSession.is_unlocked() and (not resolved_key or resolved_key == "set"):
+            async def _resolve(db):
+                return await devvault.vault_resolve_provider_key(db, provider_id)
+
+            if conn:
+                vault_key = await _resolve(conn)
+            else:
+                async with devdb.get_db() as _conn:
+                    vault_key = await _resolve(_conn)
+            if vault_key:
+                resolved_key = vault_key
+
+        return runtime, resolved_key
+
+    api_runtime, api_key = await _resolved_api_runtime(selected_provider_id)
+    provider_id = api_runtime.get("provider_id", selected_provider_id or "deepseek")
+
+    if backend in {"cli", "ollama"} and not api_key:
+        fallback_candidates = [
+            spec.provider_id
+            for spec in provider_registry.PROVIDERS
+            if spec.runtime_capable and spec.provider_id != provider_id
+        ]
+        for candidate_id in fallback_candidates:
+            candidate_runtime, candidate_key = await _resolved_api_runtime(candidate_id)
+            if candidate_key:
+                api_runtime = candidate_runtime
+                api_key = candidate_key
+                provider_id = candidate_runtime.get("provider_id", candidate_id)
+                break
 
     cli_path = settings.get("claude_cli_path", "")
+    cli_model = settings.get("claude_cli_model", "")
+    cli_session_persistence = cli_session_persistence_enabled(settings.get("claude_cli_session_persistence_enabled"))
     ollama_url = settings.get("ollama_url", "")
     ollama_model = settings.get("ollama_model", "")
     if backend == "api" and not api_key:
@@ -1301,7 +1897,8 @@ async def _ai_params(settings: dict, conn=None) -> dict:
         "api_provider": provider_id,
         "api_base_url": api_runtime.get("api_base_url", ""),
         "api_model": api_runtime.get("api_model", ""),
-        "backend": backend, "cli_path": cli_path,
+        "backend": backend, "cli_path": cli_path, "cli_model": cli_model,
+        "cli_session_persistence": cli_session_persistence,
         "ollama_url": ollama_url, "ollama_model": ollama_model,
     }
 
@@ -1498,7 +2095,7 @@ async def _effective_ai_params(settings: dict, composer_options: dict, *, conn=N
         )
         if route.get("selected_model"):
             ai["ollama_model"] = route["selected_model"]
-    else:
+    elif ai.get("backend") == "api":
         if requested_model:
             ai["api_model"] = requested_model
             return ai
@@ -1508,7 +2105,83 @@ async def _effective_ai_params(settings: dict, composer_options: dict, *, conn=N
         role_map = brain.API_MODEL_BY_ROLE.get(provider_id, {})
         if role in role_map:
             ai["api_model"] = role_map[role]
+    else:
+        if requested_model:
+            ai["cli_model"] = requested_model
     return ai
+
+
+def _looks_like_image_generation_request(message: str) -> bool:
+    text = str(message or "").strip().lower()
+    if not text:
+        return False
+    strong_markers = (
+        "generate an image",
+        "create an image",
+        "make an image",
+        "make me an image",
+        "generate a logo",
+        "create a logo",
+        "generate an illustration",
+        "create an illustration",
+        "generate a poster",
+        "create a poster",
+        "generate concept art",
+        "text to image",
+    )
+    if any(marker in text for marker in strong_markers):
+        return True
+    visual_nouns = ("image", "logo", "illustration", "poster", "sticker", "banner", "icon", "mockup", "render")
+    visual_verbs = ("generate", "create", "make", "design", "draw")
+    return any(verb in text for verb in visual_verbs) and any(noun in text for noun in visual_nouns)
+
+
+async def _auto_route_image_generation_runtime(
+    conn,
+    *,
+    settings: dict,
+    ai: dict,
+    user_message: str,
+    requested_model: str = "",
+    agent_request: bool = False,
+) -> tuple[dict, list[str]]:
+    if not _looks_like_image_generation_request(user_message):
+        return ai, []
+
+    warnings: list[str] = []
+    if not agent_request:
+        warnings.append("Image generation requests work best in Agent mode so Axon can call the generate_image tool automatically.")
+        return ai, warnings
+
+    if (requested_model or "").strip():
+        warnings.append(f"Image generation request kept on explicitly selected model `{requested_model}`.")
+        return ai, warnings
+
+    routed = dict(ai)
+    candidate_id = "gemini_gems"
+    candidate = provider_registry.merged_provider_config(
+        candidate_id,
+        settings,
+        {"model": settings.get("gemini_image_model") or "gemini-3.1-flash-image-preview"},
+    )
+    candidate_key = settings.get(candidate.get("key_setting", ""), "") or ""
+    if not candidate_key and devvault.VaultSession.is_unlocked():
+        candidate_key = await devvault.vault_resolve_provider_key(conn, candidate_id)
+    if not candidate_key:
+        warnings.append("Image generation was requested, but no Gemini key is configured. Axon can plan the image prompt, but cannot render it yet.")
+        return routed, warnings
+
+    routed.update(
+        {
+            "backend": "api",
+            "api_provider": candidate_id,
+            "api_key": candidate_key,
+            "api_base_url": candidate.get("base_url", ""),
+            "api_model": candidate.get("model", "gemini-3.1-flash-image-preview"),
+        }
+    )
+    warnings.append(f"Image generation request — auto-routed to {candidate.get('label', candidate_id)} for image-capable tool use.")
+    return routed, warnings
 
 
 async def _memory_bundle(
@@ -1520,7 +2193,10 @@ async def _memory_bundle(
     settings: dict,
     composer_options: dict,
 ) -> dict:
-    await memory_engine.sync_memory_layers(conn, settings)
+    try:
+        await memory_engine.sync_memory_layers(conn, settings)
+    except _sqlite3.DatabaseError as exc:
+        print(f"[Axon] Memory bundle sync degraded: {exc}")
     layers = _composer_memory_layers(composer_options, has_attached_resources=bool(resource_ids))
     intelligence = str(composer_options.get("intelligence_mode") or "ask").lower()
     limit = 8 if intelligence == "deep_research" else 5
@@ -1532,10 +2208,15 @@ async def _memory_bundle(
         layers=layers,
         limit=limit,
     )
+    try:
+        overview = await memory_engine.build_memory_overview(conn)
+    except _sqlite3.DatabaseError as exc:
+        print(f"[Axon] Memory overview degraded: {exc}")
+        overview = {"total": 0, "layers": {}, "state": "degraded"}
     return {
         "items": results,
         "context_block": memory_engine.build_memory_context(results),
-        "overview": await memory_engine.build_memory_overview(conn),
+        "overview": overview,
     }
 
 
@@ -1584,10 +2265,10 @@ async def _resource_bundle(
     context_parts = ["## Attached Resources"]
     image_paths: list[str] = []
     vision_model = (settings.get("vision_model") or "").strip()
-    # For API/CLI backends, vision is built-in — no separate vision_model needed
+    # Only Ollama uses a separate explicit vision model setting here.
     _backend = (settings.get("ai_backend") or "api").lower()
-    if not vision_model and _backend in ("api", "cli"):
-        vision_model = settings.get("api_model") or settings.get("ollama_model") or "api"
+    if not vision_model and _backend == "api":
+        vision_model = settings.get("api_model") or ""
 
     for resource in resources:
         await devdb.touch_resource_used(conn, resource["id"])
@@ -1623,8 +2304,8 @@ async def _resource_bundle(
         for idx, chunk in enumerate(selected, start=1):
             context_parts.append(f"  Excerpt {idx}: {chunk}")
 
-    if image_paths and not vision_model:
-        warnings.append("Image resources are attached, but no vision model is configured. Axon will use metadata only.")
+    if image_paths and not vision_model and _backend not in {"api", "cli"}:
+        warnings.append("Image resources are attached, but the current runtime does not have direct vision enabled. Axon will use image metadata only.")
 
     return {
         "resources": resources,
@@ -2061,6 +2742,26 @@ async def chat(body: ChatMessage):
             user_message=body.message,
             settings=settings,
         )
+        ai, _vision_warnings = await auto_route_vision_runtime(
+            settings=settings,
+            ai=ai,
+            resource_bundle=resource_bundle,
+            requested_model=body.model or "",
+            resolve_provider_key=lambda provider_id: devvault.vault_resolve_provider_key(conn, provider_id),
+            vault_unlocked=devvault.VaultSession.is_unlocked(),
+        )
+        if _vision_warnings:
+            resource_bundle["warnings"].extend(_vision_warnings)
+        ai, _image_warnings = await _auto_route_image_generation_runtime(
+            conn,
+            settings=settings,
+            ai=ai,
+            user_message=body.message,
+            requested_model=body.model or "",
+            agent_request=False,
+        )
+        if _image_warnings:
+            resource_bundle["warnings"].extend(_image_warnings)
         memory_bundle = await _memory_bundle(
             conn,
             user_message=body.message,
@@ -2101,7 +2802,7 @@ async def chat(body: ChatMessage):
                 if not _pptx_api_key and devvault.VaultSession.is_unlocked():
                     _pptx_api_key = await devvault.vault_resolve_provider_key(conn, _pptx_api_cfg.get("provider_id", "deepseek"))
                 _pptx_api_base = _pptx_api_cfg.get("api_base_url", "https://api.deepseek.com/")
-                _pptx_api_model = _pptx_api_cfg.get("api_model", "deepseek-chat")
+                _pptx_api_model = _pptx_api_cfg.get("api_model", "deepseek-reasoner")
 
                 def _call_cloud_api(system: str, user: str) -> str:
                     """Call cloud provider (DeepSeek etc.) for slide JSON."""
@@ -2224,7 +2925,7 @@ async def chat(body: ChatMessage):
                 if not _mns_api_key and devvault.VaultSession.is_unlocked():
                     _mns_api_key = await devvault.vault_resolve_provider_key(conn, _mns_api_cfg.get("provider_id", "deepseek"))
                 _mns_api_base = _mns_api_cfg.get("api_base_url", "https://api.deepseek.com/").rstrip("/")
-                _mns_api_model = _mns_api_cfg.get("api_model", "deepseek-chat")
+                _mns_api_model = _mns_api_cfg.get("api_model", "deepseek-reasoner")
 
                 _proj_names_ns = {str(p["id"]): p["name"] for p in projects}
                 _proj_list_ns = ", ".join(f'{pid}: {pn}' for pid, pn in _proj_names_ns.items()) or "none"
@@ -2359,7 +3060,7 @@ async def chat(body: ChatMessage):
                 if not _pbns_api_key and devvault.VaultSession.is_unlocked():
                     _pbns_api_key = await devvault.vault_resolve_provider_key(conn, _pbns_api_cfg.get("provider_id", "deepseek"))
                 _pbns_api_base = _pbns_api_cfg.get("api_base_url", "https://api.deepseek.com/").rstrip("/")
-                _pbns_api_model = _pbns_api_cfg.get("api_model", "deepseek-chat")
+                _pbns_api_model = _pbns_api_cfg.get("api_model", "deepseek-reasoner")
 
                 _proj_names_pbns = {str(p["id"]): p["name"] for p in projects}
                 _proj_list_pbns = ", ".join(f'{pid}: {pn}' for pid, pn in _proj_names_pbns.items()) or "none"
@@ -2575,6 +3276,30 @@ async def chat_stream(body: ChatMessage, request: Request):
             user_message=body.message,
             settings=settings,
         )
+        ai, _vision_warnings = await auto_route_vision_runtime(
+            settings=settings,
+            ai=ai,
+            resource_bundle=resource_bundle,
+            requested_model=body.model or "",
+            resolve_provider_key=lambda provider_id: devvault.vault_resolve_provider_key(conn, provider_id),
+            vault_unlocked=devvault.VaultSession.is_unlocked(),
+        )
+        if _vision_warnings:
+            resource_bundle["warnings"].extend(_vision_warnings)
+        ai, _image_warnings = await _auto_route_image_generation_runtime(
+            conn,
+            settings=settings,
+            ai=ai,
+            user_message=body.message,
+            requested_model=body.model or "",
+            agent_request=False,
+        )
+        if _image_warnings:
+            resource_bundle["warnings"].extend(_image_warnings)
+        settings = {**settings, "ai_backend": ai.get("backend", settings.get("ai_backend", "api"))}
+        if ai.get("ollama_model"):
+            settings["ollama_model"] = ai["ollama_model"]
+        backend = settings.get("ai_backend", backend)
         memory_bundle = await _memory_bundle(
             conn,
             user_message=body.message,
@@ -2624,7 +3349,7 @@ async def chat_stream(body: ChatMessage, request: Request):
             if not _pptx_api_key_s and devvault.VaultSession.is_unlocked():
                 _pptx_api_key_s = await devvault.vault_resolve_provider_key(conn, _pptx_api_cfg_s.get("provider_id", "deepseek"))
             _pptx_api_base_s = _pptx_api_cfg_s.get("api_base_url", "https://api.deepseek.com/")
-            _pptx_api_model_s = _pptx_api_cfg_s.get("api_model", "deepseek-chat")
+            _pptx_api_model_s = _pptx_api_cfg_s.get("api_model", "deepseek-reasoner")
 
             def _call_cloud_api_s(system: str, user: str) -> str:
                 """Call cloud provider (DeepSeek etc.) for slide JSON."""
@@ -2754,7 +3479,7 @@ async def chat_stream(body: ChatMessage, request: Request):
                 async with devdb.get_db() as _m_conn:
                     _m_api_key = await devvault.vault_resolve_provider_key(_m_conn, _m_api_cfg.get("provider_id", "deepseek"))
             _m_api_base = _m_api_cfg.get("api_base_url", "https://api.deepseek.com/").rstrip("/")
-            _m_api_model = _m_api_cfg.get("api_model", "deepseek-chat")
+            _m_api_model = _m_api_cfg.get("api_model", "deepseek-reasoner")
 
             # Build project list for context
             _proj_names = {str(p["id"]): p["name"] for p in projects}
@@ -2899,7 +3624,7 @@ async def chat_stream(body: ChatMessage, request: Request):
                 async with devdb.get_db() as _pb_conn:
                     _pb_api_key = await devvault.vault_resolve_provider_key(_pb_conn, _pb_api_cfg.get("provider_id", "deepseek"))
             _pb_api_base = _pb_api_cfg.get("api_base_url", "https://api.deepseek.com/").rstrip("/")
-            _pb_api_model = _pb_api_cfg.get("api_model", "deepseek-chat")
+            _pb_api_model = _pb_api_cfg.get("api_model", "deepseek-reasoner")
 
             _proj_names_pb = {str(p["id"]): p["name"] for p in projects}
             _proj_list_pb = ", ".join(f'{pid}: {pn}' for pid, pn in _proj_names_pb.items()) or "none"
@@ -3038,6 +3763,9 @@ async def chat_stream(body: ChatMessage, request: Request):
                 api_provider=ai.get("api_provider", ""),
                 api_base_url=ai.get("api_base_url", ""),
                 api_model=ai.get("api_model", ""),
+                cli_path=ai.get("cli_path", ""),
+                cli_model=ai.get("cli_model", ""),
+                cli_session_persistence=bool(ai.get("cli_session_persistence", False)),
                 ollama_url=ollama_url, ollama_model=ollama_model,
             ):
                 if not started_stream:
@@ -3111,31 +3839,8 @@ async def agent_endpoint(body: AgentRequest, request: Request):
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
         composer_options = _composer_options_dict(body.composer_options)
-        backend = settings.get("ai_backend", "api")
-        if backend != "ollama" and str(composer_options.get("external_mode") or "").lower() == "disable_external_calls":
-            backend = "ollama"
-            settings["ai_backend"] = "ollama"
-
-        # Resolve API credentials for API backend; CLI backend needs no API key
-        _agent_api_key = ""
-        _agent_api_base = ""
-        _agent_api_model = ""
-        _agent_api_provider = ""
-        if backend == "api":
-            _agent_api_cfg = provider_registry.runtime_api_config(settings)
-            _agent_api_key = _agent_api_cfg.get("api_key", "")
-            if not _agent_api_key and devvault.VaultSession.is_unlocked():
-                _agent_api_key = await devvault.vault_resolve_provider_key(conn, _agent_api_cfg.get("provider_id", "deepseek"))
-            _agent_api_base = _agent_api_cfg.get("api_base_url", "https://api.deepseek.com/")
-            _agent_api_model = _agent_api_cfg.get("api_model", "deepseek-chat")
-            _agent_api_provider = _agent_api_cfg.get("provider_id", "api")
-            # Use role-specific model for code/reasoning tasks
-            _agent_role = _local_role_for_composer(composer_options, agent_request=True)
-            _agent_role_map = brain.API_MODEL_BY_ROLE.get(_agent_api_provider, {})
-            if _agent_role in _agent_role_map:
-                _agent_api_model = _agent_role_map[_agent_role]
-            if not _agent_api_key:
-                raise HTTPException(400, "Agent mode with API backend requires a configured API key. Check Settings or Vault.")
+        ai = await _effective_ai_params(settings, composer_options, conn=conn, agent_request=True, requested_model=body.model or "")
+        settings = {**settings, "ai_backend": ai.get("backend", settings.get("ai_backend", "api"))}
 
         _max_agent_iterations = max(10, min(200, int(settings.get("max_agent_iterations") or "75")))
         _context_compact = str(settings.get("context_compact_enabled", "1")).strip().lower() in {"1", "true", "yes", "on"}
@@ -3159,6 +3864,27 @@ async def agent_endpoint(body: AgentRequest, request: Request):
             user_message=body.message,
             settings=settings,
         )
+        ai, _vision_warnings = await auto_route_vision_runtime(
+            settings=settings,
+            ai=ai,
+            resource_bundle=resource_bundle,
+            requested_model=body.model or "",
+            resolve_provider_key=lambda provider_id: devvault.vault_resolve_provider_key(conn, provider_id),
+            vault_unlocked=devvault.VaultSession.is_unlocked(),
+        )
+        if _vision_warnings:
+            resource_bundle["warnings"].extend(_vision_warnings)
+        ai, _image_warnings = await _auto_route_image_generation_runtime(
+            conn,
+            settings=settings,
+            ai=ai,
+            user_message=body.message,
+            requested_model=body.model or "",
+            agent_request=True,
+        )
+        if _image_warnings:
+            resource_bundle["warnings"].extend(_image_warnings)
+        settings = {**settings, "ai_backend": ai.get("backend", settings.get("ai_backend", "api"))}
         memory_bundle = await _memory_bundle(
             conn,
             user_message=body.message,
@@ -3171,8 +3897,14 @@ async def agent_endpoint(body: AgentRequest, request: Request):
         merged_context_block = "\n\n".join(
             block for block in (context_block, memory_bundle["context_block"], composer_block) if block
         )
+        backend = settings.get("ai_backend", "api")
+        _agent_api_key = ai.get("api_key", "")
+        _agent_api_base = ai.get("api_base_url", "")
+        _agent_api_model = ai.get("api_model", "")
+        _agent_api_provider = ai.get("api_provider", "")
+        if backend == "api" and not _agent_api_key:
+            raise HTTPException(400, "Agent mode with API backend requires a configured API key. Check Settings or Vault.")
 
-    ai = await _effective_ai_params(settings, composer_options, agent_request=True, requested_model=body.model or "")
     ollama_url = ai.get("ollama_url", settings.get("ollama_url", ""))
     ollama_model = ai.get("ollama_model") or resource_bundle["vision_model"] or settings.get("ollama_model", "")
 
@@ -3221,6 +3953,8 @@ async def agent_endpoint(body: AgentRequest, request: Request):
                 api_model=_agent_api_model,
                 api_provider=_agent_api_provider,
                 cli_path=ai.get("cli_path", ""),
+                cli_model=ai.get("cli_model", ""),
+                cli_session_persistence=bool(ai.get("cli_session_persistence", False)),
                 backend=backend,
             ):
                 if event.get("type") == "text":
@@ -3265,6 +3999,16 @@ async def agent_endpoint(body: AgentRequest, request: Request):
                         tool=event.get("name", ""),
                         workspace_id=body.project_id,
                         preserve_started=True,
+                    )
+                elif event.get("type") == "approval_required":
+                    _set_live_operator(
+                        active=False,
+                        mode="agent",
+                        phase="recover",
+                        title="Awaiting approval",
+                        detail=str(event.get("message") or "Axon paused until you approve or deny the blocked action.")[:180],
+                        summary=body.message[:120],
+                        workspace_id=body.project_id,
                     )
                 elif event.get("type") == "done":
                     _set_live_operator(
@@ -3360,6 +4104,7 @@ async def get_settings():
             "openai_gpts_enabled",
             "gemini_gems_enabled",
             "resource_url_import_enabled",
+            "claude_cli_session_persistence_enabled",
             "live_feed_enabled",
             "stable_domain_enabled",
             "alerts_enabled",
@@ -3398,83 +4143,28 @@ async def get_settings():
         return s
 
 
-class SettingsUpdate(BaseModel):
-    anthropic_api_key: Optional[str] = None
-    anthropic_base_url: Optional[str] = None
-    anthropic_api_model: Optional[str] = None
-    scan_interval_hours: Optional[str] = None
-    morning_digest_hour: Optional[str] = None
-    projects_root: Optional[str] = None
-    notify_desktop: Optional[str] = None
-    ai_backend: Optional[str] = None
-    api_provider: Optional[str] = None
-    claude_cli_path: Optional[str] = None
-    ollama_url: Optional[str] = None
-    ollama_runtime_mode: Optional[str] = None
-    ollama_model: Optional[str] = None
-    code_model: Optional[str] = None
-    general_model: Optional[str] = None
-    reasoning_model: Optional[str] = None
-    embeddings_model: Optional[str] = None
-    vision_model: Optional[str] = None
-    resource_storage_path: Optional[str] = None
-    resource_upload_max_mb: Optional[str] = None
-    resource_url_import_enabled: Optional[bool] = None
-    live_feed_enabled: Optional[bool] = None
-    stable_domain_enabled: Optional[bool] = None
-    stable_domain: Optional[str] = None
-    public_base_url: Optional[str] = None
-    tunnel_mode: Optional[str] = None
-    cloudflare_tunnel_token: Optional[str] = None
-    terminal_default_mode: Optional[str] = None
-    terminal_command_timeout_seconds: Optional[str] = None
-    cloud_agents_enabled: Optional[bool] = None
-    openai_gpts_enabled: Optional[bool] = None
-    gemini_gems_enabled: Optional[bool] = None
-    deepseek_enabled: Optional[bool] = None
-    generic_api_enabled: Optional[bool] = None
-    openai_api_key: Optional[str] = None
-    openai_base_url: Optional[str] = None
-    openai_api_model: Optional[str] = None
-    gemini_api_key: Optional[str] = None
-    gemini_base_url: Optional[str] = None
-    gemini_api_model: Optional[str] = None
-    deepseek_api_key: Optional[str] = None
-    deepseek_base_url: Optional[str] = None
-    deepseek_api_model: Optional[str] = None
-    generic_api_key: Optional[str] = None
-    generic_api_url: Optional[str] = None
-    generic_api_model: Optional[str] = None
-    github_token: Optional[str] = None
-    slack_webhook_url: Optional[str] = None
-    webhook_urls: Optional[str] = None
-    webhook_secret: Optional[str] = None
-    azure_speech_key: Optional[str] = None
-    azure_speech_region: Optional[str] = None
-    azure_voice: Optional[str] = None
-    local_stt_model: Optional[str] = None
-    local_stt_language: Optional[str] = None
-    local_tts_model_path: Optional[str] = None
-    local_tts_config_path: Optional[str] = None
-    alerts_enabled: Optional[bool] = None
-    alerts_desktop: Optional[bool] = None
-    alerts_mobile: Optional[bool] = None
-    alerts_missions: Optional[bool] = None
-    alerts_runtime: Optional[bool] = None
-    alerts_morning_brief: Optional[bool] = None
-    alerts_tunnel: Optional[bool] = None
-    dash_bridge_enabled: Optional[bool] = None
-    dash_bridge_url: Optional[str] = None
-    dash_bridge_token: Optional[str] = None
-    dash_bridge_mode: Optional[str] = None
-    max_agent_iterations: Optional[str] = None
-    context_compact_enabled: Optional[bool] = None
-
-
 @app.post("/api/settings")
 async def update_settings(body: SettingsUpdate):
     async with devdb.get_db() as conn:
         data = body.model_dump(exclude_none=True)
+        current_settings = await devdb.get_all_settings(conn)
+        for spec in provider_registry.PROVIDERS:
+            key_name = spec.base_url_setting
+            if key_name in data:
+                raw_value = str(data.get(key_name, "") or "").strip()
+                if raw_value:
+                    merged = provider_registry.merged_provider_config(
+                        spec.provider_id,
+                        current_settings,
+                        {"base_url": raw_value},
+                    )
+                    data[key_name] = merged.get("base_url", raw_value)
+                else:
+                    data[key_name] = ""
+        if "claude_cli_model" in data or "claude_cli_path" in data:
+            selected_cli_path = str(data.get("claude_cli_path", current_settings.get("claude_cli_path", "")) or "")
+            requested_cli_model = str(data.get("claude_cli_model", current_settings.get("claude_cli_model", "")) or "")
+            data["claude_cli_model"] = brain.normalize_cli_model(selected_cli_path, requested_cli_model)
         for key, value in data.items():
             if isinstance(value, bool):
                 await devdb.set_setting(conn, key, "1" if value else "0")
@@ -3545,6 +4235,7 @@ class VaultSetupRequest(BaseModel):
 class VaultUnlockRequest(BaseModel):
     master_password: str
     totp_code: str
+    remember_me: bool = False   # True → 24h TTL, False → 1h TTL
 
 
 class VaultSecretCreate(BaseModel):
@@ -3566,26 +4257,37 @@ class VaultSecretUpdate(BaseModel):
 
 
 @app.get("/api/vault/status")
-async def vault_status():
+async def vault_status(request: Request):
     """Return vault setup state and lock state."""
+    if _dev_local_vault_bypass_active(request):
+        return {
+            "is_setup": False,
+            "is_unlocked": True,
+            "ttl_remaining": 0,
+            "dev_bypass": True,
+        }
     async with devdb.get_db() as conn:
         is_setup = await devvault.vault_is_setup(conn)
     return {
         "is_setup": is_setup,
         "is_unlocked": devvault.VaultSession.is_unlocked(),
+        "ttl_remaining": devvault.VaultSession.ttl_remaining(),
+        "dev_bypass": False,
     }
 
 
 @app.get("/api/vault/provider-keys")
-async def vault_provider_keys():
+async def vault_provider_keys(request: Request):
     """Check which providers have keys resolvable from the vault."""
+    if _dev_local_vault_bypass_active(request):
+        return {"unlocked": True, "resolved": {}, "dev_bypass": True}
     result = {}
     if devvault.VaultSession.is_unlocked():
         async with devdb.get_db() as conn:
             resolved = await devvault.vault_resolve_all_provider_keys(conn)
             for pid in resolved:
                 result[pid] = True
-    return {"unlocked": devvault.VaultSession.is_unlocked(), "resolved": result}
+    return {"unlocked": devvault.VaultSession.is_unlocked(), "resolved": result, "dev_bypass": False}
 
 
 @app.post("/api/vault/setup")
@@ -3601,12 +4303,20 @@ async def vault_setup(body: VaultSetupRequest):
 
 @app.post("/api/vault/unlock")
 async def vault_unlock(body: VaultUnlockRequest):
-    """Unlock the vault with master password + TOTP code."""
+    """Unlock the vault with master password + TOTP code.
+    remember_me=True → 24-hour session; False (default) → 1-hour session.
+    The master password is NEVER stored; only the derived key lives in memory.
+    """
+    ttl = devvault.VaultSession.EXTENDED_TTL if body.remember_me else devvault.VaultSession.DEFAULT_TTL
     async with devdb.get_db() as conn:
-        ok, err = await devvault.unlock_vault(conn, body.master_password, body.totp_code)
+        ok, err = await devvault.unlock_vault(conn, body.master_password, body.totp_code, session_ttl=ttl)
     if not ok:
         raise HTTPException(401, err)
-    return {"unlocked": True}
+    return {
+        "unlocked": True,
+        "session_ttl": ttl,
+        "ttl_label": "24 hours" if body.remember_me else "1 hour",
+    }
 
 
 @app.post("/api/vault/lock")
@@ -3807,7 +4517,16 @@ async def runtime_status():
                 settings = {**settings, spec.key_setting: api_key}
         projects = await devdb.get_projects(conn, status="active")
         resources = await devdb.list_resources(conn)
-        memory_overview = await memory_engine.sync_memory_layers(conn, settings)
+        try:
+            memory_overview = await memory_engine.sync_memory_layers(conn, settings)
+        except _sqlite3.DatabaseError as exc:
+            print(f"[Axon] Runtime status memory sync degraded: {exc}")
+            memory_overview = {
+                "total": 0,
+                "layers": {},
+                "state": "degraded",
+                "warning": "Memory sync is temporarily unavailable.",
+            }
         terminal_sessions = await devdb.list_terminal_sessions(conn, limit=6)
 
     available_models = await brain.ollama_list_models(settings.get("ollama_url", ""))
@@ -3835,6 +4554,87 @@ async def runtime_status():
     return status
 
 
+class ClaudeCliLoginRequest(BaseModel):
+    mode: Optional[str] = None
+    email: Optional[str] = None
+
+
+@app.get("/api/runtime/cli/status")
+async def runtime_cli_status():
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+    return claude_cli_runtime.build_cli_runtime_snapshot(settings.get("claude_cli_path", ""))
+
+
+@app.post("/api/runtime/cli/install")
+async def runtime_cli_install():
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+        result = await asyncio.to_thread(
+            claude_cli_runtime.install_claude_cli,
+            settings.get("claude_cli_path", ""),
+        )
+        await devdb.log_event(conn, "maintenance", "Claude CLI install action requested")
+    return result
+
+
+@app.post("/api/runtime/cli/login")
+async def runtime_cli_login(body: ClaudeCliLoginRequest):
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+        result = await asyncio.to_thread(
+            claude_cli_runtime.prepare_claude_cli_login,
+            settings.get("claude_cli_path", ""),
+            mode=body.mode or "claudeai",
+            email=body.email or "",
+        )
+        await devdb.log_event(conn, "maintenance", "Claude CLI login guidance prepared")
+    return result
+
+
+@app.get("/api/runtime/codex/status")
+async def runtime_codex_status():
+    return codex_cli_runtime.build_codex_runtime_snapshot("")
+
+
+@app.post("/api/runtime/codex/install")
+async def runtime_codex_install():
+    async with devdb.get_db() as conn:
+        result = await asyncio.to_thread(codex_cli_runtime.install_codex_cli, "")
+        await devdb.log_event(conn, "maintenance", "Codex CLI install action requested")
+    return result
+
+
+@app.post("/api/runtime/codex/login")
+async def runtime_codex_login():
+    async with devdb.get_db() as conn:
+        result = await asyncio.to_thread(codex_cli_runtime.prepare_codex_cli_login, "")
+        await devdb.log_event(conn, "maintenance", "Codex CLI login guidance prepared")
+    return result
+
+
+@app.get("/api/server/logs")
+async def server_logs(tail: int = 200):
+    line_limit = max(20, min(int(tail), 2000))
+    if not DEVBRAIN_LOG.exists():
+        return {"path": str(DEVBRAIN_LOG), "lines": [], "text": "", "available": False}
+
+    from collections import deque
+
+    try:
+        with DEVBRAIN_LOG.open("r", encoding="utf-8", errors="replace") as handle:
+            lines = list(deque((line.rstrip("\n") for line in handle), maxlen=line_limit))
+    except Exception as exc:
+        raise HTTPException(500, f"Unable to read server log: {exc}")
+
+    return {
+        "path": str(DEVBRAIN_LOG),
+        "lines": lines,
+        "text": "\n".join(lines),
+        "available": True,
+    }
+
+
 async def _build_live_snapshot() -> dict:
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
@@ -3855,7 +4655,12 @@ async def _build_live_snapshot() -> dict:
                 else "CLI Agent" if settings.get("ai_backend") == "cli"
                 else "Runtime offline"
             ),
-            "active_model": settings.get("code_model") or settings.get("ollama_model") or settings.get("general_model") or "Saved default",
+            "active_model": (
+                settings.get("api_model") or provider_registry.runtime_api_config(settings).get("api_model", "deepseek-reasoner")
+            ) if settings.get("ai_backend") == "api" else (
+                (settings.get("claude_cli_model") or "CLI default") if settings.get("ai_backend") == "cli"
+                else settings.get("code_model") or settings.get("ollama_model") or settings.get("general_model") or "Saved default"
+            ),
         },
         "terminal": {
             "active_session_id": running_session_id,
@@ -4175,6 +4980,29 @@ async def desktop_preview(w: int = 960, h: int = 540):
     height = max(180, min(int(h), 900))
     display = os.environ.get("DISPLAY", "")
 
+    def _placeholder_png(status: str, message: str) -> Response:
+        image = Image.new("RGB", (width, height), color=(11, 15, 25))
+        draw = ImageDraw.Draw(image)
+        accent = (245, 158, 11)
+        text = (226, 232, 240)
+        muted = (148, 163, 184)
+        draw.rounded_rectangle((24, 24, width - 24, height - 24), radius=24, outline=(51, 65, 85), width=2, fill=(15, 23, 42))
+        draw.text((48, 44), "Axon Desktop Preview Unavailable", fill=accent)
+        draw.text((48, 76), f"Status: {status}", fill=text)
+        body = textwrap.fill(message.strip() or "Desktop preview is unavailable in the current environment.", width=56)
+        draw.multiline_text((48, 116), body, fill=muted, spacing=6)
+        draw.text((48, height - 56), f"Display: {display or 'not set'}", fill=(100, 116, 139))
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        return Response(
+            content=buf.getvalue(),
+            media_type="image/png",
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "X-Axon-Preview-Status": status,
+            },
+        )
+
     # ── Fallback chain for screen capture ────────────────────────────────────
     strategies: list[tuple[str, list[str]]] = []
     if display:
@@ -4188,12 +5016,9 @@ async def desktop_preview(w: int = 960, h: int = 540):
         strategies.append(("xvfb-import", ["xvfb-run", "--auto-servernum", "import", "-silent", "-window", "root", "-resize", f"{width}x{height}", "png:-"]))
 
     if not strategies:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "no_display",
-                "message": "No display server available for screen capture. Set DISPLAY or install scrot/xvfb.",
-            },
+        return _placeholder_png(
+            "no_display",
+            "No display server or supported capture tool is available. Set DISPLAY or install a supported desktop capture backend.",
         )
 
     last_error = ""
@@ -4219,12 +5044,9 @@ async def desktop_preview(w: int = 960, h: int = 540):
             headers={"Cache-Control": "no-store, max-age=0"},
         )
 
-    return JSONResponse(
-        status_code=503,
-        content={
-            "status": "capture_failed",
-            "message": f"All capture strategies failed. Last: {last_error[:200]}",
-        },
+    return _placeholder_png(
+        "capture_failed",
+        f"All desktop capture strategies failed. Last error: {last_error[:220]}",
     )
 
 
@@ -5981,9 +6803,20 @@ async def get_interrupted_session():
     """Return the most-recent interrupted/active agent session (for resume banner)."""
     from axon_core.session_store import SessionStore
     ss = SessionStore(devdb.DB_PATH)
-    session = ss.get_interrupted(max_age_hours=72.0)   # 3-day resume window
+    session = ss.get_interrupted()   # prefer recent paused sessions; stale sessions are hidden
     if not session:
         return {"session": None}
+
+    last_assistant_message = ""
+    for message in reversed(session.messages or []):
+        if str(message.get("role") or "") != "assistant":
+            continue
+        candidate = str(message.get("content") or "").strip()
+        if candidate:
+            last_assistant_message = candidate
+            break
+
+    metadata = dict(session.metadata or {})
     return {
         "session": {
             "session_id": session.session_id,
@@ -5995,6 +6828,10 @@ async def get_interrupted_session():
             "tool_count": len(session.tool_log),
             "project_name": session.project_name,
             "backend": session.backend,
+            "updated_at": session.updated_at,
+            "last_assistant_message": last_assistant_message,
+            "error_message": str(metadata.get("error_message") or "").strip(),
+            "approval": metadata if session.status == "approval_required" else None,
         }
     }
 
@@ -6010,6 +6847,19 @@ async def allow_agent_edit(body: AllowEditBody):
     """Whitelist file edits for a specific file, repo root, or the whole session."""
     brain.agent_allow_edit(body.path, scope=body.scope)
     return {"ok": True, "scope": body.scope, **brain.agent_get_edit_state()}
+
+
+@app.post("/api/agent/steer")
+async def steer_agent(body: dict):
+    """Send a guidance message to the running agent (stored for next iteration)."""
+    message = (body.get("message") or "").strip()
+    if not message:
+        return {"ok": False, "detail": "Empty steer message"}
+    if hasattr(brain, "_agent_steer_messages"):
+        brain._agent_steer_messages.append(message)
+    else:
+        brain._agent_steer_messages = [message]
+    return {"ok": True, "queued": len(brain._agent_steer_messages)}
 
 
 @app.get("/api/agent/allowed-commands")

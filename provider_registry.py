@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 import httpx
 
 
@@ -56,8 +57,8 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         base_url_setting="deepseek_base_url",
         model_setting="deepseek_api_model",
         default_base_url="https://api.deepseek.com/v1",
-        default_model="deepseek-chat",
-        model_placeholder="deepseek-chat",
+        default_model="deepseek-reasoner",
+        model_placeholder="deepseek-reasoner",
     ),
     ProviderSpec(
         provider_id="anthropic",
@@ -93,6 +94,17 @@ def _normalized_base_url(spec: ProviderSpec, base_url: str) -> str:
     url = (base_url or spec.default_base_url or "").strip().rstrip("/")
     if not url:
         return ""
+    if spec.provider_id == "deepseek":
+        parsed = urlparse(url if "://" in url else f"https://{url}")
+        host = (parsed.netloc or parsed.path or "").strip().lower()
+        if "platform.deepseek.com" in host:
+            return (spec.default_base_url or "https://api.deepseek.com/v1").rstrip("/")
+        if host == "api.deepseek.com":
+            path = parsed.path.rstrip("/")
+            if not path or path == "":
+                return "https://api.deepseek.com/v1"
+            if path == "/chat/completions":
+                return "https://api.deepseek.com/v1"
     if spec.transport == "anthropic" and not url.endswith("/v1"):
         if url.endswith("/"):
             url = url[:-1]
@@ -161,6 +173,37 @@ def runtime_api_config(settings: dict) -> dict:
         "api_base_url": state["base_url"],
         "api_model": state["model"] or spec.default_model,
     }
+
+
+def model_supports_vision(provider_id: str, model: str = "") -> bool:
+    provider = (provider_id or "").strip().lower()
+    model_name = (model or "").strip().lower()
+    if provider == "anthropic":
+        return True
+    if provider == "gemini_gems":
+        return True
+    if provider == "deepseek":
+        return any(token in model_name for token in ("vl", "vision"))
+    return any(token in model_name for token in ("vision", "image", "vl"))
+
+
+def model_supports_image_generation(provider_id: str, model: str = "") -> bool:
+    provider = (provider_id or "").strip().lower()
+    model_name = (model or "").strip().lower()
+    if provider == "gemini_gems":
+        return (not model_name) or any(
+            token in model_name
+            for token in ("flash-image", "image-preview", "pro-image", "imagen")
+        )
+    return False
+
+
+def preferred_vision_provider_ids() -> tuple[str, ...]:
+    return ("anthropic", "gemini_gems")
+
+
+def preferred_image_generation_provider_ids() -> tuple[str, ...]:
+    return ("gemini_gems",)
 
 
 def merged_provider_config(provider_id: str, settings: dict, overrides: dict | None = None) -> dict:

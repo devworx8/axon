@@ -52,7 +52,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
-  <link rel="stylesheet" href="/styles.css?v=20260330c">
+  <link rel="stylesheet" href="/styles.css?v=20260331a">
   <style>
     [x-cloak] { display: none !important; }
     /* xterm overrides to fit Axon dark theme */
@@ -79,7 +79,7 @@
 <!-- @include partials/sidebar.html -->
 
   <!-- ── Main content ──────────────────────────────────────────────── -->
-  <main class="flex-1 flex flex-col overflow-hidden pb-safe md:pb-0 pt-14 md:pt-0 page-content">
+  <main class="app-shell-main flex-1 flex flex-col overflow-hidden">
     <input x-ref="resourceUploadInput"
            type="file"
            multiple
@@ -92,7 +92,7 @@
 
          TAB: CHAT
     ════════════════════════════════════════════════════════════ -->
-    <div x-show="activeTab === 'chat'" class="flex flex-col h-full">
+    <div x-show="activeTab === 'chat'" class="chat-shell flex flex-1 flex-col min-h-0">
       <!-- Console header — desktop only -->
       <div class="hidden md:flex items-center justify-between px-4 py-2.5 border-b border-slate-800 bg-slate-950/70 backdrop-blur shrink-0 gap-3 desktop-header-glass relative z-20">
         <!-- Left: back + title -->
@@ -107,17 +107,17 @@
         <!-- Centre: model picker pill (always visible) -->
         <div class="flex-1 flex justify-center">
           <div class="relative" x-data>
-            <button @click="chatModelOpen = !chatModelOpen; if(chatModelOpen && ollamaModels.length===0) loadOllamaModels()"
+            <button @click="chatModelOpen = !chatModelOpen; if(chatModelOpen){ if(ollamaModels.length===0) loadOllamaModels(); loadRuntimeStatus(); }"
                     class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 hover:border-slate-500/80 transition group select-none">
               <div class="w-1.5 h-1.5 rounded-full shrink-0"
-                   :class="settingsForm.ai_backend === 'ollama' ? 'bg-green-400' : settingsForm.ai_backend === 'api' ? 'bg-blue-400' : 'bg-slate-500'"></div>
+                   :class="settingsForm.ai_backend === 'ollama' ? 'bg-green-400' : settingsForm.ai_backend === 'api' ? 'bg-blue-400' : settingsForm.ai_backend === 'cli' ? 'bg-amber-400' : 'bg-slate-500'"></div>
               <span class="text-sm font-medium text-slate-200"
                     x-text="consoleRuntimeLabel()">
               </span>
               <svg class="w-3.5 h-3.5 text-slate-500 group-hover:text-slate-300 transition flex-none" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
             </button>
             <!-- Dropdown — shows all backends: Ollama + API providers + CLI -->
-            <div x-show="chatModelOpen" @click.away="chatModelOpen=false"
+            <div x-show="chatModelOpen" @click.away="chatModelOpen=false" @keydown.escape.window="chatModelOpen=false"
                  x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 -translate-y-1" x-transition:enter-end="opacity-100 translate-y-0"
                  class="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl z-[200] min-w-[260px] py-1 overflow-hidden max-h-[420px] overflow-y-auto">
 
@@ -140,10 +140,10 @@
               </div>
 
               <!-- API providers -->
-              <template x-if="(runtimeStatus.api_providers || []).length">
+              <template x-if="runtimeApiProviders().length">
                 <div>
                   <div class="px-3 py-1.5 text-[10px] text-slate-500 uppercase tracking-wider border-y border-slate-800/80 mt-0.5 sticky top-[30px] bg-slate-900 z-10">Cloud · API</div>
-                  <template x-for="p in (runtimeStatus.api_providers || [])" :key="p.id">
+                  <template x-for="p in runtimeApiProviders()" :key="p.id">
                     <button @click="settingsForm.ai_backend='api'; settingsForm.api_provider=p.id; api('POST','/api/settings',{ai_backend:'api',api_provider:p.id}).catch(()=>{}); chatModelOpen=false"
                             :class="settingsForm.ai_backend==='api' && settingsForm.api_provider===p.id ? 'bg-blue-600/10 text-blue-300' : 'text-slate-300 hover:bg-slate-800/60'"
                             class="w-full text-left px-3 py-2 text-[13px] flex items-center gap-2.5 transition">
@@ -156,33 +156,23 @@
                 </div>
               </template>
 
-              <!-- CLI agent -->
-              <div class="border-t border-slate-800/80 mt-0.5" x-data="{ cliExpanded: false }">
-                <button @click="if ((runtimeStatus.cli_environments||[]).length > 1) { cliExpanded = !cliExpanded } else { settingsForm.ai_backend='cli'; api('POST','/api/settings',{ai_backend:'cli'}).catch(()=>{}); chatModelOpen=false }"
-                        :class="settingsForm.ai_backend==='cli' ? 'bg-amber-600/10 text-amber-300' : 'text-slate-300 hover:bg-slate-800/60'"
-                        class="w-full text-left px-3 py-2 text-[13px] flex items-center gap-2.5 transition">
-                  <div class="w-1.5 h-1.5 rounded-full shrink-0" :class="settingsForm.ai_backend==='cli' ? 'bg-amber-400' : 'bg-slate-700'"></div>
-                  <span class="flex-1">CLI Agent</span>
-                  <span class="text-[10px] text-slate-600 shrink-0">local bridge</span>
-                  <span x-show="(runtimeStatus.cli_environments||[]).length > 1"
-                        class="text-[10px] text-slate-500 transition-transform"
-                        :class="cliExpanded ? 'rotate-90' : ''">&rsaquo;</span>
-                </button>
-                <!-- CLI environment sub-list -->
-                <template x-if="cliExpanded && (runtimeStatus.cli_environments||[]).length > 1">
-                  <div class="border-t border-slate-800/60">
-                    <template x-for="env in (runtimeStatus.cli_environments||[])" :key="env.path">
-                      <button @click="settingsForm.ai_backend='cli'; settingsForm.claude_cli_path=env.path; api('POST','/api/settings',{ai_backend:'cli',claude_cli_path:env.path}).catch(()=>{}); chatModelOpen=false"
-                              :class="settingsForm.ai_backend==='cli' && (settingsForm.claude_cli_path||'')===env.path ? 'bg-amber-600/10 text-amber-200' : 'text-slate-400 hover:bg-slate-800/60'"
-                              class="w-full text-left pl-7 pr-3 py-1.5 text-[12px] flex items-center gap-2 transition">
-                        <span class="text-[10px]">&rsaquo;</span>
-                        <span class="flex-1 truncate" x-text="env.label"></span>
-                        <span class="text-[9px] text-slate-600 shrink-0" x-text="env.source"></span>
-                      </button>
-                    </template>
-                  </div>
-                </template>
-              </div>
+              <!-- CLI runtimes -->
+              <template x-if="(runtimeStatus.cli_environments||[]).length">
+                <div class="border-t border-slate-800/80 mt-0.5">
+                  <div class="px-3 py-1.5 text-[10px] text-slate-500 uppercase tracking-wider border-b border-slate-800/60">Local · CLI</div>
+                  <template x-for="env in (runtimeStatus.cli_environments||[])" :key="env.path">
+                    <button @click="selectCliEnvironment(env); chatModelOpen=false"
+                            :class="settingsForm.ai_backend==='cli' && ((settingsForm.claude_cli_path || runtimeStatus.cli_binary || '')===env.path) ? 'bg-amber-600/10 text-amber-200' : 'text-slate-300 hover:bg-slate-800/60'"
+                            class="w-full text-left px-3 py-2 text-[13px] flex items-center gap-2.5 transition">
+                      <div class="w-1.5 h-1.5 rounded-full shrink-0"
+                           :class="settingsForm.ai_backend==='cli' && ((settingsForm.claude_cli_path || runtimeStatus.cli_binary || '')===env.path) ? 'bg-amber-400' : 'bg-slate-700'"></div>
+                      <span class="flex-1 truncate" x-text="env.label"></span>
+                      <span class="text-[10px] text-slate-600 shrink-0"
+                            x-text="env.family === 'codex' ? 'local extension' : 'local bridge'"></span>
+                    </button>
+                  </template>
+                </div>
+              </template>
             </div>
           </div>
         </div>
@@ -228,10 +218,10 @@
       </div>
 
       <!-- Desktop: side-by-side | Mobile: stacked -->
-      <div class="flex-1 flex flex-col md:flex-row min-h-0">
+      <div class="chat-shell__body flex-1 flex flex-col md:flex-row min-h-0">
 
       <!-- Canvas: messages + input bar -->
-      <div class="flex-1 flex flex-col min-w-0 min-h-0 relative" :class="{ 'agent-canvas-glow': agentMode && chatLoading }">
+      <div class="chat-shell__canvas flex-1 flex flex-col min-w-0 min-h-0 relative" :class="{ 'agent-canvas-glow': agentMode && chatLoading }">
       <!-- Jump-to-bottom button — visible when user scrolled up during streaming -->
       <button x-show="showScrollToBottom"
               x-transition:enter="transition ease-out duration-150"
@@ -243,7 +233,7 @@
         <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg>
         New content
       </button>
-      <div class="flex-1 overflow-y-auto page-content px-3 md:px-5 py-4 space-y-3" id="chat-messages" @scroll.passive="onChatScroll($event)">
+      <div class="chat-shell__messages flex-1 overflow-y-auto page-content px-3 md:px-5 py-4 space-y-3 axon-console-zoom" id="chat-messages" @scroll.passive="onChatScroll($event)" :style="consoleZoomStyle()">
         <!-- Empty state -->
         <div x-show="chatMessages.length === 0" class="flex flex-col items-center justify-center h-full text-center px-4">
           <!-- Axon ORB -->
@@ -260,32 +250,6 @@
                 <span x-text="hint"></span>
               </button>
             </template>
-          </div>
-        </div>
-
-        <!-- ── Interrupted session resume banner ──────────────────────────── -->
-        <div x-show="interruptedSession && !resumeBannerDismissed && !chatLoading"
-             x-transition
-             class="mx-1 mb-2 rounded-2xl border border-amber-500/30 bg-amber-950/30 px-4 py-3">
-          <div class="flex items-start gap-3">
-            <span class="text-lg shrink-0 mt-0.5">♻️</span>
-            <div class="flex-1 min-w-0">
-              <div class="text-xs font-semibold text-amber-300 mb-0.5">Unfinished session detected</div>
-              <div class="text-[11px] text-amber-200/70 truncate"
-                   x-text="interruptedSession?.task || 'Previous task'"></div>
-              <div class="text-[10px] text-slate-500 mt-0.5"
-                   x-text="`${interruptedSession?.tool_count || 0} tool calls · iteration ${interruptedSession?.iteration || 0} · ${interruptedSession?.status}`"></div>
-            </div>
-            <div class="flex gap-2 shrink-0">
-              <button @click="quickResume()"
-                      class="px-3 py-1.5 text-[11px] font-medium bg-amber-500/20 hover:bg-amber-500/35 border border-amber-500/40 text-amber-300 rounded-xl transition press-scale">
-                Resume
-              </button>
-              <button @click="resumeBannerDismissed = true"
-                      class="px-2 py-1.5 text-[11px] text-slate-500 hover:text-slate-300 rounded-xl transition">
-                Dismiss
-              </button>
-            </div>
           </div>
         </div>
 
@@ -321,53 +285,88 @@
                       x-text="messageProviderIdentity(msg).transportLabel || 'Runtime'"></span>
               </div>
 
-              <div x-show="chronologicalAgentBlocks(msg).length" class="mb-2 space-y-2">
-                <template x-for="entry in chronologicalAgentBlocks(msg)" :key="entry.block.id">
-                  <div>
-                    <template x-if="entry.kind === 'thinking'">
-                      <div class="rounded-xl border border-violet-500/15 bg-gradient-to-b from-violet-950/30 to-slate-950/40 px-3 py-2"
-                           x-data="{ open: entry.block.status === 'active' }"
-                           x-effect="if (entry.block.status === 'active') open = true">
-                        <div class="flex items-center gap-2 cursor-pointer select-none" @click="open = !open">
-                          <svg :class="open ? 'rotate-90' : ''" class="w-3 h-3 text-violet-400/70 transition-transform duration-150 shrink-0"
-                               fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path d="M9 5l7 7-7 7"/></svg>
-                          <span class="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.16em]"
-                                :class="entry.block.status === 'active' ? 'text-violet-200 animate-pulse' : 'text-violet-300/80'"
-                                x-text="entry.block.status === 'active' ? 'Thinking…' : (entry.block.title || 'Thought')"></span>
-                          <span class="text-[10px] text-slate-500" x-text="entry.block.updatedAt ? timeAgo(entry.block.updatedAt) : ''"></span>
-                          <span x-show="!open" class="ml-auto text-[10px] text-violet-400/40 italic truncate max-w-[260px]" x-text="(entry.block.content || '').slice(0, 100) + '…'"></span>
+              <!-- ── Agent trace: thinking + working blocks (Cowork-style) ── -->
+              <div x-show="chronologicalAgentBlocks(msg).length" class="mb-2">
+                <!-- Outer trace container — subtle left rail -->
+                <div class="border-l-2 border-slate-700/40 pl-3 space-y-1.5">
+                  <template x-for="entry in chronologicalAgentBlocks(msg)" :key="entry.block.id">
+                    <div>
+
+                      <!-- ── Thought Process block (Cowork "Thought process ›" style) ── -->
+                      <template x-if="entry.kind === 'thinking'">
+                        <div x-data="{ open: entry.block.status === 'active' }"
+                             x-effect="if (entry.block.status === 'active') open = true">
+                          <!-- Clickable header row -->
+                          <button type="button" @click="open = !open"
+                                  class="flex items-center gap-1.5 w-full text-left group py-0.5">
+                            <svg :class="open ? 'rotate-90' : ''"
+                                 class="w-2.5 h-2.5 shrink-0 text-slate-500 transition-transform duration-150"
+                                 fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
+                              <path d="M9 5l7 7-7 7"/>
+                            </svg>
+                            <span class="text-[11px] font-medium"
+                                  :class="entry.block.status === 'active'
+                                    ? 'text-violet-300 animate-pulse'
+                                    : 'text-slate-400 group-hover:text-slate-200'"
+                                  x-text="entry.block.status === 'active' ? 'Reasoning…' : 'Reasoning notes'"></span>
+                            <span class="rounded-full border border-slate-700/70 bg-slate-900/70 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.18em] text-slate-500">
+                              unverified
+                            </span>
+                            <span x-show="entry.block.status !== 'active'"
+                                  class="text-[10px] text-slate-600"
+                                  x-text="entry.block.updatedAt ? timeAgo(entry.block.updatedAt) : ''"></span>
+                            <!-- Collapsed preview -->
+                            <span x-show="!open && entry.block.status !== 'active'"
+                                  class="ml-1 text-[10px] text-slate-600 italic truncate flex-1 max-w-[240px]"
+                                  x-text="(entry.block.content || '').replace(/\s+/g,' ').slice(0, 80) + '…'"></span>
+                          </button>
+                          <!-- Expanded content -->
+                          <div x-show="open" x-collapse
+                               class="mt-1 ml-4 rounded-lg bg-slate-950/60 border border-violet-500/10 px-3 py-2 text-[12px] leading-6 break-words thinking-md max-h-56 overflow-y-auto overscroll-contain"
+                               x-html="renderMd(entry.block.content)">
+                          </div>
                         </div>
-                        <div x-show="open" x-collapse
-                             class="mt-2 max-h-52 overflow-y-auto overscroll-contain rounded-lg bg-slate-950/50 px-3 py-2 text-[11.5px] leading-[1.7] text-violet-100/80 whitespace-pre-wrap break-words"
-                             x-text="entry.block.content"></div>
-                      </div>
-                    </template>
-                    <template x-if="entry.kind === 'working'">
-                      <div class="rounded-xl border overflow-hidden"
-                           :class="entry.block.status === 'running' ? 'border-amber-500/20' : 'border-slate-700/50'"
-                           x-data="{ open: entry.block.status === 'running' }"
-                           x-effect="if (entry.block.status === 'running') open = true">
-                        <div class="flex items-center gap-2 px-3 py-2 cursor-pointer select-none"
-                             :class="entry.block.status === 'running' ? 'bg-amber-950/40' : 'bg-slate-900/70'"
-                             @click="open = !open">
-                          <span class="w-1.5 h-1.5 rounded-full shrink-0 transition-colors"
-                                :class="entry.block.status === 'running' ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'"></span>
-                          <span class="text-[11px] font-medium"
-                                :class="entry.block.status === 'running' ? 'text-amber-100' : 'text-slate-300'"
-                                x-text="entry.block.title"></span>
-                          <span x-show="!open" class="text-[10px] text-slate-500 font-mono truncate max-w-[200px]"
-                                x-text="toolPreview(entry.block.name, entry.block.args)"></span>
-                          <span class="ml-auto text-[10px] text-slate-600 shrink-0" x-text="entry.block.updatedAt ? timeAgo(entry.block.updatedAt) : ''"></span>
-                          <svg :class="open ? 'rotate-90' : ''" class="w-3 h-3 transition-transform duration-150 shrink-0 text-slate-600"
-                               fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path d="M9 5l7 7-7 7"/></svg>
+                      </template>
+
+                      <!-- ── Working / tool-call block (Cowork timeline step style) ── -->
+                      <template x-if="entry.kind === 'working'">
+                        <div x-data="{ open: entry.block.status === 'running' }"
+                             x-effect="if (entry.block.status === 'running') open = true">
+                          <!-- Header row -->
+                          <button type="button" @click="open = !open"
+                                  class="flex items-center gap-2 w-full text-left group py-0.5">
+                            <!-- Status dot / step number -->
+                            <span class="w-5 h-5 rounded-full shrink-0 flex items-center justify-center text-[9px] font-bold transition-colors"
+                                  :class="entry.block.status === 'running'
+                                    ? 'bg-amber-400/20 text-amber-300 ring-2 ring-amber-400/20 animate-pulse'
+                                    : 'bg-emerald-400/15 text-emerald-400'"
+                                  x-text="entry.stepNum || ''"></span>
+                            <!-- Tool label -->
+                            <span class="text-[11.5px] font-medium"
+                                  :class="entry.block.status === 'running' ? 'text-amber-200' : 'text-slate-300 group-hover:text-white'"
+                                  x-text="prettyToolName(entry.block.name)"></span>
+                            <!-- Inline preview when collapsed -->
+                            <span x-show="!open"
+                                  class="text-[10px] text-slate-500 font-mono truncate flex-1 max-w-[200px]"
+                                  x-text="toolPreview(entry.block.name, entry.block.args)"></span>
+                            <span class="ml-auto text-[10px] text-slate-600 shrink-0"
+                                  x-text="entry.block.updatedAt ? timeAgo(entry.block.updatedAt) : ''"></span>
+                            <svg :class="open ? 'rotate-90' : ''"
+                                 class="w-2.5 h-2.5 text-slate-600 shrink-0 transition-transform duration-150"
+                                 fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
+                              <path d="M9 5l7 7-7 7"/>
+                            </svg>
+                          </button>
+                          <!-- Expanded tool detail -->
+                          <div x-show="open" x-collapse class="mt-1 ml-4">
+                            <div x-html="renderToolBlock(entry.block.name, entry.block.args, entry.block.result, entry.block.status)"></div>
+                          </div>
                         </div>
-                        <div x-show="open" x-collapse>
-                          <div x-html="renderToolBlock(entry.block.name, entry.block.args, entry.block.result, entry.block.status)"></div>
-                        </div>
-                      </div>
-                    </template>
-                  </div>
-                </template>
+                      </template>
+
+                    </div>
+                  </template>
+                </div>
               </div>
 
               <div x-show="msg.agentEvents && msg.agentEvents.length && !(msg.workingBlocks && msg.workingBlocks.length)" class="mb-2 space-y-1">
@@ -385,9 +384,10 @@
                 : (msg.error
                   ? 'bg-red-950/60 border border-red-500/30 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm'
                   : ((msg.mode === 'agent' || (msg.agentEvents && msg.agentEvents.length))
-                    ? 'bg-slate-800/95 border border-amber-500/20 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm'
+                    ? 'bg-slate-900/80 border border-slate-700/40 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm'
                     : 'bg-slate-800/90 border border-slate-700/50 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm'))">
-                <div x-show="msg.role === 'assistant'" class="prose-dark text-sm">
+                <div x-show="msg.role === 'assistant'" class="prose-dark text-sm"
+                     :class="(msg.mode === 'agent' || msg.agentEvents?.length) && !msg.streaming ? 'max-h-[60vh] overflow-y-auto overscroll-contain' : ''">
                   <div x-html="renderMd(msg.content)"></div>
                   <!-- Streaming cursor -->
                   <span x-show="msg.streaming" class="inline-block w-2 h-4 bg-blue-400 ml-0.5 animate-pulse rounded-sm align-middle"></span>
@@ -412,10 +412,15 @@
                 </button>
                 <div x-show="msg.resources?.length" class="mt-2 flex flex-wrap gap-1.5">
                   <template x-for="resource in (msg.resources || [])" :key="resource.id">
-                    <span class="inline-flex items-center gap-1 rounded-full border border-sky-500/20 bg-sky-500/10 px-2 py-1 text-[10px] text-sky-200">
-                      <span>📎</span>
-                      <span class="max-w-[180px] truncate" x-text="resourceChipLabel(resource)"></span>
-                    </span>
+                    <div>
+                      <img x-show="resource.kind === 'image'" :src="resourceContentUrl(resource.id)" :alt="resource.title || 'Image'"
+                           class="w-20 h-20 rounded-xl object-cover border border-slate-700/80 shadow-lg cursor-pointer hover:ring-2 hover:ring-sky-400/50 transition"
+                           @click="imageModal = { open: true, src: resourceContentUrl(resource.id), title: resource.title || 'Image' }" />
+                      <span x-show="resource.kind !== 'image'" class="inline-flex items-center gap-1 rounded-full border border-sky-500/20 bg-sky-500/10 px-2 py-1 text-[10px] text-sky-200">
+                        <span>📎</span>
+                        <span class="max-w-[180px] truncate" x-text="resourceChipLabel(resource)"></span>
+                      </span>
+                    </div>
                   </template>
                 </div>
               </div>
@@ -484,29 +489,52 @@
           </div>
         </template>
 
+        <!-- ── Interrupted session resume banner ──────────────────────────── -->
+        <div x-show="interruptedSession && !resumeBannerDismissed && !chatLoading"
+             x-transition
+             class="mx-1 mt-2 rounded-2xl border border-amber-500/30 bg-amber-950/30 px-4 py-3">
+          <div class="flex items-start gap-3">
+            <span class="text-lg shrink-0 mt-0.5">♻️</span>
+            <div class="flex-1 min-w-0">
+              <div class="text-xs font-semibold text-amber-300 mb-0.5">Unfinished session detected</div>
+              <div class="text-[11px] text-amber-200/70 truncate"
+                   x-text="interruptedSession?.task || 'Previous task'"></div>
+              <div class="text-[10px] text-slate-500 mt-0.5"
+                   x-text="`${interruptedSession?.tool_count || 0} tool calls · iteration ${interruptedSession?.iteration || 0} · ${interruptedSession?.status}`"></div>
+            </div>
+            <div class="flex gap-2 shrink-0">
+              <button @click="quickResume()"
+                      class="px-3 py-1.5 text-[11px] font-medium bg-amber-500/20 hover:bg-amber-500/35 border border-amber-500/40 text-amber-300 rounded-xl transition press-scale">
+                Resume
+              </button>
+              <button @click="resumeBannerDismissed = true"
+                      class="px-2 py-1.5 text-[11px] text-slate-500 hover:text-slate-300 rounded-xl transition">
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+
       <!-- Typing indicator — only show when loading AND no streaming placeholder exists yet -->
-      <div x-show="chatLoading && !chatMessages.some(m => m.streaming)" class="flex justify-start items-end gap-2">
+      <!-- ── Waiting indicator (Cowork "Working on it…" style) ── -->
+      <div x-show="chatLoading && !chatMessages.some(m => m.streaming)" class="flex justify-start items-center gap-2.5 px-1">
+          <!-- Avatar -->
           <div :class="agentMode ? 'from-amber-400 via-orange-400 to-cyan-300 text-slate-950 next-gen-icon-glow' : 'from-blue-500 to-blue-700 text-white'"
-               class="w-8 h-8 rounded-2xl bg-gradient-to-br flex items-center justify-center text-sm shrink-0 overflow-hidden">
+               class="w-7 h-7 rounded-xl bg-gradient-to-br flex items-center justify-center text-xs shrink-0 overflow-hidden">
             <template x-if="agentMode">
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-label="#NEXT-GEN">
-                <path d="M8 4L6.7 20"/>
-                <path d="M15 4L13.7 20"/>
-                <path d="M4 9h15"/>
-                <path d="M3.3 15h15"/>
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 4L6.7 20"/><path d="M15 4L13.7 20"/><path d="M4 9h15"/><path d="M3.3 15h15"/>
                 <path d="M18.6 4.8l.8 1.8 1.8.8-1.8.8-.8 1.8-.8-1.8-1.8-.8 1.8-.8.8-1.8z" fill="currentColor" stroke="none"/>
               </svg>
             </template>
-            <template x-if="!agentMode">
-              <span>🧠</span>
-            </template>
+            <template x-if="!agentMode"><span>🧠</span></template>
           </div>
-          <div class="bg-slate-800/90 border border-slate-700/50 rounded-[20px] rounded-tl-[6px] px-4 py-3">
-            <div class="flex gap-1.5 items-center">
-              <div class="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style="animation-delay:0ms"></div>
-              <div class="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style="animation-delay:150ms"></div>
-              <div class="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style="animation-delay:300ms"></div>
-            </div>
+          <!-- "Working on it…" label with animated dots -->
+          <div class="flex items-center gap-1.5">
+            <span class="text-[12px] text-slate-400" x-text="agentMode ? 'Working on it' : 'Thinking'"></span>
+            <span class="working-dot-1 w-1 h-1 rounded-full bg-slate-500 inline-block"></span>
+            <span class="working-dot-2 w-1 h-1 rounded-full bg-slate-500 inline-block"></span>
+            <span class="working-dot-3 w-1 h-1 rounded-full bg-slate-500 inline-block"></span>
           </div>
         </div>
       </div>
@@ -528,16 +556,16 @@
       </div>
 
       <!-- Input bar (bottom of canvas) -->
-      <div class="shrink-0 px-3 md:px-5 py-2.5 border-t border-slate-800 bg-slate-950/80 backdrop-blur">
+      <div class="chat-shell__composer shrink-0 px-3 md:px-5 py-2.5 border-t border-slate-800 bg-slate-950/80 backdrop-blur">
         <div x-show="consoleHasImageAttachmentWithoutVision()" class="mb-2 rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2.5">
           <div class="flex items-start gap-3">
             <div class="text-amber-300 text-sm">⚠️</div>
             <div class="flex-1 min-w-0">
-              <div class="text-xs font-medium text-amber-200">No vision model configured</div>
-              <div class="mt-0.5 text-[11px] text-amber-100/80">Image attached, but visual reasoning is disabled.</div>
+              <div class="text-xs font-medium text-amber-200">Current runtime cannot inspect this image</div>
+              <div class="mt-0.5 text-[11px] text-amber-100/80">Image attached, but the active runtime is text-only for vision. Switch to a vision-capable runtime or API provider.</div>
               <button @click="switchTab('settings')"
                       class="mt-2 text-[11px] text-amber-200 underline underline-offset-2 hover:text-white transition">
-                Configure vision model →
+                Open runtime settings →
               </button>
             </div>
             <button @click="visionWarningDismissed = true" class="text-amber-300/70 hover:text-white text-xs">✕</button>
@@ -584,6 +612,19 @@
           </button>
         </div>
 
+        <!-- Image attachment thumbnails (above composer) -->
+        <div x-show="selectedResources.filter(r => r.kind === 'image').length" class="flex flex-wrap gap-2 px-1 pb-2">
+          <template x-for="resource in selectedResources.filter(r => r.kind === 'image')" :key="'cimg-'+resource.id">
+            <div class="relative group">
+              <img :src="resourceContentUrl(resource.id)" :alt="resource.title || 'Image'"
+                   class="w-14 h-14 rounded-xl object-cover border border-slate-700/80 shadow-lg cursor-pointer hover:ring-2 hover:ring-sky-400/50 transition"
+                   @click="imageModal = { open: true, src: resourceContentUrl(resource.id), title: resource.title || 'Image' }" />
+              <button @click.stop="removeResourceAttachment(resource.id)"
+                      class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-slate-900 border border-slate-600 text-slate-300 hover:text-white hover:bg-red-600 hover:border-red-500 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition shadow-lg">✕</button>
+            </div>
+          </template>
+        </div>
+
         <div class="flex gap-1.5 items-end">
             <!-- Desktop: workspace / environment indicator -->
             <div x-show="!isMobile" class="shrink-0 flex items-center h-9 gap-1.5 rounded-xl px-2.5 bg-slate-800/60 border border-slate-700/40 select-none font-mono text-[11px] text-slate-500" :title="composerEnvLabel()">
@@ -609,14 +650,27 @@
               </svg>
             </button>
 
+            <!-- Desktop: direct image upload button -->
+            <input x-ref="imageUploadInput" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" class="hidden"
+                   @change="handleImageUpload($event)" />
+            <button x-show="!isMobile" @click="$refs.imageUploadInput.click()"
+                    class="w-9 h-9 flex-none rounded-xl bg-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition flex items-center justify-center press-scale" title="Upload image">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
+              </svg>
+            </button>
+
             <!-- Mobile: toolbar toggle button (replaces voice/attach/menu) -->
-            <button x-show="isMobile" @click="showMobileToolbar = !showMobileToolbar"
+            <button x-show="isMobile" @click="showMobileToolbar = !showMobileToolbar; if (showMobileToolbar) { showConsoleDetails = false; showComposerMenu = false; showResourcePicker = false; }"
                     :class="showMobileToolbar ? 'bg-violet-500/15 text-violet-200' : 'bg-slate-800 text-slate-400'"
                     class="md:hidden w-9 h-9 flex-none rounded-xl transition flex items-center justify-center press-scale" title="Tools">
               <span class="text-lg leading-none" x-text="showMobileToolbar ? '×' : '+'"></span>
             </button>
 
-            <div class="flex-1 relative input-glow-wrap" :class="resolveChatMode(chatInput) === 'agent' ? 'agent-mode' : ''">
+            <div class="flex-1 relative input-glow-wrap" :class="resolveChatMode(chatInput) === 'agent' ? 'agent-mode' : ''"
+                 @dragover.prevent="$el.classList.add('ring-2','ring-blue-400/40')"
+                 @dragleave.prevent="$el.classList.remove('ring-2','ring-blue-400/40')"
+                 @drop.prevent="$el.classList.remove('ring-2','ring-blue-400/40'); handleComposerDrop($event)">
               <textarea
                 x-ref="chatComposer"
                 x-model="chatInput"
@@ -672,6 +726,14 @@
                 </svg>
               </template>
             </button>
+            <button x-show="chatLoading && chatInput.trim()" @click="steerAgent(chatInput); chatInput=''; resetChatComposerHeight()" x-cloak
+                    class="w-9 h-9 flex-none rounded-xl bg-violet-600 hover:bg-violet-500 text-white transition flex items-center justify-center shadow-lg shadow-violet-500/20 press-scale" title="Steer — send guidance to running agent">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+            </button>
+            <button x-show="chatLoading && chatInput.trim()" @click="enqueueMessage(chatInput); chatInput=''; resetChatComposerHeight()" x-cloak
+                    class="w-9 h-9 flex-none rounded-xl bg-slate-700 hover:bg-slate-600 text-blue-300 transition flex items-center justify-center shadow-lg press-scale" title="Add to queue — run after current task">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
             <button x-show="chatLoading" @click="stopGeneration()" x-cloak
                     class="w-9 h-9 flex-none rounded-xl bg-red-500 hover:bg-red-400 text-white transition flex items-center justify-center shadow-lg shadow-red-500/20 press-scale" title="Stop generating">
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -683,27 +745,84 @@
         <div class="hidden md:flex items-center gap-1.5 px-1 pt-1.5 text-[10px] text-slate-500">
           <span x-text="runtimeStatus.runtime_label || 'Local-first'"></span>
           <span>·</span>
-          <span x-text="activeChatModel() || runtimeStatus.active_model || 'Saved default'"></span>
+          <span x-text="assistantRuntimeLabel() || runtimeStatus.active_model || 'Saved default'"></span>
           <span>·</span>
           <span x-text="composerExecutionLabel(chatInput)"></span>
           <span>·</span>
           <span x-text="phaseLabel(liveOperator.phase || agentProgressState || 'observe')"></span>
           <span>·</span>
           <span x-text="liveFeed.connected ? 'Live' : (liveFeed.reconnecting ? 'Reconnecting' : 'Idle')"></span>
-          <span class="ml-auto">Enter to send · Shift+Enter for newline</span>
+          <span x-show="_messageQueue?.length" class="text-violet-400" x-text="'· Queue: ' + (_messageQueue?.length || 0)"></span>
+          <span class="ml-auto" x-text="chatLoading ? '↑ Steer · + Queue · ■ Stop' : 'Enter to send · Shift+Enter for newline'"></span>
         </div>
       </div>
+
+      <!-- Image lightbox modal -->
+      <div x-show="imageModal.open" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+           x-transition:leave="transition ease-in duration-100" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
+           @click.self="imageModal.open = false" @keydown.escape.window="imageModal.open = false"
+           class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm" style="display:none;">
+        <div class="relative max-w-[90vw] max-h-[90vh]">
+          <img :src="imageModal.src" :alt="imageModal.title" class="max-w-full max-h-[85vh] rounded-xl shadow-2xl" />
+          <div class="absolute top-2 right-2 flex gap-2">
+            <a :href="imageModal.src" target="_blank" class="w-8 h-8 rounded-full bg-slate-900/80 border border-slate-600 text-slate-300 hover:text-white flex items-center justify-center text-xs transition" title="Open in new tab">↗</a>
+            <button @click="imageModal.open = false" class="w-8 h-8 rounded-full bg-slate-900/80 border border-slate-600 text-slate-300 hover:text-white flex items-center justify-center text-xs transition" title="Close">✕</button>
+          </div>
+          <div x-show="imageModal.title" class="mt-2 text-center text-xs text-slate-400" x-text="imageModal.title"></div>
+        </div>
+      </div>
+
+      <!-- Server logs modal -->
+      <div x-show="serverLogs.open" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+           x-transition:leave="transition ease-in duration-100" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
+           @click.self="serverLogs.open = false" @keydown.escape.window="serverLogs.open = false"
+           class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm" style="display:none;">
+        <div class="w-[min(92vw,1100px)] max-h-[88vh] overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-2xl">
+          <div class="flex items-center gap-3 border-b border-slate-800 px-4 py-3">
+            <div class="min-w-0 flex-1">
+              <div class="text-sm font-semibold text-slate-100">Server Logs</div>
+              <div class="truncate text-[11px] text-slate-500" x-text="serverLogs.path || '~/.devbrain/devbrain.log'"></div>
+            </div>
+            <select x-model.number="serverLogs.tail" @change="loadServerLogs(serverLogs.tail)"
+                    class="dark-select rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-[11px] text-slate-200 focus:outline-none">
+              <option :value="100">100 lines</option>
+              <option :value="200">200 lines</option>
+              <option :value="400">400 lines</option>
+              <option :value="800">800 lines</option>
+            </select>
+            <button @click="loadServerLogs(serverLogs.tail)" class="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-[11px] text-slate-300 hover:border-slate-500 transition">Refresh</button>
+            <button @click="serverLogs.open = false" class="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-[11px] text-slate-300 hover:text-white transition">Close</button>
+          </div>
+          <div x-show="serverLogs.loading" class="px-4 py-8 text-sm text-slate-400">Loading server logs…</div>
+          <div x-show="serverLogs.error" class="px-4 py-4 text-sm text-rose-300" x-text="serverLogs.error"></div>
+          <pre x-show="!serverLogs.loading && !serverLogs.error"
+               class="max-h-[70vh] overflow-auto px-4 py-4 text-[11px] leading-5 text-slate-200 whitespace-pre-wrap break-words bg-slate-950"
+               x-text="serverLogs.text || 'No log lines available.'"></pre>
+        </div>
+      </div>
+
       </div><!-- /canvas -->
 
       <!-- Composer sidebar — controls panel -->
-      <div class="md:border-l md:border-t-0 border-t border-slate-800 bg-slate-900/40 shrink-0 md:overflow-y-auto max-h-[35vh] md:max-h-full relative"
-           :style="`width:${consolePanelWidth}px; min-width:320px; max-width:70vw;`">
+      <div x-show="isMobile && showConsoleDetails"
+           x-transition.opacity
+           @click="showConsoleDetails = false"
+           class="chat-shell__sidebar-backdrop md:hidden"></div>
+      <div x-show="!isMobile || showConsoleDetails"
+           x-transition:enter="transition ease-out duration-200"
+           x-transition:enter-start="opacity-0 translate-y-4 md:translate-y-0 md:translate-x-2"
+           x-transition:enter-end="opacity-100 translate-y-0 md:translate-x-0"
+           x-transition:leave="transition ease-in duration-150"
+           x-transition:leave-start="opacity-100 translate-y-0"
+           x-transition:leave-end="opacity-0 translate-y-4 md:translate-y-0 md:translate-x-2"
+           class="chat-shell__sidebar md:border-l md:border-t-0 border-t border-slate-800 bg-slate-900/40 shrink-0 md:overflow-y-auto max-h-[35vh] md:max-h-full relative"
+           :style="isMobile ? '' : `width:${consolePanelWidth}px; min-width:320px; max-width:70vw;`">
         <!-- Drag-to-resize handle (left edge) -->
         <div class="hidden md:block absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-30 hover:bg-amber-500/20 active:bg-amber-500/30 transition-colors"
              @mousedown.prevent="consolePanelResizing = true; consolePanelResizeStartX = $event.clientX; consolePanelResizeStartW = consolePanelWidth"
              @touchstart.prevent="consolePanelResizing = true; consolePanelResizeStartX = $event.touches[0].clientX; consolePanelResizeStartW = consolePanelWidth">
         </div>
-      <div class="px-3 py-3" :class="isMobile && !showConsoleDetails ? 'hidden' : ''">
+      <div class="chat-shell__sidebar-panel px-3 py-3">
         <div class="space-y-1.5">
           <div class="md:hidden flex items-center justify-between gap-3 border-b border-slate-800/70 px-0.5 pb-2">
             <div>
@@ -757,19 +876,24 @@
                 <span class="text-[9px] md:text-[10px] uppercase tracking-[0.16em] text-slate-500">Provider</span>
                 <select x-model="settingsForm.api_provider" @change="saveSettingsQuiet()"
                         class="dark-select min-w-0 flex-1 rounded-lg border border-slate-800 px-2 py-1 text-[11px] focus:outline-none md:rounded-xl">
-                  <template x-for="p in (runtimeStatus.api_providers || [])" :key="p.id">
+                  <template x-for="p in runtimeApiProviders()" :key="p.id">
                     <option :value="p.id" x-text="p.label"></option>
                   </template>
                 </select>
               </div>
               <!-- CLI agent info -->
-              <div x-show="settingsForm.ai_backend === 'cli'" class="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-green-500/20 bg-green-500/8 px-2.5 py-1.5 md:flex-none md:rounded-2xl">
+              <div x-show="settingsForm.ai_backend === 'cli'"
+                   class="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-green-500/20 bg-green-500/8 px-2.5 py-1.5 md:flex-none md:rounded-2xl">
                 <svg class="w-3.5 h-3.5 text-green-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6.75h16v10.5H4z"/><path stroke-linecap="round" stroke-linejoin="round" d="m8 10 2 2-2 2m5 0h3"/></svg>
                 <div class="min-w-0 flex-1">
-                  <div class="text-[10px] font-medium text-green-300 truncate"
-                       x-text="(settingsForm.claude_cli_path || runtimeStatus.cli_binary || 'claude').split('/').pop()"></div>
-                  <div class="text-[9px] text-slate-500 truncate"
-                       x-text="runtimeStatus.cli_model || 'Default model (set in CLI config)'"></div>
+                     <div class="text-[10px] font-medium text-green-300 truncate"
+                       x-text="cliRuntimeBinaryName()"></div>
+                  <select x-model="settingsForm.claude_cli_model" @change="saveCliModelQuiet()"
+                          class="dark-select mt-1 w-full rounded-lg border border-green-500/20 bg-slate-950/40 px-2 py-1 text-[10px] text-green-200 focus:outline-none">
+                    <template x-for="option in cliModelOptions()" :key="option.id || 'default'">
+                      <option :value="option.id" x-text="option.label"></option>
+                    </template>
+                  </select>
                 </div>
               </div>
 
@@ -823,6 +947,53 @@
                       :class="phaseChipClass(phase)"
                       x-text="phase"
                       :title="phase === 'observe' ? 'Gather context and understand the task' : phase === 'plan' ? 'Break down approach into steps' : phase === 'execute' ? 'Carry out the plan' : phase === 'verify' ? 'Check results for correctness' : 'Handle errors and retry'"></span>
+              </template>
+            </div>
+          </div>
+
+          <!-- ▾ Progress — Cowork-style numbered steps -->
+          <div class="hidden md:block pt-1" x-show="coworkSteps().length > 0" x-transition>
+            <button @click="panelProgressOpen = !panelProgressOpen" class="flex items-center gap-1.5 px-1 w-full text-left group">
+              <span class="text-[9px] text-slate-600 transition" :class="panelProgressOpen ? 'rotate-0' : '-rotate-90'" style="display:inline-block">▾</span>
+              <span class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 group-hover:text-slate-300 transition">Progress</span>
+              <span class="ml-auto rounded-full border border-slate-700 bg-slate-950/60 px-1.5 py-0.5 text-[9px] text-slate-400 tabular-nums"
+                    x-text="coworkSteps().filter(s=>s.status==='done').length + '/' + coworkSteps().length"></span>
+            </button>
+            <div x-show="panelProgressOpen" x-transition class="mt-1 space-y-0.5 max-h-48 overflow-y-auto pr-0.5 cowork-steps">
+              <template x-for="step in coworkSteps()" :key="step.num">
+                <div class="flex items-center gap-2 px-1.5 py-1 rounded-lg"
+                     :class="step.status === 'running' ? 'bg-amber-500/8' : 'hover:bg-slate-800/40'">
+                  <span class="cowork-step-num shrink-0"
+                        :class="step.status === 'running' ? 'cowork-step-num--active' : 'cowork-step-num--done'"
+                        x-text="step.num"></span>
+                  <span class="text-[11px] font-medium truncate"
+                        :class="step.status === 'running' ? 'text-amber-200' : 'text-slate-300'"
+                        x-text="step.label"></span>
+                  <span class="ml-auto text-[10px] text-slate-600 font-mono truncate max-w-[120px]"
+                        x-text="step.detail"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- ▾ Working Files — Cowork-style file tracker -->
+          <div class="hidden md:block pt-1" x-show="coworkFiles().length > 0" x-transition>
+            <button @click="panelFilesOpen = !panelFilesOpen" class="flex items-center gap-1.5 px-1 w-full text-left group">
+              <span class="text-[9px] text-slate-600 transition" :class="panelFilesOpen ? 'rotate-0' : '-rotate-90'" style="display:inline-block">▾</span>
+              <span class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 group-hover:text-slate-300 transition">Working Files</span>
+              <span class="ml-auto rounded-full border border-slate-700 bg-slate-950/60 px-1.5 py-0.5 text-[9px] text-slate-400 tabular-nums"
+                    x-text="coworkFiles().length + ' file' + (coworkFiles().length === 1 ? '' : 's')"></span>
+            </button>
+            <div x-show="panelFilesOpen" x-transition class="mt-1 space-y-0.5 max-h-40 overflow-y-auto pr-0.5">
+              <template x-for="f in coworkFiles()" :key="f.path">
+                <div class="flex items-center gap-2 px-1.5 py-1 rounded-lg hover:bg-slate-800/40 group/file">
+                  <span class="text-[10px] shrink-0" x-text="f.action === 'edited' ? '✏️' : f.action === 'read' ? '📖' : f.action === 'listed' ? '📁' : '📄'"></span>
+                  <span class="text-[11px] text-slate-300 font-mono truncate flex-1 min-w-0"
+                        :title="f.path" x-text="f.short"></span>
+                  <span class="rounded-full border px-1.5 py-0.5 text-[8px] uppercase tracking-wider shrink-0"
+                        :class="f.action === 'edited' ? 'border-amber-500/20 bg-amber-500/10 text-amber-300' : 'border-slate-700 bg-slate-950/60 text-slate-500'"
+                        x-text="f.action"></span>
+                </div>
               </template>
             </div>
           </div>
@@ -890,6 +1061,11 @@
               <span class="ml-auto rounded-full border border-emerald-500/20 bg-emerald-500/8 px-2 py-0.5 text-[9px] text-emerald-400 uppercase tracking-wider">Sandboxed</span>
             </button>
             <div x-show="panelToolsOpen" x-transition class="flex flex-wrap items-center gap-1.5 px-1 pt-1.5">
+            <button @click="window.__axon?.allowAllEdits({ resume: false })"
+                    class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-emerald-300 hover:text-emerald-200 hover:border-emerald-400/40 border-emerald-500/25 bg-emerald-500/8 transition press-scale"
+                    title="Allow all file edits for this session">
+              🔓 Accept All Edits
+            </button>
             <button @click="chatInput = 'Browse my files in ~/'; $nextTick(() => $refs.chatComposer?.focus())"
                     class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-amber-200 hover:border-amber-500/30 transition press-scale"
                     title="Browse files in your home directory">
@@ -923,6 +1099,10 @@
             <button @click="chatInput = 'Create slides for '; $nextTick(() => $refs.chatComposer?.focus())"
                     class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-violet-200 hover:border-violet-500/30 transition press-scale">
               📊 Create Slides
+            </button>
+            <button @click="openServerLogs()"
+                    class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-rose-200 hover:border-rose-500/30 transition press-scale">
+              📜 Server Logs
             </button>
             <span class="text-[9px] text-slate-500"
                   x-text="'Terminal: ' + (settingsForm.terminal_default_mode || 'read_only').replace(/_/g,' ')"></span>
@@ -1036,10 +1216,30 @@
               <span class="text-[9px] text-sky-500/60 transition" :class="panelBrowserOpen ? 'rotate-0' : '-rotate-90'" style="display:inline-block">▾</span>
               <span class="text-[11px] font-semibold text-white group-hover:text-sky-200 transition">Live Page Control</span>
               <span class="ml-auto rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] shrink-0"
-                    :class="browserActions.pending_count ? 'border-amber-500/20 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
-                    x-text="browserActions.pending_count ? `${browserActions.pending_count} pending` : (browserActions.session?.connected ? 'Attached' : 'No page')"></span>
+                    :class="devPreview.url ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' : (browserActions.pending_count ? 'border-amber-500/20 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-950/60 text-slate-400')"
+                    x-text="devPreview.url ? 'Live' : (browserActions.pending_count ? `${browserActions.pending_count} pending` : (browserActions.session?.connected ? 'Attached' : 'No page'))"></span>
             </button>
             <div x-show="panelBrowserOpen" x-transition class="px-3 pb-3">
+            <!-- ── Dev Server Preview ── -->
+            <template x-if="devPreview.url">
+              <div class="mb-3">
+                <div class="flex items-center gap-2 mb-1.5">
+                  <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
+                  <span class="text-[11px] font-medium text-emerald-200 truncate" x-text="devPreview.url"></span>
+                  <button @click="$refs.devPreviewFrame && ($refs.devPreviewFrame.src = devPreview.url)"
+                          class="ml-auto rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[9px] text-slate-300 hover:border-slate-500 transition" title="Reload">↻</button>
+                  <button @click="window.open(devPreview.url, '_blank')"
+                          class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[9px] text-slate-300 hover:border-slate-500 transition" title="Open in browser">↗</button>
+                  <button @click="devPreview.url = ''; devPreview.visible = false"
+                          class="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[9px] text-rose-300 hover:bg-rose-500/20 transition" title="Close preview">✕</button>
+                </div>
+                <div class="rounded-lg border border-slate-700 overflow-hidden bg-white" style="height: 360px;">
+                  <iframe x-ref="devPreviewFrame" :src="devPreview.url" class="w-full h-full border-0"
+                          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                          loading="lazy"></iframe>
+                </div>
+              </div>
+            </template>
             <div class="flex flex-wrap items-center gap-2">
               <span class="rounded-full border px-2 py-0.5 text-[10px]"
                     :class="browserActions.session?.connected ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
@@ -1051,46 +1251,77 @@
                 Refresh
               </button>
             </div>
+            <!-- Quick preview URL input -->
+            <div x-show="!devPreview.url" class="mt-2 flex gap-1.5">
+              <input x-ref="previewUrlInput" type="text" placeholder="http://localhost:3000"
+                     class="flex-1 rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-[11px] text-slate-200 placeholder-slate-600 focus:border-sky-500/50 transition font-mono"
+                     @keydown.enter="if($el.value.trim()){devPreview.url=$el.value.trim();devPreview.visible=true;panelBrowserOpen=true;}" />
+              <button @click="const v=$refs.previewUrlInput?.value?.trim();if(v){devPreview.url=v;devPreview.visible=true;panelBrowserOpen=true;}"
+                      class="rounded-lg border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 text-[10px] text-sky-300 hover:bg-sky-500/20 transition">Preview</button>
+            </div>
             <div x-show="browserActions.session?.url" class="mt-2 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
               <div class="truncate text-[11px] text-slate-200" x-text="browserActions.session?.title || 'Live page'"></div>
               <div class="mt-1 truncate text-[10px] text-sky-300" x-text="browserActions.session?.url"></div>
               <div class="mt-1 text-[10px] text-slate-500" x-text="browserActions.session?.last_seen_at ? 'Seen ' + timeAgo(browserActions.session.last_seen_at) : ''"></div>
             </div>
-            <div class="mt-3 space-y-2" x-show="browserActions.proposals?.length">
+            <!-- Pending count badge -->
+            <div x-show="browserActions.proposals?.length" class="mt-2 mb-1 flex items-center gap-1.5">
+              <span class="rounded-full bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-widest text-amber-300"
+                    x-text="`${browserActions.proposals?.length || 0} pending approval`"></span>
+            </div>
+            <div class="mt-1 space-y-2" x-show="browserActions.proposals?.length">
               <template x-for="proposal in (browserActions.proposals || [])" :key="proposal.id">
-                <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5">
+                <div class="perm-card"
+                     :class="{'perm-card--high': String(proposal.risk||'').toLowerCase()==='high',
+                              'perm-card--medium': String(proposal.risk||'').toLowerCase()==='medium',
+                              'perm-card--low': String(proposal.risk||'').toLowerCase()==='low'}">
+                  <!-- Header row: icon + summary + risk badge -->
                   <div class="flex items-start gap-2">
-                    <span class="mt-0.5 text-sky-300" x-text="browserActionIcon(proposal.action_type)"></span>
+                    <span class="mt-0.5 text-base leading-none shrink-0" x-text="browserActionIcon(proposal.action_type)"></span>
                     <div class="min-w-0 flex-1">
-                      <div class="flex flex-wrap items-center gap-2">
-                        <span class="text-[11px] font-medium text-slate-100" x-text="proposal.summary"></span>
-                        <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.14em]"
-                              :class="browserActionRiskClass(proposal.risk)"
-                              x-text="proposal.risk"></span>
-                        <span class="rounded-full border border-slate-700 bg-slate-900/70 px-2 py-0.5 text-[9px] uppercase tracking-[0.14em] text-slate-400"
-                              x-text="browserActionScopeLabel(proposal.scope)"></span>
+                      <div class="flex flex-wrap items-center gap-1.5">
+                        <span class="text-[11.5px] font-semibold text-white leading-snug" x-text="proposal.summary"></span>
+                        <!-- Risk badge -->
+                        <span class="rounded-full border px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-widest"
+                              :class="{'border-rose-500/40 bg-rose-500/15 text-rose-300': String(proposal.risk||'').toLowerCase()==='high',
+                                       'border-amber-500/35 bg-amber-500/12 text-amber-200': String(proposal.risk||'').toLowerCase()==='medium',
+                                       'border-emerald-500/35 bg-emerald-500/12 text-emerald-200': String(proposal.risk||'').toLowerCase()==='low'}"
+                              x-text="proposal.risk || 'medium'"></span>
                       </div>
-                      <div x-show="proposal.target || proposal.url" class="mt-1 text-[10px] text-slate-500 break-all"
+                      <!-- Scope + action type row -->
+                      <div class="mt-1 flex flex-wrap gap-1.5">
+                        <span class="rounded-full border border-slate-700/60 bg-slate-900/50 px-2 py-0.5 text-[9px] uppercase tracking-[0.12em] text-slate-400"
+                              x-text="browserActionScopeLabel(proposal.scope)"></span>
+                        <span x-show="proposal.action_type"
+                              class="rounded-full border border-slate-700/60 bg-slate-900/50 px-2 py-0.5 text-[9px] uppercase tracking-[0.12em] text-slate-500"
+                              x-text="String(proposal.action_type||'').replace(/_/g,' ')"></span>
+                      </div>
+                      <!-- Target / URL -->
+                      <div x-show="proposal.target || proposal.url"
+                           class="mt-1.5 rounded-md bg-slate-900/60 px-2 py-1 text-[10px] text-slate-400 font-mono break-all leading-relaxed"
                            x-text="proposal.target || proposal.url"></div>
-                      <div x-show="proposal.value" class="mt-1 text-[10px] text-slate-400 break-all"
-                           x-text="proposal.value"></div>
+                      <!-- Value -->
+                      <div x-show="proposal.value"
+                           class="mt-1 rounded-md bg-slate-900/50 px-2 py-0.5 text-[10px] text-slate-300 break-all italic"
+                           x-text="`Value: ${proposal.value}`"></div>
                     </div>
                   </div>
-                  <div class="mt-2 flex items-center justify-end gap-2">
-                    <button @click="rejectBrowserAction(proposal.id)"
-                            class="rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-[11px] text-slate-300 hover:border-slate-500 transition">
+                  <!-- Action buttons -->
+                  <div class="mt-2.5 flex items-center justify-end gap-2">
+                    <button @click="rejectBrowserAction(proposal.id)" class="perm-reject-btn">
+                      <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M6 18L18 6M6 6l12 12"/></svg>
                       Reject
                     </button>
-                    <button @click="approveBrowserAction(proposal.id)"
-                            class="rounded-xl border border-sky-500/20 bg-sky-500/10 px-3 py-1.5 text-[11px] text-sky-200 hover:bg-sky-500/15 transition">
+                    <button @click="approveBrowserAction(proposal.id)" class="perm-approve-btn">
+                      <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7"/></svg>
                       Approve
                     </button>
                   </div>
                 </div>
               </template>
             </div>
-            <div x-show="!browserActions.proposals?.length" class="mt-3 rounded-xl border border-dashed border-slate-800 px-3 py-3 text-[11px] text-slate-500">
-              Browser actions will appear here as a queue: inspect page state freely, but gate clicks, typing, navigation, and submits behind explicit approval.
+            <div x-show="!browserActions.proposals?.length" class="mt-3 rounded-xl border border-dashed border-slate-800 px-3 py-3 text-[11px] text-slate-500 leading-relaxed">
+              Pending actions appear here. Inspect is auto-approved — clicks, typing, navigation and submits require your explicit approval.
             </div>
             </div><!-- /panelBrowserOpen -->
           </div>
@@ -1152,7 +1383,18 @@
           </div>
 
           <div x-show="selectedResources.length" class="mt-2 flex flex-wrap gap-2">
-            <template x-for="resource in selectedResources" :key="resource.id">
+            <!-- Image thumbnails -->
+            <template x-for="resource in selectedResources.filter(r => r.kind === 'image')" :key="'img-'+resource.id">
+              <div class="relative group">
+                <img :src="resourceContentUrl(resource.id)" alt=""
+                     class="w-16 h-16 rounded-xl object-cover border border-slate-700/80 shadow-lg cursor-pointer hover:ring-2 hover:ring-sky-400/50 transition"
+                     @click="imageModal = { open: true, src: resourceContentUrl(resource.id), title: resource.title || 'Image' }" />
+                <button @click.stop="removeResourceAttachment(resource.id)"
+                        class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-slate-900 border border-slate-600 text-slate-300 hover:text-white hover:bg-red-600 hover:border-red-500 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition shadow-lg">✕</button>
+              </div>
+            </template>
+            <!-- Non-image resource chips -->
+            <template x-for="resource in selectedResources.filter(r => r.kind !== 'image')" :key="'res-'+resource.id">
               <span class="inline-flex items-center gap-1 rounded-full border border-sky-500/20 bg-sky-500/10 px-2.5 py-1 text-[10px] text-sky-200">
                 <span>📎</span>
                 <span class="max-w-[180px] truncate" x-text="resourceChipLabel(resource)"></span>
@@ -2128,11 +2370,41 @@
                       <span x-show="t.updated_at" x-text="timeAgo(t.updated_at)"></span>
                     </div>
                     <div x-show="t.detail" class="text-xs text-slate-400 mt-1.5 line-clamp-2" x-text="t.detail"></div>
+                    <div x-show="t.project_id || t.sandbox" class="mt-2.5 rounded-xl border border-slate-800/80 bg-slate-950/70 px-3 py-2">
+                      <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                        <div class="flex flex-wrap items-center gap-2">
+                          <span class="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                                :class="taskSandboxStatusClass(t.sandbox?.status)"
+                                x-text="taskSandboxStatusLabel(t.sandbox?.status)"></span>
+                          <span x-show="t.sandbox?.branch_name"
+                                class="rounded-full border border-slate-700 bg-slate-900/80 px-2 py-0.5 text-[10px] text-slate-400"
+                              x-text="t.sandbox?.branch_name || ''"></span>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-1">
+                          <button x-show="t.project_id"
+                                  @click="runMissionInSandbox(t)"
+                                  class="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[11px] font-medium text-cyan-200 transition hover:bg-cyan-500/20">
+                            Run in sandbox
+                          </button>
+                          <button x-show="t.sandbox?.status === 'approval_required'"
+                                  @click="runMissionInSandbox(t, true)"
+                                  class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-200 transition hover:bg-amber-500/20">
+                            Continue
+                          </button>
+                          <button x-show="t.sandbox"
+                                  @click="viewMissionSandboxReport(t)"
+                                  class="rounded-lg border border-slate-700 bg-slate-900/80 px-2 py-1 text-[11px] font-medium text-slate-200 transition hover:border-slate-500">
+                            Report
+                          </button>
+                        </div>
+                      </div>
+                      <div class="mt-1.5 text-[11px] text-slate-400" x-text="taskSandboxSummary(t)"></div>
+                    </div>
                     <div class="mt-2.5 h-1 rounded-full bg-slate-800 overflow-hidden">
                       <div class="h-full rounded-full bg-blue-400 transition-all" style="width:60%"></div>
                     </div>
                   </div>
-                  <div class="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition">
+                  <div class="flex items-center gap-1 shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition">
                     <button @click="runMission(t)" title="Run in console" class="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-blue-500/20 text-blue-400 transition text-sm">▶</button>
                     <button @click="editingTaskId = t.id" title="Edit" class="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-slate-700 text-slate-400 transition text-sm">✏️</button>
                     <button @click="deleteTask(t)" title="Delete" class="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-red-500/20 text-red-400 transition text-sm">🗑</button>
@@ -2196,8 +2468,38 @@
                       <span x-show="t.updated_at" x-text="timeAgo(t.updated_at)"></span>
                     </div>
                     <div x-show="t.detail" class="text-xs text-slate-400 mt-1.5 line-clamp-2" x-text="t.detail"></div>
+                    <div x-show="t.project_id || t.sandbox" class="mt-2.5 rounded-xl border border-slate-800/80 bg-slate-950/70 px-3 py-2">
+                      <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                        <div class="flex flex-wrap items-center gap-2">
+                          <span class="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                                :class="taskSandboxStatusClass(t.sandbox?.status)"
+                                x-text="taskSandboxStatusLabel(t.sandbox?.status)"></span>
+                          <span x-show="t.sandbox?.branch_name"
+                                class="rounded-full border border-slate-700 bg-slate-900/80 px-2 py-0.5 text-[10px] text-slate-400"
+                              x-text="t.sandbox?.branch_name || ''"></span>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-1">
+                          <button x-show="t.project_id"
+                                  @click="runMissionInSandbox(t)"
+                                  class="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[11px] font-medium text-cyan-200 transition hover:bg-cyan-500/20">
+                            Run in sandbox
+                          </button>
+                          <button x-show="t.sandbox?.status === 'approval_required'"
+                                  @click="runMissionInSandbox(t, true)"
+                                  class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-200 transition hover:bg-amber-500/20">
+                            Continue
+                          </button>
+                          <button x-show="t.sandbox"
+                                  @click="viewMissionSandboxReport(t)"
+                                  class="rounded-lg border border-slate-700 bg-slate-900/80 px-2 py-1 text-[11px] font-medium text-slate-200 transition hover:border-slate-500">
+                            Report
+                          </button>
+                        </div>
+                      </div>
+                      <div class="mt-1.5 text-[11px] text-slate-400" x-text="taskSandboxSummary(t)"></div>
+                    </div>
                   </div>
-                  <div class="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition">
+                  <div class="flex items-center gap-1 shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition">
                     <button @click="runMission(t)" title="Run in console" class="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-blue-500/20 text-blue-400 transition text-sm">▶</button>
                     <button @click="editingTaskId = t.id" title="Edit" class="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-slate-700 text-slate-400 transition text-sm">✏️</button>
                     <button @click="deleteTask(t)" title="Delete" class="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-red-500/20 text-red-400 transition text-sm">🗑</button>
@@ -2272,6 +2574,62 @@
                 </div>
               </div>
             </template>
+          </div>
+        </div>
+
+        <div x-show="taskSandboxReview.open" x-cloak class="fixed inset-0 z-[120] flex items-end justify-center bg-slate-950/80 p-3 md:items-center md:p-6" @click.self="closeMissionSandboxReport()">
+          <div class="w-full max-w-3xl max-h-[92vh] overflow-hidden rounded-[28px] border border-slate-800 bg-slate-950 shadow-2xl shadow-black/40">
+            <div class="flex items-start justify-between gap-3 border-b border-slate-800 px-4 py-4 md:px-5">
+              <div class="min-w-0">
+                <div class="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">Mission Sandbox</div>
+                <div class="mt-1 text-base font-semibold text-white" x-text="taskSandboxReview.task?.title || 'Sandbox report'"></div>
+                <div class="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                  <span class="rounded-full border px-2 py-0.5 font-semibold"
+                        :class="taskSandboxStatusClass(taskSandboxReview.sandbox?.status)"
+                        x-text="taskSandboxStatusLabel(taskSandboxReview.sandbox?.status)"></span>
+                  <span x-show="taskSandboxReview.sandbox?.branch_name"
+                        class="rounded-full border border-slate-700 bg-slate-900/80 px-2 py-0.5"
+                        x-text="taskSandboxReview.sandbox?.branch_name"></span>
+                  <span x-show="taskSandboxReview.sandbox?.changed_files_count"
+                        class="rounded-full border border-slate-700 bg-slate-900/80 px-2 py-0.5"
+                        x-text="`${taskSandboxReview.sandbox?.changed_files_count} changed file${taskSandboxReview.sandbox?.changed_files_count === 1 ? '' : 's'}`"></span>
+                </div>
+              </div>
+              <button @click="closeMissionSandboxReport()" class="rounded-xl border border-slate-700 bg-slate-900/80 p-2 text-slate-400 transition hover:border-slate-500 hover:text-white">
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6 6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+            <div class="max-h-[calc(92vh-92px)] overflow-y-auto px-4 py-4 md:px-5">
+              <div class="flex flex-wrap items-center gap-2 pb-4">
+                <button @click="refreshMissionSandbox(taskSandboxReview.task)"
+                        class="rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:border-slate-500">
+                  Refresh report
+                </button>
+                <button x-show="taskSandboxReview.sandbox?.changed_files_count && taskSandboxReview.sandbox?.status !== 'applied'"
+                        @click="applyMissionSandbox(taskSandboxReview.task)"
+                        class="rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200 transition hover:bg-cyan-500/20">
+                  Apply changes
+                </button>
+                <button x-show="taskSandboxReview.sandbox?.status === 'approval_required'"
+                        @click="runMissionInSandbox(taskSandboxReview.task, true)"
+                        class="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-200 transition hover:bg-amber-500/20">
+                  Continue sandbox run
+                </button>
+                <button x-show="taskSandboxReview.sandbox?.status !== 'running'"
+                        @click="discardMissionSandbox(taskSandboxReview.task)"
+                        class="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-200 transition hover:bg-rose-500/20">
+                  Discard sandbox
+                </button>
+              </div>
+              <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+                <div x-show="taskSandboxReview.sandbox?.report_markdown"
+                     class="prose prose-invert max-w-none prose-pre:whitespace-pre-wrap"
+                     x-html="renderMd(taskSandboxReview.sandbox?.report_markdown || '')"></div>
+                <div x-show="!taskSandboxReview.sandbox?.report_markdown" class="text-sm text-slate-400">
+                  Axon has not written a sandbox report yet. Start the sandbox run or refresh once it finishes.
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -2522,19 +2880,27 @@
             <div class="text-[10px] text-slate-600 mt-0.5 hidden md:block">Axon stores secrets locally and only injects them into approved actions.</div>
           </div>
         </div>
-        <div x-show="vault.is_unlocked" class="flex items-center gap-1.5 md:gap-2 shrink-0">
+        <div x-show="vault.is_unlocked && !vault.dev_bypass" class="flex items-center gap-1.5 md:gap-2 shrink-0">
           <span class="text-[10px] md:text-xs text-green-400 font-medium">● Unlocked</span>
+          <span x-show="vault.ttl_remaining" class="hidden md:inline text-[10px] text-slate-500" x-text="vaultSessionLabel()"></span>
           <button @click="lockVault()" class="px-2 md:px-3 py-1.5 text-[10px] md:text-xs bg-slate-800 hover:bg-red-900/40 hover:text-red-400 text-slate-400 rounded-lg border border-slate-700 transition">🔒 Lock</button>
         </div>
-        <div x-show="!vault.is_unlocked && vault.is_setup" class="shrink-0">
+        <div x-show="vault.dev_bypass" class="shrink-0">
+          <span class="text-[10px] md:text-xs text-amber-300">● Dev bypass</span>
+        </div>
+        <div x-show="!vault.is_unlocked && vault.is_setup && !vault.dev_bypass" class="shrink-0">
           <span class="text-[10px] md:text-xs text-slate-500">● Locked</span>
         </div>
       </div>
 
       <div class="flex-1 overflow-y-auto page-content p-3 md:p-5">
+        <div x-show="vault.dev_bypass" class="max-w-2xl mx-auto rounded-2xl border border-amber-500/20 bg-amber-500/8 px-4 py-4 text-sm text-amber-100">
+          <div class="font-semibold text-amber-200">Development bypass is active</div>
+          <div class="mt-1 text-[12px] leading-6 text-amber-100/80">Axon is skipping vault setup and unlock locally while we stabilise development. Existing vault secrets are left untouched, and Axon will keep using keys saved directly in Settings or other non-vault runtime config.</div>
+        </div>
 
         <!-- ── Not set up ── -->
-        <div x-show="!vault.is_setup" class="max-w-md mx-auto pt-4 md:pt-8 px-1">
+        <div x-show="!vault.dev_bypass && !vault.is_setup" class="max-w-md mx-auto pt-4 md:pt-8 px-1">
           <div class="text-center mb-4 md:mb-6">
             <div class="text-4xl md:text-5xl mb-2 md:mb-3">🔐</div>
             <div class="text-base md:text-lg font-semibold text-white mb-1">Set up Secure Vault</div>
@@ -2582,6 +2948,19 @@
             <input x-model="vaultUnlockForm.totp_code" type="text" inputmode="numeric" maxlength="6" placeholder="6-digit code from authenticator"
                    class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition text-center tracking-[0.4em] font-mono text-lg"
                    @keydown.enter="confirmSetup()" />
+            <label class="flex items-center gap-2.5 cursor-pointer select-none group">
+              <div class="relative">
+                <input type="checkbox" x-model="vaultUnlockForm.remember_me" @change="persistVaultRememberChoice()" class="sr-only peer" />
+                <div class="w-9 h-5 bg-slate-700 rounded-full peer-checked:bg-blue-600 transition"></div>
+                <div class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition peer-checked:translate-x-4"></div>
+              </div>
+              <div>
+                <span class="text-[12px] font-medium" :class="vaultUnlockForm.remember_me ? 'text-blue-300' : 'text-slate-400'">
+                  <span x-text="vaultUnlockForm.remember_me ? 'Remember for 24 hours' : 'Keep unlocked for 1 hour'"></span>
+                </span>
+                <div class="text-[10px] text-slate-600">The master password is never stored after unlock</div>
+              </div>
+            </label>
             <button @click="confirmSetup()" :disabled="vaultSubmitting || vaultUnlockForm.totp_code.length !== 6"
                     class="w-full py-2 bg-green-600 hover:bg-green-500 disabled:opacity-40 text-white text-sm font-medium rounded-xl transition">
               <span x-text="vaultSubmitting ? 'Verifying...' : 'Confirm & Unlock →'"></span>
@@ -2590,7 +2969,7 @@
         </div>
 
         <!-- ── Locked (setup done, not unlocked) ── -->
-        <div x-show="vault.is_setup && !vault.is_unlocked" class="max-w-md mx-auto pt-4 md:pt-8 px-1">
+        <div x-show="!vault.dev_bypass && vault.is_setup && !vault.is_unlocked" class="max-w-md mx-auto pt-4 md:pt-8 px-1">
           <div class="text-center mb-4 md:mb-6">
             <div class="text-4xl md:text-5xl mb-2 md:mb-3">🔒</div>
             <div class="text-base md:text-lg font-semibold text-white mb-1">Secure Vault is locked</div>
@@ -2613,6 +2992,20 @@
                      class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition text-center tracking-[0.4em] font-mono text-lg"
                      @keydown.enter="unlockVault()" />
             </div>
+            <!-- Remember-me toggle -->
+            <label class="flex items-center gap-2.5 cursor-pointer select-none group">
+              <div class="relative">
+                <input type="checkbox" x-model="vaultUnlockForm.remember_me" @change="persistVaultRememberChoice()" class="sr-only peer" />
+                <div class="w-9 h-5 bg-slate-700 rounded-full peer-checked:bg-blue-600 transition"></div>
+                <div class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition peer-checked:translate-x-4"></div>
+              </div>
+              <div>
+                <span class="text-[12px] font-medium" :class="vaultUnlockForm.remember_me ? 'text-blue-300' : 'text-slate-400'">
+                  <span x-text="vaultUnlockForm.remember_me ? 'Remember for 24 hours' : 'Keep unlocked for 1 hour'"></span>
+                </span>
+                <div class="text-[10px] text-slate-600">Master password is never stored — only a derived key in memory</div>
+              </div>
+            </label>
             <button @click="unlockVault()" :disabled="vaultSubmitting || !vaultUnlockForm.master_password || vaultUnlockForm.totp_code.length !== 6"
                     class="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-medium rounded-xl transition">
               <span x-text="vaultSubmitting ? 'Unlocking...' : '🔓 Unlock Vault'"></span>
@@ -2625,7 +3018,7 @@
         </div>
 
         <!-- ── Unlocked: secret list ── -->
-        <div x-show="vault.is_unlocked">
+        <div x-show="!vault.dev_bypass && vault.is_unlocked">
           <!-- Add secret form -->
           <div x-show="showVaultAddForm" class="bg-slate-900 border border-slate-800 rounded-2xl p-3 md:p-5 mb-4 space-y-3">
             <div class="font-medium text-white text-sm mb-1" x-text="editingSecretId ? 'Edit Secret' : 'Add New Secret'"></div>
@@ -2734,26 +3127,26 @@
                   <div x-show="viewingSecret?.username" class="flex items-center gap-2">
                     <span class="text-[10px] md:text-xs text-slate-500 w-12 md:w-16 shrink-0">User</span>
                     <code class="flex-1 bg-slate-800 rounded px-2 py-1 text-xs font-mono text-slate-200 break-all min-w-0"
-                          x-text="viewingSecret.username"></code>
-                    <button @click="copyToClipboard(viewingSecret.username, 'Username')"
+                          x-text="viewingSecret?.username"></code>
+                    <button @click="copyToClipboard(viewingSecret?.username, 'Username')"
                             class="text-xs text-slate-500 hover:text-blue-400 transition shrink-0">📋</button>
                   </div>
                   <div x-show="viewingSecret?.url" class="flex items-center gap-2">
                     <span class="text-[10px] md:text-xs text-slate-500 w-12 md:w-16 shrink-0">URL</span>
-                    <a :href="viewingSecret.url" target="_blank"
+                    <a :href="viewingSecret?.url" target="_blank"
                        class="flex-1 bg-slate-800 rounded px-2 py-1 text-xs text-blue-400 hover:underline break-all min-w-0"
-                       x-text="viewingSecret.url"></a>
-                    <button @click="copyToClipboard(viewingSecret.url, 'URL')"
+                       x-text="viewingSecret?.url"></a>
+                    <button @click="copyToClipboard(viewingSecret?.url, 'URL')"
                             class="text-xs text-slate-500 hover:text-blue-400 transition shrink-0">📋</button>
                   </div>
                   <div x-show="viewingSecret?.password" class="flex items-center gap-2 flex-wrap">
                     <span class="text-[10px] md:text-xs text-slate-500 w-12 md:w-16 shrink-0">Password</span>
                     <code class="flex-1 bg-slate-800 rounded px-2 py-1 text-xs font-mono text-yellow-300 break-all min-w-0"
-                          x-text="showSecretPassword ? viewingSecret.password : '••••••••••••'"></code>
+                          x-text="showSecretPassword ? viewingSecret?.password : '••••••••••••'"></code>
                     <div class="flex gap-1 shrink-0">
                       <button @click="showSecretPassword = !showSecretPassword"
                               class="text-xs text-slate-500 hover:text-slate-300 transition" x-text="showSecretPassword ? 'Hide' : 'Show'"></button>
-                      <button @click="copyToClipboard(viewingSecret.password, 'Password')"
+                      <button @click="copyToClipboard(viewingSecret?.password, 'Password')"
                               class="text-xs text-slate-500 hover:text-blue-400 transition">📋</button>
                     </div>
                   </div>
@@ -3293,7 +3686,7 @@
   </main>
 
   <!-- ── Mobile top bar ─────────────────────────────────────────── -->
-  <header class="md:hidden fixed top-0 left-0 right-0 z-40 mobile-header safe-top flex items-center px-4 pb-2 gap-3" style="min-height:52px">
+  <header class="md:hidden fixed top-0 left-0 right-0 z-40 mobile-header safe-top flex items-center px-4 pb-2 gap-3" style="min-height:var(--mobile-header-height)">
     <!-- Left: back (context) or brain logo -->
     <template x-if="activeTab === 'chat' && chatProject">
       <button @click="activeTab = 'projects'" class="w-8 h-8 flex items-center justify-center text-slate-400 -ml-1 press-scale">
@@ -3368,15 +3761,58 @@
             </template>
             <div x-show="ollamaModels.length === 0" class="px-3 py-3 text-center text-xs text-slate-500">No models — Settings → Ollama</div>
           </div>
-          <div x-show="!usesOllamaBackend()" class="px-3 py-3 text-xs text-slate-400">
-            <div class="truncate text-slate-200" x-text="consoleProviderIdentity().providerLabel"></div>
-            <div class="mt-1 truncate" x-text="consoleProviderIdentity().modelLabel"></div>
+          <div x-show="settingsForm.ai_backend === 'cli'">
+            <div x-show="(runtimeStatus.cli_environments || []).length > 1" class="border-b border-slate-800/80">
+              <div class="flex items-center justify-between px-3 py-1.5 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                <span>CLI runtime</span>
+                <span class="text-[9px] text-slate-500" x-text="cliRuntimeName()"></span>
+              </div>
+              <template x-for="env in (runtimeStatus.cli_environments || [])" :key="env.path">
+                <button @click="selectCliEnvironment(env); chatModelOpen = false"
+                        :class="((settingsForm.claude_cli_path || runtimeStatus.cli_binary || '') === env.path) ? 'bg-amber-600/15 text-amber-200' : 'text-slate-300 hover:bg-slate-800/80'"
+                        class="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition">
+                  <div class="w-1.5 h-1.5 rounded-full shrink-0"
+                       :class="((settingsForm.claude_cli_path || runtimeStatus.cli_binary || '') === env.path) ? 'bg-amber-400' : 'bg-slate-700'"></div>
+                  <span class="flex-1 truncate" x-text="env.label"></span>
+                  <span class="shrink-0 text-[10px] text-slate-500" x-text="env.family"></span>
+                </button>
+              </template>
+            </div>
+            <div class="flex items-center justify-between border-b border-slate-800/80 px-3 py-1.5 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+              <span x-text="`${cliRuntimeName()} models`"></span>
+              <span class="text-[9px] text-emerald-300" x-text="cliRuntimeBinaryName()"></span>
+            </div>
+            <template x-for="option in cliModelOptions()" :key="option.id || 'default'">
+              <button @click="settingsForm.ai_backend = 'cli'; settingsForm.claude_cli_model = option.id || ''; saveCliModelQuiet(); chatModelOpen = false"
+                      :class="(settingsForm.claude_cli_model || '') === (option.id || '') ? 'bg-amber-600/15 text-amber-200' : 'text-slate-300 hover:bg-slate-800/80'"
+                      class="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition">
+                <div class="w-1.5 h-1.5 rounded-full shrink-0"
+                     :class="(settingsForm.claude_cli_model || '') === (option.id || '') ? 'bg-amber-400' : 'bg-slate-700'"></div>
+                <span class="flex-1 truncate" x-text="option.label"></span>
+              </button>
+            </template>
+          </div>
+          <div x-show="settingsForm.ai_backend === 'api'">
+            <div class="flex items-center justify-between border-b border-slate-800/80 px-3 py-1.5 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+              <span>API providers</span>
+            </div>
+            <template x-for="p in runtimeApiProviders()" :key="p.id">
+              <button @click="settingsForm.ai_backend='api'; settingsForm.api_provider=p.id; api('POST','/api/settings',{ai_backend:'api',api_provider:p.id}).catch(()=>{}); chatModelOpen=false"
+                      :class="settingsForm.api_provider===p.id ? 'bg-blue-600/15 text-blue-300' : 'text-slate-300 hover:bg-slate-800/80'"
+                      class="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition">
+                <div class="w-1.5 h-1.5 rounded-full shrink-0"
+                     :class="settingsForm.api_provider===p.id ? 'bg-blue-400' : (p.configured ? 'bg-slate-500' : 'bg-slate-800')"></div>
+                <span class="flex-1 truncate" x-text="p.label"></span>
+                <span class="shrink-0 text-[10px]" :class="p.configured ? 'text-emerald-500' : 'text-slate-600'" x-text="p.configured ? '✓ key' : 'no key'"></span>
+              </button>
+            </template>
           </div>
         </div>
       </div>
       <button x-show="activeTab === 'chat'"
-              @click="showConsoleDetails = !showConsoleDetails"
+              @click="showConsoleDetails = !showConsoleDetails; if (showConsoleDetails) { showComposerMenu = false; showResourcePicker = false; showMobileToolbar = false; }"
               class="btn-icon bg-slate-800 text-slate-400 press-scale"
+              :class="showConsoleDetails ? 'border border-amber-500/30 bg-amber-500/12 text-amber-200' : ''"
               :aria-expanded="showConsoleDetails"
               aria-label="Toggle console controls">
         <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
@@ -3417,7 +3853,7 @@
 
   <!-- ── Mobile bottom tab bar ────────────────────────────────────── -->
   <nav
-    class="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-900/95 backdrop-blur-md border-t border-slate-800"
+    class="tab-bar md:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-900/95 backdrop-blur-md border-t border-slate-800"
     style="padding-bottom: var(--safe-bottom);"
     aria-label="Main navigation"
   >
@@ -3487,21 +3923,21 @@
 <!-- @include partials/modals.html -->
 
 <!-- ── Axon Modules ── -->
-<script src="/js/helpers.js?v=20260330i"></script>
-<script src="/js/codeblocks.js?v=20260330i"></script>
-<script src="/js/auth.js?v=20260330i"></script>
-<script src="/js/dashboard.js?v=20260330i"></script>
-<script src="/js/chat.js?v=20260330i"></script>
-<script src="/js/voice.js?v=20260330i"></script>
-<script src="/js/settings.js?v=20260330i"></script>
-<script src="/js/resources.js?v=20260330i"></script>
-<script src="/js/projects.js?v=20260330i"></script>
-<script src="/js/tasks.js?v=20260330i"></script>
-<script src="/js/notifications.js?v=20260330i"></script>
-<script src="/js/mobile.js?v=20260330i"></script>
-<script src="/js/vault.js?v=20260330i"></script>
-<script src="/js/files.js?v=20260330i"></script>
-<script src="/js/models.js?v=20260330i"></script>
+<script src="/js/helpers.js?v=20260331a"></script>
+<script src="/js/codeblocks.js?v=20260331a"></script>
+<script src="/js/auth.js?v=20260331b"></script>
+<script src="/js/dashboard.js?v=20260331c"></script>
+<script src="/js/chat.js?v=20260331b"></script>
+<script src="/js/voice.js?v=20260331a"></script>
+<script src="/js/settings.js?v=20260331b"></script>
+<script src="/js/resources.js?v=20260331a"></script>
+<script src="/js/projects.js?v=20260331a"></script>
+<script src="/js/tasks.js?v=20260331b"></script>
+<script src="/js/notifications.js?v=20260331a"></script>
+<script src="/js/mobile.js?v=20260331a"></script>
+<script src="/js/vault.js?v=20260331b"></script>
+<script src="/js/files.js?v=20260331a"></script>
+<script src="/js/models.js?v=20260331a"></script>
 
 <script>
 function devbrain() {
@@ -3516,6 +3952,7 @@ function devbrain() {
     authError: '',
     authLoading: false,
     authToken: localStorage.getItem('axon-token') || localStorage.getItem('devbrain-token') || localStorage.getItem('devbrain_token') || '',
+    authDevBypass: false,
     isLocalhost: ['localhost','127.0.0.1','[::1]'].includes(location.hostname),
     isMobile: window.innerWidth < 768,
     viewportSyncBound: false,
@@ -3584,6 +4021,10 @@ function devbrain() {
       gpu_guard: { warning: '', connected_outputs: [] },
       ollama_service: {},
       ollama_runtime_mode: 'gpu_default',
+      cli_runtime: { installed: false, binary: '', version: '', auth: {}, selected_environment: {} },
+      codex_runtime: { installed: false, binary: '', version: '', auth: {}, selected_environment: {} },
+      local_extensions: [],
+      cli_cooldown_remaining_seconds: 0,
       vision_status: { model: '', ready: false, runtime_label: 'Not configured' },
       resource_bank: { count: 0, storage_path: '~/.devbrain/resources', upload_max_mb: '20', url_import_enabled: true },
       memory_overview: { total: 0, layers: { workspace: 0, resource: 0, mission: 0, user: 0 }, labels: {} },
@@ -3598,15 +4039,19 @@ function devbrain() {
     chatProject: null,
     _workspaceEnv: null,
     agentMode: false,
+    consoleZoom: 1,
     selectedChatModel: '',
     followUpSuggestions: [],
+    _messageQueue: [],
     showResourcePicker: false,
     showComposerMenu: false,
     showMobileToolbar: false,
     visionWarningDismissed: false,
     panelRuntimeOpen: true,
     panelStepsOpen: false,
-    panelToolsOpen: false,
+    panelProgressOpen: true,
+    panelFilesOpen: true,
+    panelToolsOpen: true,
     panelTasksOpen: false,
     workspaceTasks: [],
     addingTask: false,
@@ -3728,6 +4173,17 @@ function devbrain() {
       approval_mode: 'approval_required',
       loading: false,
     },
+    serverLogs: {
+      open: false,
+      loading: false,
+      error: '',
+      text: '',
+      path: '',
+      tail: 200,
+      available: false,
+    },
+    devPreview: { url: '', visible: false },
+    imageModal: { open: false, src: '', title: '' },
 
     // Model management
     ollamaModels: [],
@@ -3779,6 +4235,7 @@ function devbrain() {
     showAddTask: false,
     editingTaskId: null,
     newTask: { title:'', detail:'', priority:'medium', project_id:'', due_date:'' },
+    taskSandboxReview: { open: false, task: null, sandbox: null },
     suggestions: [],
     urgentCount: 0,
 
@@ -3815,6 +4272,9 @@ function devbrain() {
     settingsForm: {
       ai_backend: 'api',
       api_provider: 'deepseek',
+      claude_cli_path: '',
+      claude_cli_model: '',
+      claude_cli_session_persistence_enabled: true,
       anthropic_api_key: '',
       anthropic_base_url: '',
       anthropic_api_model: '',
@@ -3873,6 +4333,9 @@ function devbrain() {
     vaultProviderKeys: {},
     settingsSaving: false,
     settingsSaved: false,
+    cliRuntimeActionLoading: { install: false, login: false, codex_install: false, codex_login: false },
+    cliRuntimeActionResult: null,
+    codexRuntimeActionResult: null,
     ollamaStatus: { running: false, models: [], url: '', runtime_mode: 'gpu_default', service_detail: '', service_mode: '' },
     systemActionsLoading: false,
     systemStatus: {
@@ -3989,8 +4452,8 @@ function devbrain() {
     githubAvailable: false,
 
     // Vault
-    vault: { is_setup: false, is_unlocked: false },
-    vaultUnlockForm: { master_password: '', totp_code: '' },
+    vault: { is_setup: false, is_unlocked: false, ttl_remaining: 0, dev_bypass: false },
+    vaultUnlockForm: { master_password: '', totp_code: '', remember_me: (() => { try { return localStorage.getItem('axon.vaultRememberMe') === 'true'; } catch (_) { return false; } })() },
     vaultSetupForm: { master_password: '', confirm_password: '' },
     vaultSetupResult: null,
     vaultSecrets: [],
@@ -4033,16 +4496,46 @@ function devbrain() {
       if (!this.viewportSyncBound) {
         const syncViewport = () => {
           this.isMobile = window.innerWidth < 768;
+          if (!this.isMobile) {
+            this.showConsoleDetails = false;
+            this.showMoreMenu = false;
+            this.showMobileToolbar = false;
+          }
           this.resetChatComposerHeight();
         };
         window.addEventListener('resize', syncViewport, { passive: true });
         window.addEventListener('orientationchange', syncViewport);
         this.viewportSyncBound = true;
       }
+      if (!this.consoleZoomShortcutsBound) {
+        const onConsoleZoomKey = (event) => {
+          const modifier = event.ctrlKey || event.metaKey;
+          if (!modifier) return;
+          if (event.key === '=' || event.key === '+') {
+            event.preventDefault();
+            this.adjustConsoleZoom?.(0.05);
+          } else if (event.key === '-' || event.key === '_') {
+            event.preventDefault();
+            this.adjustConsoleZoom?.(-0.05);
+          } else if (event.key === '0') {
+            event.preventDefault();
+            this.resetConsoleZoom?.();
+          }
+        };
+        window.addEventListener('keydown', onConsoleZoomKey);
+        this.consoleZoomShortcutsBound = true;
+      }
       this.isMobile = window.innerWidth < 768;
       this.loadUiPrefs();
       await this.loadSettings();
+      this.restoreConversationModePreference?.();
       await this.loadProjects();
+      // Restore last workspace if saved
+      if (this.chatProjectId && this.projects.some(p => p.id == this.chatProjectId)) {
+        this.updateChatProject();
+      } else {
+        this.chatProjectId = '';
+      }
       this.loadTasks();
       this._startMissionReminders();
       this._startDailyDigestCheck();
@@ -4081,6 +4574,10 @@ function devbrain() {
         if (value) {
           this.panelRuntimeOpen = true;
         }
+      });
+      this.$watch('chatProjectId', value => {
+        if (value) localStorage.setItem('axon.lastProjectId', value);
+        else localStorage.removeItem('axon.lastProjectId');
       });
 
       // xterm drag-to-resize global handlers
@@ -4122,6 +4619,11 @@ function devbrain() {
         this._tabHistory.push(this.activeTab);
         if (this._tabHistory.length > 20) this._tabHistory.shift();
       }
+      this.showMoreMenu = false;
+      this.showConsoleDetails = false;
+      this.showComposerMenu = false;
+      this.showResourcePicker = false;
+      this.showMobileToolbar = false;
       this.activeTab = id;
       if (id === 'dashboard') this.loadDashboard();
       else if (id === 'projects') this.loadProjects();
@@ -4153,6 +4655,13 @@ function devbrain() {
 
     loadUiPrefs() {
       this.showGithubStatus = localStorage.getItem('devbrain.showGithubStatus') !== 'false';
+      // Restore last active workspace
+      const savedProject = localStorage.getItem('axon.lastProjectId');
+      if (savedProject) this.chatProjectId = savedProject;
+      const savedZoom = Number(localStorage.getItem('axon.consoleZoom') || 1);
+      if (Number.isFinite(savedZoom) && savedZoom > 0) {
+        this.consoleZoom = Math.max(0.9, Math.min(1.45, savedZoom));
+      }
     },
 
     setGithubVisibility(enabled) {
@@ -4254,34 +4763,124 @@ function __axonToast(message, { error = false } = {}) {
 }
 
 window.__axon = {
-  allowCommand(command, allowAll, persist) {
+  async waitForAgentIdle(timeoutMs = 4000) {
+    const app = window.__axonApp?.();
+    if (!app) return null;
+    const started = Date.now();
+    while (app.chatLoading && (Date.now() - started) < timeoutMs) {
+      await new Promise(resolve => setTimeout(resolve, 120));
+    }
+    return app;
+  },
+
+  async resumePausedTask(note) {
+    try {
+      if (note) {
+        await __axonPost('/api/agent/steer', { message: note });
+      }
+    } catch (e) {
+      console.debug('resume steer failed:', e);
+    }
+    const app = await window.__axon.waitForAgentIdle();
+    if (app && typeof app.sendChatSilent === 'function') {
+      app.sendChatSilent('please continue', 'agent');
+    }
+  },
+
+  allowCommand(command, allowAll, persist, options = {}) {
     __axonPost('/api/agent/allow-command', {
       command: command || '',
       allow_all: !!allowAll,
       persist: !!persist,
     }).then(() => {
-      const label = allowAll ? 'All commands allowed' : `'${command}' allowed${persist ? ' (saved)' : ' (session)'}`;
-      __axonToast(`✓ ${label} — say "please continue" to retry`);
+      const label = allowAll
+        ? 'All commands allowed for this task'
+        : persist
+          ? `'${command}' saved for future Axon sessions`
+          : `'${command}' allowed once`;
+      __axonToast(`✓ ${label}`);
+      if (options.resume !== false) {
+        const note = allowAll
+          ? 'Permission granted: commands for this task are approved. Retry the blocked command if it is still needed, then continue.'
+          : persist
+            ? `Permission granted: the command \`${command}\` is now saved for future Axon sessions. Retry it if it is still needed, then continue the same task.`
+            : `Permission granted: you may run the blocked command \`${command}\` once. Retry it if it is still needed, then continue the same task.`;
+        window.__axon.resumePausedTask(note);
+      }
     }).catch(e => {
       __axonToast(`Allow command failed: ${e.message || e}`, { error: true });
       console.error('allow-command failed:', e);
     });
   },
 
-  allowEdit(path, scope) {
+  allowEdit(path, scope, options = {}) {
     __axonPost('/api/agent/allow-edit', {
       path: path || '',
       scope: scope || 'file',
     }).then(() => {
-      const label = scope === 'session' ? 'All file edits allowed this session'
-                  : scope === 'repo'    ? `Repo allowed for edits`
-                                        : `File allowed for edits`;
-      __axonToast(`✓ ${label} — say "please continue" to retry`);
+      const label = scope === 'session' ? 'All edits allowed for this task'
+                  : scope === 'repo'    ? 'Edits allowed for this repo'
+                                        : 'Edit allowed once';
+      __axonToast(`✓ ${label}`);
+      if (options.resume !== false) {
+        const note = scope === 'session'
+          ? 'Permission granted: edits for this task are approved. Retry the blocked edit if it is still needed, then continue.'
+          : scope === 'repo'
+            ? `Permission granted: edits in the repo containing \`${path}\` are now approved. Retry the blocked edit if it is still needed, then continue.`
+            : `Permission granted: you may edit \`${path}\` once. Retry the blocked edit if it is still needed, then continue the same task.`;
+        window.__axon.resumePausedTask(note);
+      }
     }).catch(e => {
       __axonToast(`Allow edit failed: ${e.message || e}`, { error: true });
       console.error('allow-edit failed:', e);
     });
+  },
+
+  allowAllEdits(options = {}) {
+    __axonPost('/api/agent/allow-edit', {
+      path: '',
+      scope: 'session',
+    }).then(() => {
+      __axonToast('✓ All edits allowed for this task');
+      if (options.resume !== false) {
+        window.__axon.resumePausedTask(
+          'Permission granted: edits for this task are approved. Retry the blocked edit if it is still needed, then continue.'
+        );
+      }
+    }).catch(e => {
+      __axonToast(`Allow all edits failed: ${e.message || e}`, { error: true });
+    });
   }
+};
+
+/* ── Approval card visual feedback ── */
+function _resolveCard(btn, html) {
+  const card = btn.closest('.axon-approval');
+  if (!card) return;
+  card.querySelectorAll('button').forEach(b => b.disabled = true);
+  card.classList.add('axon-approval--resolved');
+  card.innerHTML = html;
+}
+
+window.__axon_approve = function(btn, type, ...rest) {
+  const okHtml = '<div class="axon-approval__resolved axon-approval__resolved--ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16"><polyline points="20 6 9 17 4 12"/></svg> Allowed</div>';
+  _resolveCard(btn, okHtml);
+  if (type === 'edit') {
+    window.__axon.allowEdit(rest[0], rest[1], { resume: true });
+  } else if (type === 'edit-all') {
+    window.__axon.allowAllEdits({ resume: true });
+  } else if (type === 'cmd') {
+    window.__axon.allowCommand(rest[0], rest[1], rest[2], { resume: true });
+  } else if (type === 'cmd-all') {
+    window.__axon.allowCommand('', true, false, { resume: true });
+  }
+};
+
+window.__axon_deny = function(btn) {
+  const denyHtml = '<div class="axon-approval__resolved axon-approval__resolved--deny"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Denied</div>';
+  _resolveCard(btn, denyHtml);
+  __axonToast('⊘ Permission denied');
+  window.__axon.resumePausedTask('The user denied permission for the blocked operation. Do not retry it. Skip that step and continue the same task with safe alternatives.');
 };
 </script>
 </body>

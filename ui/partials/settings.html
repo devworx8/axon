@@ -11,6 +11,24 @@
             <div class="text-sm text-slate-400">Local-first routing, workspace monitoring, and operator control.</div>
           </div>
 
+          <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <div class="text-xs font-semibold text-slate-300">Console Text Size</div>
+                <div class="text-[11px] text-slate-500">Adjust the thinking and result text density without changing the rest of the layout.</div>
+              </div>
+              <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-slate-400">Console</span>
+            </div>
+            <div class="mt-3 flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2.5">
+              <div class="text-[11px] text-slate-500">Shortcuts: <span class="font-mono text-slate-400">Ctrl/Cmd +/-</span> and <span class="font-mono text-slate-400">0</span></div>
+              <div class="inline-flex items-center gap-1 rounded-xl border border-slate-800 bg-slate-900/70 px-1.5 py-1 text-[10px] text-slate-300 shrink-0">
+                <button @click="adjustConsoleZoom(-0.05)" class="rounded-lg px-2 py-1 hover:bg-slate-800 transition" title="Zoom out">A-</button>
+                <button @click="resetConsoleZoom()" class="rounded-lg px-2 py-1 text-slate-400 hover:bg-slate-800 hover:text-white transition" :title="'Reset console zoom (' + consoleZoomPercent() + ')'"><span x-text="consoleZoomPercent()"></span></button>
+                <button @click="adjustConsoleZoom(0.05)" class="rounded-lg px-2 py-1 hover:bg-slate-800 transition" title="Zoom in">A+</button>
+              </div>
+            </div>
+          </div>
+
           <!-- AI Backend -->
           <div>
             <label class="block text-xs font-medium text-slate-400 mb-2">Primary Runtime</label>
@@ -128,13 +146,149 @@
             </div>
           </div>
 
-          <!-- CLI path (only when cli backend) -->
-          <div x-show="settingsForm.ai_backend === 'cli'">
-            <label class="block text-xs font-medium text-slate-400 mb-1.5">CLI Agent Path (optional)</label>
-            <input x-model="settingsForm.claude_cli_path"
-                   placeholder="Leave blank to auto-detect"
-                   class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono" />
-            <p class="text-[11px] text-slate-500 mt-1">Uses a locally installed CLI bridge for cloud-connected agent work. Auto-detects <code class="bg-slate-800 px-1 rounded">claude</code> in PATH for backward compatibility.</p>
+          <!-- CLI runtime (only when cli backend) -->
+          <div x-show="settingsForm.ai_backend === 'cli'" x-data="{ cliAdvanced: false }" class="space-y-3">
+            <div class="rounded-2xl border border-emerald-500/20 bg-emerald-500/8 p-4">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-xs font-semibold text-emerald-200" x-text="cliRuntimeName()"></div>
+                  <div class="text-[11px] text-slate-400" x-text="cliRuntimeSourceSummary()"></div>
+                </div>
+                <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em]"
+                      :class="cliRuntimeInfo().installed ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' : 'border-amber-500/30 bg-amber-500/10 text-amber-200'"
+                      x-text="cliRuntimeInfo().installed ? 'installed' : 'missing'"></span>
+              </div>
+
+              <div class="mt-3 grid gap-2 sm:grid-cols-3">
+                <div class="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Binary</div>
+                  <div class="mt-1 text-xs font-medium text-slate-100 truncate" x-text="cliRuntimeBinaryName()"></div>
+                </div>
+                <div class="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Version</div>
+                  <div class="mt-1 text-xs font-medium text-slate-100 truncate" x-text="cliRuntimeInfo().version || 'Not installed'"></div>
+                </div>
+                <div class="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Auth</div>
+                  <div class="mt-1 text-xs font-medium" :class="cliRuntimeInfo().auth?.logged_in ? 'text-emerald-200' : 'text-amber-200'" x-text="cliRuntimeAuthSummary()"></div>
+                </div>
+              </div>
+
+              <div class="mt-3 flex flex-wrap gap-2">
+                <button @click="installClaudeCli()"
+                        :disabled="cliRuntimeActionLoading.install"
+                        class="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-200 transition hover:bg-emerald-500/15 disabled:opacity-50">
+                  <span x-text="cliRuntimeInfo().installed ? `Reinstall ${cliRuntimeName()}` : `Install ${cliRuntimeName()}`"></span>
+                </button>
+                <button @click="loginClaudeCli()"
+                        :disabled="cliRuntimeActionLoading.login || !cliRuntimeInfo().installed"
+                        class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500 disabled:opacity-50">
+                  Sign In
+                </button>
+                <button @click="refreshClaudeCliStatus()"
+                        class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-400 transition hover:border-slate-500 hover:text-slate-200">
+                  Refresh Status
+                </button>
+                <button x-show="settingsForm.claude_cli_path"
+                        @click="useAutoDetectedCli()"
+                        class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-400 transition hover:border-slate-500 hover:text-slate-200">
+                  Use Auto-Detect
+                </button>
+              </div>
+
+              <div x-show="cliRuntimeActionResult?.message" class="mt-3 rounded-xl border px-3 py-2 text-[11px]"
+                   :class="cliRuntimeActionResult?.status === 'completed' ? 'border-emerald-500/20 bg-emerald-500/8 text-emerald-200' : (cliRuntimeActionResult?.status === 'error' ? 'border-rose-500/20 bg-rose-500/8 text-rose-200' : 'border-amber-500/20 bg-amber-500/8 text-amber-200')">
+                <div x-text="cliRuntimeActionResult?.message"></div>
+                <div x-show="cliRuntimeActionResult?.command_preview" class="mt-2 font-mono text-[10px] break-all text-slate-300" x-text="cliRuntimeActionResult?.command_preview"></div>
+                <div x-show="cliRuntimeActionResult?.command_preview" class="mt-1 text-[10px] text-slate-500">The prepared command is copied when browser clipboard access is available.</div>
+              </div>
+              <div x-show="cliCooldownSummary()" class="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-[11px] text-amber-200" x-text="cliCooldownSummary()"></div>
+            </div>
+
+            <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-xs font-semibold text-slate-300">Installable local extensions</div>
+                  <div class="text-[11px] text-slate-500">Keep extra local runtimes available in Axon without switching the selected CLI runtime until you want to.</div>
+                </div>
+              </div>
+
+              <div class="mt-3 rounded-2xl border border-cyan-500/20 bg-cyan-500/8 p-4">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-xs font-semibold text-cyan-200">Codex CLI</div>
+                    <div class="text-[11px] text-slate-400">Install OpenAI Codex locally so Axon can detect it as an available developer runtime extension.</div>
+                  </div>
+                  <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em]"
+                        :class="codexRuntimeInfo().installed ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200' : 'border-amber-500/30 bg-amber-500/10 text-amber-200'"
+                        x-text="codexRuntimeInfo().installed ? 'installed' : 'missing'"></span>
+                </div>
+
+                <div class="mt-3 grid gap-2 sm:grid-cols-3">
+                  <div class="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2">
+                    <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Binary</div>
+                    <div class="mt-1 text-xs font-medium text-slate-100 truncate" x-text="codexRuntimeInfo().binary_name || 'codex'"></div>
+                  </div>
+                  <div class="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2">
+                    <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Version</div>
+                    <div class="mt-1 text-xs font-medium text-slate-100 truncate" x-text="codexRuntimeInfo().version || 'Not installed'"></div>
+                  </div>
+                  <div class="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2">
+                    <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Auth</div>
+                    <div class="mt-1 text-xs font-medium" :class="codexRuntimeInfo().auth?.logged_in ? 'text-emerald-200' : 'text-amber-200'" x-text="codexRuntimeAuthSummary()"></div>
+                  </div>
+                </div>
+
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <button @click="installCodexCli()"
+                          :disabled="cliRuntimeActionLoading.codex_install"
+                          class="rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-medium text-cyan-200 transition hover:bg-cyan-500/15 disabled:opacity-50">
+                    <span x-text="codexRuntimeInfo().installed ? 'Reinstall Codex CLI' : 'Install Codex CLI'"></span>
+                  </button>
+                  <button @click="loginCodexCli()"
+                          :disabled="cliRuntimeActionLoading.codex_login || !codexRuntimeInfo().installed"
+                          class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500 disabled:opacity-50">
+                    Sign In
+                  </button>
+                  <button @click="_copyCommandPreview(codexRuntimeInfo().login_command || codexRuntimeInfo().binary || 'codex')"
+                          :disabled="!codexRuntimeInfo().installed"
+                          class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500 disabled:opacity-50">
+                    Copy launch command
+                  </button>
+                </div>
+
+                <div x-show="codexRuntimeActionResult?.message" class="mt-3 rounded-xl border px-3 py-2 text-[11px]"
+                     :class="codexRuntimeActionResult?.status === 'completed' ? 'border-emerald-500/20 bg-emerald-500/8 text-emerald-200' : (codexRuntimeActionResult?.status === 'error' ? 'border-rose-500/20 bg-rose-500/8 text-rose-200' : 'border-amber-500/20 bg-amber-500/8 text-amber-200')">
+                  <div x-text="codexRuntimeActionResult?.message"></div>
+                  <div x-show="codexRuntimeActionResult?.command_preview" class="mt-2 font-mono text-[10px] break-all text-slate-300" x-text="codexRuntimeActionResult?.command_preview"></div>
+                </div>
+              </div>
+
+              <label class="flex items-start gap-3 rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-3 cursor-pointer">
+                <input x-model="settingsForm.claude_cli_session_persistence_enabled"
+                       type="checkbox"
+                       class="mt-0.5 rounded border-slate-700 bg-slate-900 text-emerald-400 focus:ring-emerald-500/40" />
+                <span>
+                  <span class="block text-xs font-semibold text-slate-300">Reuse Claude Code sessions</span>
+                  <span class="block text-[11px] text-slate-500">Keep Claude CLI conversational state between turns so Axon behaves more like the VS Code workflow. Axon still disables Claude's native tools, so the local shell/file actions continue to come from Axon.</span>
+                </span>
+              </label>
+
+              <button @click="cliAdvanced = !cliAdvanced" class="flex w-full items-center justify-between text-left">
+                <div>
+                  <div class="text-xs font-semibold text-slate-300">Advanced Override</div>
+                  <div class="text-[11px] text-slate-500">Auto-discovery is now the default. Only set a path when you want Axon to pin itself to one exact CLI binary.</div>
+                </div>
+                <span class="text-slate-500 transition-transform" :class="cliAdvanced ? 'rotate-90' : ''">&rsaquo;</span>
+              </button>
+              <div x-show="cliAdvanced" x-transition class="mt-3 space-y-2">
+                <label class="block text-xs font-medium text-slate-400">CLI Agent Path</label>
+                <input x-model="settingsForm.claude_cli_path"
+                       placeholder="Leave blank to auto-detect"
+                       class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono" />
+                <p class="text-[11px] text-slate-500">Axon discovers <code class="bg-slate-800 px-1 rounded">claude</code> from PATH, nvm, local bins, and VS Code Claude Code installs. This field is a manual override only.</p>
+              </div>
+            </div>
           </div>
 
           <!-- Ollama settings (only when ollama backend + local models enabled) -->

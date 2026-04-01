@@ -15,12 +15,10 @@ from permissions_guard import default_permission_cards
 import gpu_guard
 import provider_registry
 import brain as _brain
+from axon_api.services import claude_cli_runtime as _claude_cli_runtime
+from axon_api.services import codex_cli_runtime as _codex_cli_runtime
+from axon_core.cli_pacing import current_cli_cooldown
 
-
-# API providers whose models support vision without a separate vision_model setting
-_VISION_CAPABLE_API_PROVIDERS = {
-    "anthropic", "claude", "openai", "gpt", "deepseek", "gemini", "mistral",
-}
 
 # Ollama model families that support vision natively
 _VISION_CAPABLE_OLLAMA_FAMILIES = (
@@ -39,12 +37,10 @@ def _build_vision_status(settings: dict) -> dict:
     backend = (settings.get("ai_backend") or "ollama").lower()
 
     if backend == "api":
-        # API-backed models (Claude, DeepSeek, OpenAI, etc.) include vision natively
         api_model = (settings.get("api_model") or "").strip()
         provider = (settings.get("api_provider") or "").lower()
         label = provider.capitalize() if provider else "API"
-        # Check if the provider is known to support vision
-        vision_ready = any(p in provider for p in _VISION_CAPABLE_API_PROVIDERS) or bool(api_model)
+        vision_ready = provider_registry.model_supports_vision(provider, api_model)
         return {
             "model": api_model or label,
             "ready": vision_ready,
@@ -52,7 +48,11 @@ def _build_vision_status(settings: dict) -> dict:
         }
 
     if backend == "cli":
-        return {"model": "Claude CLI", "ready": True, "runtime_label": "Claude CLI (built-in vision)"}
+        return {
+            "model": "Claude CLI",
+            "ready": True,
+            "runtime_label": "Claude CLI with forwarded image attachments",
+        }
 
     # Ollama: check if the active model name contains a vision family keyword
     ollama_model = (settings.get("ollama_model") or "").strip().lower()
@@ -164,25 +164,47 @@ def build_runtime_status(
         card["safety_warning"] = safety.get("warning", "")
         card["preferred_num_ctx"] = safety.get("preferred_num_ctx")
     runtime_ready = ollama_running or settings.get("ai_backend") in {"api", "cli"}
-    active_model = (
-        settings.get("code_model")
-        or settings.get("ollama_model")
-        or code_route.get("selected_model")
-        or code_route.get("default_family")
-        or "deepseek-chat"
-    )
+    selected_cli_override = str(settings.get("claude_cli_path", "") or "")
+    selected_cli_family = _brain._cli_runtime_family(selected_cli_override) if selected_cli_override else "claude"
+    claude_runtime = {
+        **_claude_cli_runtime.build_cli_runtime_snapshot(selected_cli_override if selected_cli_family == "claude" else ""),
+        "runtime_id": "claude",
+        "runtime_name": "Claude CLI",
+    }
+    codex_runtime = {
+        **_codex_cli_runtime.build_codex_runtime_snapshot(selected_cli_override if selected_cli_family == "codex" else ""),
+        "runtime_id": "codex",
+        "runtime_name": "Codex CLI",
+    }
+    cli_runtime = codex_runtime if selected_cli_family == "codex" else claude_runtime
+    selected_cli_path = str(cli_runtime.get("binary") or (_brain._resolve_selected_cli_binary(selected_cli_override) or ""))
+    cli_environments = [dict(env) for env in (_brain.discover_cli_environments() or [])]
 
     backend = settings.get("ai_backend") or "api"
+    cli_models = _brain.available_cli_models(selected_cli_path)
+    normalized_cli_model = _brain.normalize_cli_model(selected_cli_path, settings.get("claude_cli_model", ""))
+
     if backend == "api":
+        api_cfg = provider_registry.runtime_api_config(settings)
+        active_model = api_cfg.get("api_model") or "deepseek-reasoner"
         runtime_state = "active"
         runtime_label = "Cloud API"
     elif backend == "cli":
+        active_model = normalized_cli_model or ("Codex default" if selected_cli_family == "codex" else "Claude default")
         runtime_state = "active"
-        runtime_label = "CLI Agent"
+        runtime_label = str(cli_runtime.get("runtime_name") or ("Codex CLI" if selected_cli_family == "codex" else "Claude CLI"))
     elif ollama_running:
+        active_model = (
+            settings.get("code_model")
+            or settings.get("ollama_model")
+            or code_route.get("selected_model")
+            or code_route.get("default_family")
+            or "qwen2.5-coder:1.5b"
+        )
         runtime_state = "active"
         runtime_label = "Local Ollama"
     else:
+        active_model = settings.get("code_model") or settings.get("ollama_model") or "Saved default"
         runtime_state = "degraded"
         runtime_label = "Runtime offline"
 
@@ -202,9 +224,32 @@ def build_runtime_status(
         "cloud_agents": provider_registry.cloud_adapter_cards(settings),
         "api_providers": provider_registry.api_provider_cards(settings),
         "selected_api_provider": provider_registry.runtime_api_config(settings),
-        "cli_environments": _brain.discover_cli_environments(),
-        "cli_binary": settings.get("claude_cli_path") or (_brain._find_cli() or ""),
-        "cli_model": "",
+        "cli_environments": cli_environments,
+        "cli_binary": selected_cli_path,
+        "cli_model": normalized_cli_model,
+        "cli_session_persistence_enabled": _setting_enabled(settings.get("claude_cli_session_persistence_enabled")),
+        "cli_cooldown_remaining_seconds": float(
+            current_cli_cooldown(key=_brain._cli_runtime_key(selected_cli_path)).get("remaining_seconds") or 0
+        ),
+        "cli_models": cli_models,
+        "cli_runtime": cli_runtime,
+        "codex_runtime": codex_runtime,
+        "local_extensions": [
+            {
+                "id": "claude_cli",
+                "label": "Claude CLI",
+                "description": "Axon's supported local CLI bridge for console and agent work.",
+                "runtime": claude_runtime,
+                "installed": bool(claude_runtime.get("installed")),
+            },
+            {
+                "id": "codex_cli",
+                "label": "Codex CLI",
+                "description": "Installable local extension for Codex workflows and non-interactive exec runs.",
+                "runtime": codex_runtime,
+                "installed": bool(codex_runtime.get("installed")),
+            },
+        ],
         "permissions": default_permission_cards(),
         "gpu_guard": gpu_profile,
         "vision_status": _build_vision_status(settings),

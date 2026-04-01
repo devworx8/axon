@@ -12,6 +12,12 @@ function axonAuthMixin() {
           headers: this.authHeaders()
         });
         const d = await r.json();
+        if (d.dev_bypass) {
+          this.authenticated = true;
+          this.authMode = 'login';
+          this.authDevBypass = true;
+          return;
+        }
         if (!d.auth_enabled) {
           // No PIN set — offer setup or skip (localhost only)
           this.authMode = 'setup';
