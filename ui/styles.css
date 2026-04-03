@@ -1886,6 +1886,27 @@ textarea:focus, input:focus { outline: none; }
                                padding:10px 12px; font-size:11px; line-height:1.55;
                                color:rgba(226,232,240,0.9); overflow-wrap:anywhere; }
 .axon-approval-dock__hint { margin-top:8px; font-size:11px; line-height:1.5; color:rgba(148,163,184,0.88); }
+.axon-approval-dock--compact { padding:12px 14px; }
+.axon-approval-dock__workflow { margin-top:10px; border-radius:12px; border:1px solid rgba(148,163,184,0.14);
+                                background:rgba(2,6,23,0.34); padding:10px 12px; }
+.axon-approval-dock__workflow-copy { display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; }
+.axon-approval-dock__workflow-label { font-size:11px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase;
+                                      color:rgba(148,163,184,0.92); }
+.axon-approval-dock__workflow-summary { font-size:11px; color:rgba(191,219,254,0.94); }
+.axon-approval-dock__steps { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.axon-approval-dock__step { display:inline-flex; align-items:center; gap:7px; border-radius:999px;
+                            padding:6px 10px; font-size:11px; line-height:1.2;
+                            border:1px solid rgba(71,85,105,0.45); color:rgba(148,163,184,0.92);
+                            background:rgba(15,23,42,0.42); }
+.axon-approval-dock__step-dot { width:7px; height:7px; border-radius:999px; background:rgba(71,85,105,0.9); }
+.axon-approval-dock__step--done { border-color:rgba(34,197,94,0.26); color:rgba(134,239,172,0.96); background:rgba(22,163,74,0.12); }
+.axon-approval-dock__step--done .axon-approval-dock__step-dot { background:rgba(74,222,128,0.95); }
+.axon-approval-dock__step--current { border-color:rgba(251,191,36,0.3); color:rgba(253,224,71,0.96); background:rgba(245,158,11,0.12); }
+.axon-approval-dock__step--current .axon-approval-dock__step-dot { background:rgba(251,191,36,0.98); }
+.axon-approval-dock__step--next { border-color:rgba(59,130,246,0.28); color:rgba(191,219,254,0.95); background:rgba(30,64,175,0.14); }
+.axon-approval-dock__step--next .axon-approval-dock__step-dot { background:rgba(96,165,250,0.96); }
+.axon-approval-dock__step--denied { border-color:rgba(248,113,113,0.3); color:rgba(252,165,165,0.96); background:rgba(127,29,29,0.2); }
+.axon-approval-dock__step--denied .axon-approval-dock__step-dot { background:rgba(248,113,113,0.96); }
 
 @media (max-width: 640px) {
   .axon-approval__actions {
@@ -1896,6 +1917,9 @@ textarea:focus, input:focus { outline: none; }
   }
   .axon-approval-dock__status {
     align-self:flex-start;
+  }
+  .axon-approval-dock__steps {
+    gap:6px;
   }
 }
 

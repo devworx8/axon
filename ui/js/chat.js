@@ -612,6 +612,8 @@ function axonChatMixin() {
         task: String(session?.task || approval.task || '').trim(),
         workspaceId: String(session?.workspace_id || approval.workspace_id || this.chatProjectId || '').trim(),
         sessionId: String(session?.session_id || approval.session_id || '').trim(),
+        resumeTask: String(approval.resume_task || approval.resumeTask || '').trim(),
+        draftCommitMessage: String(approval.draft_commit_message || approval.draftCommitMessage || '').trim(),
         resolved: '',
         resolutionMessage: '',
       };
@@ -668,6 +670,14 @@ function axonChatMixin() {
       };
     },
 
+    agentApprovalDockClass(approval = null) {
+      const item = approval || this.activePendingAgentApproval();
+      if (!item) return 'axon-approval-dock';
+      return item.resolved
+        ? 'axon-approval-dock axon-approval-dock--compact'
+        : 'axon-approval-dock';
+    },
+
     prepareInterruptedSessionResume() {
       this.resumeBannerDismissed = true;
       this.removeInterruptedSessionMessages();
@@ -689,10 +699,26 @@ function axonChatMixin() {
       return item.path || '';
     },
 
+    agentApprovalTitle(approval = null) {
+      const item = approval || this.activePendingAgentApproval();
+      if (!item) return 'Approval required before Axon can continue this task.';
+      const workflow = this.agentApprovalWorkflow(item);
+      const subject = workflow?.currentLabel || item.summary || 'Blocked action';
+      if (item.resolved === 'approved') return `${subject} approved`;
+      if (item.resolved === 'denied') return `${subject} denied`;
+      if (item.kind === 'command' && item.summary) return `${item.summary} needs approval`;
+      if (item.kind === 'edit' && item.summary) return `${item.summary} needs approval`;
+      return item.message || 'Approval required before Axon can continue this task.';
+    },
+
     agentApprovalHint(approval = null) {
       const item = approval || this.activePendingAgentApproval();
       if (!item) return '';
-      if (item.resolved) return item.resolutionMessage || '';
+      if (item.resolved) {
+        const workflow = this.agentApprovalWorkflow(item);
+        const nextStep = workflow?.nextLabel ? ` Next: ${workflow.nextLabel}.` : '';
+        return `${item.resolutionMessage || ''}${nextStep}`.trim();
+      }
       const source = item.evidenceSource ? ` Source: ${item.evidenceSource.replace(/_/g, ' ')}.` : '';
       if (item.kind === 'command') {
         return `Approve the exact blocked action below so Axon can retry it safely.${source}`;
@@ -714,6 +740,96 @@ function axonChatMixin() {
       if (item.resolved === 'approved') return 'axon-approval-dock__status axon-approval-dock__status--approved';
       if (item.resolved === 'denied') return 'axon-approval-dock__status axon-approval-dock__status--denied';
       return 'axon-approval-dock__status axon-approval-dock__status--pending';
+    },
+
+    approvalResolutionDetail(state = 'approved', scope = 'once', approval = null) {
+      const item = approval || this.activePendingAgentApproval();
+      const workflow = this.agentApprovalWorkflow(item);
+      if (String(state || '').trim().toLowerCase() === 'denied') {
+        return workflow?.currentLabel
+          ? `${workflow.currentLabel} denied. Axon will skip that step and continue with safer alternatives.`
+          : 'Permission denied. Axon will continue with safer alternatives.';
+      }
+      const scopeLabel = (
+        String(scope || 'once').trim().toLowerCase() === 'persist' ? 'Saved for future sessions.'
+          : String(scope || 'once').trim().toLowerCase() === 'session' ? 'Approved for this Axon session.'
+            : String(scope || 'once').trim().toLowerCase() === 'task' ? 'Approved for this task.'
+              : 'Approved once.'
+      );
+      if (workflow?.nextLabel) return `${scopeLabel} Axon is moving to ${workflow.nextLabel} next.`;
+      return `${scopeLabel} Axon is continuing the same task.`;
+    },
+
+    agentApprovalWorkflow(approval = null) {
+      const item = approval || this.activePendingAgentApproval();
+      if (!item) return null;
+      const actionType = String(item.actionType || '').trim().toLowerCase();
+      const resumeTask = String(item.resumeTask || '').trim().toLowerCase();
+      const fullCommand = String(item.fullCommand || '').trim().toLowerCase();
+      const isGitAction = actionType.startsWith('git_');
+      const isGhPrAction = actionType === 'gh_pr_upsert';
+      if (!isGitAction && !isGhPrAction) return null;
+
+      const wantsCommit = actionType === 'git_add' || actionType === 'git_commit' || /\bcommit\b/.test(resumeTask);
+      const wantsPush = actionType === 'git_push' || /\bpush\b/.test(resumeTask) || fullCommand.startsWith('git push');
+      const wantsPr = isGhPrAction || /\bpull request\b/.test(resumeTask) || /\bpr\b/.test(resumeTask);
+      const steps = [];
+
+      if (actionType === 'git_add') steps.push({ key: 'stage', label: 'Stage changes' });
+      if (wantsCommit) steps.push({ key: 'commit', label: 'Create commit' });
+      if (wantsPush) steps.push({ key: 'push', label: 'Push branch' });
+      if (wantsPr) steps.push({ key: 'pr', label: 'Open PR' });
+
+      if (!steps.length) {
+        if (actionType === 'git_commit') steps.push({ key: 'commit', label: 'Create commit' });
+        else if (actionType === 'git_push') steps.push({ key: 'push', label: 'Push branch' });
+        else if (actionType === 'gh_pr_upsert') steps.push({ key: 'pr', label: 'Open PR' });
+        else return null;
+      }
+
+      const currentKey = (
+        actionType === 'git_add' ? 'stage'
+          : actionType === 'git_commit' ? 'commit'
+            : actionType === 'git_push' ? 'push'
+              : actionType === 'gh_pr_upsert' ? 'pr'
+                : steps[0].key
+      );
+      const currentIndex = Math.max(steps.findIndex(step => step.key === currentKey), 0);
+      const resolvedState = String(item.resolved || '').trim().toLowerCase();
+      const decoratedSteps = steps.map((step, index) => {
+        let status = 'pending';
+        if (index < currentIndex) status = 'done';
+        else if (index === currentIndex) {
+          status = resolvedState === 'approved'
+            ? 'done'
+            : resolvedState === 'denied'
+              ? 'denied'
+              : 'current';
+        } else if (resolvedState === 'approved' && index === currentIndex + 1) {
+          status = 'next';
+        }
+        return { ...step, status };
+      });
+      const nextStep = decoratedSteps.find(step => step.status === 'next' || step.status === 'pending');
+      const currentStep = decoratedSteps[currentIndex] || decoratedSteps[0];
+      return {
+        label: decoratedSteps.length > 1
+          ? `Git workflow · step ${Math.min(currentIndex + 1, decoratedSteps.length)} of ${decoratedSteps.length}`
+          : 'Git workflow',
+        summary: item.draftCommitMessage ? `Draft message: ${item.draftCommitMessage}` : '',
+        currentLabel: currentStep?.label || '',
+        nextLabel: nextStep?.label || '',
+        steps: decoratedSteps,
+      };
+    },
+
+    agentApprovalWorkflowStepClass(step = {}) {
+      const status = String(step?.status || 'pending').trim().toLowerCase();
+      if (status === 'done') return 'axon-approval-dock__step axon-approval-dock__step--done';
+      if (status === 'current') return 'axon-approval-dock__step axon-approval-dock__step--current';
+      if (status === 'next') return 'axon-approval-dock__step axon-approval-dock__step--next';
+      if (status === 'denied') return 'axon-approval-dock__step axon-approval-dock__step--denied';
+      return 'axon-approval-dock__step';
     },
 
     normalizeEvidenceSource(value = '') {

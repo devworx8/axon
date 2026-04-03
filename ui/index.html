@@ -657,21 +657,40 @@
       <!-- Input bar (bottom of canvas) -->
       <div class="chat-shell__composer shrink-0 px-3 md:px-5 py-2.5 border-t border-slate-800 bg-slate-950/80 backdrop-blur">
         <div x-show="activePendingAgentApproval()" x-transition class="mb-3">
-          <div class="axon-approval-dock">
+          <div :class="agentApprovalDockClass(activePendingAgentApproval())">
             <div class="axon-approval-dock__header">
               <span :class="agentApprovalStatusClass(activePendingAgentApproval())"
                     x-text="agentApprovalStatusLabel(activePendingAgentApproval())"></span>
               <div class="min-w-0 flex-1">
                 <div class="axon-approval-dock__title"
-                     x-text="activePendingAgentApproval()?.message || 'Approval required before Axon can continue this task.'"></div>
-                <div x-show="activePendingAgentApproval()?.task"
+                     x-text="agentApprovalTitle(activePendingAgentApproval())"></div>
+                <div x-show="activePendingAgentApproval()?.task && !activePendingAgentApproval()?.resolved"
                      class="axon-approval-dock__task">
                   Task:
                   <span x-text="activePendingAgentApproval()?.task"></span>
                 </div>
-                <code x-show="agentApprovalSubject(activePendingAgentApproval())"
+                <code x-show="agentApprovalSubject(activePendingAgentApproval()) && !activePendingAgentApproval()?.resolved"
                       class="axon-approval-dock__subject"
                       x-text="agentApprovalSubject(activePendingAgentApproval())"></code>
+                <template x-if="agentApprovalWorkflow(activePendingAgentApproval())">
+                  <div class="axon-approval-dock__workflow">
+                    <div class="axon-approval-dock__workflow-copy">
+                      <div class="axon-approval-dock__workflow-label"
+                           x-text="agentApprovalWorkflow(activePendingAgentApproval())?.label"></div>
+                      <div x-show="agentApprovalWorkflow(activePendingAgentApproval())?.summary"
+                           class="axon-approval-dock__workflow-summary"
+                           x-text="agentApprovalWorkflow(activePendingAgentApproval())?.summary"></div>
+                    </div>
+                    <div class="axon-approval-dock__steps">
+                      <template x-for="step in (agentApprovalWorkflow(activePendingAgentApproval())?.steps || [])" :key="step.key">
+                        <div :class="agentApprovalWorkflowStepClass(step)">
+                          <span class="axon-approval-dock__step-dot"></span>
+                          <span x-text="step.label"></span>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </template>
                 <div class="axon-approval-dock__hint"
                      x-text="agentApprovalHint(activePendingAgentApproval())"></div>
               </div>
@@ -5619,7 +5638,10 @@ window.__axon = {
           : scope === 'task'
             ? 'Action approved for this task'
             : 'Action approved once';
-      __axonApp()?.markPendingAgentApprovalResolved?.('approved', 'Permission granted. Axon is continuing the same task.');
+      const app = __axonApp?.();
+      const detail = app?.approvalResolutionDetail?.('approved', scope, app?.activePendingAgentApproval?.())
+        || 'Permission granted. Axon is continuing the same task.';
+      app?.markPendingAgentApprovalResolved?.('approved', detail);
       __axonToast(`✓ ${label}`);
       if (options.resume !== false) {
         const note = scope === 'persist'
@@ -5668,7 +5690,10 @@ window.__axon = {
   },
 
   denyApproval(options = {}) {
-    __axonApp()?.markPendingAgentApprovalResolved?.('denied', 'Permission denied. Axon will continue with safer alternatives.');
+    const app = __axonApp?.();
+    const detail = app?.approvalResolutionDetail?.('denied', 'once', app?.activePendingAgentApproval?.())
+      || 'Permission denied. Axon will continue with safer alternatives.';
+    app?.markPendingAgentApprovalResolved?.('denied', detail);
     __axonToast('⊘ Permission denied');
     if (options.resume !== false) {
       window.__axon.resumePausedTask('The user denied permission for the blocked operation. Do not retry it. Skip that step and continue the same task with safe alternatives.');
