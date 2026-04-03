@@ -108,6 +108,7 @@ def build_codex_runtime_snapshot(codex_path_override: str = "") -> StatusRecord:
     auth = _auth_status(binary)
     install_parts = [npm_binary or "npm", "install", "-g", _CODEX_PACKAGE]
     login_parts = [binary or "codex", "login"]
+    logout_parts = [binary or "codex", "logout"]
     status_parts = [binary or "codex", "login", "status"]
 
     return {
@@ -125,6 +126,7 @@ def build_codex_runtime_snapshot(codex_path_override: str = "") -> StatusRecord:
         "using_auto_discovery": bool(binary and not codex_path_override),
         "install_command": _shared._command_preview(install_parts),
         "login_command": _shared._command_preview(login_parts),
+        "logout_command": _shared._command_preview(logout_parts),
         "status_command": _shared._command_preview(status_parts),
         "auth": auth,
     }
@@ -179,4 +181,35 @@ def prepare_codex_cli_login(codex_path_override: str = "") -> StatusRecord:
         "message": "Run the Codex CLI login flow locally to finish authentication. The command has been prepared for you.",
         "command_preview": _shared._command_preview(parts),
         "cli_runtime": snapshot,
+    }
+
+
+def logout_codex_cli(codex_path_override: str = "") -> StatusRecord:
+    snapshot = build_codex_runtime_snapshot(codex_path_override)
+    if not snapshot.get("installed"):
+        return {
+            "status": "manual_required",
+            "message": "Install Codex CLI before signing out.",
+            "command_preview": snapshot.get("install_command", ""),
+            "cli_runtime": snapshot,
+        }
+    if not snapshot.get("auth", {}).get("logged_in"):
+        return {
+            "status": "completed",
+            "message": "Codex CLI is already signed out.",
+            "command_preview": snapshot.get("status_command", ""),
+            "cli_runtime": snapshot,
+        }
+    binary = str(snapshot.get("binary") or "codex")
+    proc = _shared._run_command([binary, "logout"], timeout=_shared._STATUS_TIMEOUT_SECONDS)
+    output = (proc.stdout or proc.stderr or "").strip()
+    if proc.returncode != 0:
+        raise RuntimeError(output or "Codex CLI sign out failed.")
+    refreshed = build_codex_runtime_snapshot(codex_path_override)
+    return {
+        "status": "completed",
+        "message": "Codex CLI signed out.",
+        "command_preview": refreshed.get("status_command", ""),
+        "cli_runtime": refreshed,
+        "output": output,
     }

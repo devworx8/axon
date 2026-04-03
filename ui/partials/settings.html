@@ -54,6 +54,38 @@
             </div>
           </div>
 
+          <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 space-y-3">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <div class="text-xs font-semibold text-slate-300">Runtime Observability</div>
+                <div class="text-[11px] text-slate-500">Show the selected lane, the runtime Axon will effectively use, auth type, and whether a provider cooldown or fallback is driving behavior.</div>
+              </div>
+              <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-slate-400">Truth</span>
+            </div>
+
+            <div class="grid gap-2 sm:grid-cols-2">
+              <template x-for="row in runtimeObservabilityRows()" :key="row.key">
+                <div class="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500" x-text="row.label"></div>
+                  <div class="mt-1 text-xs font-medium text-slate-100" x-text="row.value"></div>
+                </div>
+              </template>
+            </div>
+
+            <div class="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2">
+              <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Cooldown source</div>
+              <div class="mt-1 text-xs font-medium text-slate-100"
+                   x-text="runtimeStatus.cooldown_source ? runtimeStatus.cooldown_source.replace(/_/g, ' ') : 'No active cooldown'"></div>
+            </div>
+
+            <div class="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2">
+              <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Fallback reason</div>
+              <div class="mt-1 text-xs text-slate-300" x-text="runtimeFallbackSummaryText()"></div>
+            </div>
+
+            <div x-show="runtimeProviderErrorText()" class="rounded-xl border border-rose-500/20 bg-rose-500/8 px-3 py-2 text-[11px] text-rose-200" x-text="runtimeProviderErrorText()"></div>
+          </div>
+
           <!-- API runtime provider -->
           <div x-show="settingsForm.ai_backend === 'api' || settingsForm.cloud_agents_enabled" class="space-y-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
             <div class="flex items-center justify-between gap-3">
@@ -180,16 +212,23 @@
                         class="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-200 transition hover:bg-emerald-500/15 disabled:opacity-50">
                   <span x-text="cliRuntimeInfo().installed ? `Reinstall ${cliRuntimeName()}` : `Install ${cliRuntimeName()}`"></span>
                 </button>
-                <button @click="loginClaudeCli()"
+                <button x-show="!cliRuntimeInfo().auth?.logged_in"
+                        @click="loginClaudeCli()"
                         :disabled="cliRuntimeActionLoading.login || !cliRuntimeInfo().installed"
                         class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500 disabled:opacity-50">
                   Sign In
+                </button>
+                <button x-show="cliRuntimeInfo().auth?.logged_in"
+                        @click="logoutClaudeCli()"
+                        :disabled="cliRuntimeActionLoading.logout || !cliRuntimeInfo().installed"
+                        class="rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200 transition hover:bg-rose-500/15 disabled:opacity-50">
+                  Sign Out
                 </button>
                 <button @click="refreshClaudeCliStatus()"
                         class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-400 transition hover:border-slate-500 hover:text-slate-200">
                   Refresh Status
                 </button>
-                <button x-show="settingsForm.claude_cli_path"
+                <button x-show="settingsForm.cli_runtime_path"
                         @click="useAutoDetectedCli()"
                         class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-400 transition hover:border-slate-500 hover:text-slate-200">
                   Use Auto-Detect
@@ -245,10 +284,17 @@
                           class="rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-medium text-cyan-200 transition hover:bg-cyan-500/15 disabled:opacity-50">
                     <span x-text="codexRuntimeInfo().installed ? 'Reinstall Codex CLI' : 'Install Codex CLI'"></span>
                   </button>
-                  <button @click="loginCodexCli()"
+                  <button x-show="!codexRuntimeInfo().auth?.logged_in"
+                          @click="loginCodexCli()"
                           :disabled="cliRuntimeActionLoading.codex_login || !codexRuntimeInfo().installed"
                           class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500 disabled:opacity-50">
                     Sign In
+                  </button>
+                  <button x-show="codexRuntimeInfo().auth?.logged_in"
+                          @click="logoutCodexCli()"
+                          :disabled="cliRuntimeActionLoading.codex_logout || !codexRuntimeInfo().installed"
+                          class="rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200 transition hover:bg-rose-500/15 disabled:opacity-50">
+                    Sign Out
                   </button>
                   <button @click="_copyCommandPreview(codexRuntimeInfo().login_command || codexRuntimeInfo().binary || 'codex')"
                           :disabled="!codexRuntimeInfo().installed"
@@ -277,16 +323,16 @@
               <button @click="cliAdvanced = !cliAdvanced" class="flex w-full items-center justify-between text-left">
                 <div>
                   <div class="text-xs font-semibold text-slate-300">Advanced Override</div>
-                  <div class="text-[11px] text-slate-500">Auto-discovery is now the default. Only set a path when you want Axon to pin itself to one exact CLI binary.</div>
+                  <div class="text-[11px] text-slate-500">Auto-discovery is now the default. Only set a path when you want Axon to pin the active local CLI runtime to one exact binary.</div>
                 </div>
                 <span class="text-slate-500 transition-transform" :class="cliAdvanced ? 'rotate-90' : ''">&rsaquo;</span>
               </button>
               <div x-show="cliAdvanced" x-transition class="mt-3 space-y-2">
-                <label class="block text-xs font-medium text-slate-400">CLI Agent Path</label>
-                <input x-model="settingsForm.claude_cli_path"
+                <label class="block text-xs font-medium text-slate-400">CLI Runtime Path</label>
+                <input x-model="settingsForm.cli_runtime_path"
                        placeholder="Leave blank to auto-detect"
                        class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono" />
-                <p class="text-[11px] text-slate-500">Axon discovers <code class="bg-slate-800 px-1 rounded">claude</code> from PATH, nvm, local bins, and VS Code Claude Code installs. This field is a manual override only.</p>
+                <p class="text-[11px] text-slate-500">Axon discovers supported local runtimes like <code class="bg-slate-800 px-1 rounded">claude</code> and <code class="bg-slate-800 px-1 rounded">codex</code> from PATH, nvm, local bins, and bundled installs. This field is a manual override only.</p>
               </div>
             </div>
           </div>
@@ -621,6 +667,85 @@
                 <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1"
                       x-text="`Terminal starts in ${String(settingsForm.terminal_default_mode || 'read_only').replace(/_/g, ' ')}`"></span>
               </div>
+            </div>
+
+            <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 space-y-3">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-sm font-medium text-white">Autonomy + Memory</div>
+                  <div class="text-[11px] text-slate-500">Control how far Axon may act unattended, how aggressively it prefers local memory and cached evidence over live fetches, and how much thread history stays in the hot path.</div>
+                </div>
+                <span class="rounded-full border px-2 py-0.5 text-[10px] border-blue-500/20 bg-blue-500/10 text-blue-300"
+                      x-text="String(settingsForm.autonomy_profile || 'workspace_auto').replace(/_/g, ' ')"></span>
+              </div>
+              <div class="grid gap-3 md:grid-cols-2">
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Autonomy profile</label>
+                  <select x-model="settingsForm.autonomy_profile"
+                          class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-blue-500 transition">
+                    <option value="manual">Manual</option>
+                    <option value="workspace_auto">Workspace auto</option>
+                  </select>
+                  <div class="mt-1 text-[10px] text-slate-500">Higher autonomy tiers are hidden during this hardening phase.</div>
+                </div>
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">External fetch policy</label>
+                  <select x-model="settingsForm.external_fetch_policy"
+                          class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-blue-500 transition">
+                    <option value="cache_first">Cache first</option>
+                    <option value="live_first">Live first</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Quick model</label>
+                  <input x-model="settingsForm.quick_model"
+                         placeholder="Use current runtime default"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition" />
+                </div>
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Standard model</label>
+                  <input x-model="settingsForm.standard_model"
+                         placeholder="Use current runtime default"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition" />
+                </div>
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Deep model</label>
+                  <input x-model="settingsForm.deep_model"
+                         placeholder="Use current runtime default"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition" />
+                </div>
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Max history turns</label>
+                  <input x-model="settingsForm.max_history_turns"
+                         type="number" min="6" max="60"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-blue-500 transition" />
+                </div>
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Workspace snapshot TTL (s)</label>
+                  <input x-model="settingsForm.workspace_snapshot_ttl_seconds"
+                         type="number" min="10" max="3600"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-blue-500 transition" />
+                </div>
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Memory query cache TTL (s)</label>
+                  <input x-model="settingsForm.memory_query_cache_ttl_seconds"
+                         type="number" min="5" max="600"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-blue-500 transition" />
+                </div>
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">External fetch cache TTL (s)</label>
+                  <input x-model="settingsForm.external_fetch_cache_ttl_seconds"
+                         type="number" min="60" max="86400"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:border-blue-500 transition" />
+                </div>
+              </div>
+              <label class="flex items-center gap-2 text-[11px] text-slate-300">
+                <input type="checkbox"
+                       :checked="!!settingsForm.memory_first_enabled"
+                       @change="settingsForm.memory_first_enabled = $event.target.checked"
+                       class="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500">
+                <span>Prefer workspace memory, snapshots, and cache before external tools</span>
+              </label>
             </div>
 
             <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 space-y-3">

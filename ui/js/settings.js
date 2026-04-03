@@ -17,8 +17,8 @@ function axonSettingsMixin() {
           morning_digest_hour: s.morning_digest_hour || '8',
           ai_backend: s.ai_backend || 'ollama',
           api_provider: s.api_provider || 'deepseek',
-          claude_cli_path: s.claude_cli_path || '',
-          claude_cli_model: s.claude_cli_model || '',
+          cli_runtime_path: s.cli_runtime_path || s.claude_cli_path || '',
+          cli_runtime_model: s.cli_runtime_model || s.claude_cli_model || '',
           claude_cli_session_persistence_enabled: this.settingEnabled(s.claude_cli_session_persistence_enabled ?? true),
           ollama_url: s.ollama_url || '',
           ollama_runtime_mode: s.ollama_runtime_mode || 'gpu_default',
@@ -67,6 +67,18 @@ function axonSettingsMixin() {
           _deepseekKeyHint: '',
           max_agent_iterations: s.max_agent_iterations || '75',
           context_compact_enabled: this.settingEnabled(s.context_compact_enabled ?? true),
+          autonomy_profile: ['manual', 'workspace_auto'].includes(String(s.autonomy_profile || '').trim())
+            ? s.autonomy_profile
+            : 'workspace_auto',
+          memory_first_enabled: this.settingEnabled(s.memory_first_enabled ?? true),
+          external_fetch_policy: (s.external_fetch_policy === 'live_first') ? 'live_first' : 'cache_first',
+          quick_model: s.quick_model || '',
+          standard_model: s.standard_model || '',
+          deep_model: s.deep_model || '',
+          workspace_snapshot_ttl_seconds: s.workspace_snapshot_ttl_seconds || '60',
+          memory_query_cache_ttl_seconds: s.memory_query_cache_ttl_seconds || '45',
+          external_fetch_cache_ttl_seconds: s.external_fetch_cache_ttl_seconds || '21600',
+          max_history_turns: s.max_history_turns || s.max_chat_history || '10',
         };
         this.selectedChatModel = s.code_model || s.ollama_model || this.selectedChatModel || '';
         if (s.ai_backend === 'ollama') { this.checkOllamaStatus(); this.loadOllamaModels(); }
@@ -122,8 +134,8 @@ function axonSettingsMixin() {
       if (this.settingsForm.morning_digest_hour) payload.morning_digest_hour = String(this.settingsForm.morning_digest_hour);
       if (this.settingsForm.ai_backend) payload.ai_backend = this.settingsForm.ai_backend;
       payload.api_provider = this.settingsForm.api_provider || 'deepseek';
-      payload.claude_cli_path = this.settingsForm.claude_cli_path || '';
-      payload.claude_cli_model = this.settingsForm.claude_cli_model || '';
+      payload.cli_runtime_path = this.settingsForm.cli_runtime_path || '';
+      payload.cli_runtime_model = this.settingsForm.cli_runtime_model || '';
       payload.claude_cli_session_persistence_enabled = !!this.settingsForm.claude_cli_session_persistence_enabled;
       payload.ollama_url = this.settingsForm.ollama_url || '';
       payload.ollama_runtime_mode = this.settingsForm.ollama_runtime_mode || 'gpu_default';
@@ -146,6 +158,16 @@ function axonSettingsMixin() {
       payload.terminal_command_timeout_seconds = String(this.settingsForm.terminal_command_timeout_seconds || '25');
       payload.max_agent_iterations = String(this.settingsForm.max_agent_iterations || '75');
       payload.context_compact_enabled = !!this.settingsForm.context_compact_enabled;
+      payload.autonomy_profile = (this.settingsForm.autonomy_profile === 'manual') ? 'manual' : 'workspace_auto';
+      payload.memory_first_enabled = !!this.settingsForm.memory_first_enabled;
+      payload.external_fetch_policy = this.settingsForm.external_fetch_policy === 'live_first' ? 'live_first' : 'cache_first';
+      payload.quick_model = this.settingsForm.quick_model || '';
+      payload.standard_model = this.settingsForm.standard_model || '';
+      payload.deep_model = this.settingsForm.deep_model || '';
+      payload.workspace_snapshot_ttl_seconds = String(this.settingsForm.workspace_snapshot_ttl_seconds || '60');
+      payload.memory_query_cache_ttl_seconds = String(this.settingsForm.memory_query_cache_ttl_seconds || '45');
+      payload.external_fetch_cache_ttl_seconds = String(this.settingsForm.external_fetch_cache_ttl_seconds || '21600');
+      payload.max_history_turns = String(this.settingsForm.max_history_turns || '10');
       payload.cloud_agents_enabled = !!this.settingsForm.cloud_agents_enabled;
       payload.openai_gpts_enabled = !!this.settingsForm.openai_gpts_enabled;
       payload.gemini_gems_enabled = !!this.settingsForm.gemini_gems_enabled;

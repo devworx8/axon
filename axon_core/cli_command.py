@@ -44,12 +44,18 @@ def build_codex_exec_command(
     model: str = "",
     cwd: str = "",
     sandbox_mode: str = "read-only",
+    approval_mode: str = "on-request",
 ) -> list[str]:
     command = [binary, "exec", "--json"]
     if cwd:
         command.extend(["-C", cwd, "--skip-git-repo-check"])
+    normalized_sandbox = sandbox_mode or "read-only"
+    normalized_approval = str(approval_mode or "").strip().lower()
+    if normalized_approval == "on-request" and normalized_sandbox == "workspace-write":
+        # Newer Codex CLI builds expose this mode via --full-auto instead of the old -a flag.
+        command.append("--full-auto")
     command.extend([
-        "--sandbox", sandbox_mode or "read-only",
+        "--sandbox", normalized_sandbox,
         "--ephemeral",
     ])
     if model:

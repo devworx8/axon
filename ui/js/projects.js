@@ -96,12 +96,19 @@ function axonProjectsMixin() {
 
     openProjectChat(p) {
       const alreadyInChat = this.activeTab === 'chat';
-      this.chatProjectId = String(p.id);
-      this.chatProject = p;
+      const usedWorkspaceTabs = typeof this.activateWorkspaceTab === 'function';
+      if (typeof this.activateWorkspaceTab === 'function') {
+        this.activateWorkspaceTab(String(p.id));
+      } else {
+        this.chatProjectId = String(p.id);
+        this.chatProject = p;
+      }
       this._userScrolled = false;
       this.showScrollToBottom = false;
       this.activeTab = 'chat';
-      if (alreadyInChat && typeof this.loadChatHistory === 'function') {
+      if (usedWorkspaceTabs) {
+        this.$nextTick(() => requestAnimationFrame(() => this.scrollChat?.(true)));
+      } else if (alreadyInChat && typeof this.loadChatHistory === 'function') {
         this.loadChatHistory();
       } else {
         this.$nextTick(() => requestAnimationFrame(() => this.scrollChat?.(true)));
@@ -120,6 +127,46 @@ function axonProjectsMixin() {
         this.noteModal.open = false;
         this.showToast('Note saved');
       } catch(e) { this.showToast('Save failed'); }
+    },
+
+    async deleteProject(p) {
+      const projectId = Number(p?.id || 0);
+      if (!projectId) return;
+      const label = String(p?.name || `Workspace ${projectId}`).trim();
+      const confirmed = window.confirm(
+        `Delete workspace "${label}" from Axon?\n\nThis removes the workspace from Axon's database, notes, tasks, prompts, and workspace-scoped context. It does not delete the folder on disk.`
+      );
+      if (!confirmed) return;
+
+      try {
+        await this.api('DELETE', `/api/projects/${projectId}`);
+        this.projects = (this.projects || []).filter(project => Number(project?.id || 0) !== projectId);
+        this.projectGithubSummaries = Object.fromEntries(
+          Object.entries(this.projectGithubSummaries || {}).filter(([id]) => Number(id || 0) !== projectId)
+        );
+        if (Number(this.chatProjectId || 0) === projectId) {
+          this.chatProjectId = '';
+          this.chatProject = null;
+        }
+        if (Number(this.analysisProject?.id || 0) === projectId) {
+          this.analysisProject = null;
+          this.analysisPanel = false;
+        }
+        if (Number(this.noteModal?.project?.id || 0) === projectId) {
+          this.noteModal = { open: false, project: null, value: '' };
+        }
+        this.consoleWorkspaceTabs = (this.consoleWorkspaceTabs || []).filter(value => Number(value || 0) !== projectId);
+        this.syncWorkspaceTabs?.();
+        this.activeProjectMenu = null;
+        this.windowChannel?.postMessage?.({
+          source: this.windowId,
+          type: 'workspace_deleted',
+          payload: { projectId },
+        });
+        this.showToast(`Workspace "${label}" deleted`);
+      } catch (e) {
+        this.showToast(e?.message || 'Delete failed');
+      }
     },
 
   };

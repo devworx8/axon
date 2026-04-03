@@ -1,29 +1,43 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import sys
 import tempfile
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 import sqlite3
 import subprocess
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 import brain
+import browser_bridge
 import memory_engine
 import server
 import runtime_manager
 import provider_registry
+from axon_data import core as db_core
+from axon_data import runtime_state
 from axon_core import agent as core_agent
+from axon_core import approval_actions
 from axon_core import agent_file_actions
 from axon_core import agent_prompts
 from axon_core import cli_pacing
+from axon_core import session_store as session_store_module
 from axon_core.agent_toolspecs import AgentRuntimeDeps
 from axon_core.session_store import SessionStore
 from axon_api.settings_models import SettingsUpdate
 from axon_api.services import claude_cli_runtime
 from axon_api.services import codex_cli_runtime
+from axon_api.services import auto_sessions as auto_session_service
+from axon_api.services import live_preview_sessions
+from axon_api.services import runtime_login_sessions
+from axon_api.services import runtime_truth as runtime_truth_service
+from axon_api.services import sandbox_sessions
 from axon_api.services import task_sandboxes as task_sandbox_service
 from axon_core.chat_context import select_history_for_chat
 from axon_core import agent_output
@@ -31,6 +45,12 @@ from axon_core.vision_runtime import auto_route_vision_runtime
 
 
 class SettingsPayloadTests(unittest.TestCase):
+    def test_settings_update_accepts_generic_cli_model(self):
+        payload = SettingsUpdate(cli_runtime_model="gpt-5.4", ai_backend="cli")
+
+        self.assertEqual(payload.cli_runtime_model, "gpt-5.4")
+        self.assertEqual(payload.ai_backend, "cli")
+
     def test_settings_update_accepts_cli_model(self):
         payload = SettingsUpdate(claude_cli_model="sonnet", ai_backend="cli")
 
@@ -42,6 +62,71 @@ class SettingsPayloadTests(unittest.TestCase):
 
         self.assertTrue(payload.claude_cli_session_persistence_enabled)
         self.assertEqual(payload.ai_backend, "cli")
+
+    def test_normalized_autonomy_profile_rejects_future_modes(self):
+        with self.assertRaises(server.HTTPException) as exc:
+            server._normalized_autonomy_profile("pr_auto", reject_elevated=True)
+
+        self.assertEqual(exc.exception.status_code, 400)
+
+    def test_normalized_external_fetch_policy_coalesces_memory_first_to_cache_first(self):
+        self.assertEqual(server._normalized_external_fetch_policy("memory_first"), "cache_first")
+        self.assertEqual(server._normalized_external_fetch_policy("cache_first"), "cache_first")
+
+
+class SettingsCleanupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_get_settings_hides_legacy_extra_allowed_cmds(self):
+        @asynccontextmanager
+        async def fake_db():
+            yield object()
+
+        async def fake_get_all_settings(_conn):
+            return {
+                "extra_allowed_cmds": "curl,rm",
+                "external_fetch_policy": "memory_first",
+                "max_history_turns": "12",
+            }
+
+        with patch.object(server.devdb, "get_db", fake_db), \
+             patch.object(server.devdb, "get_all_settings", side_effect=fake_get_all_settings):
+            payload = await server.get_settings()
+
+        self.assertNotIn("extra_allowed_cmds", payload)
+        self.assertEqual(payload["external_fetch_policy"], "cache_first")
+        self.assertEqual(payload["max_history_turns"], "10")
+
+    async def test_init_db_migrates_legacy_hardening_settings(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = Path(tmp_dir) / "devbrain.db"
+            with patch.object(db_core, "DB_PATH", db_path):
+                await db_core.init_db()
+
+                conn = sqlite3.connect(db_path)
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))",
+                    ("extra_allowed_cmds", "curl,rm"),
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))",
+                    ("external_fetch_policy", "memory_first"),
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))",
+                    ("max_history_turns", "12"),
+                )
+                conn.commit()
+                conn.close()
+
+                await db_core.init_db()
+
+                conn = sqlite3.connect(db_path)
+                rows = dict(conn.execute("SELECT key, value FROM settings"))
+                conn.close()
+
+        self.assertNotIn("extra_allowed_cmds", rows)
+        self.assertEqual(rows["external_fetch_policy"], "cache_first")
+        self.assertEqual(rows["max_history_turns"], "10")
+        self.assertEqual(rows["autonomy_profile"], "workspace_auto")
 
 
 class ProviderRegistryTests(unittest.TestCase):
@@ -56,8 +141,382 @@ class ProviderRegistryTests(unittest.TestCase):
 
         self.assertEqual(cfg["api_base_url"], "https://api.deepseek.com/v1")
 
+    def test_public_runtime_api_config_redacts_api_key(self):
+        settings = {
+            "api_provider": "anthropic",
+            "anthropic_api_key": "anthropic-secret-token",
+            "anthropic_base_url": "https://api.anthropic.com",
+            "anthropic_api_model": "claude-sonnet-4-5",
+        }
+
+        cfg = provider_registry.public_runtime_api_config(settings)
+
+        self.assertNotIn("api_key", cfg)
+        self.assertTrue(cfg["api_key_configured"])
+        self.assertEqual(cfg["key_hint"], "anth...oken")
+        self.assertEqual(cfg["api_base_url"], "https://api.anthropic.com/v1")
+
+
+class AnthropicClientConfigTests(unittest.TestCase):
+    def test_get_client_strips_v1_suffix_for_anthropic_sdk(self):
+        captured = {}
+
+        class DummyClient:
+            pass
+
+        def fake_anthropic(**kwargs):
+            captured.update(kwargs)
+            return DummyClient()
+
+        with patch.object(brain.anthropic, "Anthropic", side_effect=fake_anthropic):
+            client = brain._get_client("anthropic-key", api_base_url="https://api.anthropic.com/v1")
+
+        self.assertIsInstance(client, DummyClient)
+        self.assertEqual(captured["api_key"], "anthropic-key")
+        self.assertEqual(captured["base_url"], "https://api.anthropic.com")
+
+
+class ChatHistoryEnvelopeTests(unittest.TestCase):
+    def test_stored_chat_message_round_trip_preserves_thread_metadata(self):
+        payload = server._stored_chat_message(
+            "Ship the fix",
+            resources=[{"id": 52, "title": "Runtime audit", "kind": "note"}],
+            mode="agent",
+            thread_mode="auto",
+            model_label="Codex CLI · gpt-5.4",
+        )
+
+        parsed = server._parse_stored_chat_message(payload)
+
+        self.assertEqual(parsed["content"], "Ship the fix")
+        self.assertEqual(parsed["mode"], "agent")
+        self.assertEqual(parsed["thread_mode"], "auto")
+        self.assertEqual(parsed["model_label"], "Codex CLI · gpt-5.4")
+        self.assertEqual(parsed["resources"][0]["title"], "Runtime audit")
+        self.assertEqual(parsed["resources"][0]["kind"], "note")
+
+    def test_serialize_chat_history_row_exposes_structured_metadata(self):
+        row = {
+            "role": "assistant",
+            "content": server._stored_chat_message(
+                "Recovery finished",
+                resources=[{"title": "Session log"}],
+                mode="chat",
+                thread_mode="recover",
+                model_label="Claude Code",
+            ),
+            "created_at": "2026-04-02T08:55:00Z",
+            "tokens_used": 11,
+        }
+
+        payload = server._serialize_chat_history_row(row)
+
+        self.assertEqual(payload["content"], "Recovery finished")
+        self.assertEqual(payload["mode"], "chat")
+        self.assertEqual(payload["thread_mode"], "recover")
+        self.assertEqual(payload["model_label"], "Claude Code")
+        self.assertEqual(payload["resources"][0]["title"], "Session log")
+
+    def test_parse_stored_chat_message_supports_legacy_plain_text_rows(self):
+        parsed = server._parse_stored_chat_message("legacy assistant reply")
+
+        self.assertEqual(parsed["content"], "legacy assistant reply")
+        self.assertEqual(parsed["resources"], [])
+        self.assertEqual(parsed["mode"], "")
+        self.assertEqual(parsed["thread_mode"], "")
+
+    def test_parse_stored_chat_message_supports_legacy_resource_suffix_rows(self):
+        parsed = server._parse_stored_chat_message(
+            "legacy reply\n\n[Attached resources: Spec doc, Screenshot]"
+        )
+
+        self.assertEqual(parsed["content"], "legacy reply")
+        self.assertEqual([item["title"] for item in parsed["resources"]], ["Spec doc", "Screenshot"])
+        self.assertEqual(parsed["mode"], "")
+        self.assertEqual(parsed["thread_mode"], "")
+
+
+class LivePreviewSessionServiceTests(unittest.TestCase):
+    def test_infer_preview_launch_uses_workspace_specific_next_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "package.json").write_text(
+                json.dumps(
+                    {
+                        "scripts": {"dev": "next dev"},
+                        "dependencies": {"next": "16.2.1"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(live_preview_sessions, "_free_port", return_value=3456):
+                launch = live_preview_sessions.infer_preview_launch(str(repo), workspace_id=11)
+
+        self.assertEqual(launch["framework"], "next")
+        self.assertEqual(launch["workspace_path"], str(Path(tmp).resolve()))
+        self.assertEqual(
+            launch["command_parts"],
+            ["npm", "run", "dev", "--", "--hostname", "127.0.0.1", "--port", "3456"],
+        )
+        self.assertEqual(launch["url"], "http://127.0.0.1:3456")
+
+    def test_infer_preview_launch_uses_expo_web_and_hybrid_source_node_modules_for_auto_worktree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_repo = root / "dashpro"
+            sandbox_repo = root / "auto-dashpro"
+            (source_repo / "node_modules" / ".bin").mkdir(parents=True)
+            (source_repo / "node_modules" / "expo-router" / "build").mkdir(parents=True)
+            (sandbox_repo).mkdir()
+            (source_repo / "node_modules" / ".bin" / "expo").write_text("#!/bin/sh\n", encoding="utf-8")
+            (source_repo / "node_modules" / "expo-router" / "package.json").write_text(
+                json.dumps({"name": "expo-router", "version": "6.0.23"}),
+                encoding="utf-8",
+            )
+            (sandbox_repo / "package.json").write_text(
+                json.dumps(
+                    {
+                        "scripts": {"start": "npx expo start --dev-client --host localhost", "web": "expo start --web"},
+                        "dependencies": {"expo": "~54.0.0", "react-native-web": "^0.21.0"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(live_preview_sessions, "_free_port", return_value=3564):
+                launch = live_preview_sessions.infer_preview_launch(
+                    str(sandbox_repo),
+                    workspace_id=2,
+                    auto_session_id="auto-2",
+                    source_workspace_path=str(source_repo),
+                )
+
+            self.assertEqual(launch["framework"], "expo")
+            self.assertEqual(launch["script"], "web")
+            sandbox_expo = sandbox_repo / "node_modules" / ".bin" / "expo"
+            self.assertTrue(sandbox_expo.exists())
+            self.assertEqual(sandbox_expo.resolve(), (source_repo / "node_modules" / ".bin" / "expo").resolve())
+            self.assertTrue((sandbox_repo / "node_modules" / ".bin").is_symlink())
+            sandbox_expo_router = sandbox_repo / "node_modules" / "expo-router"
+            self.assertTrue(sandbox_expo_router.exists())
+            self.assertFalse(sandbox_expo_router.is_symlink())
+            self.assertTrue((sandbox_expo_router / "package.json").is_file())
+            self.assertEqual(
+                launch["command_parts"],
+                [str(sandbox_expo), "start", "--web", "--host", "localhost", "--port", "3564"],
+            )
+            self.assertFalse((sandbox_repo / "node_modules").is_symlink())
+            self.assertEqual(launch["url"], "http://127.0.0.1:3564")
+
+    def test_ensure_preview_session_restarts_stale_expo_symlinked_node_modules(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_repo = root / "dashpro"
+            sandbox_repo = root / "auto-dashpro"
+            (source_repo / "node_modules").mkdir(parents=True)
+            sandbox_repo.mkdir()
+            (sandbox_repo / "package.json").write_text(
+                json.dumps(
+                    {
+                        "scripts": {"web": "expo start --web"},
+                        "dependencies": {"expo": "~54.0.0", "react-native-web": "^0.21.0"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (sandbox_repo / "node_modules").symlink_to(source_repo / "node_modules", target_is_directory=True)
+            existing = {
+                "scope_key": "auto-auto-2",
+                "workspace_id": 2,
+                "workspace_name": "dashpro",
+                "auto_session_id": "auto-2",
+                "title": "dashpro",
+                "cwd": str(sandbox_repo),
+                "command": "expo start --web --host localhost --port 3564",
+                "status": "running",
+                "source_workspace_path": str(source_repo),
+            }
+            with patch.object(live_preview_sessions, "refresh_preview_session", return_value=existing), \
+                 patch.object(live_preview_sessions, "_stop_process") as stop_process, \
+                 patch.object(live_preview_sessions, "infer_preview_launch", return_value={
+                     "workspace_path": str(sandbox_repo),
+                     "command_parts": ["echo", "preview"],
+                     "command_preview": "echo preview",
+                     "package_manager": "expo",
+                     "framework": "expo",
+                     "script": "web",
+                     "port": 3564,
+                     "url": "http://127.0.0.1:3564",
+                     "env": {},
+                 }), \
+                 patch.object(live_preview_sessions, "session_dir", return_value=root / "preview-session"), \
+                 patch.object(live_preview_sessions, "write_preview_session", side_effect=lambda meta: meta), \
+                 patch.object(live_preview_sessions, "_wait_until_ready", side_effect=lambda meta, timeout_seconds=18: meta), \
+                 patch("subprocess.Popen") as popen:
+                popen.return_value.pid = 4242
+                result = live_preview_sessions.ensure_preview_session(
+                    workspace_id=2,
+                    workspace_name="dashpro",
+                    source_path=str(sandbox_repo),
+                    source_workspace_path=str(source_repo),
+                    auto_session_id="auto-2",
+                )
+
+        stop_process.assert_called_once_with(existing)
+        self.assertEqual(result["framework"], "expo")
+        self.assertEqual(result["port"], 3564)
+
+    def test_workspace_env_snapshot_is_isolated_per_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(live_preview_sessions, "SESSION_ROOT", root):
+                live_preview_sessions.write_preview_session(
+                    {
+                        "scope_key": "workspace-7",
+                        "workspace_id": 7,
+                        "workspace_name": "dashpro",
+                        "title": "dashpro",
+                        "url": "http://127.0.0.1:3007",
+                        "status": "running",
+                        "healthy": True,
+                        "cwd": "/tmp/dashpro",
+                        "command": "npm run dev -- --port 3007",
+                        "port": 3007,
+                    }
+                )
+                live_preview_sessions.write_preview_session(
+                    {
+                        "scope_key": "auto-session-abc",
+                        "workspace_id": 7,
+                        "auto_session_id": "session-abc",
+                        "workspace_name": "dashpro",
+                        "title": "auto",
+                        "url": "http://127.0.0.1:3407",
+                        "status": "running",
+                        "healthy": True,
+                        "cwd": "/tmp/dashpro/.axon-auto",
+                        "command": "npm run dev -- --port 3407",
+                        "port": 3407,
+                    }
+                )
+
+                workspace_snapshot = live_preview_sessions.workspace_env_snapshot("/tmp/dashpro", workspace_id=7)
+                auto_snapshot = live_preview_sessions.workspace_env_snapshot(
+                    "/tmp/dashpro",
+                    workspace_id=7,
+                    auto_session_id="session-abc",
+                )
+                other_snapshot = live_preview_sessions.workspace_env_snapshot("/tmp/other", workspace_id=8)
+
+        self.assertEqual(workspace_snapshot["preview_url"], "http://127.0.0.1:3007")
+        self.assertEqual(auto_snapshot["preview_url"], "http://127.0.0.1:3407")
+        self.assertEqual(auto_snapshot["preview_auto_session_id"], "session-abc")
+        self.assertEqual(other_snapshot, {})
+
+
+class WorkspacePreviewTargetTests(unittest.IsolatedAsyncioTestCase):
+    async def test_workspace_preview_target_prefers_auto_sandbox_path(self):
+        workspace_row = {"id": 22, "name": "dashpro", "path": "/src/dashpro"}
+
+        @asynccontextmanager
+        async def fake_db():
+            yield object()
+
+        with patch.object(server.devdb, "get_db", fake_db), \
+             patch.object(server.devdb, "get_project", return_value=workspace_row), \
+             patch.object(
+                 server.auto_session_service,
+                 "read_auto_session",
+                 return_value={
+                     "session_id": "auto-22",
+                     "workspace_id": 22,
+                     "sandbox_path": "/tmp/axon-auto-22",
+                 },
+             ):
+            workspace, auto_meta, target_path = await server._workspace_preview_target(22, "auto-22")
+
+        self.assertEqual(workspace["path"], "/src/dashpro")
+        self.assertEqual(auto_meta["sandbox_path"], "/tmp/axon-auto-22")
+        self.assertEqual(target_path, "/tmp/axon-auto-22")
+
+    async def test_workspace_env_uses_project_path_and_auto_sandbox_when_path_missing(self):
+        workspace_row = {"id": 22, "name": "dashpro", "path": "/src/dashpro"}
+
+        @asynccontextmanager
+        async def fake_db():
+            yield object()
+
+        with patch.object(server.devdb, "get_db", fake_db), \
+             patch.object(server.devdb, "get_project", return_value=workspace_row), \
+             patch.object(
+                 server.auto_session_service,
+                 "read_auto_session",
+                 return_value={
+                     "session_id": "auto-22",
+                     "workspace_id": 22,
+                     "sandbox_path": "/tmp/axon-auto-22",
+                 },
+             ), \
+             patch.object(server.runtime_manager, "env_snapshot", return_value={"work_dir": "axon-auto-22"}) as env_snapshot, \
+             patch.object(server.live_preview_service, "workspace_env_snapshot", return_value={"preview_url": "http://127.0.0.1:3564"}) as preview_snapshot:
+            payload = await server.workspace_env(project_id=22, auto_session_id="auto-22")
+
+        env_snapshot.assert_called_once_with("/tmp/axon-auto-22")
+        preview_snapshot.assert_called_once_with("/tmp/axon-auto-22", workspace_id=22, auto_session_id="auto-22")
+        self.assertEqual(payload["work_dir"], "axon-auto-22")
+        self.assertEqual(payload["preview_url"], "http://127.0.0.1:3564")
+
+
+class WorkspaceDeletionEndpointTests(unittest.IsolatedAsyncioTestCase):
+    @asynccontextmanager
+    async def _fake_db(self):
+        yield object()
+
+    async def test_delete_project_returns_deleted_workspace(self):
+        row = {"id": 7, "name": "dashpro", "path": "/src/dashpro", "status": "active"}
+
+        with patch.object(server.devdb, "get_db", self._fake_db), \
+             patch.object(server.devdb, "get_project", return_value=row), \
+             patch.object(server.devdb, "delete_project", return_value=None) as delete_project, \
+             patch.object(server.devdb, "log_event", return_value=None) as log_event:
+            payload = await server.delete_project(7)
+
+        delete_project.assert_called_once()
+        self.assertEqual(delete_project.call_args.args[1], 7)
+        log_event.assert_called_once()
+        self.assertTrue(payload["deleted"])
+        self.assertEqual(payload["project"]["name"], "dashpro")
+
+    async def test_delete_project_raises_404_for_unknown_workspace(self):
+        with patch.object(server.devdb, "get_db", self._fake_db), \
+             patch.object(server.devdb, "get_project", return_value=None):
+            with self.assertRaises(server.HTTPException) as ctx:
+                await server.delete_project(999)
+
+        self.assertEqual(ctx.exception.status_code, 404)
+
 
 class ServerAiParamsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cli_backend_prefers_generic_cli_runtime_keys(self):
+        settings = {
+            "ai_backend": "cli",
+            "api_provider": "deepseek",
+            "deepseek_api_key": "",
+            "anthropic_api_key": "anth-key",
+            "anthropic_base_url": "https://api.anthropic.com/v1",
+            "anthropic_api_model": "claude-sonnet-4-5",
+            "cli_runtime_path": "/tmp/codex",
+            "cli_runtime_model": "gpt-5.4",
+            "claude_cli_path": "/tmp/claude",
+            "claude_cli_model": "claude-sonnet-4-6",
+        }
+
+        with patch.object(server.devvault.VaultSession, "is_unlocked", return_value=False):
+            params = await server._ai_params(settings)
+
+        self.assertEqual(params["backend"], "cli")
+        self.assertEqual(params["cli_path"], "/tmp/codex")
+        self.assertEqual(params["cli_model"], "gpt-5.4")
+
     async def test_cli_backend_chooses_configured_api_fallback(self):
         settings = {
             "ai_backend": "cli",
@@ -78,6 +537,345 @@ class ServerAiParamsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params["api_key"], "anth-key")
         self.assertEqual(params["api_model"], "claude-sonnet-4-5")
 
+    async def test_effective_ai_params_self_heals_api_backend_to_codex(self):
+        settings = {
+            "ai_backend": "api",
+            "api_provider": "deepseek",
+            "deepseek_api_key": "",
+            "deepseek_base_url": "https://api.deepseek.com/v1",
+            "deepseek_api_model": "deepseek-reasoner",
+            "cli_runtime_path": "/tmp/codex",
+        }
+
+        with patch.object(server.devvault.VaultSession, "is_unlocked", return_value=False), \
+             patch.object(server, "_ollama_service_status", return_value={"running": False}), \
+             patch.object(
+                 claude_cli_runtime,
+                 "build_cli_runtime_snapshot",
+                 return_value={"installed": True, "binary": "/tmp/claude", "auth": {"logged_in": True, "auth_method": "claude.ai"}},
+             ), \
+             patch.object(
+                 codex_cli_runtime,
+                 "build_codex_runtime_snapshot",
+                 return_value={"installed": True, "binary": "/tmp/codex", "auth": {"logged_in": True, "auth_method": "chatgpt"}},
+             ):
+            params = await server._effective_ai_params(settings, {}, requested_model="deepseek-reasoner")
+
+        self.assertEqual(params["backend"], "cli")
+        self.assertEqual(params["cli_path"], "/tmp/codex")
+        self.assertEqual(params["cli_model"], "gpt-5.4")
+
+    async def test_effective_ai_params_uses_quick_budget_for_plain_chat(self):
+        settings = {
+            "quick_model": "cheap-model",
+            "standard_model": "standard-model",
+        }
+
+        with patch.object(server, "_ai_params", return_value={
+            "backend": "api",
+            "api_key": "key",
+            "api_provider": "deepseek",
+            "api_base_url": "https://api.deepseek.com/v1",
+            "api_model": "deepseek-reasoner",
+        }), patch.object(server, "_runtime_truth_for_settings", return_value=(
+            {"effective_runtime": "api", "selected_runtime": "api", "selected_runtime_label": "API", "self_heal_active": False},
+            {},
+        )):
+            params = await server._effective_ai_params(settings, {}, requested_model="")
+
+        self.assertEqual(params["budget_class"], "quick")
+        self.assertEqual(params["api_model"], "cheap-model")
+
+    async def test_effective_ai_params_uses_standard_budget_for_agent(self):
+        settings = {
+            "quick_model": "cheap-model",
+            "standard_model": "standard-model",
+        }
+
+        with patch.object(server, "_ai_params", return_value={
+            "backend": "api",
+            "api_key": "key",
+            "api_provider": "deepseek",
+            "api_base_url": "https://api.deepseek.com/v1",
+            "api_model": "deepseek-reasoner",
+        }), patch.object(server, "_runtime_truth_for_settings", return_value=(
+            {"effective_runtime": "api", "selected_runtime": "api", "selected_runtime_label": "API", "self_heal_active": False},
+            {},
+        )):
+            params = await server._effective_ai_params(settings, {}, agent_request=True, requested_model="")
+
+        self.assertEqual(params["budget_class"], "standard")
+        self.assertEqual(params["api_model"], "standard-model")
+
+
+class RuntimeLoginEndpointTests(unittest.IsolatedAsyncioTestCase):
+    @asynccontextmanager
+    async def _fake_db(self):
+        yield object()
+
+    async def test_runtime_login_start_returns_guided_session(self):
+        with patch.object(server.devdb, "get_db", self._fake_db), \
+             patch.object(server.devdb, "get_all_settings", return_value={"claude_cli_path": "/tmp/claude"}), \
+             patch.object(
+                 runtime_login_sessions,
+                 "start_login_session",
+                 return_value={
+                     "session_id": "sess-1",
+                     "family": "claude",
+                     "status": "waiting",
+                     "browser_url": "https://example.com/login",
+                 },
+             ), \
+             patch.object(server.devdb, "log_event", return_value=None):
+            payload = await server.runtime_claude_login_start(
+                server.RuntimeLoginStartRequest(mode="claudeai", email="user@example.com")
+            )
+
+        self.assertEqual(payload["session"]["session_id"], "sess-1")
+        self.assertEqual(payload["session"]["browser_url"], "https://example.com/login")
+
+    async def test_runtime_login_start_uses_generic_codex_override_only_for_codex(self):
+        with patch.object(server.devdb, "get_db", self._fake_db), \
+             patch.object(
+                 server.devdb,
+                 "get_all_settings",
+                 return_value={"cli_runtime_path": "/tmp/codex", "claude_cli_path": "/tmp/claude"},
+             ), \
+             patch.object(
+                 runtime_login_sessions,
+                 "start_login_session",
+                 return_value={"session_id": "sess-codex", "family": "codex", "status": "waiting"},
+             ) as start_login_session, \
+             patch.object(server.devdb, "log_event", return_value=None):
+            await server.runtime_codex_login_start()
+
+        start_login_session.assert_called_once()
+        self.assertEqual(start_login_session.call_args.kwargs["override_path"], "/tmp/codex")
+
+    async def test_runtime_login_start_does_not_leak_codex_override_into_claude(self):
+        with patch.object(server.devdb, "get_db", self._fake_db), \
+             patch.object(server.devdb, "get_all_settings", return_value={"cli_runtime_path": "/tmp/codex"}), \
+             patch.object(
+                 runtime_login_sessions,
+                 "start_login_session",
+                 return_value={"session_id": "sess-claude", "family": "claude", "status": "waiting"},
+             ) as start_login_session, \
+             patch.object(server.devdb, "log_event", return_value=None):
+            await server.runtime_claude_login_start()
+
+        start_login_session.assert_called_once()
+        self.assertEqual(start_login_session.call_args.kwargs["override_path"], "")
+
+    async def test_runtime_login_refresh_returns_session(self):
+        with patch.object(
+            runtime_login_sessions,
+            "refresh_login_session",
+            return_value={
+                "session_id": "sess-2",
+                "family": "codex",
+                "status": "waiting",
+                "user_code": "ABCD-1234",
+            },
+        ):
+            payload = await server.runtime_codex_login_status("sess-2")
+
+        self.assertEqual(payload["session"]["user_code"], "ABCD-1234")
+
+    async def test_runtime_codex_status_uses_selected_codex_override(self):
+        with patch.object(server.devdb, "get_db", self._fake_db), \
+             patch.object(server.devdb, "get_all_settings", return_value={"cli_runtime_path": "/tmp/codex"}), \
+             patch.object(codex_cli_runtime, "build_codex_runtime_snapshot", return_value={"binary": "/tmp/codex"}) as build_snapshot:
+            payload = await server.runtime_codex_status()
+
+        build_snapshot.assert_called_once_with("/tmp/codex")
+        self.assertEqual(payload["binary"], "/tmp/codex")
+
+    async def test_runtime_cli_status_ignores_selected_codex_override(self):
+        with patch.object(server.devdb, "get_db", self._fake_db), \
+             patch.object(server.devdb, "get_all_settings", return_value={"cli_runtime_path": "/tmp/codex"}), \
+             patch.object(claude_cli_runtime, "build_cli_runtime_snapshot", return_value={"binary": "/tmp/claude"}) as build_snapshot:
+            payload = await server.runtime_cli_status()
+
+        build_snapshot.assert_called_once_with("")
+        self.assertEqual(payload["binary"], "/tmp/claude")
+
+    async def test_runtime_login_cancel_returns_cancelled_session(self):
+        with patch.object(server.devdb, "get_db", self._fake_db), \
+             patch.object(
+                 runtime_login_sessions,
+                 "cancel_login_session",
+                 return_value={"session_id": "sess-3", "family": "codex", "status": "cancelled"},
+             ), \
+             patch.object(server.devdb, "log_event", return_value=None):
+            payload = await server.runtime_codex_login_cancel("sess-3")
+
+        self.assertEqual(payload["session"]["status"], "cancelled")
+
+
+class RuntimeLoginSessionServiceTests(unittest.TestCase):
+    def test_codex_login_status_normalizes_browser_url_and_strips_ansi(self):
+        session = runtime_login_sessions._status_from_meta(
+            {"family": "codex", "status": "pending"},
+            {"auth": {"logged_in": False}},
+            "Open https://auth.openai.com/codex/device\x1b[0m\nEnter code: ABCD-EFGH",
+        )
+
+        self.assertEqual(session["browser_url"], "https://auth.openai.com/log-in")
+        self.assertEqual(session["user_code"], "ABCD-EFGH")
+
+
+class RuntimeTruthSelfHealTests(unittest.TestCase):
+    def test_runtime_truth_prefers_codex_self_heal_for_missing_api_key(self):
+        settings = {
+            "ai_backend": "api",
+            "api_provider": "deepseek",
+        }
+        status = {
+            "selected_api_provider": {
+                "provider_id": "deepseek",
+                "provider_label": "DeepSeek",
+                "api_key_configured": False,
+                "api_base_url": "https://api.deepseek.com/v1",
+                "api_model": "deepseek-reasoner",
+            },
+            "cli_runtime": {
+                "runtime_id": "claude",
+                "auth": {"logged_in": True, "auth_method": "claude.ai", "subscription_type": "max"},
+            },
+            "codex_runtime": {
+                "installed": True,
+                "auth": {"logged_in": True, "auth_method": "chatgpt"},
+            },
+            "cli_cooldown_remaining_seconds": 0,
+        }
+
+        truth = runtime_truth_service.build_runtime_truth(status, settings=settings, ollama_running=False)
+
+        self.assertEqual(truth["selected_runtime"], "deepseek_api")
+        self.assertEqual(truth["effective_runtime"], "codex_cli")
+        self.assertTrue(truth["self_heal_active"])
+        self.assertEqual(truth["self_heal_target_model"], "gpt-5.4")
+        self.assertIn("Codex CLI", truth["fallback_reason"])
+
+
+class RuntimeStatusEndpointTests(unittest.IsolatedAsyncioTestCase):
+    @asynccontextmanager
+    async def _fake_db(self):
+        yield object()
+
+    async def test_runtime_status_adds_truth_fields_and_redacts_provider_key(self):
+        settings = {
+            "ai_backend": "cli",
+            "api_provider": "anthropic",
+            "anthropic_api_key": "anthropic-secret-token",
+            "anthropic_base_url": "https://api.anthropic.com/v1",
+            "anthropic_api_model": "claude-sonnet-4-5",
+        }
+        base_status = {
+            "runtime_state": "active",
+            "runtime_label": "Claude CLI",
+            "active_model": "Claude default",
+            "selected_api_provider": provider_registry.public_runtime_api_config(settings),
+            "cli_runtime": {
+                "runtime_id": "claude",
+                "auth": {"logged_in": True, "auth_method": "claude.ai", "subscription_type": "max"},
+            },
+            "codex_runtime": {
+                "installed": True,
+                "auth": {"logged_in": True, "auth_method": "chatgpt"},
+            },
+            "cli_cooldown_remaining_seconds": 42,
+        }
+
+        with patch.object(server.devdb, "get_db", self._fake_db), \
+             patch.object(server.devdb, "get_all_settings", return_value=settings), \
+             patch.object(server.devvault, "vault_resolve_all_provider_keys", return_value={}), \
+             patch.object(server.devdb, "get_projects", return_value=[]), \
+             patch.object(server.devdb, "list_resources", return_value=[]), \
+             patch.object(memory_engine, "sync_memory_layers", return_value={"total": 0, "layers": {}, "labels": {}}), \
+             patch.object(server.devdb, "list_terminal_sessions", return_value=[]), \
+             patch.object(brain, "ollama_list_models", return_value=[]), \
+             patch.object(server, "_ollama_service_status", return_value={"running": False}), \
+             patch.object(runtime_manager, "build_runtime_status", return_value=base_status), \
+             patch.object(server.devvault.VaultSession, "is_unlocked", return_value=False), \
+             patch.object(brain, "get_session_usage", return_value={"calls": 0}):
+            payload = await server.runtime_status()
+
+        self.assertEqual(payload["selected_runtime"], "claude_cli")
+        self.assertEqual(payload["effective_runtime"], "codex_cli")
+        self.assertEqual(payload["auth_method"], "chatgpt")
+        self.assertEqual(payload["cooldown_source"], "claude_cli_rate_limit")
+        self.assertIn("Codex CLI", payload["fallback_reason"])
+        self.assertNotIn("api_key", payload["selected_api_provider"])
+
+
+class BrowserPreviewAttachmentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_attach_preview_browser_sets_ownership_and_scope_fields(self):
+        class _FakeBridge:
+            def __init__(self):
+                self.is_running = False
+
+            async def start(self, headless=False):
+                self.is_running = True
+
+            async def execute_action(self, action):
+                return {"success": True, "action": action}
+
+            def status(self):
+                return {"running": True, "url": "http://127.0.0.1:3007", "title": "Dashpro Preview"}
+
+        fake_bridge = _FakeBridge()
+        original_session = dict(server._browser_action_state["session"])
+        server._browser_action_state["session"] = server._default_browser_session()
+        try:
+            with patch.dict(sys.modules, {"browser_bridge": SimpleNamespace(get_bridge=lambda: fake_bridge)}):
+                result = await server._attach_preview_browser(
+                    "http://127.0.0.1:3007",
+                    preview={
+                        "scope_key": "workspace-7",
+                        "status": "running",
+                        "source_workspace_path": "/src/dashpro",
+                    },
+                    workspace={"id": 7, "name": "dashpro", "path": "/src/dashpro"},
+                    auto_meta={"session_id": "auto-7"},
+                )
+        finally:
+            session = dict(server._browser_action_state["session"])
+            server._browser_action_state["session"] = original_session
+
+        self.assertTrue(result["attached"])
+        self.assertTrue(session["connected"])
+        self.assertEqual(session["control_owner"], "axon")
+        self.assertEqual(session["ownership_label"], "Axon controls this browser now")
+        self.assertEqual(session["attached_workspace_id"], 7)
+        self.assertEqual(session["attached_workspace_name"], "dashpro")
+        self.assertEqual(session["attached_auto_session_id"], "auto-7")
+        self.assertEqual(session["attached_scope_key"], "workspace-7")
+
+
+class BrowserBridgeHealthTests(unittest.TestCase):
+    def test_is_running_false_when_page_is_closed(self):
+        bridge = browser_bridge.BrowserBridge()
+        bridge._started = True
+        bridge._browser = SimpleNamespace(is_connected=lambda: True)
+        bridge._context = object()
+        bridge._page = SimpleNamespace(is_closed=lambda: True)
+
+        self.assertFalse(bridge.is_running)
+
+    def test_status_clears_url_when_page_is_closed(self):
+        bridge = browser_bridge.BrowserBridge()
+        bridge._started = True
+        bridge._browser = SimpleNamespace(is_connected=lambda: True)
+        bridge._context = object()
+        bridge._page = SimpleNamespace(is_closed=lambda: True, url="http://localhost:3002")
+        bridge._cached_title = "EduDash Pro"
+
+        self.assertEqual(
+            bridge.status(),
+            {"running": False, "url": "", "title": ""},
+        )
+
 
 class ChatContextTests(unittest.TestCase):
     def test_image_inspection_turn_drops_old_history(self):
@@ -94,6 +892,18 @@ class ChatContextTests(unittest.TestCase):
         )
 
         self.assertEqual(selected, [])
+
+    def test_explicit_history_budget_overrides_backend_default(self):
+        history = [{"role": "user", "content": f"turn {index}"} for index in range(20)]
+
+        selected = select_history_for_chat(
+            "Keep going",
+            history,
+            backend="cli",
+            max_turns=14,
+        )
+
+        self.assertEqual(len(selected), 14)
 
 
 class VisionRoutingTests(unittest.IsolatedAsyncioTestCase):
@@ -152,17 +962,14 @@ class BrainChatRegressionTests(unittest.IsolatedAsyncioTestCase):
         cli_pacing._last_cli_cooldown_message_by_key[runtime_key] = "Claude CLI hit a rate limit."
         cli_pacing._last_cli_cooldown_until_by_key[runtime_key] = time.time() + 60
 
-        async def fail_stream_cli(*args, **kwargs):
-            raise AssertionError("CLI should not be launched while cooldown is active")
-            yield ""
-
-        async def fake_stream_api_chat(messages, **kwargs):
-            self.assertEqual(kwargs["api_model"], "deepseek-reasoner")
+        async def fake_stream_codex_cli(messages, **kwargs):
+            self.assertEqual(kwargs["binary"], "/tmp/codex")
+            self.assertEqual(kwargs["model"], "gpt-5.4")
             yield "fallback ok"
 
         with patch.object(brain, "_resolve_selected_cli_binary", return_value="/tmp/claude"), \
-             patch.object(brain, "_stream_cli", side_effect=fail_stream_cli), \
-             patch.object(brain, "_stream_api_chat", side_effect=fake_stream_api_chat):
+             patch.object(brain, "_find_codex_cli", return_value="/tmp/codex"), \
+             patch.object(brain, "_stream_codex_cli", side_effect=fake_stream_codex_cli):
             chunks = [
                 chunk async for chunk in brain.stream_chat(
                     "hello",
@@ -178,6 +985,7 @@ class BrainChatRegressionTests(unittest.IsolatedAsyncioTestCase):
 
         rendered = "".join(chunks).lower()
         self.assertIn("cooling down after a rate limit", rendered)
+        self.assertIn("codex cli", rendered)
         self.assertIn("fallback ok", rendered)
 
 
@@ -262,6 +1070,19 @@ class ClaudeCliRuntimeServiceTests(unittest.TestCase):
         self.assertIn("auth login --claudeai", result["command_preview"])
         self.assertIn("--email user@example.com", result["command_preview"])
 
+    @patch.object(claude_cli_runtime, "build_cli_runtime_snapshot")
+    def test_logout_claude_cli_returns_completed_when_already_signed_out(self, build_snapshot):
+        build_snapshot.return_value = {
+            "installed": True,
+            "status_command": "/tmp/claude auth status --json",
+            "auth": {"logged_in": False},
+        }
+
+        result = claude_cli_runtime.logout_claude_cli("")
+
+        self.assertEqual(result["status"], "completed")
+        self.assertIn("already signed out", result["message"].lower())
+
 
 class CodexCliRuntimeServiceTests(unittest.TestCase):
     @patch.object(codex_cli_runtime, "_find_codex_cli")
@@ -285,6 +1106,19 @@ class CodexCliRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(snapshot["package_name"], "@openai/codex")
         self.assertEqual(snapshot["binary_name"], "codex")
         self.assertTrue(snapshot["install_available"])
+
+    @patch.object(codex_cli_runtime, "build_codex_runtime_snapshot")
+    def test_logout_codex_cli_returns_completed_when_already_signed_out(self, build_snapshot):
+        build_snapshot.return_value = {
+            "installed": True,
+            "status_command": "/tmp/codex login status",
+            "auth": {"logged_in": False},
+        }
+
+        result = codex_cli_runtime.logout_codex_cli("")
+
+        self.assertEqual(result["status"], "completed")
+        self.assertIn("already signed out", result["message"].lower())
 
 
 class ClaudeCliCommandTests(unittest.TestCase):
@@ -352,6 +1186,7 @@ class ClaudeCliCommandTests(unittest.TestCase):
         self.assertIn("--ephemeral", cmd)
         self.assertIn("--sandbox", cmd)
         self.assertIn("read-only", cmd)
+        self.assertNotIn("--full-auto", cmd)
         self.assertIn("gpt-5.1-codex-max", cmd)
 
     def test_codex_exec_command_accepts_workspace_write_mode(self):
@@ -363,6 +1198,7 @@ class ClaudeCliCommandTests(unittest.TestCase):
             sandbox_mode="workspace-write",
         )
 
+        self.assertIn("--full-auto", cmd)
         self.assertIn("--sandbox", cmd)
         self.assertIn("workspace-write", cmd)
 
@@ -371,6 +1207,7 @@ class ClaudeCliCooldownGuardTests(unittest.IsolatedAsyncioTestCase):
     async def test_call_cli_falls_back_to_codex_during_cooldown(self):
         async def fake_call_codex(prompt, **kwargs):
             self.assertEqual(kwargs["binary"], "/tmp/codex")
+            self.assertEqual(kwargs["model"], "gpt-5.4")
             return "fallback ok", 42
 
         with patch.object(brain, "_find_cli", return_value="/tmp/claude"), \
@@ -386,6 +1223,7 @@ class ClaudeCliCooldownGuardTests(unittest.IsolatedAsyncioTestCase):
     async def test_stream_cli_falls_back_to_codex_during_cooldown(self):
         async def fake_stream_codex(messages, **kwargs):
             self.assertEqual(kwargs["binary"], "/tmp/codex")
+            self.assertEqual(kwargs["model"], "gpt-5.4")
             yield "fallback "
             yield "stream"
 
@@ -637,6 +1475,59 @@ class MemorySyncRegressionTests(unittest.TestCase):
         self.assertIsNone(sanitized["mission_id"])
 
 
+class RuntimeStateRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_compute_workspace_revision_supports_sqlite_row_results(self):
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        self.addAsyncCleanup(asyncio.to_thread, conn.close)
+
+        await asyncio.to_thread(
+            conn.execute,
+            "CREATE TABLE projects (id INTEGER PRIMARY KEY, created_at TEXT, updated_at TEXT)",
+        )
+        await asyncio.to_thread(
+            conn.execute,
+            "CREATE TABLE prompts (project_id INTEGER, created_at TEXT, updated_at TEXT)",
+        )
+        await asyncio.to_thread(
+            conn.execute,
+            "CREATE TABLE tasks (project_id INTEGER, created_at TEXT, updated_at TEXT)",
+        )
+        await asyncio.to_thread(
+            conn.execute,
+            "CREATE TABLE resources (workspace_id INTEGER, created_at TEXT, updated_at TEXT)",
+        )
+        await asyncio.to_thread(
+            conn.execute,
+            "CREATE TABLE memory_items (workspace_id INTEGER, created_at TEXT, updated_at TEXT)",
+        )
+        await asyncio.to_thread(
+            conn.execute,
+            "INSERT INTO projects (id, created_at, updated_at) VALUES (1, '2026-04-03T08:00:00Z', '2026-04-03T09:00:00Z')",
+        )
+        await asyncio.to_thread(conn.commit)
+
+        class AsyncSqliteCompat:
+            def __init__(self, db_conn):
+                self._conn = db_conn
+
+            class _CursorCompat:
+                def __init__(self, cursor):
+                    self._cursor = cursor
+
+                async def fetchone(self):
+                    return await asyncio.to_thread(self._cursor.fetchone)
+
+            async def execute(self, sql, params=()):
+                cursor = await asyncio.to_thread(self._conn.execute, sql, params)
+                return self._CursorCompat(cursor)
+
+        revision = await runtime_state.compute_workspace_revision(AsyncSqliteCompat(conn), 1)
+
+        self.assertEqual(len(revision), 40)
+        self.assertTrue(all(ch in "0123456789abcdef" for ch in revision))
+
+
 class TerminalRegressionTests(unittest.IsolatedAsyncioTestCase):
     async def test_resolve_terminal_cwd_accepts_sqlite_row(self):
         conn = sqlite3.connect(":memory:")
@@ -651,6 +1542,9 @@ class TerminalRegressionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SessionStoreRegressionTests(unittest.TestCase):
+    def setUp(self):
+        session_store_module._MEMORY_FALLBACK_SESSIONS.clear()
+
     def test_get_interrupted_skips_stale_paused_sessions(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             store = SessionStore(Path(tmp_dir) / 'sessions.db')
@@ -701,8 +1595,72 @@ class SessionStoreRegressionTests(unittest.TestCase):
             self.assertIsNotNone(session)
             self.assertEqual(session.session_id, 'recent-active')
 
+    def test_get_interrupted_prefers_current_workspace_before_newer_foreign_session(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = SessionStore(Path(tmp_dir) / 'sessions.db')
+            now = time.time()
+
+            store.save(
+                session_id='foreign-newer',
+                task='Foreign workspace task',
+                messages=[],
+                iteration=2,
+                tool_log=[{'name': 'read_file'}],
+                status='interrupted',
+                project_name='Other',
+                backend='api',
+                metadata={'workspace_id': 999, 'workspace_path': '/tmp/other'},
+            )
+            store.save(
+                session_id='local-older',
+                task='Current workspace task',
+                messages=[],
+                iteration=1,
+                tool_log=[{'name': 'read_file'}],
+                status='approval_required',
+                project_name='Axon',
+                backend='cli',
+                metadata={'workspace_id': 202, 'workspace_path': '/tmp/current'},
+            )
+            with store._connect() as conn:
+                conn.execute("UPDATE agent_sessions SET updated_at=? WHERE session_id=?", (now - 10, 'foreign-newer'))
+                conn.execute("UPDATE agent_sessions SET updated_at=? WHERE session_id=?", (now - 120, 'local-older'))
+                conn.commit()
+
+            session = store.get_interrupted(workspace_id=202, workspace_path='/tmp/current', project_name='Axon')
+
+            self.assertIsNotNone(session)
+            self.assertEqual(session.session_id, 'local-older')
+
+    def test_get_interrupted_strict_workspace_hides_foreign_session(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = SessionStore(Path(tmp_dir) / 'sessions.db')
+            store.save(
+                session_id='foreign-only',
+                task='Foreign workspace task',
+                messages=[],
+                iteration=2,
+                tool_log=[{'name': 'read_file'}],
+                status='approval_required',
+                project_name='dashpro',
+                backend='cli',
+                metadata={'workspace_id': 2, 'workspace_path': '/tmp/dashpro'},
+            )
+
+            session = store.get_interrupted(
+                workspace_id=173,
+                workspace_path='/tmp/axon',
+                project_name='Axon',
+                strict_workspace=True,
+            )
+
+            self.assertIsNone(session)
+
 
 class InterruptedSessionEndpointTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        session_store_module._MEMORY_FALLBACK_SESSIONS.clear()
+
     async def test_endpoint_returns_last_assistant_and_error(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             db_path = Path(tmp_dir) / 'sessions.db'
@@ -728,6 +1686,36 @@ class InterruptedSessionEndpointTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload['session']['status'], 'interrupted')
             self.assertIn('rate limit', payload['session']['last_assistant_message'].lower())
             self.assertIn('rate limit', payload['session']['error_message'].lower())
+            self.assertEqual(payload['session']['resume_target'], 'session-1')
+
+    async def test_endpoint_with_project_id_does_not_leak_foreign_workspace_session(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = Path(tmp_dir) / 'sessions.db'
+            store = SessionStore(db_path)
+            store.save(
+                session_id='foreign-dashpro',
+                task='Remove accidental root files',
+                messages=[{'role': 'assistant', 'content': 'Approval required before Axon can delete /home/edp/Desktop/dashpro/lib/__tests__/popUpload.test.ts'}],
+                iteration=2,
+                tool_log=[{'name': 'delete_file'}],
+                status='approval_required',
+                project_name='dashpro',
+                backend='cli',
+                metadata={'workspace_id': 2, 'workspace_path': '/home/edp/Desktop/dashpro'},
+            )
+
+            @asynccontextmanager
+            async def fake_db():
+                class _Conn:
+                    pass
+                yield _Conn()
+
+            with patch.object(server.devdb, 'DB_PATH', db_path), \
+                 patch.object(server.devdb, 'get_db', fake_db), \
+                 patch.object(server.devdb, 'get_project', return_value={'id': 173, 'name': 'Axon', 'path': '/home/edp/.devbrain'}):
+                payload = await server.get_interrupted_session(project_id=173)
+
+            self.assertEqual(payload, {'session': None})
 
 
 class AgentCliIsolationTests(unittest.IsolatedAsyncioTestCase):
@@ -776,6 +1764,125 @@ class AgentCliIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(events)
         self.assertEqual(captured, [False])
 
+    async def test_resume_session_without_verified_tools_restarts_saved_task(self):
+        db_path = Path(tempfile.gettempdir()) / 'axon-agent-resume.db'
+        if db_path.exists():
+            db_path.unlink()
+        store = SessionStore(db_path)
+        store.save(
+            session_id='resume-me',
+            task='Inspect the repo root',
+            messages=[{'role': 'user', 'content': 'Inspect the repo root'}],
+            iteration=0,
+            tool_log=[],
+            status='interrupted',
+            project_name='Axon',
+            backend='cli',
+            metadata={'workspace_id': 202, 'workspace_path': '/tmp/current'},
+        )
+        captured_messages = []
+
+        async def fake_stream_cli(messages, **kwargs):
+            captured_messages.extend(messages)
+            yield 'ANSWER: done'
+
+        async def fake_stream_api_chat(**kwargs):
+            if False:
+                yield ''
+
+        async def fake_stream_ollama_chat(**kwargs):
+            if False:
+                yield ''
+
+        deps = AgentRuntimeDeps(
+            tool_registry={},
+            normalize_tool_args=lambda name, args: args,
+            stream_cli=fake_stream_cli,
+            stream_api_chat=fake_stream_api_chat,
+            stream_ollama_chat=fake_stream_ollama_chat,
+            ollama_execution_profile_sync=lambda *args, **kwargs: {'model': 'dummy'},
+            ollama_message_with_images=lambda text, images: {'role': 'user', 'content': text},
+            api_message_with_images=lambda text, images: {'role': 'user', 'content': text},
+            cli_message_with_images=lambda text, images: {'role': 'user', 'content': text},
+            find_cli=lambda path: '/tmp/claude',
+            ollama_default_model='dummy',
+            ollama_agent_model='dummy',
+            db_path=db_path,
+        )
+
+        events = [
+            event async for event in core_agent.run_agent(
+                'please continue',
+                [],
+                deps=deps,
+                backend='cli',
+                cli_path='/tmp/claude',
+                workspace_id=202,
+                workspace_path='/tmp/current',
+                resume_session_id='resume-me',
+                resume_reason='resume_banner',
+            )
+        ]
+
+        text = ''.join(event.get('chunk', '') for event in events if event.get('type') == 'text')
+        self.assertIn('restarting that task cleanly', text.lower())
+        self.assertTrue(any(msg.get('content') == 'Inspect the repo root' for msg in captured_messages))
+
+    async def test_explicit_continue_without_paused_session_uses_latest_task_hint(self):
+        db_path = Path(tempfile.gettempdir()) / 'axon-agent-continue-fallback.db'
+        if db_path.exists():
+            db_path.unlink()
+        captured_messages = []
+
+        async def fake_stream_cli(messages, **kwargs):
+            captured_messages.extend(messages)
+            yield 'ANSWER: done'
+
+        async def fake_stream_api_chat(**kwargs):
+            if False:
+                yield ''
+
+        async def fake_stream_ollama_chat(**kwargs):
+            if False:
+                yield ''
+
+        deps = AgentRuntimeDeps(
+            tool_registry={},
+            normalize_tool_args=lambda name, args: args,
+            stream_cli=fake_stream_cli,
+            stream_api_chat=fake_stream_api_chat,
+            stream_ollama_chat=fake_stream_ollama_chat,
+            ollama_execution_profile_sync=lambda *args, **kwargs: {'model': 'dummy'},
+            ollama_message_with_images=lambda text, images: {'role': 'user', 'content': text},
+            api_message_with_images=lambda text, images: {'role': 'user', 'content': text},
+            cli_message_with_images=lambda text, images: {'role': 'user', 'content': text},
+            find_cli=lambda path: '/tmp/claude',
+            ollama_default_model='dummy',
+            ollama_agent_model='dummy',
+            db_path=db_path,
+        )
+
+        events = [
+            event async for event in core_agent.run_agent(
+                'please continue',
+                [],
+                deps=deps,
+                backend='cli',
+                cli_path='/tmp/claude',
+                workspace_id=202,
+                workspace_path='/tmp/current',
+                continue_task='Continue working on the Axon website in the current workspace.',
+                resume_reason='typed_continue:last_user',
+            )
+        ]
+
+        text = ''.join(event.get('chunk', '') for event in events if event.get('type') == 'text')
+        self.assertIn('latest concrete task', text.lower())
+        self.assertTrue(any(
+            msg.get('content') == 'Continue working on the Axon website in the current workspace.'
+            for msg in captured_messages
+        ))
+
     async def test_agent_cli_rate_limit_falls_back_to_api(self):
         async def fake_stream_cli(messages, **kwargs):
             raise RuntimeError("Claude CLI hit a rate limit.")
@@ -820,6 +1927,54 @@ class AgentCliIsolationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(any('switching this' in str(event.get('chunk', '')).lower() and 'deepseek' in str(event.get('chunk', '')).lower() for event in events if event.get('type') in {'thinking', 'text'}))
         self.assertTrue(any(event.get('type') == 'text' and 'fallback ok' in str(event.get('chunk', '')) for event in events))
+
+    async def test_agent_cli_rate_limit_forwards_api_provider_to_fallback_stream(self):
+        captured = {}
+
+        async def fake_stream_cli(messages, **kwargs):
+            raise RuntimeError("Claude CLI hit a rate limit.")
+            yield ""
+
+        async def fake_stream_api_chat(**kwargs):
+            captured.update(kwargs)
+            yield "ANSWER: anthropic fallback ok"
+
+        async def fake_stream_ollama_chat(**kwargs):
+            if False:
+                yield ""
+
+        deps = AgentRuntimeDeps(
+            tool_registry={},
+            normalize_tool_args=lambda name, args: args,
+            stream_cli=fake_stream_cli,
+            stream_api_chat=fake_stream_api_chat,
+            stream_ollama_chat=fake_stream_ollama_chat,
+            ollama_execution_profile_sync=lambda *args, **kwargs: {'model': 'dummy'},
+            ollama_message_with_images=lambda text, images: {'role': 'user', 'content': text},
+            api_message_with_images=lambda text, images: {'role': 'user', 'content': text},
+            cli_message_with_images=lambda text, images: {'role': 'user', 'content': text},
+            find_cli=lambda path: '/tmp/claude',
+            ollama_default_model='dummy',
+            ollama_agent_model='dummy',
+            db_path=Path(tempfile.gettempdir()) / 'axon-agent-test.db',
+        )
+
+        events = []
+        async for event in core_agent.run_agent(
+            'hello there',
+            [],
+            deps=deps,
+            backend='cli',
+            cli_path='/tmp/claude',
+            api_key='key',
+            api_base_url='https://api.anthropic.com/v1',
+            api_provider='anthropic',
+            api_model='claude-sonnet-4-5',
+        ):
+            events.append(event)
+
+        self.assertEqual(captured["api_provider"], "anthropic")
+        self.assertTrue(any(event.get('type') == 'text' and 'anthropic fallback ok' in str(event.get('chunk', '')) for event in events))
 
     async def test_blocked_cd_shell_command_is_repaired_with_cwd(self):
         prompts = []
@@ -888,11 +2043,12 @@ class AgentCliIsolationTests(unittest.IsolatedAsyncioTestCase):
     async def test_stream_codex_cli_uses_workspace_write_mode(self):
         captured = {}
 
-        def fake_build(binary, *, prompt, model="", cwd="", sandbox_mode="read-only"):
+        def fake_build(binary, *, prompt, model="", cwd="", sandbox_mode="read-only", approval_mode="on-request"):
             captured["binary"] = binary
             captured["model"] = model
             captured["cwd"] = cwd
             captured["sandbox_mode"] = sandbox_mode
+            captured["approval_mode"] = approval_mode
             raise RuntimeError("sentinel")
 
         with patch.object(brain, "build_codex_exec_command", side_effect=fake_build):
@@ -906,6 +2062,120 @@ class AgentCliIsolationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(str(exc.exception), "sentinel")
         self.assertEqual(captured["sandbox_mode"], "workspace-write")
+        self.assertEqual(captured["approval_mode"], "on-request")
+
+    async def test_stream_codex_cli_recovers_from_chunk_limit(self):
+        captured = {}
+
+        class FakeStdout:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise asyncio.LimitOverrunError(
+                    "Separator is found, but chunk is longer than limit",
+                    131072,
+                )
+
+        class FakeStderr:
+            async def read(self):
+                return b""
+
+        class FakeProc:
+            def __init__(self):
+                self.stdout = FakeStdout()
+                self.stderr = FakeStderr()
+                self.returncode = 0
+
+            def terminate(self):
+                self.returncode = -15
+
+            def kill(self):
+                self.returncode = -9
+
+            async def wait(self):
+                return self.returncode
+
+        async def fake_wait_for_cli_slot(*args, **kwargs):
+            return None
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            captured["limit"] = kwargs.get("limit")
+            return FakeProc()
+
+        async def fake_call_codex_exec_prompt(prompt, **kwargs):
+            captured["replay_sandbox_mode"] = kwargs.get("sandbox_mode")
+            return "Recovered reply", 17
+
+        with patch.object(brain, "wait_for_cli_slot", side_effect=fake_wait_for_cli_slot), \
+             patch.object(brain.asyncio, "create_subprocess_exec", side_effect=fake_create_subprocess_exec), \
+             patch.object(brain, "_call_codex_exec_prompt", side_effect=fake_call_codex_exec_prompt):
+            chunks = [
+                chunk async for chunk in brain._stream_codex_cli(
+                    [{"role": "user", "content": "Reply with OK."}],
+                    binary="/tmp/codex",
+                    model="gpt-5.4",
+                )
+            ]
+
+        self.assertEqual("".join(chunks), "Recovered reply")
+        self.assertEqual(captured["replay_sandbox_mode"], "workspace-write")
+        self.assertEqual(captured["limit"], brain._CLI_SUBPROCESS_STREAM_LIMIT_BYTES)
+
+    async def test_call_codex_exec_prompt_uses_large_subprocess_limit(self):
+        captured = {}
+
+        class FakeProc:
+            def __init__(self):
+                self.returncode = 0
+
+            async def communicate(self):
+                payload = "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "type": "item.completed",
+                                "item": {"type": "agent_message", "text": "OK"},
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "type": "turn.completed",
+                                "usage": {"input_tokens": 1, "output_tokens": 2},
+                            }
+                        ),
+                    ]
+                )
+                return payload.encode("utf-8"), b""
+
+            def terminate(self):
+                self.returncode = -15
+
+            def kill(self):
+                self.returncode = -9
+
+            async def wait(self):
+                return self.returncode
+
+        async def fake_wait_for_cli_slot(*args, **kwargs):
+            return None
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            captured["limit"] = kwargs.get("limit")
+            return FakeProc()
+
+        with patch.object(brain, "wait_for_cli_slot", side_effect=fake_wait_for_cli_slot), \
+             patch.object(brain.asyncio, "create_subprocess_exec", side_effect=fake_create_subprocess_exec):
+            text, tokens = await brain._call_codex_exec_prompt(
+                "Reply with OK.",
+                binary="/tmp/codex",
+                model="gpt-5.4",
+                sandbox_mode="read-only",
+            )
+
+        self.assertEqual(text, "OK")
+        self.assertEqual(tokens, 3)
+        self.assertEqual(captured["limit"], brain._CLI_SUBPROCESS_STREAM_LIMIT_BYTES)
 
 
 class BrainAgentWrapperFallbackTests(unittest.IsolatedAsyncioTestCase):
@@ -930,6 +2200,7 @@ class BrainAgentWrapperFallbackTests(unittest.IsolatedAsyncioTestCase):
             yield {"type": "done", "iterations": 0}
 
         with patch.object(brain, "_resolve_selected_cli_binary", return_value="/tmp/claude"), \
+             patch.object(brain, "_find_codex_cli", return_value="/tmp/codex"), \
              patch.object(brain, "_run_agent_core", side_effect=fake_run_agent_core):
             events = [
                 event async for event in brain.run_agent(
@@ -944,16 +2215,15 @@ class BrainAgentWrapperFallbackTests(unittest.IsolatedAsyncioTestCase):
                 )
             ]
 
-        self.assertEqual(seen["backend"], "api")
+        self.assertEqual(seen["backend"], "cli")
         self.assertTrue(any(event.get("type") == "text" and "cooling down after a rate limit" in str(event.get("chunk", "")).lower() for event in events))
 
 
 class AgentAutonomyRegressionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_codex_mutating_requests_skip_direct_file_shortcuts(self):
+    async def test_codex_mutating_requests_use_direct_file_shortcuts(self):
         async def fake_stream_cli(messages, **kwargs):
-            self.assertEqual(kwargs.get("cli_path"), "/tmp/codex")
-            self.assertEqual(kwargs.get("model"), "gpt-5.4")
-            yield "OK"
+            if False:
+                yield ""
 
         async def fake_stream_api_chat(**kwargs):
             if False:
@@ -979,7 +2249,18 @@ class AgentAutonomyRegressionTests(unittest.IsolatedAsyncioTestCase):
             db_path=Path(tempfile.gettempdir()) / "axon-agent-test.db",
         )
 
-        with patch.object(core_agent, "_direct_agent_action", side_effect=AssertionError("direct shortcut should be skipped")):
+        blocked_result = "BLOCKED_EDIT:write:/tmp/AXON_AUTONOMY_PROBE.txt"
+
+        with patch.object(
+            core_agent,
+            "_direct_agent_action",
+            return_value=(
+                "write_file",
+                {"path": "/tmp/AXON_AUTONOMY_PROBE.txt", "content": "OK"},
+                blocked_result,
+                blocked_result,
+            ),
+        ):
             events = [
                 event async for event in core_agent.run_agent(
                     "Create a file named AXON_AUTONOMY_PROBE.txt in the workspace root containing exactly OK.",
@@ -992,7 +2273,13 @@ class AgentAutonomyRegressionTests(unittest.IsolatedAsyncioTestCase):
                 )
             ]
 
-        self.assertTrue(any(event.get("type") == "text" and event.get("chunk") == "OK" for event in events))
+        self.assertEqual(
+            [event.get("type") for event in events],
+            ["tool_call", "tool_result", "approval_required"],
+        )
+        self.assertEqual(events[0].get("name"), "write_file")
+        self.assertEqual(events[1].get("result"), blocked_result)
+        self.assertEqual(events[2].get("kind"), "edit")
 
     def test_direct_action_prefers_workspace_root_named_file(self):
         async def fake_stream_cli(messages, **kwargs):
@@ -1050,6 +2337,483 @@ class AgentAutonomyRegressionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(tool_result, "OK")
             self.assertIn(expected_path, answer)
 
+    def test_direct_action_strips_sentence_punctuation_from_single_word_content(self):
+        async def fake_stream_cli(messages, **kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_api_chat(**kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_ollama_chat(**kwargs):
+            if False:
+                yield ""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            created: dict[str, str] = {}
+
+            def fake_create_file(path: str, content: str = "") -> str:
+                created["content"] = content
+                Path(path).write_text(content, encoding="utf-8")
+                return "OK"
+
+            deps = AgentRuntimeDeps(
+                tool_registry={"create_file": fake_create_file},
+                normalize_tool_args=lambda name, args: args,
+                stream_cli=fake_stream_cli,
+                stream_api_chat=fake_stream_api_chat,
+                stream_ollama_chat=fake_stream_ollama_chat,
+                ollama_execution_profile_sync=lambda *args, **kwargs: {"model": "dummy"},
+                ollama_message_with_images=lambda text, images: {"role": "user", "content": text},
+                api_message_with_images=lambda text, images: {"role": "user", "content": text},
+                cli_message_with_images=lambda text, images: {"role": "user", "content": text},
+                find_cli=lambda path: path,
+                ollama_default_model="dummy",
+                ollama_agent_model="dummy",
+                db_path=Path(tempfile.gettempdir()) / "axon-agent-test.db",
+            )
+
+            result = agent_file_actions._direct_agent_action(
+                "Create a file named AXON_AUTONOMY_PROBE.txt in the workspace root containing exactly OK.",
+                history=[],
+                project_name="axon-online",
+                workspace_path=tmpdir,
+                deps=deps,
+            )
+
+            self.assertIsNotNone(result)
+            self.assertEqual(created["content"], "OK")
+
+    def test_direct_action_fetches_external_url(self):
+        async def fake_stream_cli(messages, **kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_api_chat(**kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_ollama_chat(**kwargs):
+            if False:
+                yield ""
+
+        deps = AgentRuntimeDeps(
+            tool_registry={"http_get": lambda url, headers="": "Example Domain"},
+            normalize_tool_args=lambda name, args: args,
+            stream_cli=fake_stream_cli,
+            stream_api_chat=fake_stream_api_chat,
+            stream_ollama_chat=fake_stream_ollama_chat,
+            ollama_execution_profile_sync=lambda *args, **kwargs: {"model": "dummy"},
+            ollama_message_with_images=lambda text, images: {"role": "user", "content": text},
+            api_message_with_images=lambda text, images: {"role": "user", "content": text},
+            cli_message_with_images=lambda text, images: {"role": "user", "content": text},
+            find_cli=lambda path: path,
+            ollama_default_model="dummy",
+            ollama_agent_model="dummy",
+            db_path=Path(tempfile.gettempdir()) / "axon-agent-test.db",
+        )
+
+        result = agent_file_actions._direct_agent_action(
+            "Please take a look at https://example.com for me.",
+            history=[],
+            project_name="Axon",
+            workspace_path="/tmp/axon-autonomy-workspace",
+            deps=deps,
+        )
+
+        self.assertIsNotNone(result)
+        tool_name, tool_args, tool_result, answer = result
+        self.assertEqual(tool_name, "http_get")
+        self.assertEqual(tool_args["url"], "https://example.com")
+        self.assertEqual(tool_result, "Example Domain")
+        self.assertIn("Example Domain", answer)
+
+    def test_direct_action_routes_explicit_git_command_to_shell_tool(self):
+        async def fake_stream_cli(messages, **kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_api_chat(**kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_ollama_chat(**kwargs):
+            if False:
+                yield ""
+
+        deps = AgentRuntimeDeps(
+            tool_registry={"shell_cmd": lambda cmd, cwd="", timeout=30: f"BLOCKED_CMD:git:{cmd}"},
+            normalize_tool_args=lambda name, args: args,
+            stream_cli=fake_stream_cli,
+            stream_api_chat=fake_stream_api_chat,
+            stream_ollama_chat=fake_stream_ollama_chat,
+            ollama_execution_profile_sync=lambda *args, **kwargs: {"model": "dummy"},
+            ollama_message_with_images=lambda text, images: {"role": "user", "content": text},
+            api_message_with_images=lambda text, images: {"role": "user", "content": text},
+            cli_message_with_images=lambda text, images: {"role": "user", "content": text},
+            find_cli=lambda path: path,
+            ollama_default_model="dummy",
+            ollama_agent_model="dummy",
+            db_path=Path(tempfile.gettempdir()) / "axon-agent-test.db",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = agent_file_actions._direct_agent_action(
+                'Please run `git commit -m "ship it"`.',
+                history=[],
+                project_name="Axon",
+                workspace_path=tmpdir,
+                deps=deps,
+            )
+
+        self.assertIsNotNone(result)
+        tool_name, tool_args, tool_result, _answer = result
+        self.assertEqual(tool_name, "shell_cmd")
+        self.assertEqual(tool_args["cmd"], 'git commit -m "ship it"')
+        self.assertTrue(tool_result.startswith("BLOCKED_CMD:git:git commit -m"))
+
+    def test_direct_action_commit_request_without_message_drafts_message_and_blocks_stage_all(self):
+        async def fake_stream_cli(messages, **kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_api_chat(**kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_ollama_chat(**kwargs):
+            if False:
+                yield ""
+
+        def normalize_args(name, args):
+            cleaned = dict(args)
+            if name == "shell_cmd":
+                return {k: v for k, v in cleaned.items() if not str(k).startswith("_")}
+            return cleaned
+
+        deps = AgentRuntimeDeps(
+            tool_registry={
+                "git_status": lambda path: (
+                    "Branch: development\n\n"
+                    "Status:\n"
+                    "M app/screens/parent-payments.tsx\n"
+                    " M components/layout/DesktopLayout.tsx\n"
+                    "?? tests/unit/navigation/webLayout.test.ts\n"
+                ),
+                "shell_cmd": lambda cmd, cwd="", timeout=30: f"BLOCKED_CMD:git:{cmd}",
+            },
+            normalize_tool_args=normalize_args,
+            stream_cli=fake_stream_cli,
+            stream_api_chat=fake_stream_api_chat,
+            stream_ollama_chat=fake_stream_ollama_chat,
+            ollama_execution_profile_sync=lambda *args, **kwargs: {"model": "dummy"},
+            ollama_message_with_images=lambda text, images: {"role": "user", "content": text},
+            api_message_with_images=lambda text, images: {"role": "user", "content": text},
+            cli_message_with_images=lambda text, images: {"role": "user", "content": text},
+            find_cli=lambda path: path,
+            ollama_default_model="dummy",
+            ollama_agent_model="dummy",
+            db_path=Path(tempfile.gettempdir()) / "axon-agent-test.db",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = agent_file_actions._direct_agent_action(
+                "Please commit everything.",
+                history=[],
+                project_name="Axon",
+                workspace_path=tmpdir,
+                deps=deps,
+            )
+
+        self.assertIsNotNone(result)
+        tool_name, tool_args, tool_result, answer = result
+        self.assertEqual(tool_name, "shell_cmd")
+        self.assertEqual(tool_args["cmd"], "git add -A")
+        self.assertEqual(tool_args["_draft_commit_message"], "feat: update payment, navigation, and tests")
+        self.assertIn('Commit everything with commit message "feat: update payment, navigation, and tests".', tool_args["_resume_task"])
+        self.assertTrue(tool_result.startswith("BLOCKED_CMD:git:git add -A"))
+        self.assertEqual(answer, tool_result)
+
+    def test_direct_action_vague_git_add_and_commit_request_drafts_message_and_blocks_stage_all(self):
+        async def fake_stream_cli(messages, **kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_api_chat(**kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_ollama_chat(**kwargs):
+            if False:
+                yield ""
+
+        def normalize_args(name, args):
+            cleaned = dict(args)
+            if name == "shell_cmd":
+                return {k: v for k, v in cleaned.items() if not str(k).startswith("_")}
+            return cleaned
+
+        deps = AgentRuntimeDeps(
+            tool_registry={
+                "git_status": lambda path: (
+                    "Branch: development\n\n"
+                    "Status:\n"
+                    "M app/_layout.tsx\n"
+                    " M components/dashboard/parent/MissionControlSection.tsx\n"
+                    "?? tests/unit/dashboard/missionControlLayout.test.ts\n"
+                ),
+                "shell_cmd": lambda cmd, cwd="", timeout=30: f"BLOCKED_CMD:git:{cmd}",
+            },
+            normalize_tool_args=normalize_args,
+            stream_cli=fake_stream_cli,
+            stream_api_chat=fake_stream_api_chat,
+            stream_ollama_chat=fake_stream_ollama_chat,
+            ollama_execution_profile_sync=lambda *args, **kwargs: {"model": "dummy"},
+            ollama_message_with_images=lambda text, images: {"role": "user", "content": text},
+            api_message_with_images=lambda text, images: {"role": "user", "content": text},
+            cli_message_with_images=lambda text, images: {"role": "user", "content": text},
+            find_cli=lambda path: path,
+            ollama_default_model="dummy",
+            ollama_agent_model="dummy",
+            db_path=Path(tempfile.gettempdir()) / "axon-agent-test.db",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = agent_file_actions._direct_agent_action(
+                "git add and commit first then we will debug",
+                history=[],
+                project_name="Axon",
+                workspace_path=tmpdir,
+                deps=deps,
+            )
+
+        self.assertIsNotNone(result)
+        tool_name, tool_args, tool_result, answer = result
+        self.assertEqual(tool_name, "shell_cmd")
+        self.assertTrue(tool_result.startswith("BLOCKED_CMD:git:git add -A"))
+        self.assertIn('Commit everything with commit message "feat: update missions, navigation, and dashboard".', tool_args["_resume_task"])
+        self.assertEqual(answer, tool_result)
+
+    def test_direct_action_commit_request_with_message_blocks_stage_all(self):
+        async def fake_stream_cli(messages, **kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_api_chat(**kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_ollama_chat(**kwargs):
+            if False:
+                yield ""
+
+        deps = AgentRuntimeDeps(
+            tool_registry={"shell_cmd": lambda cmd, cwd="", timeout=30: f"BLOCKED_CMD:git:{cmd}"},
+            normalize_tool_args=lambda name, args: args,
+            stream_cli=fake_stream_cli,
+            stream_api_chat=fake_stream_api_chat,
+            stream_ollama_chat=fake_stream_ollama_chat,
+            ollama_execution_profile_sync=lambda *args, **kwargs: {"model": "dummy"},
+            ollama_message_with_images=lambda text, images: {"role": "user", "content": text},
+            api_message_with_images=lambda text, images: {"role": "user", "content": text},
+            cli_message_with_images=lambda text, images: {"role": "user", "content": text},
+            find_cli=lambda path: path,
+            ollama_default_model="dummy",
+            ollama_agent_model="dummy",
+            db_path=Path(tempfile.gettempdir()) / "axon-agent-test.db",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = agent_file_actions._direct_agent_action(
+                'Commit everything with commit message "Approval smoke".',
+                history=[],
+                project_name="Axon",
+                workspace_path=tmpdir,
+                deps=deps,
+            )
+
+        self.assertIsNotNone(result)
+        tool_name, tool_args, tool_result, _answer = result
+        self.assertEqual(tool_name, "shell_cmd")
+        self.assertEqual(tool_args["cmd"], "git add -A")
+        self.assertTrue(tool_result.startswith("BLOCKED_CMD:git:git add -A"))
+
+
+class GitCommandApprovalGateTests(unittest.TestCase):
+    def test_tool_shell_cmd_blocks_mutating_git_but_allows_status(self):
+        snapshot = brain.agent_capture_permission_state()
+        try:
+            with tempfile.TemporaryDirectory(dir=str(Path.home())) as tmpdir:
+                subprocess.run(["git", "init"], cwd=tmpdir, check=True, capture_output=True, text=True)
+
+                status_result = brain._tool_shell_cmd("git status --short", cwd=tmpdir, timeout=15)
+                commit_result = brain._tool_shell_cmd('git commit -m "test"', cwd=tmpdir, timeout=15)
+
+            self.assertFalse(status_result.startswith("BLOCKED_CMD:"))
+            self.assertTrue(commit_result.startswith('BLOCKED_CMD:git:git commit -m "test"'))
+        finally:
+            brain.agent_restore_permission_state(snapshot)
+
+    def test_exact_action_approval_is_consumed_once(self):
+        snapshot = brain.agent_capture_permission_state()
+        try:
+            action = approval_actions.build_command_approval_action(
+                'git commit -m "test"',
+                cwd="/tmp/work",
+                session_id="session-1",
+            )
+            brain.agent_allow_action(action, scope="once", session_id="session-1")
+
+            self.assertTrue(brain._action_is_allowed(action))
+            self.assertFalse(brain._action_is_allowed(action))
+        finally:
+            brain.agent_restore_permission_state(snapshot)
+
+    def test_blocked_tool_event_includes_structured_action_payload(self):
+        payload = core_agent._blocked_tool_event(
+            "shell_cmd",
+            {"cmd": 'git commit -m "ship it"', "cwd": "/tmp/work"},
+            'BLOCKED_CMD:git:git commit -m "ship it"',
+            workspace_id=7,
+            session_id="session-7",
+        )
+
+        self.assertEqual(payload["action_type"], "git_commit")
+        self.assertEqual(payload["workspace_id"], 7)
+        self.assertEqual(
+            payload["action_fingerprint"],
+            payload["approval_action"]["action_fingerprint"],
+        )
+        self.assertIn("task", payload["scope_options"])
+
+    def test_git_push_action_cannot_be_persisted(self):
+        action = approval_actions.build_command_approval_action(
+            "git push origin HEAD",
+            cwd="/tmp/work",
+            session_id="session-1",
+        )
+
+        self.assertFalse(action["persist_allowed"])
+        self.assertNotIn("persist", action["scope_options"])
+
+    def test_pr_upsert_action_cannot_be_persisted(self):
+        action = approval_actions.build_command_approval_action(
+            "gh pr create --title ship --body ready",
+            cwd="/tmp/work",
+            session_id="session-1",
+        )
+
+        self.assertFalse(action["persist_allowed"])
+        self.assertNotIn("persist", action["scope_options"])
+
+
+class LegacyApprovalEndpointTests(unittest.IsolatedAsyncioTestCase):
+    async def test_allow_command_endpoint_is_gone(self):
+        with self.assertRaises(server.HTTPException) as exc:
+            await server.allow_agent_command(server.AllowCommandBody(command="git"))
+
+        self.assertEqual(exc.exception.status_code, 410)
+
+    async def test_allow_edit_endpoint_is_gone(self):
+        with self.assertRaises(server.HTTPException) as exc:
+            await server.allow_agent_edit(server.AllowEditBody(path="~/demo.txt", scope="file"))
+
+        self.assertEqual(exc.exception.status_code, 410)
+
+
+class AgentOutputHardeningTests(unittest.TestCase):
+    def test_native_sandbox_git_story_counts_as_hallucinated_execution(self):
+        text = (
+            "git commit is blocked by the sandbox because .git is mounted read-only in this session. "
+            "git commit fails with fatal: Unable to create '/tmp/repo/.git/index.lock': Read-only file system."
+        )
+
+        self.assertTrue(agent_output._looks_like_hallucinated_execution(text, []))
+
+
+class GitHubWorkflowRoutingTests(unittest.TestCase):
+    def _deps(self):
+        async def fake_stream_cli(messages, **kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_api_chat(**kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_ollama_chat(**kwargs):
+            if False:
+                yield ""
+
+        return AgentRuntimeDeps(
+            tool_registry={"shell_cmd": lambda cmd, cwd="", timeout=30: f"BLOCKED_CMD:{cmd.split()[0]}:{cmd}"},
+            normalize_tool_args=lambda name, args: args,
+            stream_cli=fake_stream_cli,
+            stream_api_chat=fake_stream_api_chat,
+            stream_ollama_chat=fake_stream_ollama_chat,
+            ollama_execution_profile_sync=lambda *args, **kwargs: {"model": "dummy"},
+            ollama_message_with_images=lambda text, images: {"role": "user", "content": text},
+            api_message_with_images=lambda text, images: {"role": "user", "content": text},
+            cli_message_with_images=lambda text, images: {"role": "user", "content": text},
+            find_cli=lambda path: path,
+            ollama_default_model="dummy",
+            ollama_agent_model="dummy",
+            db_path=Path(tempfile.gettempdir()) / "axon-agent-test.db",
+        )
+
+    def test_push_request_routes_to_exact_push_command(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = agent_file_actions._direct_agent_action(
+                "Please push this branch.",
+                history=[],
+                project_name="Axon",
+                workspace_path=tmpdir,
+                deps=self._deps(),
+            )
+
+        self.assertIsNotNone(result)
+        tool_name, tool_args, tool_result, _answer = result
+        self.assertEqual(tool_name, "shell_cmd")
+        self.assertEqual(tool_args["cmd"], "git push -u origin HEAD")
+        self.assertTrue(tool_result.startswith("BLOCKED_CMD:git:git push -u origin HEAD"))
+
+    def test_pr_request_routes_to_gh_pr_create(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = agent_file_actions._direct_agent_action(
+                'Open a PR with title "Axon smoke".',
+                history=[],
+                project_name="Axon",
+                workspace_path=tmpdir,
+                deps=self._deps(),
+            )
+
+        self.assertIsNotNone(result)
+        tool_name, tool_args, tool_result, _answer = result
+        self.assertEqual(tool_name, "shell_cmd")
+        self.assertIn("gh pr create", tool_args["cmd"])
+        self.assertIn("--title", tool_args["cmd"])
+        self.assertTrue(tool_result.startswith("BLOCKED_CMD:gh:gh pr create"))
+
+    def test_workflow_status_request_routes_to_read_only_gh_run_list(self):
+        deps = self._deps()
+        deps.tool_registry["shell_cmd"] = lambda cmd, cwd="", timeout=30: "completed\tmain\tgreen"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = agent_file_actions._direct_agent_action(
+                "Check the CI workflow status.",
+                history=[],
+                project_name="Axon",
+                workspace_path=tmpdir,
+                deps=deps,
+            )
+
+        self.assertIsNotNone(result)
+        tool_name, tool_args, tool_result, answer = result
+        self.assertEqual(tool_name, "shell_cmd")
+        self.assertEqual(tool_args["cmd"], "gh run list --limit 5")
+        self.assertEqual(tool_result, "completed\tmain\tgreen")
+        self.assertIn("completed", answer)
+
 
 class AgentEvidenceSummaryTests(unittest.TestCase):
     def test_checkpoint_summary_without_sections_needs_repair(self):
@@ -1061,6 +2825,22 @@ class AgentEvidenceSummaryTests(unittest.TestCase):
         self.assertTrue(
             agent_output._needs_evidence_section_repair(
                 "pause - review your previous answer and verify it",
+                text,
+            )
+        )
+
+    def test_auto_handoff_without_evidence_sections_needs_repair(self):
+        text = (
+            "What Changed\n"
+            "- Updated the docs route.\n\n"
+            "Verification\n"
+            "- npm run build -- --webpack passed.\n"
+            "- tsc --noEmit passed."
+        )
+
+        self.assertTrue(
+            agent_output._needs_evidence_section_repair(
+                "please continue",
                 text,
             )
         )
@@ -1214,7 +2994,7 @@ class TaskSandboxServiceTests(unittest.TestCase):
             self._git(repo_root, "worktree", "add", "-b", "axon/task-1-demo", str(sandbox_dir), "HEAD")
             (sandbox_dir / "app.txt").write_text("new\n", encoding="utf-8")
 
-            with patch.object(task_sandbox_service, "TASK_SANDBOX_ROOT", sandbox_root):
+            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"task": sandbox_root}, clear=False):
                 task_sandbox_service.write_task_sandbox(
                     {
                         "task_id": 1,
@@ -1248,7 +3028,7 @@ class TaskSandboxServiceTests(unittest.TestCase):
             sandbox_root.mkdir(parents=True, exist_ok=True)
             self._git(repo_root, "worktree", "add", "-b", "axon/task-2-demo", str(sandbox_dir), "HEAD")
 
-            with patch.object(task_sandbox_service, "TASK_SANDBOX_ROOT", sandbox_root):
+            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"task": sandbox_root}, clear=False):
                 task_sandbox_service.write_task_sandbox(
                     {
                         "task_id": 2,
@@ -1266,6 +3046,578 @@ class TaskSandboxServiceTests(unittest.TestCase):
 
             self.assertTrue(result["discarded"])
             self.assertFalse(sandbox_dir.exists())
+
+
+class AutoSessionServiceTests(unittest.TestCase):
+    def _git(self, cwd: Path, *args: str) -> str:
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Axon Tests",
+            "GIT_AUTHOR_EMAIL": "axon@example.com",
+            "GIT_COMMITTER_NAME": "Axon Tests",
+            "GIT_COMMITTER_EMAIL": "axon@example.com",
+        }
+        result = subprocess.run(
+            ["git", "-C", str(cwd), *args],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            raise AssertionError(result.stderr or result.stdout or f"git {' '.join(args)} failed")
+        return (result.stdout or "").strip()
+
+    def test_auto_session_apply_copies_changes_back_to_source(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo_root = root / "repo"
+            auto_root = root / "autos"
+            repo_root.mkdir()
+            self._git(repo_root, "init")
+            (repo_root / "app.txt").write_text("old\n", encoding="utf-8")
+            self._git(repo_root, "add", "app.txt")
+            self._git(repo_root, "commit", "-m", "init")
+
+            workspace = {"id": 7, "name": "Demo", "path": str(repo_root)}
+            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
+                meta = auto_session_service.ensure_auto_session(
+                    "auto-1",
+                    workspace,
+                    title="Auto demo",
+                    detail="Run autonomously",
+                    metadata={"status": "completed"},
+                )
+                sandbox_dir = Path(meta["sandbox_path"])
+                (sandbox_dir / "app.txt").write_text("new\n", encoding="utf-8")
+                refreshed = auto_session_service.refresh_auto_session("auto-1")
+                result = auto_session_service.apply_auto_session("auto-1")
+
+            self.assertEqual(refreshed["status"], "review_ready")
+            self.assertTrue(result["applied"])
+            self.assertEqual((repo_root / "app.txt").read_text(encoding="utf-8"), "new\n")
+            self.assertIn("Applied", result["summary"])
+
+    def test_auto_session_discard_removes_worktree(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo_root = root / "repo"
+            auto_root = root / "autos"
+            repo_root.mkdir()
+            self._git(repo_root, "init")
+            (repo_root / "app.txt").write_text("old\n", encoding="utf-8")
+            self._git(repo_root, "add", "app.txt")
+            self._git(repo_root, "commit", "-m", "init")
+
+            workspace = {"id": 8, "name": "Demo", "path": str(repo_root)}
+            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
+                meta = auto_session_service.ensure_auto_session(
+                    "auto-2",
+                    workspace,
+                    title="Auto demo",
+                    detail="Run autonomously",
+                    metadata={"status": "ready"},
+                )
+                sandbox_dir = Path(meta["sandbox_path"])
+                result = auto_session_service.discard_auto_session("auto-2")
+
+            self.assertTrue(result["discarded"])
+            self.assertFalse(sandbox_dir.exists())
+
+    def test_auto_session_apply_detects_source_conflicts(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo_root = root / "repo"
+            auto_root = root / "autos"
+            repo_root.mkdir()
+            self._git(repo_root, "init")
+            (repo_root / "app.txt").write_text("old\n", encoding="utf-8")
+            self._git(repo_root, "add", "app.txt")
+            self._git(repo_root, "commit", "-m", "init")
+
+            workspace = {"id": 9, "name": "Demo", "path": str(repo_root)}
+            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
+                meta = auto_session_service.ensure_auto_session(
+                    "auto-3",
+                    workspace,
+                    title="Auto demo",
+                    detail="Run autonomously",
+                    metadata={"status": "running"},
+                )
+                sandbox_dir = Path(meta["sandbox_path"])
+                (sandbox_dir / "app.txt").write_text("from sandbox\n", encoding="utf-8")
+                (repo_root / "app.txt").write_text("from source\n", encoding="utf-8")
+                with self.assertRaises(RuntimeError):
+                    auto_session_service.apply_auto_session("auto-3")
+
+    def test_auto_report_uses_evidence_sections(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo_root = root / "repo"
+            auto_root = root / "autos"
+            repo_root.mkdir()
+            self._git(repo_root, "init")
+            (repo_root / "app.txt").write_text("old\n", encoding="utf-8")
+            self._git(repo_root, "add", "app.txt")
+            self._git(repo_root, "commit", "-m", "init")
+
+            workspace = {"id": 10, "name": "Demo", "path": str(repo_root)}
+            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
+                auto_session_service.ensure_auto_session(
+                    "auto-4",
+                    workspace,
+                    title="Auto demo",
+                    detail="Run autonomously",
+                    metadata={
+                        "status": "completed",
+                        "final_output": "Changed the landing page.",
+                        "command_receipts": [{"command": "git diff --stat", "summary": "1 file changed"}],
+                        "verification_receipts": [{"command": "npm run build", "label": "npm run build", "summary": "passed"}],
+                        "inferred_notes": ["The next step likely touches dashboard polish."],
+                    },
+                )
+                refreshed = auto_session_service.refresh_auto_session("auto-4")
+
+            report = refreshed["report_markdown"]
+            self.assertIn("## Verified In This Run", report)
+            self.assertIn("## Inferred From Repo State", report)
+            self.assertIn("## Not Yet Verified", report)
+            self.assertIn("## Next Action Not Yet Taken", report)
+
+    def test_auto_refresh_ignores_codex_runtime_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo_root = root / "repo"
+            auto_root = root / "autos"
+            repo_root.mkdir()
+            self._git(repo_root, "init")
+            (repo_root / "README.md").write_text("hello\n", encoding="utf-8")
+            self._git(repo_root, "add", "README.md")
+            self._git(repo_root, "commit", "-m", "init")
+
+            workspace = {"id": 14, "name": "Demo", "path": str(repo_root)}
+            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
+                meta = auto_session_service.ensure_auto_session(
+                    "auto-5",
+                    workspace,
+                    title="Auto demo",
+                    detail="Run autonomously",
+                    metadata={"status": "ready"},
+                )
+                sandbox_dir = Path(meta["sandbox_path"])
+                (sandbox_dir / ".codex").write_text("runtime cache\n", encoding="utf-8")
+                refreshed = auto_session_service.refresh_auto_session("auto-5")
+
+            self.assertEqual(refreshed["changed_files"], [])
+            self.assertEqual(refreshed["status"], "ready")
+
+    def test_auto_refresh_promotes_stale_running_session_to_review_ready(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo_root = root / "repo"
+            auto_root = root / "autos"
+            repo_root.mkdir()
+            self._git(repo_root, "init")
+            (repo_root / "README.md").write_text("hello\n", encoding="utf-8")
+            self._git(repo_root, "add", "README.md")
+            self._git(repo_root, "commit", "-m", "init")
+
+            workspace = {"id": 15, "name": "Demo", "path": str(repo_root)}
+            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
+                meta = auto_session_service.ensure_auto_session(
+                    "auto-6",
+                    workspace,
+                    title="Auto demo",
+                    detail="Run autonomously",
+                    metadata={
+                        "status": "running",
+                        "last_run_completed_at": "2026-04-01T10:00:00Z",
+                        "final_output": "Changed the landing page copy.",
+                        "verification_receipts": [{"command": "npm run build", "summary": "passed"}],
+                    },
+                )
+                sandbox_dir = Path(meta["sandbox_path"])
+                (sandbox_dir / "README.md").write_text("updated\n", encoding="utf-8")
+                refreshed = auto_session_service.refresh_auto_session("auto-6")
+
+            self.assertEqual(refreshed["status"], "review_ready")
+            self.assertEqual(refreshed["last_error"], "")
+
+    def test_auto_refresh_marks_stale_running_session_without_handoff_as_error(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo_root = root / "repo"
+            auto_root = root / "autos"
+            repo_root.mkdir()
+            self._git(repo_root, "init")
+            (repo_root / "README.md").write_text("hello\n", encoding="utf-8")
+            self._git(repo_root, "add", "README.md")
+            self._git(repo_root, "commit", "-m", "init")
+
+            workspace = {"id": 16, "name": "Demo", "path": str(repo_root)}
+            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
+                auto_session_service.ensure_auto_session(
+                    "auto-7",
+                    workspace,
+                    title="Auto demo",
+                    detail="Run autonomously",
+                    metadata={
+                        "status": "running",
+                        "last_run_completed_at": "2026-04-01T10:00:00Z",
+                    },
+                )
+                refreshed = auto_session_service.refresh_auto_session("auto-7")
+
+            self.assertEqual(refreshed["status"], "error")
+            self.assertIn("reviewable handoff", refreshed["last_error"])
+
+    def test_auto_refresh_marks_deleted_or_invalid_worktree_as_error(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            repo_root = root / "repo"
+            auto_root = root / "autos"
+            repo_root.mkdir()
+            self._git(repo_root, "init")
+            (repo_root / "README.md").write_text("hello\n", encoding="utf-8")
+            self._git(repo_root, "add", "README.md")
+            self._git(repo_root, "commit", "-m", "init")
+
+            workspace = {"id": 17, "name": "Demo", "path": str(repo_root)}
+            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
+                meta = auto_session_service.ensure_auto_session(
+                    "auto-8",
+                    workspace,
+                    title="Auto demo",
+                    detail="Run autonomously",
+                    metadata={"status": "running"},
+                )
+                sandbox_dir = Path(meta["sandbox_path"])
+                git_dir = sandbox_dir / ".git"
+                if git_dir.is_file():
+                    git_dir.unlink()
+                elif git_dir.exists():
+                    shutil.rmtree(git_dir)
+                refreshed = auto_session_service.refresh_auto_session("auto-8")
+
+            self.assertEqual(refreshed["status"], "error")
+            self.assertIn("valid git worktree", refreshed["last_error"])
+            self.assertIn("## Not Yet Verified", refreshed["report_markdown"])
+
+
+class AutoSessionApiTests(unittest.IsolatedAsyncioTestCase):
+    @asynccontextmanager
+    async def _fake_db(self):
+        yield object()
+
+    async def test_continue_uses_existing_session_workspace_when_project_id_missing(self):
+        workspace = {"id": 11, "name": "Demo", "path": "/tmp/demo"}
+        session = {"session_id": "auto-11", "workspace_id": 11, "runtime_override": {}, "status": "review_ready"}
+        captured = {}
+
+        async def fake_background(workspace_dict, session_meta, **kwargs):
+            captured["workspace"] = workspace_dict
+            captured["session"] = session_meta
+            captured["kwargs"] = kwargs
+
+        async def fake_get_project(_conn, project_id):
+            captured["project_id"] = project_id
+            return workspace
+
+        with patch.object(server.devdb, "get_db", self._fake_db), \
+             patch.object(server.devdb, "get_project", side_effect=fake_get_project), \
+             patch.object(auto_session_service, "refresh_auto_session", return_value=session), \
+             patch.object(auto_session_service, "find_workspace_auto_session", return_value=session), \
+             patch.object(server, "_run_auto_session_background", side_effect=fake_background), \
+             patch.dict(server._auto_session_runs, {}, clear=True):
+            result = await server._queue_auto_session_run(
+                server.AutoSessionStartRequest(message="please continue"),
+                resume=True,
+                session_id="auto-11",
+            )
+            await asyncio.sleep(0)
+
+        self.assertTrue(result["started"])
+        self.assertTrue(result["resume"])
+        self.assertEqual(captured["project_id"], 11)
+        self.assertEqual(captured["workspace"]["id"], 11)
+        self.assertEqual(captured["kwargs"]["resume_message"], "please continue")
+
+    async def test_continue_passes_explicit_resume_instruction_to_runner(self):
+        workspace = {"id": 12, "name": "Demo", "path": "/tmp/demo"}
+        session = {"session_id": "auto-12", "workspace_id": 12, "runtime_override": {}, "status": "error"}
+        captured = {}
+
+        async def fake_background(workspace_dict, session_meta, **kwargs):
+            captured["workspace"] = workspace_dict
+            captured["session"] = session_meta
+            captured["kwargs"] = kwargs
+
+        async def fake_get_project(_conn, project_id):
+            return workspace
+
+        with patch.object(server.devdb, "get_db", self._fake_db), \
+             patch.object(server.devdb, "get_project", side_effect=fake_get_project), \
+             patch.object(auto_session_service, "refresh_auto_session", return_value=session), \
+             patch.object(auto_session_service, "find_workspace_auto_session", return_value=session), \
+             patch.object(server, "_run_auto_session_background", side_effect=fake_background), \
+             patch.dict(server._auto_session_runs, {}, clear=True):
+            result = await server._queue_auto_session_run(
+                server.AutoSessionStartRequest(message="Create AUTO_RESUME.txt and stop for review."),
+                resume=True,
+                session_id="auto-12",
+            )
+            await asyncio.sleep(0)
+
+        self.assertTrue(result["started"])
+        self.assertEqual(captured["kwargs"]["resume_message"], "Create AUTO_RESUME.txt and stop for review.")
+
+    async def test_list_auto_sessions_refreshes_stale_entries(self):
+        with patch.object(
+            auto_session_service,
+            "list_auto_sessions",
+            return_value=[
+                {
+                    "session_id": "auto-17",
+                    "status": "running",
+                    "workspace_id": 17,
+                    "workspace_name": "Demo",
+                }
+            ],
+        ), patch.object(
+            auto_session_service,
+            "refresh_auto_session",
+            return_value={
+                "session_id": "auto-17",
+                "status": "review_ready",
+                "workspace_id": 17,
+                "workspace_name": "Demo",
+                "changed_files": ["app/page.tsx"],
+            },
+        ):
+            payload = await server.list_auto_sessions()
+
+        self.assertEqual(payload["sessions"][0]["status"], "review_ready")
+        self.assertTrue(payload["sessions"][0]["apply_allowed"])
+
+    async def test_list_auto_sessions_degrades_refresh_failures(self):
+        with patch.object(
+            auto_session_service,
+            "list_auto_sessions",
+            return_value=[
+                {
+                    "session_id": "auto-18",
+                    "status": "running",
+                    "workspace_id": 18,
+                    "workspace_name": "Demo",
+                }
+            ],
+        ), patch.object(
+            auto_session_service,
+            "refresh_auto_session",
+            side_effect=RuntimeError("sandbox missing"),
+        ):
+            payload = await server.list_auto_sessions()
+
+        self.assertEqual(payload["sessions"][0]["status"], "error")
+        self.assertIn("sandbox missing", payload["sessions"][0]["last_error"])
+
+    async def test_build_live_snapshot_includes_auto_sessions(self):
+        async def fake_get_all_settings(_conn):
+            return {"ai_backend": "api", "api_model": "deepseek-reasoner"}
+
+        async def fake_list_terminal_sessions(_conn, limit=6):
+            return []
+
+        async def fake_get_activity(_conn, limit=6):
+            return []
+
+        with patch.object(server.devdb, "get_db", self._fake_db), \
+             patch.object(server.devdb, "get_all_settings", side_effect=fake_get_all_settings), \
+             patch.object(server.devdb, "list_terminal_sessions", side_effect=fake_list_terminal_sessions), \
+             patch.object(server.devdb, "get_activity", side_effect=fake_get_activity), \
+             patch.object(auto_session_service, "list_auto_sessions", return_value=[{
+                 "session_id": "auto-12",
+                 "workspace_id": 12,
+                 "workspace_name": "Demo",
+                 "status": "review_ready",
+                 "title": "Auto demo",
+                 "changed_files": ["app.txt"],
+                 "resolved_runtime": {"label": "Codex CLI", "model": "gpt-5.4"},
+                 "updated_at": "2026-04-01T10:00:00Z",
+             }]), \
+             patch.object(server, "_connection_snapshot", return_value={"connected": True}):
+            snapshot = await server._build_live_snapshot()
+
+        self.assertEqual(snapshot["auto_sessions"][0]["session_id"], "auto-12")
+        self.assertTrue(snapshot["auto_sessions"][0]["apply_allowed"])
+
+    async def test_build_live_snapshot_includes_live_operator_feed(self):
+        async def fake_get_all_settings(_conn):
+            return {"ai_backend": "api", "api_model": "deepseek-reasoner"}
+
+        async def fake_rows(*_args, **_kwargs):
+            return []
+
+        original = dict(server._live_operator_snapshot)
+        try:
+            server._live_operator_snapshot.update(
+                {
+                    "active": True,
+                    "mode": "auto",
+                    "phase": "execute",
+                    "title": "Running Auto session",
+                    "detail": "Applying a focused patch",
+                    "workspace_id": 12,
+                    "auto_session_id": "auto-12",
+                    "feed": [
+                        {
+                            "id": "1",
+                            "phase": "plan",
+                            "title": "Planning inside Auto sandbox",
+                            "detail": "Checking the active diff",
+                            "at": "2026-04-01T10:00:00Z",
+                        }
+                    ],
+                }
+            )
+            with patch.object(server.devdb, "get_db", self._fake_db), \
+                 patch.object(server.devdb, "get_all_settings", side_effect=fake_get_all_settings), \
+                 patch.object(server.devdb, "list_terminal_sessions", side_effect=fake_rows), \
+                 patch.object(server.devdb, "get_activity", side_effect=fake_rows), \
+                 patch.object(auto_session_service, "list_auto_sessions", return_value=[]), \
+                 patch.object(server, "_connection_snapshot", return_value={"connected": True}):
+                snapshot = await server._build_live_snapshot()
+        finally:
+            server._live_operator_snapshot.clear()
+            server._live_operator_snapshot.update(original)
+
+        self.assertEqual(snapshot["operator"]["auto_session_id"], "auto-12")
+        self.assertEqual(snapshot["operator"]["feed"][0]["title"], "Planning inside Auto sandbox")
+
+    def test_set_live_operator_retains_auto_session_context_on_review_handoff(self):
+        original = dict(server._live_operator_snapshot)
+        try:
+            server._live_operator_snapshot.clear()
+            server._live_operator_snapshot.update(
+                {
+                    "active": True,
+                    "mode": "auto",
+                    "phase": "execute",
+                    "title": "Running Auto session",
+                    "detail": "Applying a focused patch",
+                    "tool": "",
+                    "summary": "",
+                    "workspace_id": 12,
+                    "auto_session_id": "auto-12",
+                    "changed_files_count": 0,
+                    "apply_allowed": False,
+                    "started_at": "2026-04-01T10:00:00Z",
+                    "updated_at": "2026-04-01T10:00:00Z",
+                    "feed": [
+                        {
+                            "id": "1",
+                            "phase": "execute",
+                            "title": "Running Auto session",
+                            "detail": "Applying a focused patch",
+                            "at": "2026-04-01T10:00:00Z",
+                        }
+                    ],
+                }
+            )
+
+            server._set_live_operator(
+                active=False,
+                mode="auto",
+                phase="verify",
+                title="Auto session ready for review",
+                detail="Axon finished the sandbox pass and prepared a reviewable handoff.",
+                workspace_id=12,
+                auto_session_id="auto-12",
+                changed_files_count=3,
+                apply_allowed=True,
+            )
+        finally:
+            snapshot = dict(server._live_operator_snapshot)
+            server._live_operator_snapshot.clear()
+            server._live_operator_snapshot.update(original)
+
+        self.assertFalse(snapshot["active"])
+        self.assertEqual(snapshot["auto_session_id"], "auto-12")
+        self.assertEqual(snapshot["changed_files_count"], 3)
+        self.assertTrue(snapshot["apply_allowed"])
+        self.assertEqual(snapshot["feed"][-1]["title"], "Auto session ready for review")
+
+    async def test_noop_auto_run_fails_without_reviewable_handoff(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo_root = Path(tmp_dir) / "repo"
+            auto_root = Path(tmp_dir) / "autos"
+            repo_root.mkdir()
+            env = {
+                **os.environ,
+                "GIT_AUTHOR_NAME": "Axon Tests",
+                "GIT_AUTHOR_EMAIL": "axon@example.com",
+                "GIT_COMMITTER_NAME": "Axon Tests",
+                "GIT_COMMITTER_EMAIL": "axon@example.com",
+            }
+            subprocess.run(["git", "-C", str(repo_root), "init"], check=True, env=env, capture_output=True, text=True)
+            (repo_root / "app.txt").write_text("old\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo_root), "add", "app.txt"], check=True, env=env, capture_output=True, text=True)
+            subprocess.run(["git", "-C", str(repo_root), "commit", "-m", "init"], check=True, env=env, capture_output=True, text=True)
+            workspace = {"id": 13, "name": "Demo", "path": str(repo_root)}
+
+            async def fake_get_all_settings(_conn):
+                return {"max_agent_iterations": "3", "context_compact_enabled": "1", "ai_backend": "cli"}
+
+            async def fake_rows(*_args, **_kwargs):
+                return []
+
+            async def fake_resource_bundle(*_args, **_kwargs):
+                return {"context_block": "", "image_paths": [], "vision_model": "", "warnings": []}
+
+            async def fake_memory_bundle(*_args, **_kwargs):
+                return {"context_block": ""}
+
+            async def fake_ai_params(*_args, **_kwargs):
+                return {"backend": "cli", "cli_path": "/tmp/codex", "cli_model": "gpt-5.4", "cli_session_persistence": False}
+
+            async def fake_auto_route(*args, **kwargs):
+                return kwargs.get("ai") or args[1], []
+
+            async def fake_run_agent(*_args, **_kwargs):
+                yield {"type": "text", "chunk": "looked around"}
+
+            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
+                session_meta = auto_session_service.ensure_auto_session(
+                    "auto-13",
+                    workspace,
+                    title="Auto demo",
+                    detail="Run autonomously",
+                    start_prompt="Inspect the repo",
+                    metadata={"status": "ready"},
+                )
+                with patch.object(server.devdb, "get_db", self._fake_db), \
+                     patch.object(server.devdb, "get_all_settings", side_effect=fake_get_all_settings), \
+                     patch.object(server.devdb, "get_projects", side_effect=fake_rows), \
+                     patch.object(server.devdb, "get_tasks", side_effect=fake_rows), \
+                     patch.object(server.devdb, "get_prompts", side_effect=fake_rows), \
+                     patch.object(server, "_load_chat_history_rows", side_effect=fake_rows), \
+                     patch.object(server, "_resource_bundle", side_effect=fake_resource_bundle), \
+                     patch.object(server, "_memory_bundle", side_effect=fake_memory_bundle), \
+                     patch.object(server, "_task_sandbox_ai_params", side_effect=fake_ai_params), \
+                     patch.object(server, "auto_route_vision_runtime", side_effect=fake_auto_route), \
+                     patch.object(server, "_auto_route_image_generation_runtime", side_effect=fake_auto_route), \
+                     patch.object(brain, "_build_context_block", return_value=""), \
+                     patch.object(brain, "run_agent", side_effect=fake_run_agent), \
+                     patch.object(brain, "agent_capture_permission_state", return_value={}), \
+                     patch.object(brain, "agent_restore_permission_state"), \
+                     patch.object(brain, "agent_allow_edit"), \
+                     patch.object(brain, "agent_allow_command"):
+                    await server._run_auto_session_background(workspace, session_meta)
+
+                refreshed = auto_session_service.refresh_auto_session("auto-13")
+
+            self.assertEqual(refreshed["status"], "error")
+            self.assertIn("did not produce a reviewable handoff", refreshed["last_error"])
 
 
 if __name__ == "__main__":

@@ -105,6 +105,37 @@ async def list_memory_items(
     return await cur.fetchall()
 
 
+async def search_memory_items(
+    db: aiosqlite.Connection,
+    *,
+    query: str,
+    workspace_id: int | None = None,
+    layers: list[str] | None = None,
+    limit: int = 120,
+):
+    token = f"%{str(query or '').strip()}%"
+    clauses = ["(title LIKE ? OR summary LIKE ? OR content LIKE ? OR source LIKE ?)"]
+    params: list[object] = [token, token, token, token]
+    if workspace_id is not None:
+        clauses.append("(workspace_id = ? OR workspace_id IS NULL)")
+        params.append(workspace_id)
+    if layers:
+        placeholders = ",".join("?" for _ in layers)
+        clauses.append(f"layer IN ({placeholders})")
+        params.extend(list(layers))
+    cur = await db.execute(
+        f"""
+        SELECT *
+        FROM memory_items
+        WHERE {' AND '.join(clauses)}
+        ORDER BY pinned DESC, COALESCE(last_accessed_at, updated_at) DESC, updated_at DESC
+        LIMIT ?
+        """,
+        (*params, limit),
+    )
+    return await cur.fetchall()
+
+
 async def delete_stale_memory_items(
     db: aiosqlite.Connection,
     *,
@@ -124,12 +155,38 @@ async def delete_stale_memory_items(
         await db.commit()
 
 
-async def touch_memory_item(db: aiosqlite.Connection, memory_id: int):
+async def touch_memory_item(db: aiosqlite.Connection, memory_id: int, *, commit: bool = True):
     await db.execute(
-        "UPDATE memory_items SET last_accessed_at = datetime('now'), last_used_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+        "UPDATE memory_items SET last_accessed_at = datetime('now'), last_used_at = datetime('now') WHERE id = ?",
         (memory_id,),
     )
-    await db.commit()
+    if commit:
+        await db.commit()
+
+
+async def touch_memory_items(db: aiosqlite.Connection, memory_ids: list[int], *, commit: bool = True):
+    ids: list[int] = []
+    for item in memory_ids:
+        try:
+            value = int(item)
+        except Exception:
+            continue
+        if value > 0:
+            ids.append(value)
+    if not ids:
+        return
+    placeholders = ",".join("?" for _ in ids)
+    await db.execute(
+        f"""
+        UPDATE memory_items
+        SET last_accessed_at = datetime('now'),
+            last_used_at = datetime('now')
+        WHERE id IN ({placeholders})
+        """,
+        ids,
+    )
+    if commit:
+        await db.commit()
 
 
 async def count_memory_items_by_layer(db: aiosqlite.Connection) -> dict[str, int]:

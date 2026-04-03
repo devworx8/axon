@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 from datetime import datetime, timezone
 from typing import Iterable, Optional
 
@@ -49,6 +50,11 @@ PREFERENCE_KEYS = (
     "resource_upload_max_mb",
     "resource_url_import_enabled",
 )
+_SEARCH_CACHE: dict[tuple[str, str, str, int, str], dict[str, object]] = {}
+
+
+def _normalized_query_key(query: str) -> str:
+    return re.sub(r"\s+", " ", str(query or "").strip().lower())
 
 
 def _clean_text(value: str, *, limit: int = 4000) -> str:
@@ -376,13 +382,50 @@ async def search_memory(
     workspace_id: Optional[int] = None,
     layers: Optional[list[str]] = None,
     limit: int = 6,
+    snapshot_revision: str = "",
 ) -> list[dict]:
-    candidates = [dict(row) for row in await devdb.list_memory_items(conn, workspace_id=workspace_id, limit=1200)]
-    if layers:
-        allowed = set(layers)
-        candidates = [row for row in candidates if row.get("layer") in allowed]
+    normalized_query = _normalized_query_key(query)
+    cache_ttl = max(5, int(settings.get("memory_query_cache_ttl_seconds") or 45))
+    cache_key = (
+        normalized_query,
+        str(workspace_id or ""),
+        ",".join(sorted(layers or [])),
+        int(limit or 0),
+        str(snapshot_revision or ""),
+    )
+    cached = _SEARCH_CACHE.get(cache_key)
+    if cached and (time.time() - float(cached.get("cached_at") or 0.0)) < cache_ttl:
+        return [dict(row) for row in (cached.get("results") or [])]
+
+    if query.strip():
+        fts_rows = await devdb.search_memory_items_fts(
+            conn,
+            query=query,
+            workspace_id=workspace_id,
+            layers=list(layers or []),
+            limit=max(40, limit * 12),
+        )
+        candidates = [dict(row) for row in fts_rows]
+        if not candidates:
+            rows = await devdb.search_memory_items(
+                conn,
+                query=query,
+                workspace_id=workspace_id,
+                layers=list(layers or []),
+                limit=max(120, limit * 20),
+            )
+            candidates = [dict(row) for row in rows]
+    else:
+        rows = await devdb.list_memory_items(conn, workspace_id=workspace_id, limit=max(120, limit * 20))
+        candidates = [dict(row) for row in rows]
+        if layers:
+            allowed = set(layers)
+            candidates = [row for row in candidates if row.get("layer") in allowed]
+
     if not query.strip():
-        return candidates[:limit]
+        top = candidates[:limit]
+        _SEARCH_CACHE[cache_key] = {"cached_at": time.time(), "results": [dict(row) for row in top]}
+        return top
 
     query_vec: list[float] | None = None
     if (settings.get("embeddings_model") or "").strip():
@@ -426,11 +469,14 @@ async def search_memory(
 
     ranked.sort(key=lambda item: item[0], reverse=True)
     top_rows = [item[1] for item in ranked[:limit]]
-    for row in top_rows:
+    touch_ids = [row.get("id") for row in top_rows if row.get("id")]
+    if touch_ids:
         try:
-            await devdb.touch_memory_item(conn, row["id"])
+            await devdb.touch_memory_items(conn, touch_ids, commit=False)
+            await conn.commit()
         except Exception:
-            continue
+            pass
+    _SEARCH_CACHE[cache_key] = {"cached_at": time.time(), "results": [dict(row) for row in top_rows]}
     return top_rows
 
 

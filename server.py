@@ -49,8 +49,14 @@ import provider_registry
 import resource_bank
 import memory_engine
 from axon_api.settings_models import SettingsUpdate
+from axon_api.services import auto_sessions as auto_session_service
 from axon_api.services import claude_cli_runtime, codex_cli_runtime
+from axon_api.services import live_preview_sessions as live_preview_service
+from axon_api.services import runtime_login_sessions as runtime_login_service
+from axon_api.services import runtime_truth as runtime_truth_service
+from axon_core.cli_pacing import current_cli_cooldown
 from axon_core.cli_command import cli_session_persistence_enabled
+from axon_core.chat_context import select_history_for_chat
 from axon_api.services import task_sandboxes as task_sandbox_service
 from axon_core.vision_runtime import auto_route_vision_runtime
 from axon_api import ui_renderer
@@ -116,13 +122,18 @@ _live_operator_snapshot = {
     "tool": "",
     "summary": "",
     "workspace_id": None,
+    "auto_session_id": "",
+    "changed_files_count": 0,
+    "apply_allowed": False,
     "started_at": "",
     "updated_at": "",
+    "feed": [],
 }
 _terminal_processes: dict[int, dict] = {}
 # PTY WebSocket sessions: session_id → {pty, ws_set, task}
 _pty_sessions: dict[str, dict] = {}
 _task_sandbox_runs: dict[int, asyncio.Task] = {}
+_auto_session_runs: dict[str, asyncio.Task] = {}
 _domain_probe_cache = {
     "url": "",
     "active": False,
@@ -130,14 +141,80 @@ _domain_probe_cache = {
     "detail": "",
     "checked_at": 0.0,
 }
-_browser_action_state = {
-    "session": {
+_memory_sync_cache = {
+    "checked_at": 0.0,
+    "overview": None,
+}
+_MEMORY_SYNC_CACHE_TTL_SECONDS = 45.0
+
+
+def _default_browser_session() -> dict[str, object]:
+    return {
         "connected": False,
         "url": "",
         "title": "",
         "last_seen_at": "",
         "mode": "approval_required",
-    },
+        "control_owner": "manual",
+        "control_state": "idle",
+        "ownership_label": "Manual browser",
+        "attached_preview_url": "",
+        "attached_preview_status": "",
+        "attached_workspace_id": None,
+        "attached_workspace_name": "",
+        "attached_auto_session_id": "",
+        "attached_scope_key": "",
+        "attached_source_workspace_path": "",
+    }
+
+
+def _normalize_browser_session(session: dict | None = None, **updates: object) -> dict[str, object]:
+    item = {**_default_browser_session(), **(session or {})}
+    for key, value in updates.items():
+        if value is not None:
+            item[key] = value
+
+    mode = str(item.get("mode") or "approval_required").strip().lower()
+    item["mode"] = mode if mode in {"approval_required", "inspect_auto"} else "approval_required"
+
+    owner = str(item.get("control_owner") or "manual").strip().lower()
+    item["control_owner"] = "axon" if owner == "axon" else "manual"
+    item["connected"] = bool(item.get("connected"))
+    item["url"] = str(item.get("url") or "")
+    item["title"] = str(item.get("title") or "")
+    item["last_seen_at"] = str(item.get("last_seen_at") or "")
+    item["attached_preview_url"] = str(item.get("attached_preview_url") or "")
+    item["attached_preview_status"] = str(item.get("attached_preview_status") or "")
+    item["attached_workspace_name"] = str(item.get("attached_workspace_name") or "")
+    item["attached_auto_session_id"] = str(item.get("attached_auto_session_id") or "")
+    item["attached_scope_key"] = str(item.get("attached_scope_key") or "")
+    item["attached_source_workspace_path"] = str(item.get("attached_source_workspace_path") or "")
+
+    workspace_id = item.get("attached_workspace_id")
+    if workspace_id in ("", 0, "0"):
+        item["attached_workspace_id"] = None
+
+    if item["control_owner"] == "axon":
+        item["ownership_label"] = "Axon controls this browser now"
+    else:
+        item["ownership_label"] = "Manual browser"
+        item["attached_preview_url"] = ""
+        item["attached_preview_status"] = ""
+        item["attached_workspace_id"] = None
+        item["attached_workspace_name"] = ""
+        item["attached_auto_session_id"] = ""
+        item["attached_scope_key"] = ""
+        item["attached_source_workspace_path"] = ""
+
+    control_state = str(item.get("control_state") or "").strip().lower()
+    if control_state not in {"idle", "attached", "blocked"}:
+        control_state = "attached" if item["control_owner"] == "axon" and item["connected"] else ("connected" if item["connected"] else "idle")
+    item["control_state"] = control_state
+    return item
+
+
+_browser_action_state = {
+    "session": _default_browser_session(),
     "proposals": [],
     "history": [],
     "next_id": 1,
@@ -211,11 +288,16 @@ def _set_live_operator(
     tool: str = "",
     summary: str = "",
     workspace_id: Optional[int] = None,
+    auto_session_id: str = "",
+    changed_files_count: int = 0,
+    apply_allowed: bool = False,
     preserve_started: bool = False,
 ):
     started_at = _live_operator_snapshot.get("started_at") if preserve_started else _now_iso()
     if not started_at:
         started_at = _now_iso()
+    updated_at = _now_iso()
+    tracked_auto_session_id = auto_session_id if auto_session_id else (_live_operator_snapshot.get("auto_session_id") if mode == "auto" else "")
     _live_operator_snapshot.update(
         {
             "active": active,
@@ -226,10 +308,28 @@ def _set_live_operator(
             "tool": tool,
             "summary": summary or _live_operator_snapshot.get("summary", ""),
             "workspace_id": workspace_id,
+            "auto_session_id": tracked_auto_session_id or "",
+            "changed_files_count": int(changed_files_count or 0) if (active or tracked_auto_session_id) else 0,
+            "apply_allowed": bool(apply_allowed) if (active or tracked_auto_session_id) else False,
             "started_at": started_at if active else "",
-            "updated_at": _now_iso(),
+            "updated_at": updated_at,
         }
     )
+    if active or tracked_auto_session_id:
+        entry = {
+            "id": f"{int(_time.time() * 1000)}-{phase}",
+            "phase": phase,
+            "title": title,
+            "detail": detail,
+            "at": updated_at,
+        }
+        feed = list(_live_operator_snapshot.get("feed") or [])
+        last = feed[-1] if feed else None
+        if not last or any(str(last.get(key) or "") != str(entry.get(key) or "") for key in ("phase", "title", "detail")):
+            feed.append(entry)
+            _live_operator_snapshot["feed"] = feed[-12:]
+    else:
+        _live_operator_snapshot["feed"] = []
 
 
 def _connection_snapshot() -> dict:
@@ -276,11 +376,11 @@ def _serialize_browser_action_state() -> dict:
         reverse=True,
     )
     return {
-        "session": dict(_browser_action_state["session"]),
+        "session": _normalize_browser_session(_browser_action_state["session"]),
         "pending_count": sum(1 for item in proposals if item.get("status") == "pending"),
         "proposals": [dict(item) for item in proposals[:20]],
         "history": [dict(item) for item in history[:20]],
-        "approval_mode": _browser_action_state["session"].get("mode", "approval_required"),
+        "approval_mode": _normalize_browser_session(_browser_action_state["session"]).get("mode", "approval_required"),
     }
 
 
@@ -669,18 +769,7 @@ async def lifespan(app: FastAPI):
     print(f"[Axon] Server started on http://localhost:{PORT}")
     print(f"[Axon] Scheduler running — scan every {scan_hours}h, digest at {digest_hour}:00")
 
-    # Load persisted extra-allowed commands into the session allowlist
-    try:
-        async with devdb.get_db() as conn:
-            extra_cmds = (await devdb.get_setting(conn, "extra_allowed_cmds")) or ""
-        for cmd in extra_cmds.split(","):
-            cmd = cmd.strip()
-            if cmd == "*":
-                brain.agent_allow_command("", allow_all=True)
-            elif cmd:
-                brain.agent_allow_command(cmd)
-    except Exception:
-        pass
+    # Structured exact-action approvals supersede the legacy broad command allowlist.
 
     # Run initial scan on startup
     asyncio.create_task(sched_module.trigger_scan_now(trigger_type="startup"))
@@ -1000,10 +1089,120 @@ async def list_teams():
 
 # ─── Projects ─────────────────────────────────────────────────────────────────
 
+class WorkspacePreviewRequest(BaseModel):
+    auto_session_id: Optional[str] = None
+    restart: bool = False
+    attach_browser: bool = True
+
 @app.get("/api/workspace/env")
-async def workspace_env(path: str = Query(default="")):
+async def workspace_env(
+    path: str = Query(default=""),
+    project_id: int | None = Query(default=None),
+    auto_session_id: str = Query(default=""),
+):
     """Return venv / git-branch / dir name for an arbitrary workspace path."""
-    return runtime_manager.env_snapshot(path or None)
+    resolved_path = str(path or "").strip()
+    if project_id and not resolved_path:
+        async with devdb.get_db() as conn:
+            project = await devdb.get_project(conn, int(project_id))
+        if project:
+            project_path = project["path"] if "path" in project.keys() else ""
+            resolved_path = str(project_path or "").strip()
+    if project_id and auto_session_id:
+        auto_meta = await asyncio.to_thread(auto_session_service.read_auto_session, auto_session_id)
+        if auto_meta and int(auto_meta.get("workspace_id") or 0) == int(project_id):
+            resolved_path = str(auto_meta.get("sandbox_path") or resolved_path).strip()
+
+    payload = runtime_manager.env_snapshot(resolved_path or None)
+    if resolved_path:
+        payload.update(
+            live_preview_service.workspace_env_snapshot(
+                resolved_path,
+                workspace_id=project_id,
+                auto_session_id=auto_session_id,
+            )
+        )
+    return payload
+
+
+@app.get("/api/workspaces/{project_id}/preview")
+async def workspace_preview_status(project_id: int, auto_session_id: str = Query(default="")):
+    workspace, auto_meta, _ = await _workspace_preview_target(project_id, auto_session_id)
+    preview = await asyncio.to_thread(
+        lambda: live_preview_service.get_preview_session(
+            workspace_id=int(workspace.get("id") or 0),
+            auto_session_id=str((auto_meta or {}).get("session_id") or auto_session_id or ""),
+        )
+    )
+    return {
+        "workspace_id": workspace.get("id"),
+        "workspace_name": workspace.get("name") or "",
+        "auto_session_id": str((auto_meta or {}).get("session_id") or auto_session_id or ""),
+        "preview": _serialize_preview_session(preview),
+    }
+
+
+@app.post("/api/workspaces/{project_id}/preview/start")
+async def start_workspace_preview(project_id: int, body: WorkspacePreviewRequest | None = None):
+    payload = body or WorkspacePreviewRequest()
+    workspace, auto_meta, target_path = await _workspace_preview_target(project_id, payload.auto_session_id or "")
+    title = str((auto_meta or {}).get("title") or workspace.get("name") or "")
+    try:
+        preview = await asyncio.to_thread(
+            lambda: live_preview_service.ensure_preview_session(
+                workspace_id=int(workspace.get("id") or 0),
+                workspace_name=str(workspace.get("name") or ""),
+                source_path=target_path,
+                source_workspace_path=str(workspace.get("path") or ""),
+                auto_session_id=str((auto_meta or {}).get("session_id") or payload.auto_session_id or ""),
+                title=title,
+                restart=bool(payload.restart),
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    attached = None
+    if payload.attach_browser and preview and preview.get("url"):
+        attached = await _attach_preview_browser(
+            str(preview.get("url") or ""),
+            preview=preview,
+            workspace=workspace,
+            auto_meta=auto_meta,
+        )
+    if auto_meta and preview:
+        auto_meta["preview_url"] = str(preview.get("url") or "")
+        auto_meta["dev_url"] = str(preview.get("url") or "")
+        auto_meta["preview_status"] = str(preview.get("status") or "")
+        await asyncio.to_thread(auto_session_service.write_auto_session, auto_meta)
+    return {
+        "workspace_id": workspace.get("id"),
+        "workspace_name": workspace.get("name") or "",
+        "preview": _serialize_preview_session(preview),
+        "browser": attached,
+        "browser_actions": _serialize_browser_action_state(),
+    }
+
+
+@app.delete("/api/workspaces/{project_id}/preview")
+async def stop_workspace_preview(project_id: int, auto_session_id: str = Query(default="")):
+    workspace, auto_meta, _ = await _workspace_preview_target(project_id, auto_session_id)
+    try:
+        preview = await asyncio.to_thread(
+            lambda: live_preview_service.stop_preview_session(
+                workspace_id=int(workspace.get("id") or 0),
+                auto_session_id=str((auto_meta or {}).get("session_id") or auto_session_id or ""),
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+    _release_browser_preview_attachment(preview)
+    return {
+        "stopped": True,
+        "workspace_id": workspace.get("id"),
+        "preview": _serialize_preview_session(preview),
+    }
 
 
 @app.get("/api/projects")
@@ -1020,6 +1219,18 @@ async def get_project(project_id: int):
         if not row:
             raise HTTPException(404, "Project not found")
         return dict(row)
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: int):
+    async with devdb.get_db() as conn:
+        row = await devdb.get_project(conn, project_id)
+        if not row:
+            raise HTTPException(404, "Project not found")
+        payload = dict(row)
+        await devdb.delete_project(conn, project_id)
+        await devdb.log_event(conn, "workspace_deleted", f"Deleted workspace {payload.get('name') or project_id}")
+        return {"deleted": True, "project": payload}
 
 
 class ProjectUpdate(BaseModel):
@@ -1270,6 +1481,15 @@ class BrowserSessionUpdate(BaseModel):
     url: Optional[str] = None
     title: Optional[str] = None
     mode: Optional[str] = None
+    control_owner: Optional[str] = None
+    control_state: Optional[str] = None
+    attached_preview_url: Optional[str] = None
+    attached_preview_status: Optional[str] = None
+    attached_workspace_id: Optional[int] = None
+    attached_workspace_name: Optional[str] = None
+    attached_auto_session_id: Optional[str] = None
+    attached_scope_key: Optional[str] = None
+    attached_source_workspace_path: Optional[str] = None
 
 
 class BrowserActionProposalCreate(BaseModel):
@@ -1330,6 +1550,147 @@ def _serialize_task_sandbox(meta: dict | None, *, include_report: bool = False) 
     return item
 
 
+def _serialize_auto_session(meta: dict | None, *, include_report: bool = False) -> dict | None:
+    if not meta:
+        return None
+    item = dict(meta)
+    changed_files = list(item.get("changed_files") or [])
+    item["changed_files"] = changed_files if include_report else changed_files[:10]
+    item["changed_files_count"] = len(changed_files)
+    item["has_report"] = bool(item.get("report_markdown"))
+    item["apply_allowed"] = bool(item.get("status") == "review_ready" and changed_files)
+    item["resume_target"] = str(item.get("session_id") or "")
+    item["resume_reason"] = str(item.get("resume_reason") or item.get("status") or "auto_session")
+    preview = live_preview_service.get_preview_session(
+        workspace_id=int(item.get("workspace_id") or 0) or None,
+        auto_session_id=str(item.get("session_id") or ""),
+    )
+    if preview:
+        item["preview_url"] = str(preview.get("url") or "")
+        item["dev_url"] = str(preview.get("url") or "")
+        item["preview_status"] = str(preview.get("status") or "")
+    if not include_report:
+        item.pop("report_markdown", None)
+    return item
+
+
+def _auto_session_summary(meta: dict | None) -> dict | None:
+    item = _serialize_auto_session(meta)
+    if not item:
+        return None
+    return {
+        "session_id": item.get("session_id", ""),
+        "workspace_id": item.get("workspace_id"),
+        "workspace_name": item.get("workspace_name") or item.get("source_name") or "",
+        "status": item.get("status") or "ready",
+        "phase": "review" if item.get("status") == "review_ready" else item.get("status") or "ready",
+        "title": item.get("title") or item.get("workspace_name") or "Auto session",
+        "detail": item.get("last_error") or item.get("final_output") or "",
+        "changed_files_count": item.get("changed_files_count") or 0,
+        "apply_allowed": bool(item.get("apply_allowed")),
+        "resume_target": item.get("resume_target") or "",
+        "resume_reason": item.get("resume_reason") or "auto_session",
+        "updated_at": item.get("updated_at") or item.get("created_at") or "",
+        "runtime": item.get("resolved_runtime") or {},
+        "preview_url": item.get("preview_url") or "",
+        "preview_status": item.get("preview_status") or "",
+    }
+
+
+def _serialize_preview_session(meta: dict | None) -> dict | None:
+    if not meta:
+        return None
+    item = {
+        "status": "",
+        "healthy": False,
+        "source_workspace_path": "",
+        "last_error": "",
+        "log_tail": "",
+        **dict(meta),
+    }
+    item["url"] = str(item.get("url") or "")
+    item["healthy"] = bool(item.get("healthy"))
+    item["running"] = str(item.get("status") or "") in {"running", "starting"}
+    item["source_workspace_path"] = str(item.get("source_workspace_path") or "")
+    item["last_error"] = str(item.get("last_error") or "")
+    item["log_tail"] = str(item.get("log_tail") or "")
+    return item
+
+
+async def _workspace_preview_target(project_id: int, auto_session_id: str = "") -> tuple[dict, dict | None, str]:
+    async with devdb.get_db() as conn:
+        workspace = await devdb.get_project(conn, int(project_id))
+    if not workspace:
+        raise HTTPException(404, "Workspace not found")
+    workspace_dict = dict(workspace)
+    auto_meta = None
+    target_path = str(workspace_dict.get("path") or "")
+    auto_session_id = str(auto_session_id or "").strip()
+    if auto_session_id:
+        auto_meta = await asyncio.to_thread(auto_session_service.read_auto_session, auto_session_id)
+        if not auto_meta:
+            raise HTTPException(404, "Auto session not found.")
+        if int(auto_meta.get("workspace_id") or 0) != int(project_id):
+            raise HTTPException(400, "Auto session does not belong to this workspace.")
+        target_path = str(auto_meta.get("sandbox_path") or target_path)
+    return workspace_dict, auto_meta, target_path
+
+
+def _release_browser_preview_attachment(preview: dict | None = None) -> None:
+    session = _normalize_browser_session(_browser_action_state.get("session") or {})
+    preview_url = str((preview or {}).get("url") or "")
+    scope_key = str((preview or {}).get("scope_key") or "")
+    if preview_url and session.get("attached_preview_url") not in {"", preview_url}:
+        return
+    if scope_key and session.get("attached_scope_key") not in {"", scope_key}:
+        return
+    session = _normalize_browser_session(
+        session,
+        control_owner="manual",
+        control_state="connected" if session.get("connected") else "idle",
+    )
+    _browser_action_state["session"] = session
+
+
+async def _attach_preview_browser(
+    url: str,
+    *,
+    preview: dict | None = None,
+    workspace: dict | None = None,
+    auto_meta: dict | None = None,
+) -> dict[str, object]:
+    if not url:
+        return {"attached": False, "result": "No preview URL available"}
+    try:
+        import browser_bridge
+
+        bridge = browser_bridge.get_bridge()
+        if not bridge.is_running:
+            await bridge.start(headless=False)
+        result = await bridge.execute_action({"action_type": "navigate", "url": url})
+        bridge_status = bridge.status()
+        session = _normalize_browser_session(
+            _browser_action_state["session"],
+            connected=bool(result.get("success")),
+            url=url,
+            title=str(bridge_status.get("title") or _browser_action_state["session"].get("title") or ""),
+            last_seen_at=_now_iso(),
+            control_owner="axon" if result.get("success") else "manual",
+            control_state="attached" if result.get("success") else "blocked",
+            attached_preview_url=url,
+            attached_preview_status=str((preview or {}).get("status") or ""),
+            attached_workspace_id=int((workspace or {}).get("id") or 0) or None,
+            attached_workspace_name=str((workspace or {}).get("name") or (auto_meta or {}).get("workspace_name") or ""),
+            attached_auto_session_id=str((auto_meta or {}).get("session_id") or ""),
+            attached_scope_key=str((preview or {}).get("scope_key") or ""),
+            attached_source_workspace_path=str((preview or {}).get("source_workspace_path") or (workspace or {}).get("path") or ""),
+        )
+        _browser_action_state["session"] = session
+        return {"attached": bool(result.get("success")), "result": result}
+    except Exception as exc:
+        return {"attached": False, "result": str(exc)}
+
+
 async def _get_task_with_project(conn, task_id: int):
     cur = await conn.execute(
         """
@@ -1351,6 +1712,13 @@ class TaskSandboxRunRequest(BaseModel):
     cli_model: Optional[str] = None
     cli_session_persistence_enabled: Optional[bool] = None
     ollama_model: Optional[str] = None
+
+
+class AutoSessionStartRequest(TaskSandboxRunRequest):
+    message: str
+    project_id: Optional[int] = None
+    resource_ids: Optional[list[int]] = None
+    composer_options: Optional[dict] = None
 
 
 def _task_sandbox_runtime_override(payload: TaskSandboxRunRequest | None) -> dict[str, str]:
@@ -1399,9 +1767,9 @@ async def _task_sandbox_ai_params(
             merged[spec.model_setting] = runtime_override.get("api_model", "")
     elif backend == "cli":
         if "cli_path" in runtime_override:
-            merged["claude_cli_path"] = runtime_override.get("cli_path", "")
+            merged["cli_runtime_path"] = runtime_override.get("cli_path", "")
         if "cli_model" in runtime_override:
-            merged["claude_cli_model"] = runtime_override.get("cli_model", "")
+            merged["cli_runtime_model"] = runtime_override.get("cli_model", "")
         if "cli_session_persistence_enabled" in runtime_override:
             merged["claude_cli_session_persistence_enabled"] = "1" if runtime_override.get("cli_session_persistence_enabled") else "0"
     elif backend == "ollama":
@@ -1448,6 +1816,255 @@ def _task_sandbox_prompt(task: dict, sandbox_meta: dict) -> str:
     if detail:
         lines.extend(["", "Mission details:", detail])
     return "\n".join(lines).strip()
+
+
+def _selected_cli_path(settings: dict) -> str:
+    return str(settings.get("cli_runtime_path", settings.get("claude_cli_path", "")) or "").strip()
+
+
+def _selected_cli_model(settings: dict) -> str:
+    return str(settings.get("cli_runtime_model", settings.get("claude_cli_model", "")) or "").strip()
+
+
+def _selected_cli_family(settings: dict) -> str:
+    cli_path = _selected_cli_path(settings)
+    if not cli_path:
+        return "claude"
+    return brain._cli_runtime_family(cli_path) or "claude"
+
+
+def _family_cli_override_path(settings: dict, family: str) -> str:
+    family_name = str(family or "").strip().lower()
+    cli_path = _selected_cli_path(settings)
+    if not cli_path:
+        return ""
+    return cli_path if _selected_cli_family(settings) == family_name else ""
+
+
+def _apply_cli_runtime_settings(data: dict, current_settings: dict) -> None:
+    selected_cli_path = str(
+        data.get(
+            "cli_runtime_path",
+            data.get("claude_cli_path", _selected_cli_path(current_settings)),
+        )
+        or ""
+    ).strip()
+    requested_cli_model = str(
+        data.get(
+            "cli_runtime_model",
+            data.get("claude_cli_model", _selected_cli_model(current_settings)),
+        )
+        or ""
+    ).strip()
+    normalized_model = brain.normalize_cli_model(selected_cli_path, requested_cli_model)
+    selected_family = brain._cli_runtime_family(selected_cli_path) if selected_cli_path else "claude"
+    data["cli_runtime_path"] = selected_cli_path
+    data["cli_runtime_model"] = normalized_model
+    # Keep the legacy Claude-only keys readable, but only mirror them when Claude is selected.
+    data["claude_cli_path"] = selected_cli_path if selected_family == "claude" else ""
+    data["claude_cli_model"] = normalized_model if selected_family == "claude" else ""
+
+
+def _auto_session_prompt(message: str, session_meta: dict) -> str:
+    workspace_name = str(session_meta.get("workspace_name") or session_meta.get("source_name") or "workspace")
+    lines = [
+        f"Continue this request inside the current Axon Auto sandbox for {workspace_name}.",
+        "",
+        "You are in Axon Auto mode inside an isolated git worktree sandbox.",
+        f"Sandbox path: {session_meta.get('sandbox_path')}",
+        f"Source workspace: {session_meta.get('source_path')}",
+        "",
+        "Rules:",
+        "- Only inspect and edit files inside the sandbox path.",
+        "- Do not modify the source workspace directly. Source changes are only applied through the Auto session Apply action.",
+        "- Keep working autonomously until the request is complete or clearly blocked.",
+        "- Treat routine edits and local shell work inside the sandbox as pre-approved.",
+        "- If you hit a real blocker, explain it with tool-backed receipts instead of guessing.",
+        "- End with a concise checkpoint using these exact sections:",
+        "  Verified In This Run",
+        "  Inferred From Repo State",
+        "  Not Yet Verified",
+        "  Next Action Not Yet Taken",
+        "",
+        "User request:",
+        message.strip(),
+    ]
+    return "\n".join(lines).strip()
+
+
+def _auto_runtime_summary(ai: dict) -> dict[str, str]:
+    backend = str(ai.get("backend") or "").strip().lower()
+    if backend == "api":
+        provider_id = str(ai.get("api_provider") or "").strip().lower()
+        provider = provider_registry.PROVIDER_BY_ID.get(provider_id)
+        return {
+            "backend": backend,
+            "label": provider.label if provider else (provider_id or "API"),
+            "model": str(ai.get("api_model") or ""),
+        }
+    if backend == "cli":
+        cli_path = str(ai.get("cli_path") or "").strip()
+        binary = Path(cli_path).name.lower() if cli_path else ""
+        label = "Codex CLI" if binary == "codex" else "Claude CLI" if binary == "claude" else "CLI Runtime"
+        return {
+            "backend": backend,
+            "label": label,
+            "model": str(ai.get("cli_model") or ""),
+            "binary": cli_path,
+        }
+    return {
+        "backend": "ollama",
+        "label": "Local Ollama",
+        "model": str(ai.get("ollama_model") or ""),
+    }
+
+
+def _auto_tool_command(tool_name: str, tool_args: dict) -> tuple[str, str, str]:
+    name = str(tool_name or "").strip()
+    args = tool_args or {}
+    if name in {"shell_cmd", "shell_bg", "shell_bg_check"}:
+        command = str(args.get("cmd") or args.get("command") or args.get("check") or "").strip()
+        cwd = str(args.get("cwd") or "").strip()
+        return command, cwd, command
+    if name == "git_status":
+        cwd = str(args.get("cwd") or args.get("path") or "").strip()
+        return "git status", cwd, "git status"
+    if name == "git_diff":
+        cwd = str(args.get("cwd") or args.get("path") or "").strip()
+        target = str(args.get("path") or "").strip()
+        label = "git diff" if not target else f"git diff {target}"
+        return label, cwd, label
+    if name == "read_file":
+        target = str(args.get("path") or "").strip()
+        return "", "", f"read_file {target}".strip()
+    if name == "edit_file":
+        target = str(args.get("path") or "").strip()
+        return "", "", f"edit_file {target}".strip()
+    if name == "list_files":
+        target = str(args.get("path") or "").strip()
+        return "", "", f"list_files {target}".strip()
+    return "", "", name or "tool"
+
+
+def _is_verification_command(tool_name: str, tool_args: dict) -> bool:
+    command, _cwd, label = _auto_tool_command(tool_name, tool_args)
+    haystack = f"{command} {label}".lower()
+    verification_terms = (
+        " test",
+        "test ",
+        "pytest",
+        "jest",
+        "vitest",
+        "build",
+        "tsc",
+        "typecheck",
+        "lint",
+        "check",
+        "ruff",
+        "mypy",
+        "go test",
+        "cargo test",
+        "phpunit",
+        "next build",
+        "npm run build",
+        "npm run test",
+        "pnpm build",
+        "pnpm test",
+        "yarn build",
+        "yarn test",
+    )
+    return any(term in haystack for term in verification_terms)
+
+
+def _auto_receipt_summary(result: str) -> str:
+    text = str(result or "").strip()
+    if not text:
+        return ""
+    first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    return first_line[:220]
+
+
+def _auto_session_live_operator(session_meta: dict, event: dict):
+    event_type = str(event.get("type") or "")
+    workspace_id = session_meta.get("workspace_id")
+    session_id = str(session_meta.get("session_id") or "")
+    changed_files_count = len(session_meta.get("changed_files") or [])
+    if event_type == "tool_call":
+        _set_live_operator(
+            active=True,
+            mode="auto",
+            phase="execute",
+            title=f"Auto: {str(event.get('name') or 'tool').replace('_', ' ')}",
+            detail=_json.dumps(event.get("args") or {})[:180],
+            tool=event.get("name", ""),
+            workspace_id=workspace_id,
+            auto_session_id=session_id,
+            changed_files_count=changed_files_count,
+            apply_allowed=False,
+            preserve_started=True,
+        )
+    elif event_type == "tool_result":
+        _set_live_operator(
+            active=True,
+            mode="auto",
+            phase="verify",
+            title=f"Checking {str(event.get('name') or 'tool').replace('_', ' ')}",
+            detail=str(event.get("result") or "")[:180],
+            tool=event.get("name", ""),
+            workspace_id=workspace_id,
+            auto_session_id=session_id,
+            changed_files_count=changed_files_count,
+            apply_allowed=False,
+            preserve_started=True,
+        )
+    elif event_type == "text":
+        _set_live_operator(
+            active=True,
+            mode="auto",
+            phase="verify",
+            title="Writing Auto handoff",
+            detail="Axon is preparing the sandbox review handoff.",
+            workspace_id=workspace_id,
+            auto_session_id=session_id,
+            changed_files_count=changed_files_count,
+            apply_allowed=False,
+            preserve_started=True,
+        )
+    elif event_type == "thinking":
+        _set_live_operator(
+            active=True,
+            mode="auto",
+            phase="plan",
+            title="Planning inside Auto sandbox",
+            detail=str(event.get("chunk") or "")[:180],
+            workspace_id=workspace_id,
+            auto_session_id=session_id,
+            changed_files_count=changed_files_count,
+            apply_allowed=False,
+            preserve_started=True,
+        )
+    elif event_type == "approval_required":
+        _set_live_operator(
+            active=False,
+            mode="auto",
+            phase="recover",
+            title="Auto session awaiting approval",
+            detail=str(event.get("message") or "Axon paused for approval inside the sandbox.")[:180],
+            summary=str(session_meta.get("title") or "")[:120],
+            workspace_id=workspace_id,
+            auto_session_id=session_id,
+        )
+    elif event_type == "error":
+        _set_live_operator(
+            active=False,
+            mode="auto",
+            phase="recover",
+            title="Auto session needs attention",
+            detail=str(event.get("message") or "Axon stopped inside the sandbox.")[:180],
+            summary=str(session_meta.get("title") or "")[:120],
+            workspace_id=workspace_id,
+            auto_session_id=session_id,
+        )
 
 
 def _task_sandbox_live_operator(task: dict, event: dict):
@@ -1598,6 +2215,9 @@ async def _run_task_sandbox_background(
             cli_session_persistence=bool(ai.get("cli_session_persistence", False)),
             backend=ai.get("backend", ""),
             force_tool_mode=True,
+            autonomy_profile=_normalized_autonomy_profile(settings.get("autonomy_profile") or "workspace_auto"),
+            external_fetch_policy=_normalized_external_fetch_policy(settings.get("external_fetch_policy") or "cache_first"),
+            external_fetch_cache_ttl_seconds=str(settings.get("external_fetch_cache_ttl_seconds") or "21600"),
         ):
             _task_sandbox_live_operator(task, event)
             if event.get("type") == "text":
@@ -1838,34 +2458,582 @@ async def discard_task_sandbox(task_id: int):
     return result
 
 
+def _auto_session_title(message: str, workspace_name: str = "") -> str:
+    text = " ".join(str(message or "").strip().split())
+    if not text:
+        return f"{workspace_name or 'Workspace'} Auto session".strip()
+    return text[:120]
+
+
+def _auto_resume_prompt(session_meta: dict, resume_message: str = "") -> str:
+    text = " ".join(str(resume_message or "").strip().split())
+    generic = {"continue", "please continue", "resume", "retry"}
+    prompt_lines = [
+        "Continue the existing Axon Auto session in this sandbox.",
+        "Do not ask whether to continue or start over.",
+        "Stay inside the sandbox and either make the next concrete change or report a real blocker with receipts.",
+    ]
+    if text and text.lower() not in generic:
+        prompt_lines.extend(["", f"Resume instruction: {text}"])
+    prior = str(session_meta.get("report_markdown") or session_meta.get("final_output") or "").strip()
+    if prior:
+        prompt_lines.extend(["", "Previous session state:", prior[:4000]])
+    return "\n".join(prompt_lines).strip()
+
+
+async def _run_auto_session_background(
+    workspace: dict,
+    session_meta: dict,
+    *,
+    resume: bool = False,
+    resume_message: str = "",
+    runtime_override: dict[str, str] | None = None,
+    composer_options: dict | None = None,
+):
+    session_id = str(session_meta.get("session_id") or "")
+    workspace_id = int(workspace["id"])
+    workspace_name = str(workspace.get("name") or "")
+    sandbox_path = str(session_meta.get("sandbox_path") or "")
+    start_prompt = str(session_meta.get("start_prompt") or "")
+    prompt = _auto_resume_prompt(session_meta, resume_message) if resume else _auto_session_prompt(start_prompt, session_meta)
+    final_output_parts: list[str] = []
+    approval_message = ""
+    run_error = ""
+    command_receipts = list(session_meta.get("command_receipts") or [])
+    verification_receipts = list(session_meta.get("verification_receipts") or [])
+    pending_tool_calls: list[dict] = []
+    max_iterations = 75
+    context_compact = True
+    permission_state = brain.agent_capture_permission_state()
+    autonomous_shell_cmds = ("rm", "chmod", "ln")
+
+    try:
+        async with devdb.get_db() as conn:
+            settings = await devdb.get_all_settings(conn)
+            runtime_override = runtime_override or dict(session_meta.get("runtime_override") or {})
+            composer_options = _composer_options_dict(composer_options or session_meta.get("composer_options") or {})
+            composer_options["agent_role"] = "auto"
+            composer_options["safe_mode"] = True
+            composer_options["require_approval"] = False
+            composer_options["external_mode"] = composer_options.get("external_mode") or "local_first"
+            ai = await _task_sandbox_ai_params(settings, conn=conn, runtime_override=runtime_override)
+            projects = [dict(r) for r in await devdb.get_projects(conn, status="active")]
+            tasks = [dict(r) for r in await devdb.get_tasks(conn, status="open")]
+            prompts_list = [dict(r) for r in await devdb.get_prompts(conn)]
+            context_block = brain._build_context_block(projects, tasks, prompts_list)
+            history_rows = await _load_chat_history_rows(conn, project_id=workspace_id, degrade_to_empty=True)
+            history = _history_messages_from_rows(history_rows)
+            resource_ids = list(session_meta.get("resource_ids") or [])
+            resource_bundle = await _resource_bundle(
+                conn,
+                resource_ids=resource_ids,
+                user_message=start_prompt,
+                settings=settings,
+            )
+            ai, _vision_warnings = await auto_route_vision_runtime(
+                settings=settings,
+                ai=ai,
+                resource_bundle=resource_bundle,
+                requested_model="",
+                resolve_provider_key=lambda provider_id: devvault.vault_resolve_provider_key(conn, provider_id),
+                vault_unlocked=devvault.VaultSession.is_unlocked(),
+            )
+            if _vision_warnings:
+                resource_bundle["warnings"].extend(_vision_warnings)
+            ai, _image_warnings = await _auto_route_image_generation_runtime(
+                conn,
+                settings=settings,
+                ai=ai,
+                user_message=start_prompt,
+                requested_model="",
+                agent_request=True,
+            )
+            if _image_warnings:
+                resource_bundle["warnings"].extend(_image_warnings)
+            settings = {**settings, "ai_backend": ai.get("backend", settings.get("ai_backend", "api"))}
+            memory_bundle = await _memory_bundle(
+                conn,
+                user_message=start_prompt,
+                project_id=workspace_id,
+                resource_ids=resource_ids,
+                settings=settings,
+                composer_options=composer_options,
+            )
+            composer_block = _composer_instruction_block(composer_options)
+            merged_context_block = "\n\n".join(
+                block for block in (context_block, memory_bundle["context_block"], composer_block) if block
+            )
+            max_iterations = max(10, min(200, int(settings.get("max_agent_iterations") or "75")))
+            context_compact = str(settings.get("context_compact_enabled", "1")).strip().lower() in {"1", "true", "yes", "on"}
+            session_meta["resolved_runtime"] = _auto_runtime_summary(ai)
+
+        session_meta = await asyncio.to_thread(
+            auto_session_service.ensure_auto_session,
+            session_id,
+            workspace,
+            title=str(session_meta.get("title") or workspace_name or "Auto session"),
+            detail=str(session_meta.get("detail") or ""),
+            runtime_override=runtime_override,
+            start_prompt=start_prompt,
+            mode="auto",
+            metadata={
+                "status": "running",
+                "last_error": "",
+                "last_run_started_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+                "runtime_override": runtime_override,
+                "resolved_runtime": session_meta.get("resolved_runtime") or {},
+                "resource_ids": list(session_meta.get("resource_ids") or []),
+                "composer_options": dict(composer_options or {}),
+                "command_receipts": command_receipts,
+                "verification_receipts": verification_receipts,
+                "inferred_notes": list(session_meta.get("inferred_notes") or []),
+            },
+        )
+
+        brain.agent_allow_edit(sandbox_path, scope="repo")
+        for cmd_name in autonomous_shell_cmds:
+            brain.agent_allow_command(cmd_name)
+
+        _set_live_operator(
+            active=True,
+            mode="auto",
+            phase="execute",
+            title="Running Auto session",
+            detail=start_prompt[:180],
+            summary=str(session_meta.get("title") or "")[:120],
+            workspace_id=workspace_id,
+            auto_session_id=session_id,
+            changed_files_count=0,
+        )
+
+        for warning in resource_bundle["warnings"]:
+            final_output_parts.append(f"⚠️ {warning}\n\n")
+
+        async for event in brain.run_agent(
+            prompt,
+            history,
+            merged_context_block,
+            project_name=workspace_name,
+            workspace_path=sandbox_path,
+            resource_context=resource_bundle["context_block"],
+            resource_image_paths=resource_bundle["image_paths"],
+            vision_model=resource_bundle["vision_model"],
+            ollama_url=ai.get("ollama_url", ""),
+            ollama_model=ai.get("ollama_model", ""),
+            max_iterations=max_iterations,
+            context_compact=context_compact,
+            force_tool_mode=True,
+            api_key=ai.get("api_key", ""),
+            api_base_url=ai.get("api_base_url", ""),
+            api_model=ai.get("api_model", ""),
+            api_provider=ai.get("api_provider", ""),
+            cli_path=ai.get("cli_path", ""),
+            cli_model=ai.get("cli_model", ""),
+            cli_session_persistence=bool(ai.get("cli_session_persistence", False)),
+            backend=ai.get("backend", ""),
+            workspace_id=workspace_id,
+            autonomy_profile=_normalized_autonomy_profile(settings.get("autonomy_profile") or "workspace_auto"),
+            external_fetch_policy=_normalized_external_fetch_policy(settings.get("external_fetch_policy") or "cache_first"),
+            external_fetch_cache_ttl_seconds=str(settings.get("external_fetch_cache_ttl_seconds") or "21600"),
+        ):
+            if event.get("type") == "tool_call":
+                tool_name = str(event.get("name") or "")
+                tool_args = dict(event.get("args") or {})
+                command, cwd, label = _auto_tool_command(tool_name, tool_args)
+                pending_tool_calls.append(
+                    {
+                        "tool": tool_name,
+                        "args": tool_args,
+                        "command": command,
+                        "cwd": cwd,
+                        "label": label,
+                        "recorded_at": _now_iso(),
+                    }
+                )
+            elif event.get("type") == "tool_result":
+                tool_name = str(event.get("name") or "")
+                result = str(event.get("result") or "")
+                pending = None
+                for index in range(len(pending_tool_calls) - 1, -1, -1):
+                    if pending_tool_calls[index].get("tool") == tool_name:
+                        pending = pending_tool_calls.pop(index)
+                        break
+                receipt = {
+                    **(pending or {"tool": tool_name, "args": dict(event.get("args") or {}), "label": tool_name, "recorded_at": _now_iso()}),
+                    "summary": _auto_receipt_summary(result),
+                    "result_preview": result[:500],
+                    "success": not result.startswith("ERROR:"),
+                }
+                command_receipts.append(receipt)
+                if _is_verification_command(tool_name, receipt.get("args") or {}):
+                    verification_receipts.append(receipt)
+            elif event.get("type") == "text":
+                final_output_parts.append(str(event.get("chunk") or ""))
+            elif event.get("type") == "approval_required":
+                approval_message = str(event.get("message") or "Approval required to continue the Auto session.")
+                break
+            elif event.get("type") == "error":
+                run_error = str(event.get("message") or "Auto session failed.")
+                break
+            _auto_session_live_operator(session_meta, event)
+
+        session_meta = await asyncio.to_thread(auto_session_service.read_auto_session, session_id)
+        session_meta = session_meta or {}
+        session_meta.update(
+            {
+                "workspace_id": workspace_id,
+                "workspace_name": workspace_name,
+                "source_name": workspace_name,
+                "source_path": workspace.get("path") or "",
+                "resolved_runtime": session_meta.get("resolved_runtime") or _auto_runtime_summary(ai),
+                "resource_ids": list(session_meta.get("resource_ids") or []),
+                "composer_options": dict(composer_options or {}),
+                "command_receipts": command_receipts,
+                "verification_receipts": verification_receipts,
+                "final_output": "".join(final_output_parts).strip(),
+                "last_run_completed_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            }
+        )
+        if approval_message:
+            session_meta["status"] = "approval_required"
+            session_meta["last_error"] = approval_message
+        elif run_error:
+            session_meta["status"] = "error"
+            session_meta["last_error"] = run_error
+        else:
+            session_meta["status"] = "completed"
+            session_meta["last_error"] = ""
+        await asyncio.to_thread(auto_session_service.write_auto_session, session_meta)
+        refreshed = await asyncio.to_thread(auto_session_service.refresh_auto_session, session_id) or session_meta
+
+        if not approval_message and not run_error:
+            start_snapshot = dict(refreshed.get("start_snapshot") or {})
+            start_commit = str(start_snapshot.get("latest_commit") or "")
+            end_commit = str(refreshed.get("latest_commit") or "")
+            changed_files = list(refreshed.get("changed_files") or [])
+            commit_changed = bool(start_commit and end_commit and end_commit != start_commit)
+            concrete_blocker = bool(refreshed.get("last_error"))
+            if not changed_files and not verification_receipts and not commit_changed and not concrete_blocker:
+                refreshed["status"] = "error"
+                refreshed["last_error"] = (
+                    "Auto session finished without repository changes, verification receipts, "
+                    "or a concrete blocker. Axon did not produce a reviewable handoff."
+                )
+                await asyncio.to_thread(auto_session_service.write_auto_session, refreshed)
+                refreshed = await asyncio.to_thread(auto_session_service.refresh_auto_session, session_id) or refreshed
+
+        current_status = str(refreshed.get("status") or "")
+        changed_files_count = len(refreshed.get("changed_files") or [])
+        if current_status == "review_ready":
+            _set_live_operator(
+                active=False,
+                mode="auto",
+                phase="verify",
+                title="Auto session ready for review",
+                detail="Axon finished the sandbox pass and prepared a reviewable handoff.",
+                summary=str(refreshed.get("title") or "")[:120],
+                workspace_id=workspace_id,
+                auto_session_id=session_id,
+                changed_files_count=changed_files_count,
+                apply_allowed=bool(changed_files_count),
+            )
+        elif current_status == "approval_required":
+            _set_live_operator(
+                active=False,
+                mode="auto",
+                phase="recover",
+                title="Auto session awaiting approval",
+                detail=str(refreshed.get("last_error") or approval_message or "")[:180],
+                summary=str(refreshed.get("title") or "")[:120],
+                workspace_id=workspace_id,
+                auto_session_id=session_id,
+                changed_files_count=changed_files_count,
+            )
+        else:
+            _set_live_operator(
+                active=False,
+                mode="auto",
+                phase="recover" if current_status == "error" else "verify",
+                title="Auto session needs attention" if current_status == "error" else "Auto session updated",
+                detail=str(refreshed.get("last_error") or refreshed.get("final_output") or "")[:180],
+                summary=str(refreshed.get("title") or "")[:120],
+                workspace_id=workspace_id,
+                auto_session_id=session_id,
+                changed_files_count=changed_files_count,
+            )
+    except Exception as exc:
+        meta = await asyncio.to_thread(auto_session_service.read_auto_session, session_id)
+        meta = meta or session_meta or {}
+        meta.update(
+            {
+                "status": "error",
+                "last_error": str(exc),
+                "final_output": "".join(final_output_parts).strip(),
+                "last_run_completed_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+                "command_receipts": command_receipts,
+                "verification_receipts": verification_receipts,
+            }
+        )
+        await asyncio.to_thread(auto_session_service.write_auto_session, meta)
+        await asyncio.to_thread(auto_session_service.refresh_auto_session, session_id)
+        _set_live_operator(
+            active=False,
+            mode="auto",
+            phase="recover",
+            title="Auto session needs attention",
+            detail=str(exc)[:180],
+            summary=str(session_meta.get("title") or "")[:120],
+            workspace_id=workspace_id,
+        )
+    finally:
+        brain.agent_restore_permission_state(permission_state)
+        _auto_session_runs.pop(session_id, None)
+
+
+async def _queue_auto_session_run(
+    body: AutoSessionStartRequest,
+    *,
+    resume: bool = False,
+    session_id: str = "",
+):
+    resume_message = str(body.message or "").strip()
+    existing_session = None
+    project_id = body.project_id
+    if resume and session_id:
+        existing_session = await asyncio.to_thread(auto_session_service.refresh_auto_session, session_id)
+        project_id = project_id or int(existing_session.get("workspace_id") or 0) if existing_session else project_id
+
+    if not project_id:
+        raise HTTPException(400, "Select a workspace before starting Auto mode.")
+
+    async with devdb.get_db() as conn:
+        workspace = await devdb.get_project(conn, int(project_id))
+    if not workspace:
+        raise HTTPException(404, "Workspace not found")
+    workspace_dict = dict(workspace)
+
+    normalized_options = _composer_options_dict(body.composer_options)
+    normalized_options["agent_role"] = "auto"
+    normalized_options["require_approval"] = False
+    normalized_options["safe_mode"] = True
+    normalized_options["external_mode"] = normalized_options.get("external_mode") or "local_first"
+    runtime_override = _task_sandbox_runtime_override(body)
+
+    existing = await asyncio.to_thread(
+        auto_session_service.find_workspace_auto_session,
+        int(project_id),
+        active_only=True,
+    )
+    if existing:
+        existing = await asyncio.to_thread(
+            auto_session_service.refresh_auto_session,
+            str(existing.get("session_id") or ""),
+        ) or existing
+
+    if resume:
+        target_id = session_id or str((existing or {}).get("session_id") or "").strip()
+        if not target_id:
+            raise HTTPException(404, "No Auto session to continue for this workspace.")
+        session_meta = (
+            existing_session
+            if existing_session and str(existing_session.get("session_id") or "") == target_id
+            else await asyncio.to_thread(auto_session_service.refresh_auto_session, target_id)
+        )
+        if not session_meta:
+            raise HTTPException(404, "Auto session not found.")
+        if not runtime_override:
+            runtime_override = dict(session_meta.get("runtime_override") or {})
+        current = _auto_session_runs.get(target_id)
+        if current and not current.done():
+            return {"started": False, "already_running": True, "session": _serialize_auto_session(session_meta, include_report=True)}
+    else:
+        if existing and str(existing.get("status") or "") not in {"applied", "discarded"}:
+            current = _auto_session_runs.get(str(existing.get("session_id") or ""))
+            return {
+                "started": False,
+                "already_running": bool(current and not current.done()),
+                "requires_resolution": True,
+                "session": _serialize_auto_session(existing, include_report=True),
+            }
+        target_id = f"{int(_time.time() * 1000)}-{workspace_dict['id']}"
+        session_meta = await asyncio.to_thread(
+            auto_session_service.ensure_auto_session,
+            target_id,
+            workspace_dict,
+            title=_auto_session_title(body.message, str(workspace_dict.get("name") or "")),
+            detail=str(body.message or "").strip()[:300],
+            runtime_override=runtime_override,
+            start_prompt=str(body.message or "").strip(),
+            mode="auto",
+            metadata={
+                "resource_ids": list(body.resource_ids or []),
+                "composer_options": dict(normalized_options),
+                "status": "ready",
+            },
+        )
+
+    run_task = asyncio.create_task(
+        _run_auto_session_background(
+            workspace_dict,
+            session_meta,
+            resume=resume,
+            resume_message=resume_message,
+            runtime_override=runtime_override,
+            composer_options=normalized_options,
+        )
+    )
+    _auto_session_runs[target_id] = run_task
+    return {
+        "started": True,
+        "resume": resume,
+        "session": _serialize_auto_session(session_meta, include_report=True),
+    }
+
+
+@app.get("/api/auto/sessions")
+async def list_auto_sessions():
+    rows = await asyncio.to_thread(auto_session_service.list_auto_sessions)
+    refreshed_rows: list[dict] = []
+    for row in rows:
+        session_id = str(row.get("session_id") or "").strip()
+        if not session_id:
+            continue
+        status = str(row.get("status") or "").strip().lower()
+        if status in {"running", "completed", "ready", "error", "approval_required"} or row.get("last_run_completed_at"):
+            try:
+                refreshed = await asyncio.to_thread(auto_session_service.refresh_auto_session, session_id)
+            except Exception as exc:
+                degraded = dict(row)
+                degraded["status"] = "error"
+                degraded["last_error"] = str(exc)
+                refreshed_rows.append(degraded)
+            else:
+                refreshed_rows.append(refreshed or row)
+        else:
+            refreshed_rows.append(row)
+    return {"sessions": [_serialize_auto_session(item) for item in refreshed_rows]}
+
+
+@app.post("/api/auto/start")
+async def start_auto_session(body: AutoSessionStartRequest):
+    return await _queue_auto_session_run(body, resume=False)
+
+
+@app.get("/api/auto/{session_id}")
+async def get_auto_session(session_id: str):
+    session = await asyncio.to_thread(auto_session_service.refresh_auto_session, session_id)
+    if not session:
+        raise HTTPException(404, "Auto session not found.")
+    return {"session": _serialize_auto_session(session, include_report=True)}
+
+
+@app.post("/api/auto/{session_id}/continue")
+async def continue_auto_session(session_id: str, body: AutoSessionStartRequest | None = None):
+    payload = body or AutoSessionStartRequest(message="please continue")
+    return await _queue_auto_session_run(payload, resume=True, session_id=session_id)
+
+
+@app.post("/api/auto/{session_id}/apply")
+async def apply_auto_session(session_id: str):
+    try:
+        result = await asyncio.to_thread(auto_session_service.apply_auto_session, session_id)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    session = await asyncio.to_thread(auto_session_service.refresh_auto_session, session_id)
+    return {
+        "applied": True,
+        "summary": result.get("summary", ""),
+        "session": _serialize_auto_session(session, include_report=True),
+    }
+
+
+@app.delete("/api/auto/{session_id}")
+async def discard_auto_session(session_id: str):
+    try:
+        result = await asyncio.to_thread(auto_session_service.discard_auto_session, session_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return result
+
+
 # ─── AI backend helper ────────────────────────────────────────────────────────
 
-async def _ai_params(settings: dict, conn=None) -> dict:
+async def _resolved_api_runtime(settings: dict, provider_id: str, conn=None) -> tuple[dict, str]:
+    candidate_settings = dict(settings)
+    candidate_settings["api_provider"] = provider_id
+    runtime = provider_registry.runtime_api_config(candidate_settings)
+    resolved_key = runtime.get("api_key", "")
+
+    if devvault.VaultSession.is_unlocked() and (not resolved_key or resolved_key == "set"):
+        async def _resolve(db):
+            return await devvault.vault_resolve_provider_key(db, provider_id)
+
+        if conn:
+            vault_key = await _resolve(conn)
+        else:
+            async with devdb.get_db() as _conn:
+                vault_key = await _resolve(_conn)
+        if vault_key:
+            resolved_key = vault_key
+
+    return runtime, resolved_key
+
+
+async def _selected_api_runtime_truth(settings: dict, conn=None) -> dict:
+    provider_id = provider_registry.selected_api_provider_id(settings)
+    runtime, resolved_key = await _resolved_api_runtime(settings, provider_id, conn)
+    public = provider_registry.public_runtime_api_config(settings)
+    public["provider_id"] = provider_id
+    public["provider_label"] = runtime.get("provider_label", public.get("provider_label", "API"))
+    public["transport"] = runtime.get("transport", public.get("transport", ""))
+    public["api_base_url"] = runtime.get("api_base_url", public.get("api_base_url", ""))
+    public["api_model"] = runtime.get("api_model", public.get("api_model", ""))
+    public["api_key_configured"] = bool(str(resolved_key or "").strip())
+    public["key_hint"] = provider_registry.mask_secret(str(resolved_key or "")) if resolved_key else public.get("key_hint", "")
+    return public
+
+
+async def _runtime_truth_for_settings(settings: dict, conn=None, *, backend_override: str = "") -> tuple[dict, dict]:
+    truth_settings = dict(settings)
+    if backend_override:
+        truth_settings["ai_backend"] = backend_override
+    selected_cli_override = _selected_cli_path(settings)
+    selected_cli_family = brain._cli_runtime_family(selected_cli_override) if selected_cli_override else "claude"
+    claude_runtime = {
+        **claude_cli_runtime.build_cli_runtime_snapshot(selected_cli_override if selected_cli_family == "claude" else ""),
+        "runtime_id": "claude",
+        "runtime_name": "Claude CLI",
+    }
+    codex_runtime = {
+        **codex_cli_runtime.build_codex_runtime_snapshot(selected_cli_override if selected_cli_family == "codex" else ""),
+        "runtime_id": "codex",
+        "runtime_name": "Codex CLI",
+    }
+    cli_runtime = codex_runtime if selected_cli_family == "codex" else claude_runtime
+    cli_binary = str(cli_runtime.get("binary") or brain._resolve_selected_cli_binary(selected_cli_override) or "")
+    cooldown = current_cli_cooldown(key=brain._cli_runtime_key(cli_binary)) if cli_binary else {}
+    status = {
+        "selected_api_provider": await _selected_api_runtime_truth(settings, conn),
+        "cli_runtime": cli_runtime,
+        "codex_runtime": codex_runtime,
+        "cli_cooldown_remaining_seconds": float(cooldown.get("remaining_seconds") or 0),
+    }
+    truth = runtime_truth_service.build_runtime_truth(
+        status,
+        settings=truth_settings,
+        ollama_running=bool(_ollama_service_status().get("running")),
+    )
+    return truth, status
+
+
+async def _ai_params(settings: dict, conn=None, *, allow_degraded_api: bool = False) -> dict:
     """Extract AI backend params from settings dict, resolving keys from vault when available."""
     backend = settings.get("ai_backend", "api")
     selected_provider_id = provider_registry.selected_api_provider_id(settings)
 
-    async def _resolved_api_runtime(provider_id: str) -> tuple[dict, str]:
-        candidate_settings = dict(settings)
-        candidate_settings["api_provider"] = provider_id
-        runtime = provider_registry.runtime_api_config(candidate_settings)
-        resolved_key = runtime.get("api_key", "")
-
-        if devvault.VaultSession.is_unlocked() and (not resolved_key or resolved_key == "set"):
-            async def _resolve(db):
-                return await devvault.vault_resolve_provider_key(db, provider_id)
-
-            if conn:
-                vault_key = await _resolve(conn)
-            else:
-                async with devdb.get_db() as _conn:
-                    vault_key = await _resolve(_conn)
-            if vault_key:
-                resolved_key = vault_key
-
-        return runtime, resolved_key
-
-    api_runtime, api_key = await _resolved_api_runtime(selected_provider_id)
+    api_runtime, api_key = await _resolved_api_runtime(settings, selected_provider_id, conn)
     provider_id = api_runtime.get("provider_id", selected_provider_id or "deepseek")
 
     if backend in {"cli", "ollama"} and not api_key:
@@ -1875,19 +3043,19 @@ async def _ai_params(settings: dict, conn=None) -> dict:
             if spec.runtime_capable and spec.provider_id != provider_id
         ]
         for candidate_id in fallback_candidates:
-            candidate_runtime, candidate_key = await _resolved_api_runtime(candidate_id)
+            candidate_runtime, candidate_key = await _resolved_api_runtime(settings, candidate_id, conn)
             if candidate_key:
                 api_runtime = candidate_runtime
                 api_key = candidate_key
                 provider_id = candidate_runtime.get("provider_id", candidate_id)
                 break
 
-    cli_path = settings.get("claude_cli_path", "")
-    cli_model = settings.get("claude_cli_model", "")
+    cli_path = _selected_cli_path(settings)
+    cli_model = _selected_cli_model(settings)
     cli_session_persistence = cli_session_persistence_enabled(settings.get("claude_cli_session_persistence_enabled"))
     ollama_url = settings.get("ollama_url", "")
     ollama_model = settings.get("ollama_model", "")
-    if backend == "api" and not api_key:
+    if backend == "api" and not api_key and not allow_degraded_api:
         provider_label = api_runtime.get("provider_label", "External API")
         raise HTTPException(400, f"{provider_label} key not set. Add it to the Secure Vault or Settings → Runtime.")
     if backend == "cli" and not cli_path and not brain._find_cli():
@@ -1931,6 +3099,11 @@ def _composer_instruction_block(options: dict) -> str:
     if agent_role:
         if str(agent_role).lower() == "multi_agent":
             lines.append("- Agent mode: Multi-Agent orchestration is preferred for planning, execution, and verification.")
+        elif str(agent_role).lower() == "auto":
+            lines.append("- Agent mode: Autonomous workspace execution is active.")
+            lines.append("- Keep working inside the selected workspace until the request is complete or clearly blocked.")
+            lines.append("- Do not stop at a plan, commentary, or partial diagnosis when you can execute and verify the next step.")
+            lines.append("- Ask the user only if the request is materially ambiguous, credentials are missing, or a risky action truly needs confirmation.")
         else:
             lines.append(f"- Agent role: {str(agent_role).replace('_', ' ').title()} Agent")
     if options.get("use_workspace_memory", True):
@@ -2039,6 +3212,8 @@ def _local_role_for_composer(options: dict, agent_request: bool = False) -> str:
 
     if agent_role in {"planner", "reviewer", "repair"}:
         return "reasoning"
+    if agent_role == "auto":
+        return "code"
     if agent_role == "coder":
         return "code"
     if agent_role == "scanner":
@@ -2054,8 +3229,58 @@ def _local_role_for_composer(options: dict, agent_request: bool = False) -> str:
     return "general"
 
 
+def _normalized_autonomy_profile(value: str, *, reject_elevated: bool = False) -> str:
+    profile = str(value or "workspace_auto").strip().lower() or "workspace_auto"
+    if profile == "manual":
+        return "manual"
+    if profile in {"branch_auto", "pr_auto", "merge_auto", "deploy_auto"}:
+        if reject_elevated:
+            raise HTTPException(400, "Elevated autonomy profiles are disabled in this hardening phase.")
+        return "workspace_auto"
+    return "workspace_auto"
+
+
+def _normalized_external_fetch_policy(value: str) -> str:
+    policy = str(value or "cache_first").strip().lower()
+    if policy in {"", "memory_first", "cache_first"}:
+        return "cache_first"
+    if policy == "live_first":
+        return "live_first"
+    return "cache_first"
+
+
+def _normalized_max_history_turns(settings_or_payload: dict, key: str = "max_history_turns") -> str:
+    raw = str((settings_or_payload or {}).get(key) or "").strip()
+    if raw in {"", "12"}:
+        return "10"
+    return str(_setting_int(settings_or_payload, key, 10, minimum=6, maximum=60))
+
+
+def _model_budget_for_request(composer_options: dict, *, agent_request: bool = False) -> str:
+    options = _composer_options_dict(composer_options)
+    intelligence = str(options.get("intelligence_mode") or "ask").strip().lower()
+    action = str(options.get("action_mode") or "").strip().lower()
+    agent_role = str(options.get("agent_role") or "").strip().lower()
+    if intelligence in {"deep_research", "compare"} or agent_role in {"planner", "reviewer", "repair"}:
+        return "deep"
+    if agent_request or agent_role in {"auto", "coder"} or action in {"fix_repair", "optimize", "refactor"}:
+        return "standard"
+    return "quick"
+
+
+def _configured_budget_model(settings: dict, budget: str) -> str:
+    quick = str(settings.get("quick_model") or "").strip()
+    standard = str(settings.get("standard_model") or "").strip()
+    deep = str(settings.get("deep_model") or "").strip()
+    if budget == "deep":
+        return deep or standard or quick
+    if budget == "quick":
+        return quick or standard or deep
+    return standard or quick or deep
+
+
 async def _effective_ai_params(settings: dict, composer_options: dict, *, conn=None, agent_request: bool = False, requested_model: str = "") -> dict:
-    ai = dict(await _ai_params(settings, conn))
+    ai = dict(await _ai_params(settings, conn, allow_degraded_api=True))
     external_mode = str(composer_options.get("external_mode") or "local_first").lower()
 
     if not agent_request:
@@ -2083,6 +3308,28 @@ async def _effective_ai_params(settings: dict, composer_options: dict, *, conn=N
                     }
                 )
 
+    runtime_truth, runtime_status = await _runtime_truth_for_settings(
+        settings,
+        conn,
+        backend_override=str(ai.get("backend") or ""),
+    )
+    effective_runtime = str(runtime_truth.get("effective_runtime") or "").strip().lower()
+    selected_runtime = str(runtime_truth.get("selected_runtime") or "").strip().lower()
+    if effective_runtime == runtime_truth_service.SELF_HEAL_RUNTIME and selected_runtime != effective_runtime:
+        codex_runtime = dict(runtime_status.get("codex_runtime") or {})
+        codex_binary = str(codex_runtime.get("binary") or _family_cli_override_path(settings, "codex") or brain._find_codex_cli()).strip()
+        if codex_binary:
+            ai.update(
+                {
+                    "backend": "cli",
+                    "cli_path": codex_binary,
+                    "cli_model": runtime_truth_service.SELF_HEAL_MODEL,
+                }
+            )
+
+    budget = _model_budget_for_request(composer_options, agent_request=agent_request)
+    budget_model = _configured_budget_model(settings, budget)
+
     if ai.get("backend") == "ollama":
         if requested_model:
             ai["ollama_model"] = requested_model
@@ -2106,8 +3353,26 @@ async def _effective_ai_params(settings: dict, composer_options: dict, *, conn=N
         if role in role_map:
             ai["api_model"] = role_map[role]
     else:
-        if requested_model:
+        if runtime_truth.get("self_heal_active") and effective_runtime == runtime_truth_service.SELF_HEAL_RUNTIME:
+            ai["cli_model"] = runtime_truth_service.SELF_HEAL_MODEL
+        elif requested_model:
             ai["cli_model"] = requested_model
+
+    if not requested_model and budget_model:
+        if ai.get("backend") == "api":
+            ai["api_model"] = budget_model
+        elif ai.get("backend") == "cli":
+            selected_cli_path = str(ai.get("cli_path") or _selected_cli_path(settings) or "").strip()
+            normalized_budget = brain.normalize_cli_model(selected_cli_path, budget_model)
+            ai["cli_model"] = normalized_budget or budget_model
+        elif ai.get("backend") == "ollama":
+            ai["ollama_model"] = budget_model
+
+    ai["budget_class"] = budget
+
+    if ai.get("backend") == "api" and not ai.get("api_key"):
+        provider_label = str(runtime_truth.get("selected_runtime_label") or "External API")
+        raise HTTPException(400, f"{provider_label} key not set. Add it to the Secure Vault or Settings → Runtime.")
     return ai
 
 
@@ -2192,9 +3457,17 @@ async def _memory_bundle(
     resource_ids: list[int],
     settings: dict,
     composer_options: dict,
+    snapshot_revision: str = "",
 ) -> dict:
+    if str(settings.get("memory_first_enabled", "1")).strip().lower() not in {"1", "true", "yes", "on"}:
+        return {
+            "items": [],
+            "context_block": "",
+            "overview": {"total": 0, "layers": {}, "state": "memory_first_disabled"},
+            "evidence_source": "model_only",
+        }
     try:
-        await memory_engine.sync_memory_layers(conn, settings)
+        await _ensure_memory_layers_synced(conn, settings)
     except _sqlite3.DatabaseError as exc:
         print(f"[Axon] Memory bundle sync degraded: {exc}")
     layers = _composer_memory_layers(composer_options, has_attached_resources=bool(resource_ids))
@@ -2207,6 +3480,7 @@ async def _memory_bundle(
         workspace_id=project_id,
         layers=layers,
         limit=limit,
+        snapshot_revision=snapshot_revision,
     )
     try:
         overview = await memory_engine.build_memory_overview(conn)
@@ -2217,6 +3491,205 @@ async def _memory_bundle(
         "items": results,
         "context_block": memory_engine.build_memory_context(results),
         "overview": overview,
+        "evidence_source": "memory" if results else "model_only",
+    }
+
+
+async def _ensure_memory_layers_synced(conn, settings: dict, *, force: bool = False) -> dict:
+    now = _time.time()
+    cached_overview = _memory_sync_cache.get("overview")
+    cached_at = float(_memory_sync_cache.get("checked_at") or 0.0)
+    if (
+        not force
+        and isinstance(cached_overview, dict)
+        and cached_overview
+        and (now - cached_at) < _MEMORY_SYNC_CACHE_TTL_SECONDS
+    ):
+        return dict(cached_overview)
+
+    overview = await memory_engine.sync_memory_layers(conn, settings)
+    _memory_sync_cache["checked_at"] = now
+    _memory_sync_cache["overview"] = dict(overview or {})
+    return dict(overview or {})
+
+
+def _setting_int(settings: dict, key: str, default: int, *, minimum: int = 1, maximum: int = 500) -> int:
+    try:
+        value = int(str(settings.get(key, default) or default).strip())
+    except Exception:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _compact_text(value: str, *, limit: int = 180) -> str:
+    return " ".join(str(value or "").split())[:limit]
+
+
+def _build_thread_summary_text(rows) -> str:
+    if not rows:
+        return ""
+    lines = ["## Conversation Summary"]
+    for raw_row in rows[-12:]:
+        row = dict(raw_row)
+        parsed = _parse_stored_chat_message(str(row.get("content") or ""))
+        content = _compact_text(str(parsed.get("content") or ""), limit=180)
+        if not content:
+            continue
+        role = str(row.get("role") or "assistant").strip().lower()
+        label = "User" if role == "user" else "Axon"
+        lines.append(f"- {label}: {content}")
+    return "\n".join(lines[:13])
+
+
+async def _workspace_snapshot_bundle(
+    conn,
+    *,
+    project_id: Optional[int],
+    settings: dict,
+) -> dict:
+    if project_id is None:
+        projects = [dict(r) for r in await devdb.get_projects(conn, status="active")]
+        tasks = [dict(r) for r in await devdb.get_tasks(conn, status="open")]
+        prompts_list = [dict(r) for r in await devdb.get_prompts(conn)]
+        context_block = brain._build_context_block(projects, tasks, prompts_list)
+        return {
+            "revision": "global",
+            "context_block": context_block,
+            "data": {"projects": projects[:10], "tasks": tasks[:10], "prompts": prompts_list[:5]},
+            "evidence_source": "workspace_snapshot",
+        }
+
+    ttl_seconds = _setting_int(settings, "workspace_snapshot_ttl_seconds", 60, minimum=10, maximum=3600)
+    snapshot_key = f"workspace:{project_id}"
+    revision = await devdb.compute_workspace_revision(conn, project_id)
+    existing = await devdb.get_workspace_snapshot(conn, workspace_id=project_id, snapshot_key=snapshot_key)
+    if existing and str(existing["revision"] or "") == revision:
+        updated_at = str(existing["updated_at"] or "")
+        age_ok = True
+        if updated_at:
+            try:
+                stamp = datetime.fromisoformat(updated_at.replace("Z", "+00:00").replace(" ", "T"))
+                age_ok = (_time.time() - stamp.timestamp()) < ttl_seconds
+            except Exception:
+                age_ok = True
+        if age_ok:
+            try:
+                data = _json.loads(str(existing["data_json"] or "{}"))
+            except Exception:
+                data = {}
+            return {
+                "revision": revision,
+                "context_block": str(existing["context_block"] or ""),
+                "data": data,
+                "evidence_source": "workspace_snapshot",
+            }
+
+    project_row = await devdb.get_project(conn, project_id)
+    projects = [dict(project_row)] if project_row else []
+    tasks = [dict(r) for r in await devdb.get_tasks(conn, project_id=project_id, status="open")]
+    prompts_list = [dict(r) for r in await devdb.get_prompts(conn, project_id=project_id)]
+    high_trust_memory = [
+        dict(r)
+        for r in await devdb.list_memory_items_filtered(
+            conn,
+            workspace_id=project_id,
+            trust_level="high",
+            limit=4,
+        )
+    ]
+    context_block = brain._build_context_block(projects, tasks, prompts_list)
+    if high_trust_memory:
+        memory_lines = [
+            f"- {item.get('title', 'Memory')}: {_compact_text(item.get('summary') or item.get('content') or '', limit=160)}"
+            for item in high_trust_memory[:2]
+        ]
+        context_block = "\n\n".join(
+            block for block in (
+                context_block,
+                "## Known Workspace Facts\n" + "\n".join(memory_lines),
+            ) if block
+        )
+    snapshot_data = {
+        "project": projects[0] if projects else {},
+        "tasks": tasks[:8],
+        "prompts": prompts_list[:5],
+        "memory": high_trust_memory[:4],
+    }
+    await devdb.upsert_workspace_snapshot(
+        conn,
+        workspace_id=project_id,
+        snapshot_key=snapshot_key,
+        revision=revision,
+        context_block=context_block,
+        data_json=_json.dumps(snapshot_data, ensure_ascii=True),
+        commit=False,
+    )
+    await conn.commit()
+    return {
+        "revision": revision,
+        "context_block": context_block,
+        "data": snapshot_data,
+        "evidence_source": "workspace_snapshot",
+    }
+
+
+async def _chat_history_bundle(
+    conn,
+    *,
+    project_id: Optional[int],
+    settings: dict,
+    backend: str,
+    history_rows=None,
+) -> dict:
+    history_budget = _setting_int(
+        settings,
+        "max_history_turns",
+        _setting_int(settings, "max_chat_history", 12, minimum=6, maximum=120),
+        minimum=6,
+        maximum=60,
+    )
+    rows = list(history_rows or [])
+    if not rows:
+        rows = await _load_chat_history_rows(
+            conn,
+            project_id=project_id,
+            limit=max(history_budget * 4, 40),
+            degrade_to_empty=True,
+        )
+    recent_rows = rows[-history_budget:]
+    history = select_history_for_chat(
+        "",
+        _history_messages_from_rows(recent_rows),
+        backend=backend,
+        max_turns=history_budget,
+    )
+    summary_block = ""
+    if len(rows) > len(recent_rows):
+        older_rows = rows[:-len(recent_rows)] if recent_rows else rows
+        revision_payload = "|".join(str(dict(row).get("id") or "") for row in older_rows[-20:]) + f":{len(older_rows)}"
+        revision = _json.dumps({"digest": revision_payload}, sort_keys=True)
+        thread_key = f"chat:{project_id or 0}:{backend}"
+        existing = await devdb.get_thread_summary(conn, thread_key)
+        if existing and str(existing["revision"] or "") == revision:
+            summary_block = str(existing["summary"] or "")
+        else:
+            summary_block = _build_thread_summary_text(older_rows)
+            if summary_block:
+                await devdb.upsert_thread_summary(
+                    conn,
+                    thread_key=thread_key,
+                    workspace_id=project_id,
+                    revision=revision,
+                    summary=summary_block,
+                    message_count=len(rows),
+                    commit=False,
+                )
+                await conn.commit()
+    return {
+        "history": history,
+        "summary_block": summary_block,
+        "history_budget": history_budget,
+        "row_count": len(rows),
     }
 
 
@@ -2234,12 +3707,126 @@ def _clean_resource_ids(resource_ids: Optional[list[int]]) -> list[int]:
     return seen
 
 
+_CHAT_HISTORY_ENVELOPE_PREFIX = "AXON_CHAT_V1:"
+
+
+def _thread_mode_from_composer_options(composer_options: dict | None, *, agent_request: bool = False) -> str:
+    options = _composer_options_dict(composer_options)
+    intelligence = str(options.get("intelligence_mode") or "ask").strip().lower()
+    action = str(options.get("action_mode") or "").strip().lower()
+    agent_role = str(options.get("agent_role") or "").strip().lower()
+    if agent_role == "auto":
+        return "auto"
+    if agent_request or agent_role:
+        return "agent"
+    if intelligence == "deep_research":
+        return "research"
+    if intelligence == "analyze" and action == "generate":
+        return "code"
+    if intelligence == "build_brief" and action == "generate":
+        return "business"
+    return "ask"
+
+
+def _stored_chat_message(
+    message: str,
+    *,
+    resources: list[dict] | None = None,
+    mode: str = "",
+    thread_mode: str = "",
+    model_label: str = "",
+) -> str:
+    payload = {"content": str(message or "")}
+    resource_refs = []
+    for resource in resources or []:
+        title = str(resource.get("title") or "resource").strip() or "resource"
+        ref = {"title": title}
+        resource_id = resource.get("id")
+        if resource_id not in (None, ""):
+            ref["id"] = resource_id
+        kind = str(resource.get("kind") or "").strip()
+        if kind:
+            ref["kind"] = kind
+        resource_refs.append(ref)
+    if resource_refs:
+        payload["resources"] = resource_refs
+    if mode:
+        payload["mode"] = str(mode)
+    if thread_mode:
+        payload["thread_mode"] = str(thread_mode)
+    if model_label:
+        payload["model_label"] = str(model_label)
+    if tuple(payload.keys()) == ("content",):
+        return payload["content"]
+    return f"{_CHAT_HISTORY_ENVELOPE_PREFIX}{_json.dumps(payload, separators=(',', ':'))}"
+
+
 def _stored_message_with_resources(message: str, resources: list[dict]) -> str:
-    if not resources:
-        return message
-    labels = ", ".join(resource.get("title", "resource") for resource in resources[:6])
-    suffix = "…" if len(resources) > 6 else ""
-    return f"{message}\n\n[Attached resources: {labels}{suffix}]"
+    return _stored_chat_message(message, resources=resources)
+
+
+def _parse_stored_chat_message(raw_content: str) -> dict[str, object]:
+    raw = str(raw_content or "")
+    if raw.startswith(_CHAT_HISTORY_ENVELOPE_PREFIX):
+        try:
+            payload = _json.loads(raw[len(_CHAT_HISTORY_ENVELOPE_PREFIX):])
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            resources = payload.get("resources") if isinstance(payload.get("resources"), list) else []
+            return {
+                "content": str(payload.get("content") or ""),
+                "resources": [dict(item) for item in resources if isinstance(item, dict)],
+                "mode": str(payload.get("mode") or ""),
+                "thread_mode": str(payload.get("thread_mode") or ""),
+                "model_label": str(payload.get("model_label") or ""),
+            }
+
+    match = _re.match(r"(?s)^(.*?)(?:\n\n\[Attached resources: ([^\]]+)\]\s*)?$", raw)
+    content = raw
+    resources: list[dict[str, object]] = []
+    if match and match.group(2):
+        content = match.group(1).rstrip()
+        resources = [
+            {"id": f"history-{index}-{title.strip()}", "title": title.strip()}
+            for index, title in enumerate(match.group(2).split(","))
+            if title.strip()
+        ]
+    return {
+        "content": content,
+        "resources": resources,
+        "mode": "",
+        "thread_mode": "",
+        "model_label": "",
+    }
+
+
+def _history_messages_from_rows(rows) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    for row in rows or []:
+        parsed = _parse_stored_chat_message(row["content"])
+        content = str(parsed.get("content") or "")
+        resources = parsed.get("resources") if isinstance(parsed.get("resources"), list) else []
+        if resources:
+            labels = ", ".join(str(item.get("title") or "resource") for item in resources[:6])
+            suffix = "…" if len(resources) > 6 else ""
+            content = f"{content}\n\n[Attached resources: {labels}{suffix}]".strip()
+        messages.append({"role": row["role"], "content": content})
+    return messages
+
+
+def _serialize_chat_history_row(row) -> dict[str, object]:
+    parsed = _parse_stored_chat_message(row["content"])
+    return {
+        "role": row["role"],
+        "content": parsed.get("content") or "",
+        "created_at": row["created_at"],
+        "tokens_used": row["tokens_used"],
+        "resources": parsed.get("resources") or [],
+        "mode": parsed.get("mode") or "",
+        "thread_mode": parsed.get("thread_mode") or "",
+        "model_label": parsed.get("model_label") or "",
+    }
 
 
 async def _resource_bundle(
@@ -2715,17 +4302,29 @@ async def chat(body: ChatMessage):
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
         composer_options = _composer_options_dict(body.composer_options)
+        chat_thread_mode = _thread_mode_from_composer_options(composer_options)
         ai = await _effective_ai_params(settings, composer_options, conn=conn, requested_model=body.model or "")
+        backend = ai.get("backend", settings.get("ai_backend", "api"))
 
-        # Build rich context
-        projects = [dict(r) for r in await devdb.get_projects(conn, status="active")]
-        tasks = [dict(r) for r in await devdb.get_tasks(conn, status="open")]
-        prompts_list = [dict(r) for r in await devdb.get_prompts(conn)]
-        context_block = brain._build_context_block(projects, tasks, prompts_list)
-
-        # Load history
-        history_rows = await _load_chat_history_rows(conn, project_id=body.project_id, degrade_to_empty=True)
-        history = [{"role": r["role"], "content": r["content"]} for r in history_rows]
+        snapshot_bundle = await _workspace_snapshot_bundle(
+            conn,
+            project_id=body.project_id,
+            settings=settings,
+        )
+        history_rows = await _load_chat_history_rows(
+            conn,
+            project_id=body.project_id,
+            limit=max(_setting_int(settings, "max_history_turns", 10, minimum=6, maximum=60) * 4, 40),
+            degrade_to_empty=True,
+        )
+        history_bundle = await _chat_history_bundle(
+            conn,
+            project_id=body.project_id,
+            settings=settings,
+            backend=backend,
+            history_rows=history_rows,
+        )
+        history = history_bundle["history"]
 
         # Get project scope if present
         project_name = None
@@ -2769,10 +4368,16 @@ async def chat(body: ChatMessage):
             resource_ids=body.resource_ids or [],
             settings=settings,
             composer_options=composer_options,
+            snapshot_revision=snapshot_bundle["revision"],
         )
         composer_block = _composer_instruction_block(composer_options)
         merged_context_block = "\n\n".join(
-            block for block in (context_block, memory_bundle["context_block"], composer_block) if block
+            block for block in (
+                snapshot_bundle["context_block"],
+                history_bundle["summary_block"],
+                memory_bundle["context_block"],
+                composer_block,
+            ) if block
         )
 
         # ── PPTX intent interception ──────────────────────────────────────────
@@ -2867,8 +4472,24 @@ async def chat(body: ChatMessage):
                                    title="Slides ready", detail=f"{len(spec.slides)} slides · {out_path.name}",
                                    summary=reply[:180], workspace_id=body.project_id)
 
-                await devdb.save_message(conn, "user", body.message, project_id=body.project_id)
-                await devdb.save_message(conn, "assistant", reply, project_id=body.project_id, tokens=0)
+                await devdb.save_message(
+                    conn,
+                    "user",
+                    _stored_chat_message(
+                        body.message,
+                        resources=resource_bundle["resources"],
+                        mode="chat",
+                        thread_mode=chat_thread_mode,
+                    ),
+                    project_id=body.project_id,
+                )
+                await devdb.save_message(
+                    conn,
+                    "assistant",
+                    _stored_chat_message(reply, mode="chat", thread_mode=chat_thread_mode),
+                    project_id=body.project_id,
+                    tokens=0,
+                )
                 await devdb.log_event(conn, "pptx_generate", body.message[:100], project_id=body.project_id)
 
                 # Save to memory for future context
@@ -3032,9 +4653,20 @@ async def chat(body: ChatMessage):
                                        title="Missions created", detail=f"{len(created_ns)} mission(s)",
                                        summary=reply_ns[:180], workspace_id=body.project_id)
 
-                    stored_user_msg = _stored_message_with_resources(body.message, resource_bundle["resources"])
+                    stored_user_msg = _stored_chat_message(
+                        body.message,
+                        resources=resource_bundle["resources"],
+                        mode="chat",
+                        thread_mode=chat_thread_mode,
+                    )
                     await devdb.save_message(conn, "user", stored_user_msg, project_id=body.project_id)
-                    await devdb.save_message(conn, "assistant", reply_ns, project_id=body.project_id, tokens=0)
+                    await devdb.save_message(
+                        conn,
+                        "assistant",
+                        _stored_chat_message(reply_ns, mode="chat", thread_mode=chat_thread_mode),
+                        project_id=body.project_id,
+                        tokens=0,
+                    )
 
                     return {"role": "assistant", "content": reply_ns, "tokens": 0}
             except Exception as _mission_err_ns:
@@ -3158,9 +4790,20 @@ async def chat(body: ChatMessage):
                                        title="Playbooks saved", detail=f"{len(created_pbns)} playbook(s)",
                                        summary=reply_pbns[:180], workspace_id=body.project_id)
 
-                    stored_user_msg = _stored_message_with_resources(body.message, resource_bundle["resources"])
+                    stored_user_msg = _stored_chat_message(
+                        body.message,
+                        resources=resource_bundle["resources"],
+                        mode="chat",
+                        thread_mode=chat_thread_mode,
+                    )
                     await devdb.save_message(conn, "user", stored_user_msg, project_id=body.project_id)
-                    await devdb.save_message(conn, "assistant", reply_pbns, project_id=body.project_id, tokens=0)
+                    await devdb.save_message(
+                        conn,
+                        "assistant",
+                        _stored_chat_message(reply_pbns, mode="chat", thread_mode=chat_thread_mode),
+                        project_id=body.project_id,
+                        tokens=0,
+                    )
 
                     return {"role": "assistant", "content": reply_pbns, "tokens": 0}
             except Exception as _pb_err_ns:
@@ -3216,10 +4859,17 @@ async def chat(body: ChatMessage):
             raise HTTPException(504, f"AI backend timed out — try a shorter message or check Ollama. ({exc})")
 
         # Persist messages
-        stored_user_message = _stored_message_with_resources(body.message, resource_bundle["resources"])
+        stored_user_message = _stored_chat_message(
+            body.message,
+            resources=resource_bundle["resources"],
+            mode="chat",
+            thread_mode=chat_thread_mode,
+        )
         await devdb.save_message(conn, "user", stored_user_message, project_id=body.project_id)
         await devdb.save_message(
-            conn, "assistant", result["content"],
+            conn,
+            "assistant",
+            _stored_chat_message(result["content"], mode="chat", thread_mode=chat_thread_mode),
             project_id=body.project_id, tokens=result["tokens"]
         )
         await devdb.log_event(conn, "chat", body.message[:100], project_id=body.project_id)
@@ -3231,8 +4881,7 @@ async def chat(body: ChatMessage):
 async def get_chat_history(project_id: Optional[int] = None, limit: int = 30):
     async with devdb.get_db() as conn:
         rows = await _load_chat_history_rows(conn, project_id=project_id, limit=limit)
-        return [{"role": r["role"], "content": r["content"],
-                 "created_at": r["created_at"], "tokens_used": r["tokens_used"]} for r in rows]
+        return [_serialize_chat_history_row(r) for r in rows]
 
 
 @app.delete("/api/chat/history")
@@ -3250,19 +4899,32 @@ async def chat_stream(body: ChatMessage, request: Request):
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
         composer_options = _composer_options_dict(body.composer_options)
+        chat_thread_mode = _thread_mode_from_composer_options(composer_options)
         ai = await _effective_ai_params(settings, composer_options, conn=conn, requested_model=body.model or "")
         settings = {**settings, "ai_backend": ai.get("backend", settings.get("ai_backend", "api"))}
         if ai.get("ollama_model"):
             settings["ollama_model"] = ai["ollama_model"]
         backend = settings.get("ai_backend", "api")
 
-        # Load context + history
-        projects = [dict(r) for r in await devdb.get_projects(conn, status="active")]
-        tasks = [dict(r) for r in await devdb.get_tasks(conn, status="open")]
-        prompts_list = [dict(r) for r in await devdb.get_prompts(conn)]
-        context_block = brain._build_context_block(projects, tasks, prompts_list)
-        history_rows = await _load_chat_history_rows(conn, project_id=body.project_id, degrade_to_empty=True)
-        history = [{"role": r["role"], "content": r["content"]} for r in history_rows]
+        snapshot_bundle = await _workspace_snapshot_bundle(
+            conn,
+            project_id=body.project_id,
+            settings=settings,
+        )
+        history_rows = await _load_chat_history_rows(
+            conn,
+            project_id=body.project_id,
+            limit=max(_setting_int(settings, "max_history_turns", 10, minimum=6, maximum=60) * 4, 40),
+            degrade_to_empty=True,
+        )
+        history_bundle = await _chat_history_bundle(
+            conn,
+            project_id=body.project_id,
+            settings=settings,
+            backend=backend,
+            history_rows=history_rows,
+        )
+        history = history_bundle["history"]
         project_name = None
         workspace_path = ""
         if body.project_id:
@@ -3307,10 +4969,16 @@ async def chat_stream(body: ChatMessage, request: Request):
             resource_ids=body.resource_ids or [],
             settings=settings,
             composer_options=composer_options,
+            snapshot_revision=snapshot_bundle["revision"],
         )
         composer_block = _composer_instruction_block(composer_options)
         merged_context_block = "\n\n".join(
-            block for block in (context_block, memory_bundle["context_block"], composer_block) if block
+            block for block in (
+                snapshot_bundle["context_block"],
+                history_bundle["summary_block"],
+                memory_bundle["context_block"],
+                composer_block,
+            ) if block
         )
 
     _set_live_operator(
@@ -3419,9 +5087,20 @@ async def chat_stream(body: ChatMessage, request: Request):
                 yield {"data": _json.dumps({"done": True, "tokens": 0})}
                 # Persist chat messages
                 async with devdb.get_db() as _pconn:
-                    stored_user_message = _stored_message_with_resources(body.message, resource_bundle["resources"])
+                    stored_user_message = _stored_chat_message(
+                        body.message,
+                        resources=resource_bundle["resources"],
+                        mode="chat",
+                        thread_mode=chat_thread_mode,
+                    )
                     await devdb.save_message(_pconn, "user", stored_user_message, project_id=body.project_id)
-                    await devdb.save_message(_pconn, "assistant", reply, project_id=body.project_id, tokens=0)
+                    await devdb.save_message(
+                        _pconn,
+                        "assistant",
+                        _stored_chat_message(reply, mode="chat", thread_mode=chat_thread_mode),
+                        project_id=body.project_id,
+                        tokens=0,
+                    )
                     await devdb.log_event(_pconn, "pptx_generate", body.message[:100], project_id=body.project_id)
                     # Save to memory for future context
                     _mem_content = (
@@ -3591,9 +5270,20 @@ async def chat_stream(body: ChatMessage, request: Request):
 
                 # Persist chat messages
                 async with devdb.get_db() as _m_db2:
-                    stored_user_msg = _stored_message_with_resources(body.message, resource_bundle["resources"])
+                    stored_user_msg = _stored_chat_message(
+                        body.message,
+                        resources=resource_bundle["resources"],
+                        mode="chat",
+                        thread_mode=chat_thread_mode,
+                    )
                     await devdb.save_message(_m_db2, "user", stored_user_msg, project_id=body.project_id)
-                    await devdb.save_message(_m_db2, "assistant", reply, project_id=body.project_id, tokens=0)
+                    await devdb.save_message(
+                        _m_db2,
+                        "assistant",
+                        _stored_chat_message(reply, mode="chat", thread_mode=chat_thread_mode),
+                        project_id=body.project_id,
+                        tokens=0,
+                    )
 
                 async def _mission_stream():
                     yield {"data": _json.dumps({"chunk": reply})}
@@ -3724,9 +5414,20 @@ async def chat_stream(body: ChatMessage, request: Request):
                                    summary=reply_pb[:180], workspace_id=body.project_id)
 
                 async with devdb.get_db() as _pb_db2:
-                    stored_user_msg = _stored_message_with_resources(body.message, resource_bundle["resources"])
+                    stored_user_msg = _stored_chat_message(
+                        body.message,
+                        resources=resource_bundle["resources"],
+                        mode="chat",
+                        thread_mode=chat_thread_mode,
+                    )
                     await devdb.save_message(_pb_db2, "user", stored_user_msg, project_id=body.project_id)
-                    await devdb.save_message(_pb_db2, "assistant", reply_pb, project_id=body.project_id, tokens=0)
+                    await devdb.save_message(
+                        _pb_db2,
+                        "assistant",
+                        _stored_chat_message(reply_pb, mode="chat", thread_mode=chat_thread_mode),
+                        project_id=body.project_id,
+                        tokens=0,
+                    )
 
                 async def _playbook_stream():
                     yield {"data": _json.dumps({"chunk": reply_pb})}
@@ -3789,11 +5490,21 @@ async def chat_stream(body: ChatMessage, request: Request):
                 yield {"data": _json.dumps({"chunk": chunk})}
             # Persist after stream completes
             async with devdb.get_db() as conn:
-                stored_user_message = _stored_message_with_resources(body.message, resource_bundle["resources"])
+                stored_user_message = _stored_chat_message(
+                    body.message,
+                    resources=resource_bundle["resources"],
+                    mode="chat",
+                    thread_mode=chat_thread_mode,
+                )
                 await devdb.save_message(conn, "user", stored_user_message,
                                           project_id=body.project_id)
-                await devdb.save_message(conn, "assistant", "".join(full_content),
-                                          project_id=body.project_id, tokens=0)
+                await devdb.save_message(
+                    conn,
+                    "assistant",
+                    _stored_chat_message("".join(full_content), mode="chat", thread_mode=chat_thread_mode),
+                    project_id=body.project_id,
+                    tokens=0,
+                )
                 await devdb.log_event(conn, "chat", body.message[:100],
                                        project_id=body.project_id)
             _set_live_operator(
@@ -3831,6 +5542,9 @@ class AgentRequest(BaseModel):
     model: Optional[str] = None
     resource_ids: Optional[list[int]] = None
     composer_options: Optional[dict] = None
+    resume_session_id: Optional[str] = None
+    resume_reason: Optional[str] = None
+    continue_task: Optional[str] = None
 
 
 @app.post("/api/agent")
@@ -3839,6 +5553,7 @@ async def agent_endpoint(body: AgentRequest, request: Request):
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
         composer_options = _composer_options_dict(body.composer_options)
+        agent_thread_mode = _thread_mode_from_composer_options(composer_options, agent_request=True)
         ai = await _effective_ai_params(settings, composer_options, conn=conn, agent_request=True, requested_model=body.model or "")
         settings = {**settings, "ai_backend": ai.get("backend", settings.get("ai_backend", "api"))}
 
@@ -3848,9 +5563,25 @@ async def agent_endpoint(body: AgentRequest, request: Request):
         projects = [dict(r) for r in await devdb.get_projects(conn, status="active")]
         tasks = [dict(r) for r in await devdb.get_tasks(conn, status="open")]
         prompts_list = [dict(r) for r in await devdb.get_prompts(conn)]
-        context_block = brain._build_context_block(projects, tasks, prompts_list)
-        history_rows = await _load_chat_history_rows(conn, project_id=body.project_id, degrade_to_empty=True)
-        history = [{"role": r["role"], "content": r["content"]} for r in history_rows]
+        snapshot_bundle = await _workspace_snapshot_bundle(
+            conn,
+            project_id=body.project_id,
+            settings=settings,
+        )
+        history_rows = await _load_chat_history_rows(
+            conn,
+            project_id=body.project_id,
+            limit=max(_setting_int(settings, "max_history_turns", 10, minimum=6, maximum=60) * 4, 40),
+            degrade_to_empty=True,
+        )
+        history_bundle = await _chat_history_bundle(
+            conn,
+            project_id=body.project_id,
+            settings=settings,
+            backend=settings.get("ai_backend", "api"),
+            history_rows=history_rows,
+        )
+        history = history_bundle["history"]
         project_name = None
         workspace_path = ""
         if body.project_id:
@@ -3892,10 +5623,16 @@ async def agent_endpoint(body: AgentRequest, request: Request):
             resource_ids=body.resource_ids or [],
             settings=settings,
             composer_options=composer_options,
+            snapshot_revision=snapshot_bundle["revision"],
         )
         composer_block = _composer_instruction_block(composer_options)
         merged_context_block = "\n\n".join(
-            block for block in (context_block, memory_bundle["context_block"], composer_block) if block
+            block for block in (
+                snapshot_bundle["context_block"],
+                history_bundle["summary_block"],
+                memory_bundle["context_block"],
+                composer_block,
+            ) if block
         )
         backend = settings.get("ai_backend", "api")
         _agent_api_key = ai.get("api_key", "")
@@ -3956,6 +5693,13 @@ async def agent_endpoint(body: AgentRequest, request: Request):
                 cli_model=ai.get("cli_model", ""),
                 cli_session_persistence=bool(ai.get("cli_session_persistence", False)),
                 backend=backend,
+                workspace_id=body.project_id,
+                autonomy_profile=_normalized_autonomy_profile(settings.get("autonomy_profile") or "workspace_auto"),
+                external_fetch_policy=_normalized_external_fetch_policy(settings.get("external_fetch_policy") or "cache_first"),
+                external_fetch_cache_ttl_seconds=str(settings.get("external_fetch_cache_ttl_seconds") or "21600"),
+                resume_session_id=body.resume_session_id or "",
+                resume_reason=body.resume_reason or "",
+                continue_task=body.continue_task or "",
             ):
                 if event.get("type") == "text":
                     collected_text.append(event["chunk"])
@@ -4038,11 +5782,21 @@ async def agent_endpoint(body: AgentRequest, request: Request):
             final_text = "".join(collected_text)
             if final_text:
                 async with devdb.get_db() as conn:
-                    stored_user_message = _stored_message_with_resources(body.message, resource_bundle["resources"])
+                    stored_user_message = _stored_chat_message(
+                        body.message,
+                        resources=resource_bundle["resources"],
+                        mode="agent",
+                        thread_mode=agent_thread_mode,
+                    )
                     await devdb.save_message(conn, "user", stored_user_message,
                                               project_id=body.project_id)
-                    await devdb.save_message(conn, "assistant", final_text,
-                                              project_id=body.project_id, tokens=0)
+                    await devdb.save_message(
+                        conn,
+                        "assistant",
+                        _stored_chat_message(final_text, mode="agent", thread_mode=agent_thread_mode),
+                        project_id=body.project_id,
+                        tokens=0,
+                    )
                     await devdb.log_event(conn, "agent", body.message[:100],
                                            project_id=body.project_id)
         except Exception as exc:
@@ -4096,8 +5850,14 @@ async def get_activity(limit: int = 30):
 async def get_settings():
     async with devdb.get_db() as conn:
         s = await devdb.get_all_settings(conn)
+        s.pop("extra_allowed_cmds", None)
+        s["autonomy_profile"] = _normalized_autonomy_profile(s.get("autonomy_profile") or "workspace_auto")
+        s["external_fetch_policy"] = _normalized_external_fetch_policy(s.get("external_fetch_policy") or "cache_first")
+        s["max_history_turns"] = _normalized_max_history_turns(s)
         s["ai_backend"] = s.get("ai_backend") or "api"
         s["api_provider"] = provider_registry.selected_api_provider_id(s)
+        s["cli_runtime_path"] = _selected_cli_path(s)
+        s["cli_runtime_model"] = _selected_cli_model(s)
         s["ollama_runtime_mode"] = _stored_ollama_runtime_mode(s)
         for key in (
             "cloud_agents_enabled",
@@ -4148,6 +5908,19 @@ async def update_settings(body: SettingsUpdate):
     async with devdb.get_db() as conn:
         data = body.model_dump(exclude_none=True)
         current_settings = await devdb.get_all_settings(conn)
+        if "autonomy_profile" in data:
+            data["autonomy_profile"] = _normalized_autonomy_profile(data.get("autonomy_profile") or "workspace_auto", reject_elevated=True)
+        if "external_fetch_policy" in data:
+            data["external_fetch_policy"] = _normalized_external_fetch_policy(data.get("external_fetch_policy") or "cache_first")
+        if "max_history_turns" in data:
+            data["max_history_turns"] = _normalized_max_history_turns(data)
+        for ttl_key, ttl_default in (
+            ("workspace_snapshot_ttl_seconds", 120),
+            ("memory_query_cache_ttl_seconds", 60),
+            ("external_fetch_cache_ttl_seconds", 21600),
+        ):
+            if ttl_key in data:
+                data[ttl_key] = str(_setting_int(data, ttl_key, ttl_default, minimum=30, maximum=86400))
         for spec in provider_registry.PROVIDERS:
             key_name = spec.base_url_setting
             if key_name in data:
@@ -4161,10 +5934,8 @@ async def update_settings(body: SettingsUpdate):
                     data[key_name] = merged.get("base_url", raw_value)
                 else:
                     data[key_name] = ""
-        if "claude_cli_model" in data or "claude_cli_path" in data:
-            selected_cli_path = str(data.get("claude_cli_path", current_settings.get("claude_cli_path", "")) or "")
-            requested_cli_model = str(data.get("claude_cli_model", current_settings.get("claude_cli_model", "")) or "")
-            data["claude_cli_model"] = brain.normalize_cli_model(selected_cli_path, requested_cli_model)
+        if any(key in data for key in ("cli_runtime_model", "cli_runtime_path", "claude_cli_model", "claude_cli_path")):
+            _apply_cli_runtime_settings(data, current_settings)
         for key, value in data.items():
             if isinstance(value, bool):
                 await devdb.set_setting(conn, key, "1" if value else "0")
@@ -4408,7 +6179,7 @@ async def reset_usage():
 async def sync_memory():
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
-        overview = await memory_engine.sync_memory_layers(conn, settings)
+        overview = await _ensure_memory_layers_synced(conn, settings, force=True)
     return {"synced": True, "overview": overview}
 
 
@@ -4416,8 +6187,7 @@ async def sync_memory():
 async def memory_overview():
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
-        await memory_engine.sync_memory_layers(conn, settings)
-        overview = await memory_engine.build_memory_overview(conn)
+        overview = await _ensure_memory_layers_synced(conn, settings)
     return overview
 
 
@@ -4430,7 +6200,7 @@ async def memory_search(
 ):
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
-        await memory_engine.sync_memory_layers(conn, settings)
+        await _ensure_memory_layers_synced(conn, settings)
         selected_layers = [item.strip() for item in layers.split(",") if item.strip()]
         results = await memory_engine.search_memory(
             conn,
@@ -4473,7 +6243,7 @@ async def list_memory_items(
 ):
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
-        await memory_engine.sync_memory_layers(conn, settings)
+        await _ensure_memory_layers_synced(conn, settings)
         rows = await devdb.list_memory_items_filtered(
             conn,
             search=q,
@@ -4518,7 +6288,7 @@ async def runtime_status():
         projects = await devdb.get_projects(conn, status="active")
         resources = await devdb.list_resources(conn)
         try:
-            memory_overview = await memory_engine.sync_memory_layers(conn, settings)
+            memory_overview = await _ensure_memory_layers_synced(conn, settings)
         except _sqlite3.DatabaseError as exc:
             print(f"[Axon] Runtime status memory sync degraded: {exc}")
             memory_overview = {
@@ -4550,6 +6320,13 @@ async def runtime_status():
         "session_count": len(terminal_sessions),
         "running_count": sum(1 for row in terminal_sessions if row["id"] in _terminal_processes),
     }
+    status.update(
+        runtime_truth_service.build_runtime_truth(
+            status,
+            settings=settings,
+            ollama_running=bool(ollama_service.get("running")),
+        )
+    )
     status["browser_actions"] = _serialize_browser_action_state()
     return status
 
@@ -4559,11 +6336,61 @@ class ClaudeCliLoginRequest(BaseModel):
     email: Optional[str] = None
 
 
+class RuntimeLoginStartRequest(BaseModel):
+    mode: Optional[str] = None
+    email: Optional[str] = None
+
+
+def _normalize_runtime_login_family(family: str) -> str:
+    text = str(family or "").strip().lower()
+    if text in {"cli", "claude"}:
+        return "claude"
+    if text == "codex":
+        return "codex"
+    raise HTTPException(404, "Runtime family not found.")
+
+
+async def _runtime_login_start(family: str, body: RuntimeLoginStartRequest | None = None):
+    family_name = _normalize_runtime_login_family(family)
+    payload = body or RuntimeLoginStartRequest()
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+        override_path = _family_cli_override_path(settings, family_name)
+        result = await asyncio.to_thread(
+            runtime_login_service.start_login_session,
+            family_name,
+            override_path=override_path,
+            mode=payload.mode or "claudeai",
+            email=payload.email or "",
+        )
+        await devdb.log_event(conn, "maintenance", f"{family_name.title()} CLI guided login started")
+    return {"session": result}
+
+
+async def _runtime_login_refresh(family: str, session_id: str):
+    family_name = _normalize_runtime_login_family(family)
+    session = await asyncio.to_thread(runtime_login_service.refresh_login_session, family_name, session_id)
+    if not session:
+        raise HTTPException(404, "Runtime login session not found.")
+    return {"session": session}
+
+
+async def _runtime_login_cancel(family: str, session_id: str):
+    family_name = _normalize_runtime_login_family(family)
+    async with devdb.get_db() as conn:
+        try:
+            session = await asyncio.to_thread(runtime_login_service.cancel_login_session, family_name, session_id)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc))
+        await devdb.log_event(conn, "maintenance", f"{family_name.title()} CLI login cancelled")
+    return {"session": session}
+
+
 @app.get("/api/runtime/cli/status")
 async def runtime_cli_status():
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
-    return claude_cli_runtime.build_cli_runtime_snapshot(settings.get("claude_cli_path", ""))
+    return claude_cli_runtime.build_cli_runtime_snapshot(_family_cli_override_path(settings, "claude"))
 
 
 @app.post("/api/runtime/cli/install")
@@ -4572,7 +6399,7 @@ async def runtime_cli_install():
         settings = await devdb.get_all_settings(conn)
         result = await asyncio.to_thread(
             claude_cli_runtime.install_claude_cli,
-            settings.get("claude_cli_path", ""),
+            _family_cli_override_path(settings, "claude"),
         )
         await devdb.log_event(conn, "maintenance", "Claude CLI install action requested")
     return result
@@ -4580,36 +6407,84 @@ async def runtime_cli_install():
 
 @app.post("/api/runtime/cli/login")
 async def runtime_cli_login(body: ClaudeCliLoginRequest):
+    return await _runtime_login_start("claude", RuntimeLoginStartRequest(mode=body.mode, email=body.email))
+
+
+@app.post("/api/runtime/claude/login/start")
+async def runtime_claude_login_start(body: RuntimeLoginStartRequest | None = None):
+    return await _runtime_login_start("claude", body)
+
+
+@app.get("/api/runtime/claude/login/{session_id}")
+async def runtime_claude_login_status(session_id: str):
+    return await _runtime_login_refresh("claude", session_id)
+
+
+@app.post("/api/runtime/claude/login/{session_id}/cancel")
+async def runtime_claude_login_cancel(session_id: str):
+    return await _runtime_login_cancel("claude", session_id)
+
+
+@app.post("/api/runtime/cli/logout")
+async def runtime_cli_logout():
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
         result = await asyncio.to_thread(
-            claude_cli_runtime.prepare_claude_cli_login,
-            settings.get("claude_cli_path", ""),
-            mode=body.mode or "claudeai",
-            email=body.email or "",
+            claude_cli_runtime.logout_claude_cli,
+            _family_cli_override_path(settings, "claude"),
         )
-        await devdb.log_event(conn, "maintenance", "Claude CLI login guidance prepared")
+        await devdb.log_event(conn, "maintenance", "Claude CLI sign-out requested")
     return result
 
 
 @app.get("/api/runtime/codex/status")
 async def runtime_codex_status():
-    return codex_cli_runtime.build_codex_runtime_snapshot("")
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+    return codex_cli_runtime.build_codex_runtime_snapshot(_family_cli_override_path(settings, "codex"))
 
 
 @app.post("/api/runtime/codex/install")
 async def runtime_codex_install():
     async with devdb.get_db() as conn:
-        result = await asyncio.to_thread(codex_cli_runtime.install_codex_cli, "")
+        settings = await devdb.get_all_settings(conn)
+        result = await asyncio.to_thread(
+            codex_cli_runtime.install_codex_cli,
+            _family_cli_override_path(settings, "codex"),
+        )
         await devdb.log_event(conn, "maintenance", "Codex CLI install action requested")
     return result
 
 
 @app.post("/api/runtime/codex/login")
 async def runtime_codex_login():
+    return await _runtime_login_start("codex")
+
+
+@app.post("/api/runtime/codex/login/start")
+async def runtime_codex_login_start(body: RuntimeLoginStartRequest | None = None):
+    return await _runtime_login_start("codex", body)
+
+
+@app.get("/api/runtime/codex/login/{session_id}")
+async def runtime_codex_login_status(session_id: str):
+    return await _runtime_login_refresh("codex", session_id)
+
+
+@app.post("/api/runtime/codex/login/{session_id}/cancel")
+async def runtime_codex_login_cancel(session_id: str):
+    return await _runtime_login_cancel("codex", session_id)
+
+
+@app.post("/api/runtime/codex/logout")
+async def runtime_codex_logout():
     async with devdb.get_db() as conn:
-        result = await asyncio.to_thread(codex_cli_runtime.prepare_codex_cli_login, "")
-        await devdb.log_event(conn, "maintenance", "Codex CLI login guidance prepared")
+        settings = await devdb.get_all_settings(conn)
+        result = await asyncio.to_thread(
+            codex_cli_runtime.logout_codex_cli,
+            _family_cli_override_path(settings, "codex"),
+        )
+        await devdb.log_event(conn, "maintenance", "Codex CLI sign-out requested")
     return result
 
 
@@ -4640,6 +6515,7 @@ async def _build_live_snapshot() -> dict:
         settings = await devdb.get_all_settings(conn)
         terminal_rows = await devdb.list_terminal_sessions(conn, limit=6)
         activity_rows = await devdb.get_activity(conn, limit=6)
+    auto_rows = await asyncio.to_thread(auto_session_service.list_auto_sessions)
     running_session_id = next((row["id"] for row in terminal_rows if row["id"] in _terminal_processes), None)
     # Run the blocking domain probe in a thread to avoid stalling the event loop
     connection = await asyncio.get_event_loop().run_in_executor(None, _connection_snapshot)
@@ -4658,7 +6534,7 @@ async def _build_live_snapshot() -> dict:
             "active_model": (
                 settings.get("api_model") or provider_registry.runtime_api_config(settings).get("api_model", "deepseek-reasoner")
             ) if settings.get("ai_backend") == "api" else (
-                (settings.get("claude_cli_model") or "CLI default") if settings.get("ai_backend") == "cli"
+                (_selected_cli_model(settings) or "CLI default") if settings.get("ai_backend") == "cli"
                 else settings.get("code_model") or settings.get("ollama_model") or settings.get("general_model") or "Saved default"
             ),
         },
@@ -4669,6 +6545,9 @@ async def _build_live_snapshot() -> dict:
                 for row in terminal_rows
             ],
         },
+        "auto_sessions": [
+            item for item in (_auto_session_summary(row) for row in auto_rows[:12]) if item
+        ],
         "browser_actions": _serialize_browser_action_state(),
         "activity": [dict(row) for row in activity_rows],
     }
@@ -4801,17 +6680,23 @@ async def browser_actions_status():
 
 @app.post("/api/browser/session")
 async def update_browser_session(body: BrowserSessionUpdate):
-    session = dict(_browser_action_state["session"])
-    if body.connected is not None:
-        session["connected"] = bool(body.connected)
-    if body.url is not None:
-        session["url"] = str(body.url or "").strip()
-    if body.title is not None:
-        session["title"] = str(body.title or "").strip()
-    if body.mode is not None:
-        mode = str(body.mode or "approval_required").strip().lower()
-        session["mode"] = mode if mode in {"approval_required", "inspect_auto"} else "approval_required"
-    session["last_seen_at"] = _now_iso()
+    session = _normalize_browser_session(
+        _browser_action_state["session"],
+        connected=body.connected,
+        url=str(body.url or "").strip() if body.url is not None else None,
+        title=str(body.title or "").strip() if body.title is not None else None,
+        mode=body.mode,
+        control_owner=body.control_owner,
+        control_state=body.control_state,
+        attached_preview_url=body.attached_preview_url,
+        attached_preview_status=body.attached_preview_status,
+        attached_workspace_id=body.attached_workspace_id,
+        attached_workspace_name=body.attached_workspace_name,
+        attached_auto_session_id=body.attached_auto_session_id,
+        attached_scope_key=body.attached_scope_key,
+        attached_source_workspace_path=body.attached_source_workspace_path,
+        last_seen_at=_now_iso(),
+    )
     _browser_action_state["session"] = session
     return _serialize_browser_action_state()
 
@@ -6772,6 +8657,26 @@ async def health():
 
 # ─── Agent command approval ────────────────────────────────────────────────────
 
+class ApproveActionBody(BaseModel):
+    action: dict = {}
+    scope: str = "once"
+    session_id: str = ""
+
+
+@app.post("/api/agent/approve-action")
+async def approve_agent_action(body: ApproveActionBody):
+    action = dict(body.action or {})
+    scope = str(body.scope or "once").strip().lower()
+    if scope not in {"once", "task", "session", "persist"}:
+        raise HTTPException(400, "Invalid approval scope")
+    if not action.get("action_fingerprint"):
+        raise HTTPException(400, "approval action fingerprint is required")
+    if scope == "persist" and (bool(action.get("destructive")) or not bool(action.get("persist_allowed", False))):
+        raise HTTPException(400, "This action cannot be persisted")
+    brain.agent_allow_action(action, scope=scope, session_id=body.session_id or str(action.get("session_id") or ""))
+    return {"ok": True, "scope": scope, "action": action, "state": brain.agent_get_action_state()}
+
+
 class AllowCommandBody(BaseModel):
     command: str = ""          # specific command name to allow (e.g. "pgrep")
     allow_all: bool = False    # allow ALL commands (no filter)
@@ -6780,30 +8685,28 @@ class AllowCommandBody(BaseModel):
 
 @app.post("/api/agent/allow-command")
 async def allow_agent_command(body: AllowCommandBody):
-    """Whitelist a shell command for the agent (session or persistent)."""
-    brain.agent_allow_command(body.command, allow_all=body.allow_all)
-    if body.persist:
-        async with devdb.get_db() as conn:
-            existing = (await devdb.get_setting(conn, "extra_allowed_cmds")) or ""
-            existing_set = {c.strip() for c in existing.split(",") if c.strip()}
-            if body.allow_all:
-                existing_set.add("*")
-            elif body.command:
-                existing_set.add(body.command.strip())
-            await devdb.set_setting(conn, "extra_allowed_cmds", ",".join(sorted(existing_set)))
-    return {
-        "ok": True,
-        "allow_all": body.allow_all,
-        "session_allowed": brain.agent_get_session_allowed(),
-    }
+    raise HTTPException(410, "Broad command grants are disabled. Use /api/agent/approve-action for the exact blocked action.")
 
 
 @app.get("/api/agent/sessions/interrupted")
-async def get_interrupted_session():
+async def get_interrupted_session(project_id: Optional[int] = None):
     """Return the most-recent interrupted/active agent session (for resume banner)."""
     from axon_core.session_store import SessionStore
     ss = SessionStore(devdb.DB_PATH)
-    session = ss.get_interrupted()   # prefer recent paused sessions; stale sessions are hidden
+    workspace_path = ""
+    project_name = None
+    if project_id:
+        async with devdb.get_db() as conn:
+            proj = await devdb.get_project(conn, project_id)
+            if proj:
+                project_name = proj["name"]
+                workspace_path = proj["path"] or ""
+    session = ss.get_interrupted(
+        workspace_id=project_id,
+        workspace_path=workspace_path,
+        project_name=project_name,
+        strict_workspace=project_id is not None,
+    )   # prefer current workspace first; stale sessions are hidden
     if not session:
         return {"session": None}
 
@@ -6820,6 +8723,8 @@ async def get_interrupted_session():
     return {
         "session": {
             "session_id": session.session_id,
+            "resume_target": session.session_id,
+            "resume_reason": str(metadata.get("resume_reason") or session.status or "resume"),
             "task": session.task,
             "iteration": session.iteration,
             "status": session.status,
@@ -6827,6 +8732,8 @@ async def get_interrupted_session():
             "summary": session.summary(),
             "tool_count": len(session.tool_log),
             "project_name": session.project_name,
+            "workspace_id": metadata.get("workspace_id"),
+            "workspace_path": str(metadata.get("workspace_path") or "").strip(),
             "backend": session.backend,
             "updated_at": session.updated_at,
             "last_assistant_message": last_assistant_message,
@@ -6844,9 +8751,7 @@ class AllowEditBody(BaseModel):
 
 @app.post("/api/agent/allow-edit")
 async def allow_agent_edit(body: AllowEditBody):
-    """Whitelist file edits for a specific file, repo root, or the whole session."""
-    brain.agent_allow_edit(body.path, scope=body.scope)
-    return {"ok": True, "scope": body.scope, **brain.agent_get_edit_state()}
+    raise HTTPException(410, "Broad edit grants are disabled. Use /api/agent/approve-action for the exact blocked action.")
 
 
 @app.post("/api/agent/steer")
@@ -6864,14 +8769,15 @@ async def steer_agent(body: dict):
 
 @app.get("/api/agent/allowed-commands")
 async def get_allowed_commands():
-    """Return the current allowed command lists."""
-    async with devdb.get_db() as conn:
-        extra = (await devdb.get_setting(conn, "extra_allowed_cmds")) or ""
+    """Return the current command approval state."""
     return {
+        "deprecated": True,
+        "detail": "Broad command grants are disabled. Use structured exact-action approvals instead.",
         "base": sorted(brain._ALLOWED_CMDS),
         "session": brain.agent_get_session_allowed(),
-        "allow_all": brain._ALLOW_ALL_CMDS,
-        "persistent_extra": [c for c in extra.split(",") if c.strip()],
+        "allow_all": False,
+        "persistent_extra": [],
+        "actions": brain.agent_get_action_state(),
     }
 
 

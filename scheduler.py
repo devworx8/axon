@@ -98,7 +98,7 @@ async def job_morning_digest():
             settings = await devdb.get_all_settings(conn)
             backend = settings.get("ai_backend", "ollama")
             api_key = settings.get("anthropic_api_key", "")
-            cli_path = settings.get("claude_cli_path", "")
+            cli_path = settings.get("cli_runtime_path", settings.get("claude_cli_path", ""))
             cli_session_persistence = cli_session_persistence_enabled(
                 settings.get("claude_cli_session_persistence_enabled")
             )

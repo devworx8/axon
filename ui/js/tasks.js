@@ -144,8 +144,8 @@ function axonTasksMixin() {
           ? this.selectedApiProviderModel()
           : '') || this.runtimeStatus?.selected_api_provider?.api_model || '';
       } else if (backend === 'cli') {
-        payload.cli_path = this.settingsForm?.claude_cli_path || this.runtimeStatus?.cli_binary || '';
-        payload.cli_model = this.settingsForm?.claude_cli_model || this.runtimeStatus?.cli_model || '';
+        payload.cli_path = this.settingsForm?.cli_runtime_path || this.runtimeStatus?.cli_binary || '';
+        payload.cli_model = this.settingsForm?.cli_runtime_model || this.runtimeStatus?.cli_model || '';
       } else if (backend === 'ollama') {
         payload.ollama_model = (typeof this.activeChatModel === 'function'
           ? this.activeChatModel()

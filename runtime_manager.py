@@ -164,7 +164,7 @@ def build_runtime_status(
         card["safety_warning"] = safety.get("warning", "")
         card["preferred_num_ctx"] = safety.get("preferred_num_ctx")
     runtime_ready = ollama_running or settings.get("ai_backend") in {"api", "cli"}
-    selected_cli_override = str(settings.get("claude_cli_path", "") or "")
+    selected_cli_override = str(settings.get("cli_runtime_path", settings.get("claude_cli_path", "")) or "")
     selected_cli_family = _brain._cli_runtime_family(selected_cli_override) if selected_cli_override else "claude"
     claude_runtime = {
         **_claude_cli_runtime.build_cli_runtime_snapshot(selected_cli_override if selected_cli_family == "claude" else ""),
@@ -182,7 +182,10 @@ def build_runtime_status(
 
     backend = settings.get("ai_backend") or "api"
     cli_models = _brain.available_cli_models(selected_cli_path)
-    normalized_cli_model = _brain.normalize_cli_model(selected_cli_path, settings.get("claude_cli_model", ""))
+    normalized_cli_model = _brain.normalize_cli_model(
+        selected_cli_path,
+        settings.get("cli_runtime_model", settings.get("claude_cli_model", "")),
+    )
 
     if backend == "api":
         api_cfg = provider_registry.runtime_api_config(settings)
@@ -223,7 +226,7 @@ def build_runtime_status(
         "local_models_enabled": LOCAL_MODELS_ENABLED,
         "cloud_agents": provider_registry.cloud_adapter_cards(settings),
         "api_providers": provider_registry.api_provider_cards(settings),
-        "selected_api_provider": provider_registry.runtime_api_config(settings),
+        "selected_api_provider": provider_registry.public_runtime_api_config(settings),
         "cli_environments": cli_environments,
         "cli_binary": selected_cli_path,
         "cli_model": normalized_cli_model,

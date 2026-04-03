@@ -111,7 +111,7 @@ function axonDashboardMixin() {
           this.connectionState.domain_checked_at = new Date().toISOString();
         }
         if (this.settingsForm && typeof status.cli_model === 'string' && (this.settingsForm.ai_backend || '').toLowerCase() === 'cli') {
-          this.settingsForm.claude_cli_model = status.cli_model || '';
+          this.settingsForm.cli_runtime_model = status.cli_model || '';
         }
       } catch (e) {
         this.runtimeStatus = {
@@ -377,7 +377,7 @@ function axonDashboardMixin() {
 
     cliModelOptions() {
       const options = Array.isArray(this.runtimeStatus?.cli_models) ? [...this.runtimeStatus.cli_models] : [];
-      const selected = String(this.settingsForm?.claude_cli_model || this.runtimeStatus?.cli_model || '').trim();
+      const selected = String(this.settingsForm?.cli_runtime_model || this.runtimeStatus?.cli_model || '').trim();
       if (selected && !options.some(item => String(item?.id || '') === selected)) {
         options.push({ id: selected, label: selected, description: 'Saved custom model' });
       }
@@ -404,14 +404,14 @@ function axonDashboardMixin() {
     },
 
     activeCliModelLabel() {
-      const selected = this.settingsForm?.claude_cli_model || this.runtimeStatus?.cli_model || '';
+      const selected = this.settingsForm?.cli_runtime_model || this.runtimeStatus?.cli_model || '';
       return this.cliModelLabel(selected);
     },
 
     async saveCliModelQuiet() {
       try {
         await this.api('POST', '/api/settings', {
-          claude_cli_model: this.settingsForm.claude_cli_model || '',
+          cli_runtime_model: this.settingsForm.cli_runtime_model || '',
         });
         await this.loadRuntimeStatus();
       } catch (e) {
@@ -433,7 +433,7 @@ function axonDashboardMixin() {
 
     cliRuntimeBinaryName() {
       const fallback = this.cliRuntimeId() === 'codex' ? 'codex' : 'claude';
-      const path = this.settingsForm?.claude_cli_path || this.cliRuntimeInfo().binary || this.runtimeStatus?.cli_binary || fallback;
+      const path = this.settingsForm?.cli_runtime_path || this.cliRuntimeInfo().binary || this.runtimeStatus?.cli_binary || fallback;
       return String(path || fallback).split('/').pop() || fallback;
     },
 
@@ -470,6 +470,257 @@ function axonDashboardMixin() {
       return `Claude CLI is cooling down for about ${Math.ceil(remaining)}s after a rate limit. Axon will use a fallback runtime until it clears.`;
     },
 
+    formatRuntimeAuthMethod(method = '') {
+      const value = String(method || '').trim().toLowerCase();
+      if (!value) return 'Pending';
+      if (value === 'claude.ai') return 'Claude subscription';
+      if (value === 'console') return 'Anthropic Console';
+      if (value === 'chatgpt') return 'ChatGPT';
+      if (value === 'api_key') return 'API key';
+      if (value === 'local') return 'Local runtime';
+      return value.replace(/[_-]/g, ' ');
+    },
+
+    runtimeObservabilityRows() {
+      return [
+        {
+          key: 'selected',
+          label: 'Selected runtime',
+          value: this.runtimeStatus?.selected_runtime_label || this.runtimeStatus?.runtime_label || 'Pending',
+        },
+        {
+          key: 'effective',
+          label: 'Effective runtime',
+          value: this.runtimeStatus?.effective_runtime_label || this.runtimeStatus?.runtime_label || 'Pending',
+        },
+        {
+          key: 'auth',
+          label: 'Auth',
+          value: this.formatRuntimeAuthMethod(this.runtimeStatus?.auth_method),
+        },
+        {
+          key: 'subscription',
+          label: 'Plan',
+          value: this.runtimeStatus?.subscription_type || 'Not reported',
+        },
+      ];
+    },
+
+    runtimeFallbackSummaryText() {
+      return this.runtimeStatus?.fallback_reason || 'No active fallback.';
+    },
+
+    runtimeProviderErrorText() {
+      return this.runtimeStatus?.provider_error || '';
+    },
+
+    browserSession() {
+      const raw = this.browserActions?.session || {};
+      const scope = this.currentPreviewScope?.() || {};
+      const scopeWorkspaceId = String(scope.workspace_id || '').trim();
+      if (!scopeWorkspaceId) return raw;
+      const attachedWorkspaceId = String(raw?.attached_workspace_id || '').trim();
+      const attachedAutoSessionId = String(raw?.attached_auto_session_id || '').trim();
+      const scopeAutoSessionId = String(scope.auto_session_id || '').trim();
+      if (attachedWorkspaceId && attachedWorkspaceId !== scopeWorkspaceId) return {};
+      if (attachedAutoSessionId !== scopeAutoSessionId) return {};
+      return raw;
+    },
+
+    currentPreviewScopeKey() {
+      const scope = this.currentPreviewScope?.() || {};
+      return `${String(scope.workspace_id || '').trim()}:${String(scope.auto_session_id || '').trim()}`;
+    },
+
+    browserFrameUrl() {
+      return String(
+        this.currentWorkspacePreview?.()?.url
+        || this.browserSession()?.attached_preview_url
+        || this.devPreview?.url
+        || this.browserSession()?.url
+        || ''
+      ).trim();
+    },
+
+    browserOwnershipLabel() {
+      return this.browserSession()?.ownership_label || (this.browserSession()?.control_owner === 'axon' ? 'Axon controls this browser now' : 'Manual browser');
+    },
+
+    browserOwnershipTone() {
+      return this.browserSession()?.control_owner === 'axon'
+        ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
+        : 'border-slate-700 bg-slate-950/70 text-slate-300';
+    },
+
+    browserControlModeLabel() {
+      return String(this.browserSession()?.mode || '').toLowerCase() === 'inspect_auto' ? 'Auto control' : 'Manual control';
+    },
+
+    browserControlModeTone() {
+      return String(this.browserSession()?.mode || '').toLowerCase() === 'inspect_auto'
+        ? 'border-sky-500/25 bg-sky-500/10 text-sky-200'
+        : 'border-amber-500/25 bg-amber-500/10 text-amber-200';
+    },
+
+    browserAttachedWorkspaceLabel() {
+      const session = this.browserSession();
+      return session?.attached_workspace_name || this.workspacePreview?.workspace_name || this.chatProject?.name || 'Workspace';
+    },
+
+    browserControlStatusLabel() {
+      const preview = this.currentWorkspacePreview?.() || {};
+      const status = String(preview?.status || this.browserSession()?.attached_preview_status || '').trim().toLowerCase();
+      if (this.workspacePreview?.loading) return 'Starting';
+      if (status === 'running') return 'Live';
+      if (status) return status.replace(/_/g, ' ');
+      if (this.browserSession()?.connected) return 'Attached';
+      return 'Idle';
+    },
+
+    browserControlDetail() {
+      const preview = this.currentWorkspacePreview?.() || {};
+      if (this.workspacePreview?.loading) {
+        return `Axon is starting a live page for ${this.browserAttachedWorkspaceLabel()}.`;
+      }
+      if (this.workspacePreview?.error) return this.workspacePreview.error;
+      if (preview?.last_error) return preview.last_error;
+      if (this.browserSession()?.control_owner === 'axon' && this.browserFrameUrl()) {
+        return `${this.browserAttachedWorkspaceLabel()} is attached to Axon's browser surface.`;
+      }
+      return 'Start the live page to give Axon a controlled browser surface for preview and browser actions.';
+    },
+
+    browserPreviewStatusKey() {
+      const preview = this.currentWorkspacePreview?.() || {};
+      const rawStatus = String(preview?.status || this.browserSession()?.attached_preview_status || '').trim().toLowerCase();
+      if (this.workspacePreview?.loading) return 'starting';
+      if (this.workspacePreview?.error || preview?.last_error || rawStatus === 'error') return 'error';
+      if (rawStatus === 'running') return preview?.healthy === false ? 'attention' : 'live';
+      if (rawStatus === 'starting') return 'starting';
+      if (rawStatus === 'stopped') return 'stopped';
+      if (this.browserSession()?.control_owner === 'axon' && this.browserFrameUrl()) return 'attached';
+      if (this.browserSession()?.connected) return 'connected';
+      return 'idle';
+    },
+
+    browserPreviewStatusLabel() {
+      const key = this.browserPreviewStatusKey();
+      if (key === 'live') return 'Live';
+      if (key === 'attention') return 'Needs attention';
+      if (key === 'starting') return 'Starting';
+      if (key === 'error') return 'Error';
+      if (key === 'attached') return 'Attached';
+      if (key === 'connected') return 'Connected';
+      if (key === 'stopped') return 'Stopped';
+      return 'Idle';
+    },
+
+    browserPreviewStatusTone() {
+      const key = this.browserPreviewStatusKey();
+      if (key === 'live') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
+      if (key === 'attention' || key === 'starting') return 'border-amber-500/20 bg-amber-500/10 text-amber-200';
+      if (key === 'error') return 'border-rose-500/20 bg-rose-500/10 text-rose-200';
+      if (key === 'attached' || key === 'connected') return 'border-sky-500/20 bg-sky-500/10 text-sky-200';
+      if (key === 'stopped') return 'border-slate-700 bg-slate-950/70 text-slate-400';
+      return 'border-slate-700 bg-slate-950/70 text-slate-400';
+    },
+
+    browserControlHeadline() {
+      const workspace = this.browserAttachedWorkspaceLabel();
+      const owner = String(this.browserSession()?.control_owner || '').toLowerCase();
+      const status = this.browserPreviewStatusKey();
+      if (status === 'live' && owner === 'axon') return `Axon owns the live browser for ${workspace}.`;
+      if (status === 'attached' && owner === 'axon') return `Axon is attached to ${workspace}.`;
+      if (status === 'starting') return `Starting the live browser for ${workspace}.`;
+      if (status === 'error' || status === 'attention') return `The ${workspace} browser surface needs attention.`;
+      if (this.browserFrameUrl()) return `${workspace} is visible in the browser surface.`;
+      return `No live browser is attached for ${workspace}.`;
+    },
+
+    browserSourcePath() {
+      return String(
+        this.currentWorkspacePreview?.()?.source_workspace_path
+        || this.browserSession()?.attached_source_workspace_path
+        || this.chatProject?.path
+        || ''
+      ).trim();
+    },
+
+    browserSourceLabel() {
+      const source = this.browserSourcePath();
+      if (!source) return 'No source workspace linked yet';
+      const parts = source.split('/').filter(Boolean);
+      return parts[parts.length - 1] || source;
+    },
+
+    browserCommandLabel() {
+      return String(
+        this.browserSession()?.title
+        || this.currentWorkspacePreview?.()?.command
+        || 'Attach a live page so Axon can inspect, verify, and propose browser actions here.'
+      ).trim();
+    },
+
+    browserPendingProposalCount() {
+      const explicit = Number(this.browserActions?.pending_count || 0);
+      if (explicit > 0) return explicit;
+      return (this.browserActions?.proposals || []).filter(item => String(item?.status || 'pending') === 'pending').length;
+    },
+
+    browserPendingProposalLabel() {
+      const count = this.browserPendingProposalCount();
+      if (!count) return 'No browser actions waiting';
+      return count === 1 ? '1 browser action waiting' : `${count} browser actions waiting`;
+    },
+
+    browserRecentActionHistory() {
+      return (this.browserActions?.history || []).slice(0, 3);
+    },
+
+    browserHistoryStatusLabel(item = {}) {
+      if (item?.execution_result) return 'Executed';
+      const status = String(item?.status || '').trim().toLowerCase();
+      if (status === 'approved') return 'Approved';
+      if (status === 'rejected') return 'Rejected';
+      return 'Pending';
+    },
+
+    browserHistoryStatusTone(item = {}) {
+      const status = this.browserHistoryStatusLabel(item).toLowerCase();
+      if (status === 'executed') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
+      if (status === 'approved') return 'border-sky-500/20 bg-sky-500/10 text-sky-200';
+      if (status === 'rejected') return 'border-rose-500/20 bg-rose-500/10 text-rose-200';
+      return 'border-slate-700 bg-slate-950/70 text-slate-400';
+    },
+
+    browserHistoryDetail(item = {}) {
+      const execution = item?.execution_result || {};
+      const message = String(execution?.message || execution?.detail || '').trim();
+      if (message) return message;
+      return String(item?.target || item?.url || '').trim();
+    },
+
+    browserPrimaryActionLabel() {
+      return this.browserFrameUrl() ? 'Restart Live Page' : 'Start Live Page';
+    },
+
+    async browserPrimaryAction() {
+      if (this.browserFrameUrl()) return this.restartWorkspacePreview();
+      return this.ensureWorkspacePreview({ openExternal: false, attachBrowser: true });
+    },
+
+    runtimeLoginAuthSummary(session = null) {
+      const auth = session?.auth_snapshot || {};
+      const parts = [];
+      const provider = auth.provider_label || '';
+      const method = this.formatRuntimeAuthMethod(auth.auth_method || '');
+      if (provider) parts.push(provider);
+      if (method && method !== 'Pending' && method !== provider) parts.push(method);
+      if (auth.subscription_type) parts.push(auth.subscription_type);
+      if (auth.email) parts.push(auth.email);
+      return parts.join(' · ') || 'Waiting for runtime auth details.';
+    },
+
     codexRuntimeInfo() {
       return this.runtimeStatus?.codex_runtime || { auth: {} };
     },
@@ -496,8 +747,8 @@ function axonDashboardMixin() {
 
     async useAutoDetectedCli() {
       try {
-        this.settingsForm.claude_cli_path = '';
-        await this.api('POST', '/api/settings', { claude_cli_path: '' });
+        this.settingsForm.cli_runtime_path = '';
+        await this.api('POST', '/api/settings', { cli_runtime_path: '' });
         await this.loadRuntimeStatus();
         this.showToast('CLI runtime will now use auto-discovery');
       } catch (e) {
@@ -510,15 +761,15 @@ function axonDashboardMixin() {
       const nextFamily = String(env?.family || '');
       const currentFamily = this.cliRuntimeId();
       this.settingsForm.ai_backend = 'cli';
-      this.settingsForm.claude_cli_path = nextPath;
+      this.settingsForm.cli_runtime_path = nextPath;
       if (nextFamily && currentFamily && nextFamily !== currentFamily) {
-        this.settingsForm.claude_cli_model = '';
+        this.settingsForm.cli_runtime_model = '';
       }
       try {
         await this.api('POST', '/api/settings', {
           ai_backend: 'cli',
-          claude_cli_path: nextPath,
-          claude_cli_model: this.settingsForm.claude_cli_model || '',
+          cli_runtime_path: nextPath,
+          cli_runtime_model: this.settingsForm.cli_runtime_model || '',
         });
         await this.loadRuntimeStatus();
       } catch (_) {}
@@ -530,6 +781,207 @@ function axonDashboardMixin() {
         await navigator.clipboard.writeText(text);
       } catch (_) {
         // Ignore clipboard failures; the prepared command is still shown in the UI.
+      }
+    },
+
+    runtimeLoginPendingStatus(status = '') {
+      return ['pending', 'browser_opened', 'waiting'].includes(String(status || '').toLowerCase());
+    },
+
+    runtimeLoginFamilyLabel(family = '') {
+      return String(family || '').toLowerCase() === 'codex' ? 'Codex CLI' : 'Claude CLI';
+    },
+
+    runtimeLoginStatusClass(status = '') {
+      const value = String(status || '').toLowerCase();
+      if (value === 'authenticated') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
+      if (value === 'failed' || value === 'cancelled') return 'border-rose-500/30 bg-rose-500/10 text-rose-200';
+      if (this.runtimeLoginPendingStatus(value)) return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
+      return 'border-slate-700 bg-slate-900 text-slate-300';
+    },
+
+    closeRuntimeLoginModal() {
+      if (this.runtimeLoginModal?.pollHandle) {
+        clearTimeout(this.runtimeLoginModal.pollHandle);
+      }
+      this.runtimeLoginModal = {
+        ...this.runtimeLoginModal,
+        open: false,
+        loading: false,
+        error: '',
+        pollHandle: null,
+      };
+    },
+
+    async copyRuntimeLoginValue(value, label = 'Value') {
+      if (!value) return;
+      try {
+        await navigator.clipboard.writeText(String(value));
+        this.showToast(`${label} copied`);
+      } catch (_) {
+        this.showToast(`Could not copy ${label.toLowerCase()}`);
+      }
+    },
+
+    _maybeOpenRuntimeLoginBrowser(session) {
+      const url = String(session?.browser_url || '').trim();
+      if (!url) return;
+      if (this.runtimeLoginModal?.autoOpenedUrl === url) return;
+      this.runtimeLoginModal.autoOpenedUrl = url;
+      try {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      } catch (_) {
+        // Keep the URL visible in the modal even if popup opening is blocked.
+      }
+    },
+
+    _scheduleRuntimeLoginPoll(delayMs = 2000) {
+      if (!this.runtimeLoginModal?.open) return;
+      if (!this.runtimeLoginPendingStatus(this.runtimeLoginModal?.session?.status)) return;
+      if (this.runtimeLoginModal?.pollHandle) clearTimeout(this.runtimeLoginModal.pollHandle);
+      this.runtimeLoginModal.pollHandle = setTimeout(() => {
+        this.refreshRuntimeLoginSession(true);
+      }, Math.max(750, Number(delayMs || 0)));
+    },
+
+    async retryRuntimeLoginSession() {
+      const family = String(this.runtimeLoginModal?.family || '').toLowerCase();
+      if (!family) return;
+      const session = this.runtimeLoginModal?.session || {};
+      const payload = family === 'codex'
+        ? {}
+        : {
+            mode: session?.mode || 'claudeai',
+            email: session?.email || this.currentUser?.email || '',
+          };
+      return this.startRuntimeLogin(family, payload);
+    },
+
+    async startRuntimeLogin(family, payload = {}) {
+      const familyName = String(family || '').toLowerCase() === 'codex' ? 'codex' : 'claude';
+      const loadingKey = familyName === 'codex' ? 'codex_login' : 'login';
+      if (this.cliRuntimeActionLoading?.[loadingKey]) return;
+      this.cliRuntimeActionLoading[loadingKey] = true;
+      if (familyName === 'codex') {
+        this.codexRuntimeActionResult = null;
+      } else {
+        this.cliRuntimeActionResult = null;
+      }
+      this.runtimeLoginModal = {
+        open: true,
+        family: familyName,
+        session: null,
+        loading: true,
+        error: '',
+        autoOpenedUrl: '',
+        pollHandle: this.runtimeLoginModal?.pollHandle || null,
+      };
+      try {
+        const endpoint = `/api/runtime/${familyName}/login/start`;
+        const res = await this.api('POST', endpoint, payload);
+        const session = res?.session || null;
+        this.runtimeLoginModal = {
+          ...this.runtimeLoginModal,
+          family: familyName,
+          session,
+          loading: false,
+          error: '',
+        };
+        this._maybeOpenRuntimeLoginBrowser(session);
+        if (session?.status === 'authenticated') {
+          await this.loadRuntimeStatus();
+          this.showToast(`${this.runtimeLoginFamilyLabel(familyName)} is already signed in`);
+        } else {
+          this.showToast(`${this.runtimeLoginFamilyLabel(familyName)} sign-in started`);
+          this._scheduleRuntimeLoginPoll();
+        }
+      } catch (e) {
+        const message = e.message || `${this.runtimeLoginFamilyLabel(familyName)} login failed`;
+        this.runtimeLoginModal = {
+          ...this.runtimeLoginModal,
+          family: familyName,
+          loading: false,
+          error: message,
+        };
+        if (familyName === 'codex') {
+          this.codexRuntimeActionResult = { status: 'error', message };
+        } else {
+          this.cliRuntimeActionResult = { status: 'error', message };
+        }
+        this.showToast(message);
+      }
+      this.cliRuntimeActionLoading[loadingKey] = false;
+    },
+
+    async refreshRuntimeLoginSession(silent = false) {
+      const family = String(this.runtimeLoginModal?.family || '').toLowerCase();
+      const sessionId = String(this.runtimeLoginModal?.session?.session_id || '').trim();
+      if (!family || !sessionId) return null;
+      const previousStatus = String(this.runtimeLoginModal?.session?.status || '').toLowerCase();
+      try {
+        const res = await this.api('GET', `/api/runtime/${family}/login/${encodeURIComponent(sessionId)}`);
+        const session = res?.session || null;
+        this.runtimeLoginModal = {
+          ...this.runtimeLoginModal,
+          session,
+          loading: false,
+          error: '',
+        };
+        this._maybeOpenRuntimeLoginBrowser(session);
+        if (session?.status === 'authenticated') {
+          await this.loadRuntimeStatus();
+          if (this.runtimeLoginModal?.pollHandle) clearTimeout(this.runtimeLoginModal.pollHandle);
+          this.runtimeLoginModal.pollHandle = null;
+          if (!silent || previousStatus !== 'authenticated') this.showToast(`${this.runtimeLoginFamilyLabel(family)} signed in`);
+        } else if (this.runtimeLoginPendingStatus(session?.status)) {
+          this._scheduleRuntimeLoginPoll();
+        } else {
+          if (this.runtimeLoginModal?.pollHandle) clearTimeout(this.runtimeLoginModal.pollHandle);
+          this.runtimeLoginModal.pollHandle = null;
+          if (!silent && previousStatus !== String(session?.status || '').toLowerCase() && session?.message) {
+            this.showToast(session.message);
+          }
+        }
+        return session;
+      } catch (e) {
+        const message = e.message || 'Login status unavailable';
+        this.runtimeLoginModal = {
+          ...this.runtimeLoginModal,
+          loading: false,
+          error: message,
+        };
+        if (!silent) this.showToast(message);
+        return null;
+      }
+    },
+
+    async cancelRuntimeLoginSession() {
+      const family = String(this.runtimeLoginModal?.family || '').toLowerCase();
+      const sessionId = String(this.runtimeLoginModal?.session?.session_id || '').trim();
+      if (!family || !sessionId) {
+        this.closeRuntimeLoginModal();
+        return;
+      }
+      this.runtimeLoginModal.loading = true;
+      try {
+        const res = await this.api('POST', `/api/runtime/${family}/login/${encodeURIComponent(sessionId)}/cancel`, {});
+        this.runtimeLoginModal = {
+          ...this.runtimeLoginModal,
+          session: res?.session || this.runtimeLoginModal.session,
+          loading: false,
+          error: '',
+        };
+        if (this.runtimeLoginModal?.pollHandle) clearTimeout(this.runtimeLoginModal.pollHandle);
+        this.runtimeLoginModal.pollHandle = null;
+        this.showToast(`${this.runtimeLoginFamilyLabel(family)} sign-in cancelled`);
+      } catch (e) {
+        const message = e.message || 'Could not cancel login';
+        this.runtimeLoginModal = {
+          ...this.runtimeLoginModal,
+          loading: false,
+          error: message,
+        };
+        this.showToast(message);
       }
     },
 
@@ -552,24 +1004,30 @@ function axonDashboardMixin() {
     },
 
     async loginClaudeCli() {
-      if (this.cliRuntimeActionLoading?.login) return;
-      this.cliRuntimeActionLoading.login = true;
+      const family = this.cliRuntimeId() === 'codex' ? 'codex' : 'claude';
+      const payload = family === 'codex'
+        ? {}
+        : { mode: 'claudeai', email: this.currentUser?.email || '' };
+      return this.startRuntimeLogin(family, payload);
+    },
+
+    async logoutClaudeCli() {
+      if (this.cliRuntimeActionLoading?.logout) return;
+      this.cliRuntimeActionLoading.logout = true;
       this.cliRuntimeActionResult = null;
       try {
-        const endpoint = this.cliRuntimeId() === 'codex' ? '/api/runtime/codex/login' : '/api/runtime/cli/login';
-        const payload = this.cliRuntimeId() === 'codex'
-          ? {}
-          : { mode: 'claudeai', email: this.currentUser?.email || '' };
-        const res = await this.api('POST', endpoint, payload);
+        const endpoint = this.cliRuntimeId() === 'codex' ? '/api/runtime/codex/logout' : '/api/runtime/cli/logout';
+        const res = await this.api('POST', endpoint, {});
         this.cliRuntimeActionResult = res;
         if (res.command_preview) await this._copyCommandPreview(res.command_preview);
         await this.loadRuntimeStatus();
-        this.showToast(res.message || `${this.cliRuntimeName()} login command prepared`);
+        if (String(this.runtimeLoginModal?.family || '') === 'claude') this.closeRuntimeLoginModal();
+        this.showToast(res.message || `${this.cliRuntimeName()} signed out`);
       } catch (e) {
-        this.cliRuntimeActionResult = { status: 'error', message: e.message || `${this.cliRuntimeName()} login failed` };
-        this.showToast(`${this.cliRuntimeName()} login failed: ${e.message || e}`);
+        this.cliRuntimeActionResult = { status: 'error', message: e.message || `${this.cliRuntimeName()} sign out failed` };
+        this.showToast(`${this.cliRuntimeName()} sign out failed: ${e.message || e}`);
       }
-      this.cliRuntimeActionLoading.login = false;
+      this.cliRuntimeActionLoading.logout = false;
     },
 
     async installCodexCli() {
@@ -590,20 +1048,290 @@ function axonDashboardMixin() {
     },
 
     async loginCodexCli() {
-      if (this.cliRuntimeActionLoading?.codex_login) return;
-      this.cliRuntimeActionLoading.codex_login = true;
+      return this.startRuntimeLogin('codex', {});
+    },
+
+    async logoutCodexCli() {
+      if (this.cliRuntimeActionLoading?.codex_logout) return;
+      this.cliRuntimeActionLoading.codex_logout = true;
       this.codexRuntimeActionResult = null;
       try {
-        const res = await this.api('POST', '/api/runtime/codex/login', {});
+        const res = await this.api('POST', '/api/runtime/codex/logout', {});
         this.codexRuntimeActionResult = res;
         if (res.command_preview) await this._copyCommandPreview(res.command_preview);
         await this.loadRuntimeStatus();
-        this.showToast(res.message || 'Codex CLI login command prepared');
+        if (String(this.runtimeLoginModal?.family || '') === 'codex') this.closeRuntimeLoginModal();
+        this.showToast(res.message || 'Codex CLI signed out');
       } catch (e) {
-        this.codexRuntimeActionResult = { status: 'error', message: e.message || 'Codex CLI login failed' };
-        this.showToast(`Codex CLI login failed: ${e.message || e}`);
+        this.codexRuntimeActionResult = { status: 'error', message: e.message || 'Codex CLI sign out failed' };
+        this.showToast(`Codex CLI sign out failed: ${e.message || e}`);
       }
-      this.cliRuntimeActionLoading.codex_login = false;
+      this.cliRuntimeActionLoading.codex_logout = false;
+    },
+
+    currentPreviewScope() {
+      const projectId = parseInt(String(this.chatProjectId || 0), 10) || 0;
+      const auto = this.currentWorkspaceAutoSession?.() || null;
+      return {
+        workspace_id: projectId || null,
+        workspace_name: this.chatProject?.name || '',
+        auto_session_id: String(auto?.session_id || '').trim(),
+        title: String(auto?.title || this.chatProject?.name || 'workspace').trim(),
+      };
+    },
+
+    currentWorkspacePreview() {
+      const scope = this.currentPreviewScope?.() || {};
+      const scopeWorkspaceId = String(scope.workspace_id || '').trim();
+      if (!scopeWorkspaceId) return null;
+      const state = this.workspacePreview || {};
+      const session = state.session || null;
+      if (!session) return null;
+      const previewWorkspaceId = String(state.workspace_id || session.workspace_id || '').trim();
+      const previewAutoSessionId = String(state.auto_session_id || session.auto_session_id || '').trim();
+      const scopeAutoSessionId = String(scope.auto_session_id || '').trim();
+      if (previewWorkspaceId && previewWorkspaceId !== scopeWorkspaceId) return null;
+      if (previewAutoSessionId !== scopeAutoSessionId) return null;
+      return session;
+    },
+
+    previewReadyForCurrentWorkspace() {
+      return !!String(this.currentWorkspacePreview?.()?.url || '').trim();
+    },
+
+    composerCompactMode() {
+      if (this.isMobile) return false;
+      const previewOpen = !!(
+        this.panelBrowserOpen &&
+        (
+          this.devPreview?.url ||
+          this.currentWorkspacePreview?.()?.url ||
+          this.workspacePreview?.loading
+        )
+      );
+      const panelWidth = Number(this.consolePanelWidth || 0);
+      return previewOpen || panelWidth >= Math.round(window.innerWidth * 0.4);
+    },
+
+    ensureWorkspacePreviewLayout(forceHalf = false) {
+      if (this.isMobile) return;
+      const target = Math.round(window.innerWidth * (forceHalf ? 0.5 : 0.44));
+      const next = Math.max(420, Math.min(Math.round(window.innerWidth * 0.78), target));
+      if (Number(this.consolePanelWidth || 0) < next) {
+        this.applyConsolePanelWidth(next);
+      }
+    },
+
+    snapPreviewPanelHalf() {
+      this.ensureWorkspacePreviewLayout(true);
+      this.panelBrowserOpen = true;
+    },
+
+    async loadWorkspacePreview() {
+      const scope = this.currentPreviewScope();
+      const scopeKey = this.currentPreviewScopeKey();
+      const requestSeq = Number(this._workspacePreviewRequestSeq || 0) + 1;
+      this._workspacePreviewRequestSeq = requestSeq;
+      this._workspacePreviewScopeKey = scopeKey;
+      if (!scope.workspace_id) {
+        this.workspacePreview = { session: null, loading: false, error: '', workspace_id: null, workspace_name: '', auto_session_id: '' };
+        this.devPreview.url = '';
+        this.devPreview.visible = false;
+        return null;
+      }
+      const scopedPreview = this.currentWorkspacePreview?.() || null;
+      this.workspacePreview = {
+        session: scopedPreview,
+        loading: true,
+        error: '',
+        workspace_id: scope.workspace_id,
+        workspace_name: scope.workspace_name,
+        auto_session_id: scope.auto_session_id,
+      };
+      if (!scopedPreview) {
+        this.devPreview.url = '';
+        this.devPreview.visible = false;
+      }
+      try {
+        const qs = new URLSearchParams();
+        if (scope.auto_session_id) qs.set('auto_session_id', scope.auto_session_id);
+        const data = await this.api('GET', `/api/workspaces/${encodeURIComponent(scope.workspace_id)}/preview${qs.toString() ? `?${qs.toString()}` : ''}`);
+        if (requestSeq !== this._workspacePreviewRequestSeq || this._workspacePreviewScopeKey !== scopeKey) return null;
+        this.workspacePreview = {
+          session: data?.preview || null,
+          loading: false,
+          error: '',
+          workspace_id: scope.workspace_id,
+          workspace_name: scope.workspace_name,
+          auto_session_id: scope.auto_session_id,
+        };
+        if (data?.preview?.url) {
+          this.devPreview.url = data.preview.url;
+          this.devPreview.visible = true;
+          this.panelBrowserOpen = true;
+          this.ensureWorkspacePreviewLayout(true);
+        } else {
+          this.devPreview.url = '';
+          this.devPreview.visible = false;
+        }
+        if (!data?.preview?.url && scope.auto_session_id) {
+          const auto = this.currentWorkspaceAutoSession?.() || null;
+          if (auto?.preview_url) {
+            this.workspacePreview = {
+              ...(this.workspacePreview || {}),
+              session: {
+                ...(this.workspacePreview?.session || {}),
+                auto_session_id: scope.auto_session_id,
+                url: auto.preview_url,
+                status: auto.preview_status || 'starting',
+                title: auto.title || scope.title,
+              },
+            };
+            this.devPreview.url = auto.preview_url;
+            this.devPreview.visible = true;
+            this.panelBrowserOpen = true;
+            this.ensureWorkspacePreviewLayout(true);
+          }
+        }
+        return data?.preview || null;
+      } catch (e) {
+        if (requestSeq !== this._workspacePreviewRequestSeq || this._workspacePreviewScopeKey !== scopeKey) return null;
+        this.workspacePreview = { session: null, loading: false, error: e.message || 'Preview unavailable' };
+        this.devPreview.url = '';
+        this.devPreview.visible = false;
+        return null;
+      }
+    },
+
+    async ensureWorkspacePreview(options = {}) {
+      const scope = this.currentPreviewScope();
+      const scopeKey = this.currentPreviewScopeKey();
+      if (!scope.workspace_id) {
+        if (!options.silent) this.showToast('Select a workspace before opening the live page');
+        return null;
+      }
+      const openExternal = options.openExternal === true;
+      let restart = !!options.restart;
+      const attachBrowser = options.attachBrowser !== false;
+      let preview = this.currentWorkspacePreview();
+      const previewStatus = String(preview?.status || '').toLowerCase();
+      const stalePreview = /expo start/.test(String(preview?.command || '')) && /--host 127\.0\.0\.1/.test(String(preview?.command || ''));
+      const missingAutoSourcePath = !!(scope.auto_session_id && !String(preview?.source_workspace_path || '').trim());
+      if (!restart && (previewStatus === 'error' || previewStatus === 'stopped' || stalePreview || missingAutoSourcePath)) {
+        restart = true;
+      }
+      if (!restart && preview?.url && ['running', 'starting'].includes(previewStatus)) {
+        this.devPreview.url = preview.url;
+        this.devPreview.visible = true;
+        this.panelBrowserOpen = true;
+        this.ensureWorkspacePreviewLayout(true);
+        if (openExternal) window.open(preview.url, '_blank', 'noopener,noreferrer');
+        return preview;
+      }
+
+      this.workspacePreview = { ...(this.workspacePreview || {}), loading: true, error: '' };
+      try {
+        const payload = {
+          auto_session_id: scope.auto_session_id || '',
+          restart,
+          attach_browser: attachBrowser,
+        };
+        const data = await this.api('POST', `/api/workspaces/${encodeURIComponent(scope.workspace_id)}/preview/start`, payload);
+        if (this.currentPreviewScopeKey() !== scopeKey) return null;
+        preview = data?.preview || null;
+        this.workspacePreview = {
+          session: preview,
+          loading: false,
+          error: '',
+          workspace_id: scope.workspace_id,
+          workspace_name: scope.workspace_name,
+          auto_session_id: scope.auto_session_id,
+        };
+        if (data?.browser_actions) {
+          this.browserActions = { ...this.browserActions, ...data.browser_actions };
+        }
+        if (preview?.url) {
+          this.devPreview.url = preview.url;
+          this.devPreview.visible = true;
+          this.panelBrowserOpen = true;
+          this.ensureWorkspacePreviewLayout(true);
+          if (openExternal) window.open(preview.url, '_blank', 'noopener,noreferrer');
+          if (!options.silent) this.showToast(`Live preview ready for ${scope.workspace_name || 'workspace'}`);
+        } else if (!options.silent) {
+          this.showToast('Preview started, but no URL is available yet');
+        }
+        return preview;
+      } catch (e) {
+        if (this.currentPreviewScopeKey() !== scopeKey) return null;
+        this.workspacePreview = { ...(this.workspacePreview || {}), loading: false, error: e.message || 'Preview start failed' };
+        this.devPreview.url = '';
+        if (!options.silent) this.showToast(`Live preview failed: ${e.message || e}`);
+        return null;
+      }
+    },
+
+    async restartWorkspacePreview() {
+      return this.ensureWorkspacePreview({ restart: true, openExternal: false, attachBrowser: true });
+    },
+
+    async stopWorkspacePreview() {
+      const scope = this.currentPreviewScope();
+      if (!scope.workspace_id) return;
+      try {
+        const qs = new URLSearchParams();
+        if (scope.auto_session_id) qs.set('auto_session_id', scope.auto_session_id);
+        const data = await this.api('DELETE', `/api/workspaces/${encodeURIComponent(scope.workspace_id)}/preview${qs.toString() ? `?${qs.toString()}` : ''}`);
+        this.workspacePreview = { ...(this.workspacePreview || {}), session: data?.preview || null, loading: false, error: '' };
+        this.devPreview.url = '';
+        this.devPreview.visible = false;
+        this.panelBrowserOpen = false;
+        this.showToast('Live preview stopped');
+      } catch (e) {
+        this.showToast(`Could not stop live preview: ${e.message || e}`);
+      }
+    },
+
+    workspaceTestUrl() {
+      const auto = this.currentWorkspaceAutoSession?.() || null;
+      const candidates = [
+        this.currentWorkspacePreview?.()?.url,
+        this.devPreview?.url,
+        auto?.preview_url,
+        auto?.dev_url,
+        this._workspaceEnv?.preview_url,
+        this._workspaceEnv?.dev_url,
+      ];
+      for (const value of candidates) {
+        const url = String(value || '').trim();
+        if (!url) continue;
+        if (/^https?:\/\//i.test(url)) return url;
+      }
+      return '';
+    },
+
+    async openWorkspaceTestTab() {
+      const current = this.currentWorkspacePreview();
+      const currentStatus = String(current?.status || '').toLowerCase();
+      const shouldRestart =
+        this.autonomousConsoleActive?.()
+        || !current?.url
+        || currentStatus === 'error'
+        || currentStatus === 'stopped'
+        || /--host 127\.0\.0\.1/.test(String(current?.command || ''));
+      const preview = await this.ensureWorkspacePreview({
+        openExternal: false,
+        attachBrowser: true,
+        restart: shouldRestart,
+      });
+      if (!preview?.url) {
+        this.showToast('No test URL available for this workspace yet');
+        return;
+      }
+      this.devPreview.url = preview.url;
+      this.devPreview.visible = true;
+      this.panelBrowserOpen = true;
+      this.ensureWorkspacePreviewLayout(true);
+      this.showToast(`Testing ${this.currentPreviewScope().workspace_name || 'workspace'} inside Axon`);
     },
 
     consoleRuntimeLabel() {
@@ -620,32 +1348,30 @@ function axonDashboardMixin() {
     },
 
     composerEnvLabel() {
-      const p = this.chatProject;
-      if (p?.path) {
-        const dir = p.path.split('/').pop() || p.name;
-        const env = this._workspaceEnv || {};
-        const parts = [];
-        if (env.venv) parts.push(`(${env.venv})`);
-        parts.push(dir);
-        if (env.git_branch) parts.push(`git:(${env.git_branch})`);
-        return parts.join(' → ');
-      }
-      const env = this.runtimeStatus?.env || {};
+      const data = this.composerEnvData();
       const parts = [];
-      if (env.venv) parts.push(`(${env.venv})`);
-      parts.push(env.work_dir || '.devbrain');
-      if (env.git_branch) parts.push(`git:(${env.git_branch})`);
+      if (data.venv) parts.push(`(${data.venv})`);
+      parts.push(data.work_dir || 'console');
+      if (data.auto && data.source_dir) parts.push(`src:(${data.source_dir})`);
+      if (data.git_branch) parts.push(`git:(${data.git_branch})`);
       return parts.join(' → ');
     },
 
     composerEnvData() {
       const p = this.chatProject;
+      const auto = this.autonomousConsoleActive?.() ? (this.currentWorkspaceAutoSession?.() || null) : null;
       if (p?.path) {
         const env = this._workspaceEnv || {};
+        const sourceDir = p.path.split('/').pop() || p.name;
+        const sandboxPath = String(auto?.sandbox_path || '').trim();
+        const sandboxDir = sandboxPath ? sandboxPath.split('/').pop() || '' : '';
         return {
           venv: env.venv || '',
-          git_branch: env.git_branch || p.git_branch || '',
-          work_dir: p.path.split('/').pop() || p.name,
+          git_branch: String(auto?.branch_name || env.git_branch || p.git_branch || ''),
+          work_dir: sandboxDir || sourceDir,
+          source_dir: sandboxDir ? sourceDir : '',
+          auto: !!sandboxDir,
+          auto_label: sandboxDir ? 'worktree' : '',
         };
       }
       return this.runtimeStatus?.env || {};
@@ -655,7 +1381,10 @@ function axonDashboardMixin() {
       const p = this.chatProject;
       if (!p?.path) { this._workspaceEnv = null; return; }
       try {
-        const data = await this.api('GET', `/api/workspace/env?path=${encodeURIComponent(p.path)}`);
+        const qs = new URLSearchParams({ path: p.path, project_id: String(p.id || '') });
+        const autoSessionId = String(this.currentWorkspaceAutoSession?.()?.session_id || '').trim();
+        if (autoSessionId) qs.set('auto_session_id', autoSessionId);
+        const data = await this.api('GET', `/api/workspace/env?${qs.toString()}`);
         this._workspaceEnv = data || {};
       } catch { this._workspaceEnv = null; }
     },
@@ -1244,12 +1973,7 @@ function axonDashboardMixin() {
       }
       if (opts.action_mode) chips.push({ key: 'action_mode', label: opts.action_mode.replace(/_/g, ' ') });
       if (opts.agent_role) chips.push({ key: 'agent_role', label: `${opts.agent_role} mode` });
-      if (opts.include_timeline_history) chips.push({ key: 'include_timeline_history', label: 'timeline history' });
-      if (opts.pin_context) chips.push({ key: 'pin_context', label: 'pin context' });
-      if (opts.require_approval) chips.push({ key: 'require_approval', label: 'approval' });
-      if (opts.simulation_mode) chips.push({ key: 'simulation_mode', label: 'simulation' });
       if (opts.terminal_mode) chips.push({ key: 'terminal_mode', label: 'terminal' });
-      if (opts.live_desktop_feed) chips.push({ key: 'live_desktop_feed', label: 'live desktop' });
       if (opts.use_workspace_memory === false) chips.push({ key: 'use_workspace_memory', label: 'workspace memory off' });
       if (opts.safe_mode === false) chips.push({ key: 'safe_mode', label: 'safe mode off' });
       if (opts.external_mode && opts.external_mode !== 'local_first') {
@@ -1262,6 +1986,50 @@ function axonDashboardMixin() {
       }
       if (opts.research_pack_title) chips.push({ key: 'research_pack_id', label: `pack: ${opts.research_pack_title}` });
       return chips;
+    },
+
+    consolePanelWidthBounds() {
+      return {
+        min: 360,
+        max: Math.max(360, Math.round(window.innerWidth * 0.78)),
+      };
+    },
+
+    normalizeConsolePanelWidth(value) {
+      const bounds = this.consolePanelWidthBounds();
+      let next = Math.max(bounds.min, Math.min(bounds.max, Math.round(Number(value || bounds.min))));
+      const snapHalf = Math.round(window.innerWidth * 0.5);
+      const snapWide = Math.round(window.innerWidth * 0.44);
+      if (Math.abs(next - snapHalf) <= 22) {
+        next = snapHalf;
+      } else if (this.panelBrowserOpen && Math.abs(next - snapWide) <= 18) {
+        next = snapWide;
+      }
+      return Math.max(bounds.min, Math.min(bounds.max, next));
+    },
+
+    applyConsolePanelWidth(value) {
+      const next = this.normalizeConsolePanelWidth(value);
+      this.consolePanelWidth = next;
+      this.writeWindowPref?.('consolePanelWidth', String(next));
+      return next;
+    },
+
+    beginConsolePanelResize(pointerX) {
+      this.consolePanelResizing = true;
+      this.consolePanelResizeStartX = Number(pointerX || 0);
+      this.consolePanelResizeStartW = Number(this.consolePanelWidth || 420);
+    },
+
+    updateConsolePanelResize(pointerX) {
+      if (!this.consolePanelResizing) return;
+      const delta = this.consolePanelResizeStartX - Number(pointerX || 0);
+      this.applyConsolePanelWidth(this.consolePanelResizeStartW + delta);
+      setTimeout(() => this.fitXterm?.(), 50);
+    },
+
+    finishConsolePanelResize() {
+      this.consolePanelResizing = false;
     },
 
     removeComposerChip(key) {
@@ -1308,6 +2076,9 @@ function axonDashboardMixin() {
       }
       const agent = this.resolveChatMode(this.chatInput) === 'agent';
       const opts = this.normalizedComposerOptions();
+      if (agent && opts.agent_role === 'auto') {
+        return 'Give Axon a concrete workspace goal and it will keep going until blocked or done...';
+      }
       if (!agent) {
         if (opts.intelligence_mode === 'deep_research') return 'Ask Axon to research, synthesize, and explain...';
         if (opts.action_mode === 'generate') return 'Tell Axon what to create...';
@@ -1742,6 +2513,41 @@ function axonDashboardMixin() {
       return badges;
     },
 
+    localToolsSafetyBadge() {
+      const approvalMode = String(
+        this.browserActions?.approval_mode
+        || this.browserActions?.session?.mode
+        || 'approval_required'
+      ).toLowerCase();
+      const autoSession = this.currentWorkspaceAutoSession?.() || null;
+      if (this.autonomousConsoleActive?.() && autoSession) {
+        return {
+          label: 'Auto sandbox',
+          tone: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200',
+          title: 'Axon is operating inside an isolated Auto worktree for this workspace.',
+        };
+      }
+      if (approvalMode === 'approval_required') {
+        return {
+          label: 'Approval gate',
+          tone: 'border-amber-500/20 bg-amber-500/10 text-amber-200',
+          title: 'Clicks, typing, navigation, and other sensitive actions still require your approval.',
+        };
+      }
+      if (approvalMode === 'inspect_auto') {
+        return {
+          label: 'Inspect auto',
+          tone: 'border-sky-500/20 bg-sky-500/10 text-sky-200',
+          title: 'Inspection actions are auto-approved, while mutating browser actions stay guarded.',
+        };
+      }
+      return {
+        label: 'Guarded tools',
+        tone: 'border-slate-700 bg-slate-950/60 text-slate-300',
+        title: 'Local tools are available, but sensitive machine actions are still guarded by Axon safety rules.',
+      };
+    },
+
     terminalModeOptions() {
       return [
         { value: 'read_only', label: 'Read-only' },
@@ -1773,8 +2579,8 @@ function axonDashboardMixin() {
       this.composerOptions.terminal_mode = enabled;
       this.terminal.panelOpen = enabled;
       // Auto-widen panel for terminal, shrink back when hidden
-      if (enabled && this.consolePanelWidth < 520) this.consolePanelWidth = 520;
-      else if (!enabled && this.consolePanelWidth > 420) this.consolePanelWidth = 420;
+      if (enabled && this.consolePanelWidth < 520) this.applyConsolePanelWidth(520);
+      else if (!enabled && this.consolePanelWidth > 420) this.applyConsolePanelWidth(420);
       if (!enabled) return;
       await this.ensureTerminalSession();
     },
@@ -2019,6 +2825,12 @@ function axonDashboardMixin() {
       this.liveFeed.connected = true;
       this.liveFeed.reconnecting = false;
       if (payload?.connection) this.connectionState = payload.connection;
+      if (payload?.operator && typeof this.syncLiveOperatorFromSnapshot === 'function') {
+        this.syncLiveOperatorFromSnapshot(payload.operator);
+      }
+      if (Array.isArray(payload?.auto_sessions) && typeof this.syncAutoSessionsFromSnapshot === 'function') {
+        this.syncAutoSessionsFromSnapshot(payload.auto_sessions);
+      }
       if (payload?.browser_actions) {
         this.browserActions = {
           ...this.browserActions,
@@ -2130,8 +2942,43 @@ function axonDashboardMixin() {
 
     parseStoredChatMessage(content) {
       const raw = String(content || '');
+      const prefix = 'AXON_CHAT_V1:';
+      if (raw.startsWith(prefix)) {
+        try {
+          const payload = JSON.parse(raw.slice(prefix.length));
+          if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+            const resources = Array.isArray(payload.resources)
+              ? payload.resources
+                .map((resource, index) => {
+                  if (resource && typeof resource === 'object') {
+                    const title = String(resource.title || resource.name || `resource ${index + 1}`).trim();
+                    if (!title) return null;
+                    return {
+                      ...resource,
+                      id: resource.id ?? `history-${index}-${title}`,
+                      title,
+                    };
+                  }
+                  const title = String(resource || '').trim();
+                  if (!title) return null;
+                  return { id: `history-${index}-${title}`, title };
+                })
+                .filter(Boolean)
+              : [];
+            return {
+              content: String(payload.content || ''),
+              resources,
+              mode: String(payload.mode || ''),
+              threadMode: String(payload.thread_mode || payload.threadMode || ''),
+              modelLabel: String(payload.model_label || payload.modelLabel || ''),
+            };
+          }
+        } catch (error) {
+          // Fall back to the legacy parser when the envelope is malformed.
+        }
+      }
       const match = raw.match(/\n\n\[Attached resources: ([^\]]+)\]\s*$/);
-      if (!match) return { content: raw, resources: [] };
+      if (!match) return { content: raw, resources: [], mode: '', threadMode: '', modelLabel: '' };
       const titles = match[1]
         .split(',')
         .map(item => item.trim())
@@ -2140,6 +2987,9 @@ function axonDashboardMixin() {
       return {
         content: raw.slice(0, match.index).trimEnd(),
         resources: titles,
+        mode: '',
+        threadMode: '',
+        modelLabel: '',
       };
     },
 

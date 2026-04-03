@@ -94,11 +94,39 @@ class BrowserBridge:
 
     @property
     def is_running(self) -> bool:
-        return self._started and self._browser is not None
+        return self._started and self._browser_is_usable() and self._page_is_usable()
+
+    def _browser_is_usable(self) -> bool:
+        if self._browser is None:
+            return False
+        try:
+            return bool(self._browser.is_connected())
+        except Exception:
+            return False
+
+    def _page_is_usable(self) -> bool:
+        if self._page is None or self._context is None:
+            return False
+        try:
+            return not self._page.is_closed()
+        except Exception:
+            return False
+
+    async def _dispose_browser_locked(self) -> None:
+        if self._browser:
+            try:
+                await self._browser.close()
+            except Exception:
+                pass
+        self._browser = None
+        self._context = None
+        self._page = None
+        self._cached_title = ""
+        self._started = False
 
     @property
     def current_url(self) -> str:
-        if self._page:
+        if self._page_is_usable():
             try:
                 return self._page.url
             except Exception:
@@ -107,7 +135,7 @@ class BrowserBridge:
 
     @property
     def current_title(self) -> str:
-        if self._page:
+        if self._page_is_usable():
             try:
                 # Use a cached title — don't await here
                 return getattr(self, '_cached_title', '')
@@ -118,8 +146,10 @@ class BrowserBridge:
     async def start(self, headless: bool = False, proxy: Optional[dict[str, str]] = None):
         """Launch browser. Pass proxy={"server": "socks5://..."} for proxy."""
         async with _lock:
-            if self._started:
+            if self.is_running:
                 return
+            if self._started:
+                await self._dispose_browser_locked()
             await _ensure_playwright()
             launch_opts: dict[str, Any] = {"headless": headless}
             if proxy:
@@ -138,22 +168,13 @@ class BrowserBridge:
         """Shut down the browser."""
         global _playwright
         async with _lock:
-            if self._browser:
-                try:
-                    await self._browser.close()
-                except Exception:
-                    pass
+            await self._dispose_browser_locked()
             if _playwright:
                 try:
                     await _playwright.stop()
                 except Exception:
                     pass
                 _playwright = None
-            self._browser = None
-            self._context = None
-            self._page = None
-            self._cached_title = ""
-            self._started = False
             _log.info("Browser bridge stopped")
 
     async def execute_action(self, action: dict[str, Any]) -> dict[str, Any]:

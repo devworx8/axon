@@ -175,8 +175,15 @@ def _looks_like_checkpoint_or_audit_summary(user_message: str, text: str) -> boo
         "repo state",
         "i'm reconstructing",
     )
-    return any(marker in request_text for marker in request_markers) or any(
-        marker in answer_text for marker in answer_markers
+    structured_handoff = (
+        ("what changed" in answer_text and "verification" in answer_text)
+        or ("verified in this run" in answer_text and "not yet verified" in answer_text)
+        or ("verification" in answer_text and "next action" in answer_text)
+    )
+    return (
+        any(marker in request_text for marker in request_markers)
+        or any(marker in answer_text for marker in answer_markers)
+        or structured_handoff
     )
 
 
@@ -349,6 +356,18 @@ def _looks_like_hallucinated_execution(text: str, tool_log: list[dict]) -> bool:
             unsupported_claims += 1
 
         if any(phrase in sample for phrase in (
+            ".git/index.lock",
+            "read-only file system",
+            "git metadata is not writable",
+            "blocked by the sandbox",
+            "this session cannot write git metadata",
+        )) and not _tool_log_mentions(
+            tool_log,
+            ("blocked_cmd:git", "git commit", "git add", "git push", "read-only file system", ".git/index.lock"),
+        ):
+            unsupported_claims += 1
+
+        if any(phrase in sample for phrase in (
             "tests pass",
             "tests passed",
             "all tests passing",
@@ -426,6 +445,11 @@ def _looks_like_hallucinated_execution(text: str, tool_log: list[dict]) -> bool:
         "i've fixed the issue",
         "the fix is in place",
         "here's what i did:",
+        ".git/index.lock",
+        "read-only file system",
+        "git metadata is not writable",
+        "blocked by the sandbox",
+        "this session cannot write git metadata",
     )
     hit_count = sum(1 for phrase in execution_claims if phrase in sample)
     return hit_count >= 2

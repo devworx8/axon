@@ -13,3 +13,9 @@ devbrain.db
 .venv/
 venv/
 cloudflared
+auto_sessions/
+live_preview_sessions/
+runtime_login_sessions/
+task_sandboxes/
+resources/*/paste-*.png
+AXON_LIVE_APPROVAL_SMOKE.txt

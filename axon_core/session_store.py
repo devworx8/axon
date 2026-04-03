@@ -240,44 +240,225 @@ class SessionStore:
             return None
         return self._row_to_session(row) if row else self._fallback_recent("active", max_age_hours=max_age_hours)
 
-    def get_interrupted(self, max_age_hours: float = 8.0) -> Optional[AgentSession]:
-        """Return the most recent resumable session, preferring paused sessions over stale active ones."""
+    @staticmethod
+    def _same_workspace(
+        session: AgentSession,
+        *,
+        workspace_id: Optional[int] = None,
+        workspace_path: str = "",
+        project_name: Optional[str] = None,
+    ) -> bool:
+        metadata = session.metadata or {}
+        if workspace_id is not None and str(metadata.get("workspace_id") or "").strip() == str(workspace_id):
+            return True
+        if workspace_path:
+            left = str(metadata.get("workspace_path") or "").strip()
+            if left and Path(left).expanduser().resolve(strict=False) == Path(workspace_path).expanduser().resolve(strict=False):
+                return True
+        if project_name:
+            label = str(session.project_name or metadata.get("project_name") or "").strip().lower()
+            if label and label == str(project_name).strip().lower():
+                return True
+        return False
+
+    @classmethod
+    def _sessions_share_workspace(cls, left: AgentSession, right: AgentSession) -> bool:
+        right_meta = right.metadata or {}
+        return cls._same_workspace(
+            left,
+            workspace_id=right_meta.get("workspace_id"),
+            workspace_path=str(right_meta.get("workspace_path") or ""),
+            project_name=str(right.project_name or right_meta.get("project_name") or ""),
+        ) or cls._same_workspace(
+            right,
+            workspace_id=(left.metadata or {}).get("workspace_id"),
+            workspace_path=str((left.metadata or {}).get("workspace_path") or ""),
+            project_name=str(left.project_name or (left.metadata or {}).get("project_name") or ""),
+        )
+
+    @classmethod
+    def _filter_shadowed_paused(
+        cls,
+        paused_sessions: list[AgentSession],
+        recent_sessions: list[AgentSession],
+    ) -> list[AgentSession]:
+        filtered: list[AgentSession] = []
+        for session in paused_sessions:
+            shadowed = any(
+                candidate.session_id != session.session_id
+                and candidate.updated_at > session.updated_at
+                and candidate.status not in {"interrupted", "approval_required"}
+                and cls._sessions_share_workspace(session, candidate)
+                for candidate in recent_sessions
+            )
+            if not shadowed:
+                filtered.append(session)
+        return filtered
+
+    def _pick_resumable(
+        self,
+        paused_sessions: list[AgentSession],
+        active_sessions: list[AgentSession],
+        *,
+        preferred_session_id: str = "",
+        workspace_id: Optional[int] = None,
+        workspace_path: str = "",
+        project_name: Optional[str] = None,
+        strict_workspace: bool = False,
+    ) -> Optional[AgentSession]:
+        if preferred_session_id:
+            for session in paused_sessions + active_sessions:
+                if session.session_id == preferred_session_id:
+                    return session
+
+        workspace_paused = [
+            session
+            for session in paused_sessions
+            if self._same_workspace(
+                session,
+                workspace_id=workspace_id,
+                workspace_path=workspace_path,
+                project_name=project_name,
+            )
+        ]
+        workspace_active = [
+            session
+            for session in active_sessions
+            if self._same_workspace(
+                session,
+                workspace_id=workspace_id,
+                workspace_path=workspace_path,
+                project_name=project_name,
+            )
+        ]
+
+        if strict_workspace and (workspace_id is not None or workspace_path or project_name):
+            for pool, status in (
+                (workspace_paused, "interrupted"),
+                (workspace_paused, "approval_required"),
+                (workspace_active, "active"),
+            ):
+                match = next((session for session in pool if session.status == status), None)
+                if match:
+                    return match
+            return None
+
+        for pool, status in (
+            (workspace_paused, "interrupted"),
+            (workspace_paused, "approval_required"),
+            (paused_sessions, "interrupted"),
+            (paused_sessions, "approval_required"),
+            (workspace_active, "active"),
+            (active_sessions, "active"),
+        ):
+            match = next((session for session in pool if session.status == status), None)
+            if match:
+                return match
+        return None
+
+    def get_interrupted(
+        self,
+        max_age_hours: float = 8.0,
+        *,
+        preferred_session_id: str = "",
+        workspace_id: Optional[int] = None,
+        workspace_path: str = "",
+        project_name: Optional[str] = None,
+        strict_workspace: bool = False,
+    ) -> Optional[AgentSession]:
+        """Return the best resumable session, preferring the current workspace first."""
         paused_cutoff = time.time() - max_age_hours * 3600
         active_cutoff = time.time() - min(max_age_hours, 2.0) * 3600
         try:
             with self._connect() as conn:
-                paused_row = conn.execute(
+                paused_rows = conn.execute(
                     """
                     SELECT * FROM agent_sessions
                     WHERE status IN ('interrupted', 'approval_required') AND updated_at >= ?
                     ORDER BY updated_at DESC
-                    LIMIT 1
+                    LIMIT 40
                     """,
                     (paused_cutoff,),
-                ).fetchone()
-                if paused_row:
-                    return self._row_to_session(paused_row)
+                ).fetchall()
 
-                active_row = conn.execute(
+                active_rows = conn.execute(
                     """
                     SELECT * FROM agent_sessions
                     WHERE status = 'active' AND updated_at >= ?
                     ORDER BY updated_at DESC
-                    LIMIT 1
+                    LIMIT 20
                     """,
                     (active_cutoff,),
-                ).fetchone()
+                ).fetchall()
+
+                recent_rows = conn.execute(
+                    """
+                    SELECT * FROM agent_sessions
+                    WHERE updated_at >= ?
+                    ORDER BY updated_at DESC
+                    LIMIT 120
+                    """,
+                    (paused_cutoff,),
+                ).fetchall()
         except Exception:
-            fallback = self._fallback_recent("interrupted", "approval_required", max_age_hours=max_age_hours)
-            if fallback:
-                return fallback
-            return self._fallback_recent("active", max_age_hours=min(max_age_hours, 2.0))
-        if active_row:
-            return self._row_to_session(active_row)
-        fallback = self._fallback_recent("interrupted", "approval_required", max_age_hours=max_age_hours)
-        if fallback:
-            return fallback
-        return self._fallback_recent("active", max_age_hours=min(max_age_hours, 2.0))
+            paused_sessions = [
+                deepcopy(session)
+                for session in sorted(
+                    _MEMORY_FALLBACK_SESSIONS.values(),
+                    key=lambda item: item.updated_at,
+                    reverse=True,
+                )
+                if session.status in {"interrupted", "approval_required"} and session.updated_at >= paused_cutoff
+            ]
+            active_sessions = [
+                deepcopy(session)
+                for session in sorted(
+                    _MEMORY_FALLBACK_SESSIONS.values(),
+                    key=lambda item: item.updated_at,
+                    reverse=True,
+                )
+                if session.status == "active" and session.updated_at >= active_cutoff
+            ]
+            return self._pick_resumable(
+                paused_sessions,
+                active_sessions,
+                preferred_session_id=preferred_session_id,
+                workspace_id=workspace_id,
+                workspace_path=workspace_path,
+                project_name=project_name,
+                strict_workspace=strict_workspace,
+            )
+
+        paused_sessions = [self._row_to_session(row) for row in paused_rows]
+        active_sessions = [self._row_to_session(row) for row in active_rows]
+        recent_sessions = [self._row_to_session(row) for row in recent_rows]
+        seen = {session.session_id for session in paused_sessions + active_sessions}
+        for session in sorted(
+            _MEMORY_FALLBACK_SESSIONS.values(),
+            key=lambda item: item.updated_at,
+            reverse=True,
+        ):
+            if session.session_id in seen:
+                continue
+            if session.status in {"interrupted", "approval_required"} and session.updated_at >= paused_cutoff:
+                paused_sessions.append(deepcopy(session))
+            elif session.status == "active" and session.updated_at >= active_cutoff:
+                active_sessions.append(deepcopy(session))
+            if session.updated_at >= paused_cutoff:
+                recent_sessions.append(deepcopy(session))
+
+        if not preferred_session_id:
+            paused_sessions = self._filter_shadowed_paused(paused_sessions, recent_sessions)
+
+        return self._pick_resumable(
+            paused_sessions,
+            active_sessions,
+            preferred_session_id=preferred_session_id,
+            workspace_id=workspace_id,
+            workspace_path=workspace_path,
+            project_name=project_name,
+            strict_workspace=strict_workspace,
+        )
 
     def get_by_id(self, session_id: str) -> Optional[AgentSession]:
         try:

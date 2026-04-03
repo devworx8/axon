@@ -58,3 +58,8 @@ async def update_project_status(db: aiosqlite.Connection, project_id: int, statu
         (status, project_id),
     )
     await db.commit()
+
+
+async def delete_project(db: aiosqlite.Connection, project_id: int):
+    await db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+    await db.commit()

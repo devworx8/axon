@@ -10,11 +10,12 @@ import ssl
 import sys
 import urllib.request
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import db as devdb          # noqa: E402
 import resource_bank        # noqa: E402
+from axon_data import add_resource, get_all_settings, get_db, replace_resource_chunks  # noqa: E402
 
 # ── Resources to fetch & seed ──────────────────────────────────────────────
 # (title, url)  — raw GitHub markdown/text URLs
@@ -124,7 +125,7 @@ _ssl_ctx.check_hostname = False
 _ssl_ctx.verify_mode = ssl.CERT_NONE
 
 
-def _fetch(url: str) -> bytes | None:
+def _fetch(url: str) -> Optional[bytes]:
     req = urllib.request.Request(url, headers={"User-Agent": "AxonSeeder/1.0"})
     try:
         with urllib.request.urlopen(req, context=_ssl_ctx, timeout=25) as resp:
@@ -135,7 +136,7 @@ def _fetch(url: str) -> bytes | None:
 
 
 async def _ingest(conn, title: str, filename: str, content: bytes, mime: str,
-                  source_url: str, settings: dict) -> int | None:
+                  source_url: str, settings: dict) -> Optional[int]:
     """Insert resource row + chunks into DB, return resource_id."""
     sha = resource_bank.sha256_bytes(content)
     kind = resource_bank.classify_kind(filename, mime)
@@ -148,7 +149,7 @@ async def _ingest(conn, title: str, filename: str, content: bytes, mime: str,
     summary = resource_bank.summarize_text(title, text) if text else ""
     preview = resource_bank.preview_text(text) if text else ""
 
-    rid = await devdb.add_resource(
+    rid = await add_resource(
         conn,
         title=title,
         kind=kind,
@@ -170,7 +171,7 @@ async def _ingest(conn, title: str, filename: str, content: bytes, mime: str,
             {"chunk_index": i, "text": c, "content": c, "token_estimate": max(1, len(c) // 4)}
             for i, c in enumerate(raw_chunks)
         ]
-        await devdb.replace_resource_chunks(conn, rid, chunk_dicts)
+        await replace_resource_chunks(conn, rid, chunk_dicts)
         print(f"  ✓ #{rid} — {len(raw_chunks)} chunks ({len(content):,} bytes)")
     else:
         print(f"  ✓ #{rid} — stored (no text extracted)")
@@ -182,8 +183,8 @@ async def main():
     success = 0
     failed = []
 
-    async with devdb.get_db() as conn:
-        settings = await devdb.get_all_settings(conn)
+    async with get_db() as conn:
+        settings = await get_all_settings(conn)
 
         for i, (title, url) in enumerate(RESOURCES, 1):
             print(f"[{i}/{len(RESOURCES)}] {title}")

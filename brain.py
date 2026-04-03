@@ -16,6 +16,7 @@ import json
 import base64
 import mimetypes
 import sqlite3
+import hashlib
 import time
 import threading
 import logging
@@ -31,6 +32,12 @@ from axon_data.sqlite_utils import managed_connection
 from axon_core.cli_command import build_cli_command, build_codex_exec_command
 from axon_core.cli_pacing import cli_cooldown_remaining, current_cli_cooldown, note_cli_cooldown, wait_for_cli_slot
 from axon_core.chat_context import select_history_for_chat
+from axon_core.approval_actions import (
+    AUTONOMY_PROFILES,
+    autonomy_profile_allows,
+    build_command_approval_action,
+    build_edit_approval_action,
+)
 from axon_core.agent import (
     AGENT_TOOL_DEFS as AGENT_TOOL_DEFS_CORE,
     AgentRuntimeDeps,
@@ -146,8 +153,10 @@ _CODEX_CLI_MODEL_OPTIONS = [
     },
 ]
 
+_CODEX_SELF_HEAL_MODEL = "gpt-5.4"
 _CODEX_CLI_MIN_INTERVAL_SECONDS = 1.0
 _CODEX_CLI_CALL_TIMEOUT_SECONDS = 90
+_CLI_SUBPROCESS_STREAM_LIMIT_BYTES = 1024 * 1024
 
 
 OLLAMA_BASE_URL = "http://localhost:11434"
@@ -196,7 +205,12 @@ def _ollama_execution_profile_sync(
 def _get_client(api_key: str, api_base_url: str = "") -> anthropic.Anthropic:
     kwargs = {"api_key": api_key}
     if api_base_url:
-        kwargs["base_url"] = api_base_url
+        base_url = str(api_base_url).strip().rstrip("/")
+        # Anthropic's SDK adds `/v1/...` paths internally, so Axon's normalized
+        # provider URL must be trimmed back to the API root before we pass it in.
+        if base_url.endswith("/v1"):
+            base_url = base_url[:-3]
+        kwargs["base_url"] = base_url
     return anthropic.Anthropic(**kwargs)
 
 
@@ -271,6 +285,15 @@ def _is_cli_rate_limit_message(message: str) -> bool:
     return any(token in lower for token in ("rate limit", "rate_limit", "hit your limit"))
 
 
+def _is_cli_chunk_limit_message(message: str) -> bool:
+    lower = str(message or "").strip().lower()
+    return (
+        "chunk is longer than limit" in lower
+        or "limitoverrunerror" in lower
+        or ("separator is found" in lower and "limit" in lower)
+    )
+
+
 def _is_codex_fatal_error_message(message: str) -> bool:
     lower = str(message or "").strip().lower()
     return any(
@@ -280,6 +303,24 @@ def _is_codex_fatal_error_message(message: str) -> bool:
             "hit your limit",
             "not authenticated",
             "login required",
+            "logged out",
+            "authentication",
+            "subscription",
+        )
+    )
+
+
+def _is_claude_recoverable_problem_message(message: str) -> bool:
+    lower = str(message or "").strip().lower()
+    return any(
+        token in lower for token in (
+            "rate limit",
+            "rate_limit",
+            "hit your limit",
+            "not authenticated",
+            "not signed in",
+            "login required",
+            "sign in",
             "logged out",
             "authentication",
             "subscription",
@@ -316,6 +357,16 @@ def _resolve_cli_runtime_fallback(
         return "cli", ""
 
     wait_seconds = max(1, int(cooldown.get("remaining_seconds") or 0))
+    fallback_binary = _find_codex_cli()
+    if fallback_binary and os.path.realpath(fallback_binary) != os.path.realpath(selected_binary):
+        return (
+            "cli",
+            (
+                f"Claude CLI is cooling down after a rate limit ({wait_seconds}s remaining). "
+                f"Switching this turn to Codex CLI (`{_CODEX_SELF_HEAL_MODEL}`)."
+            ),
+        )
+
     provider_label = _api_provider_label(api_provider)
     if api_key and api_base_url:
         model_label = api_model or "configured model"
@@ -339,7 +390,13 @@ def _resolve_cli_runtime_fallback(
 
     return (
         "cli",
-        str(cooldown.get("message") or f"Claude CLI is cooling down after a rate limit ({wait_seconds}s remaining)."),
+        str(
+            cooldown.get("message")
+            or (
+                f"Claude CLI is cooling down after a rate limit ({wait_seconds}s remaining). "
+                f"Switching this turn to Codex CLI (`{_CODEX_SELF_HEAL_MODEL}`) when it is available."
+            )
+        ),
     )
 
     return "cli", ""
@@ -742,8 +799,35 @@ async def _stream_api_chat(
     api_base_url: str = "",
     api_model: str = "",
     max_tokens: int = 1500,
+    api_provider: str = "",
 ) -> AsyncGenerator[str, None]:
-    """Async generator yielding text chunks from an OpenAI-compatible streaming API."""
+    """Async generator yielding text chunks from the configured external API."""
+    provider = (api_provider or "generic_api").strip().lower()
+
+    if provider not in {"openai_gpts", "generic_api", "deepseek"}:
+        system_parts: list[str] = []
+        normalized_messages: list[dict] = []
+        for message in messages:
+            role = str(message.get("role") or "user").strip().lower()
+            content = _coerce_text_content(message.get("content"))
+            if role == "system":
+                if content:
+                    system_parts.append(content)
+                continue
+            normalized_messages.append({"role": role or "user", "content": content})
+        content, _ = await _call_api_messages(
+            normalized_messages,
+            system="\n\n".join(part for part in system_parts if part).strip(),
+            api_key=api_key,
+            api_provider=provider,
+            api_base_url=api_base_url,
+            api_model=api_model,
+            max_tokens=max_tokens,
+        )
+        if content:
+            yield content
+        return
+
     base = (api_base_url or "https://api.deepseek.com").rstrip("/")
     if not base.endswith("/v1"):
         base = base.rstrip("/") + "/v1" if "/v1" not in base else base
@@ -938,6 +1022,7 @@ async def stream_chat(
                             api_base_url=api_base_url,
                             api_model=api_model or BALANCED_MODEL,
                             max_tokens=1500,
+                            api_provider=api_provider,
                         ):
                             yield chunk
                     else:
@@ -984,6 +1069,7 @@ async def stream_chat(
                 api_base_url=api_base_url,
                 api_model=api_model,
                 max_tokens=1500,
+                api_provider=api_provider,
             ):
                 yield chunk
             return
@@ -1059,8 +1145,8 @@ _ALLOWED_CMDS = frozenset([
     "jq", "yq", "awk", "sed", "sort", "uniq", "cut", "tr",
 ])
 
-# Runtime-session allowlist — populated via /api/agent/allow-command without restart
-# Persisted to settings as "extra_allowed_cmds" (comma-separated) and loaded on boot
+# Runtime-session allowlist — now internal-only for sandbox infrastructure helpers.
+# User-facing broad command grants are deprecated in favour of exact ApprovalAction fingerprints.
 _SESSION_ALLOWED_CMDS: set[str] = set()
 
 # Sentinel value for "allow all" mode (no command filtering)
@@ -1070,6 +1156,11 @@ _ALLOW_ALL_CMDS: bool = False
 _SESSION_ALLOWED_PATHS: set[str] = set()   # specific file paths cleared this session
 _SESSION_ALLOWED_REPOS: set[str] = set()   # repo roots — all files under these are OK
 _ALLOW_ALL_EDITS: bool = False             # session-wide allow-all for file writes/edits
+_SESSION_ALLOWED_ACTIONS: set[str] = set()
+_ONCE_ALLOWED_ACTIONS: set[str] = set()
+_TASK_ALLOWED_ACTIONS: dict[str, set[str]] = {}
+_PERSISTENT_ALLOWED_ACTIONS: set[str] = set()
+_PERSISTENT_ALLOWED_ACTIONS_LOADED: bool = False
 
 # Active workspace root — set at the start of each agent run for cwd defaulting
 _ACTIVE_WORKSPACE_PATH: str = ""
@@ -1082,6 +1173,269 @@ def _workspace_root() -> str:
         if resolved.startswith(_HOME) and os.path.isdir(resolved):
             return resolved
     return _HOME
+
+
+def _current_autonomy_profile() -> str:
+    profile = str(_current_agent_runtime_context().get("autonomy_profile") or "workspace_auto").strip().lower()
+    if profile == "manual":
+        return "manual"
+    return "workspace_auto"
+
+
+def _current_agent_session_id() -> str:
+    return str(_current_agent_runtime_context().get("agent_session_id") or "").strip()
+
+
+def _load_persistent_action_grants() -> None:
+    global _PERSISTENT_ALLOWED_ACTIONS_LOADED
+    if _PERSISTENT_ALLOWED_ACTIONS_LOADED:
+        return
+    try:
+        with managed_connection(str(DEVBRAIN_DB_PATH), timeout=10, row_factory=sqlite3.Row) as conn:
+            rows = conn.execute(
+                """
+                SELECT action_fingerprint
+                FROM approval_grants
+                WHERE scope = 'persist'
+                  AND (expires_at IS NULL OR expires_at = '' OR expires_at > datetime('now'))
+                """
+            ).fetchall()
+        _PERSISTENT_ALLOWED_ACTIONS.clear()
+        _PERSISTENT_ALLOWED_ACTIONS.update(
+            str(row["action_fingerprint"]).strip()
+            for row in rows
+            if str(row["action_fingerprint"]).strip()
+        )
+    except Exception:
+        _PERSISTENT_ALLOWED_ACTIONS.clear()
+    _PERSISTENT_ALLOWED_ACTIONS_LOADED = True
+
+
+def _action_is_allowed(action: dict[str, Any]) -> bool:
+    if not action:
+        return False
+    if autonomy_profile_allows(action, _current_autonomy_profile()):
+        return True
+    fingerprint = str(action.get("action_fingerprint") or "").strip()
+    if not fingerprint:
+        return False
+    if fingerprint in _ONCE_ALLOWED_ACTIONS:
+        _ONCE_ALLOWED_ACTIONS.discard(fingerprint)
+        return True
+    if fingerprint in _SESSION_ALLOWED_ACTIONS:
+        return True
+    session_id = str(action.get("session_id") or _current_agent_session_id() or "").strip()
+    if session_id and fingerprint in _TASK_ALLOWED_ACTIONS.get(session_id, set()):
+        return True
+    _load_persistent_action_grants()
+    return fingerprint in _PERSISTENT_ALLOWED_ACTIONS
+
+
+def agent_allow_action(action: dict[str, Any], scope: str = "once", *, session_id: str = "") -> None:
+    """Grant approval for an exact normalized action fingerprint."""
+    global _PERSISTENT_ALLOWED_ACTIONS_LOADED
+    normalized_scope = str(scope or "once").strip().lower()
+    fingerprint = str((action or {}).get("action_fingerprint") or "").strip()
+    if not fingerprint:
+        return
+    if normalized_scope == "once":
+        _ONCE_ALLOWED_ACTIONS.add(fingerprint)
+        return
+    if normalized_scope == "task":
+        key = str(session_id or action.get("session_id") or _current_agent_session_id() or "").strip()
+        if not key:
+            _SESSION_ALLOWED_ACTIONS.add(fingerprint)
+            return
+        _TASK_ALLOWED_ACTIONS.setdefault(key, set()).add(fingerprint)
+        return
+    if normalized_scope == "session":
+        _SESSION_ALLOWED_ACTIONS.add(fingerprint)
+        return
+    if normalized_scope == "persist":
+        if not bool(action.get("persist_allowed", False)):
+            return
+        _SESSION_ALLOWED_ACTIONS.add(fingerprint)
+        try:
+            with managed_connection(str(DEVBRAIN_DB_PATH), timeout=10, row_factory=None) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO approval_grants (
+                        action_fingerprint, action_type, scope, workspace_id, repo_root,
+                        summary, command_preview, destructive, meta_json, updated_at
+                    ) VALUES (?, ?, 'persist', ?, ?, ?, ?, ?, ?, datetime('now'))
+                    ON CONFLICT(action_fingerprint) DO UPDATE SET
+                        action_type = excluded.action_type,
+                        workspace_id = excluded.workspace_id,
+                        repo_root = excluded.repo_root,
+                        summary = excluded.summary,
+                        command_preview = excluded.command_preview,
+                        destructive = excluded.destructive,
+                        meta_json = excluded.meta_json,
+                        updated_at = datetime('now')
+                    """,
+                    (
+                        fingerprint,
+                        str(action.get("action_type") or ""),
+                        action.get("workspace_id"),
+                        str(action.get("repo_root") or ""),
+                        str(action.get("summary") or ""),
+                        str(action.get("command_preview") or ""),
+                        1 if bool(action.get("destructive")) else 0,
+                        json.dumps(action, sort_keys=True, ensure_ascii=True),
+                    ),
+                )
+                conn.commit()
+            _PERSISTENT_ALLOWED_ACTIONS.add(fingerprint)
+            _PERSISTENT_ALLOWED_ACTIONS_LOADED = True
+        except Exception:
+            pass
+
+
+def agent_get_action_state() -> dict[str, object]:
+    return {
+        "autonomy_profile": _current_autonomy_profile(),
+        "once": sorted(_ONCE_ALLOWED_ACTIONS),
+        "session": sorted(_SESSION_ALLOWED_ACTIONS),
+        "task_scopes": {key: sorted(values) for key, values in _TASK_ALLOWED_ACTIONS.items()},
+        "persistent": sorted(_PERSISTENT_ALLOWED_ACTIONS),
+    }
+
+
+def _first_non_option_token(tokens: list[str], *, value_options: set[str] | None = None) -> tuple[str, list[str]]:
+    """Return the first non-option token plus the remaining tail."""
+    value_options = set(value_options or ())
+    items = [str(token or "") for token in tokens]
+    index = 0
+    while index < len(items):
+        token = items[index]
+        if not token:
+            index += 1
+            continue
+        if token == "--":
+            tail = items[index + 1:]
+            return (tail[0].lower(), tail[1:]) if tail else ("", [])
+        if token in value_options:
+            index += 2
+            continue
+        if any(token.startswith(f"{option}=") for option in value_options if option.startswith("--")):
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        return token.lower(), items[index + 1:]
+    return "", []
+
+
+def _git_command_is_read_only(parts: list[str]) -> bool:
+    subcommand, remainder = _first_non_option_token(
+        parts[1:],
+        value_options={"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"},
+    )
+    lower_rest = [str(item).lower() for item in remainder]
+    if not subcommand:
+        return True
+    if subcommand in {
+        "status", "diff", "show", "log", "rev-parse", "rev-list", "describe",
+        "symbolic-ref", "ls-files", "ls-tree", "grep", "blame", "shortlog",
+        "merge-base", "name-rev", "reflog",
+    }:
+        return True
+    if subcommand == "remote":
+        if not lower_rest:
+            return True
+        return lower_rest[0] in {"-v", "show", "get-url"}
+    if subcommand == "config":
+        return any(
+            arg in {"-l", "--list", "--get", "--get-all", "--get-regexp", "--name-only"}
+            or arg.startswith("--get")
+            for arg in lower_rest
+        )
+    if subcommand == "branch":
+        if not lower_rest:
+            return True
+        mutating_flags = {"-d", "-D", "-m", "-M", "-c", "-C", "--delete", "--move", "--copy", "--set-upstream-to", "-u", "--unset-upstream"}
+        if any(flag in lower_rest for flag in mutating_flags):
+            return False
+        listing_flags = {"--show-current", "--all", "-a", "--remotes", "-r", "--list", "-l", "-v", "-vv", "--contains", "--no-contains", "--merged", "--no-merged"}
+        if any(flag in lower_rest for flag in listing_flags):
+            return True
+        return False
+    if subcommand == "stash":
+        return bool(lower_rest) and lower_rest[0] in {"list", "show"}
+    return False
+
+
+def _gh_command_is_read_only(parts: list[str]) -> bool:
+    group, remainder = _first_non_option_token(
+        parts[1:],
+        value_options={"-R", "--repo", "--hostname"},
+    )
+    if not group:
+        return True
+    action, _tail = _first_non_option_token(
+        remainder,
+        value_options={"-R", "--repo", "--hostname"},
+    )
+    if group == "auth":
+        return action in {"", "status"}
+    if not action:
+        return False
+    safe_pairs = {
+        ("pr", "list"),
+        ("pr", "view"),
+        ("pr", "status"),
+        ("pr", "checks"),
+        ("pr", "diff"),
+        ("issue", "list"),
+        ("issue", "view"),
+        ("issue", "status"),
+        ("repo", "view"),
+        ("run", "list"),
+        ("run", "view"),
+        ("workflow", "list"),
+        ("workflow", "view"),
+        ("release", "list"),
+        ("release", "view"),
+    }
+    return (group, action) in safe_pairs
+
+
+def _command_requires_approval(parts: list[str], *, cmd: str = "", cwd: str = "") -> bool:
+    base_cmd = os.path.basename(str(parts[0] or "")).lower()
+    if base_cmd == "git":
+        if _git_command_is_read_only(parts):
+            return False
+        action = build_command_approval_action(
+            cmd or " ".join(parts),
+            cwd=_resolve_agent_path(cwd, default_to_workspace=True) if cwd else _workspace_root(),
+            session_id=_current_agent_session_id(),
+        )
+        return not _action_is_allowed(action)
+    if base_cmd == "gh":
+        if _gh_command_is_read_only(parts):
+            return False
+        action = build_command_approval_action(
+            cmd or " ".join(parts),
+            cwd=_resolve_agent_path(cwd, default_to_workspace=True) if cwd else _workspace_root(),
+            session_id=_current_agent_session_id(),
+        )
+        return not _action_is_allowed(action)
+    if base_cmd not in _effective_allowed_cmds():
+        action = build_command_approval_action(
+            cmd or " ".join(parts),
+            cwd=_resolve_agent_path(cwd, default_to_workspace=True) if cwd else _workspace_root(),
+            session_id=_current_agent_session_id(),
+        )
+        return not _action_is_allowed(action)
+    if base_cmd in {"bash", "sh", "zsh"}:
+        action = build_command_approval_action(
+            cmd or " ".join(parts),
+            cwd=_resolve_agent_path(cwd, default_to_workspace=True) if cwd else _workspace_root(),
+            session_id=_current_agent_session_id(),
+        )
+        return not _action_is_allowed(action)
+    return False
 
 
 def _resolve_agent_path(path: str = "", *, default_to_workspace: bool = True) -> str:
@@ -1129,7 +1483,7 @@ def _resolve_git_work_dir(path: str = "") -> str:
     return candidate
 
 
-def _edit_is_allowed(path: str) -> bool:
+def _edit_is_allowed(path: str, *, operation: str = "edit") -> bool:
     """Return True if this absolute path is cleared for writing/editing/deletion."""
     if _ALLOW_ALL_EDITS:
         return True
@@ -1138,14 +1492,20 @@ def _edit_is_allowed(path: str) -> bool:
     for repo in _SESSION_ALLOWED_REPOS:
         if path == repo or path.startswith(repo + os.sep):
             return True
-    return False
+    action = build_edit_approval_action(
+        operation,
+        path,
+        workspace_id=None,
+        session_id=_current_agent_session_id(),
+    )
+    return _action_is_allowed(action)
 
 
 def agent_allow_edit(path: str = "", scope: str = "session") -> None:
     """Whitelist file edits: scope='file' | 'repo' | 'session'."""
     global _ALLOW_ALL_EDITS
     if scope == "session":
-        _ALLOW_ALL_EDITS = True
+        _ALLOW_ALL_EDITS = False
         return
     if not path:
         return
@@ -1178,11 +1538,13 @@ def _effective_allowed_cmds() -> frozenset[str]:
 
 def agent_allow_command(cmd: str, allow_all: bool = False) -> None:
     """Add a command to the session allowlist (called from server endpoints)."""
-    global _ALLOW_ALL_CMDS
     if allow_all:
-        _ALLOW_ALL_CMDS = True
+        return
     else:
-        _SESSION_ALLOWED_CMDS.add(cmd.strip().lower())
+        normalized = cmd.strip().lower()
+        if normalized in {"git", "gh"}:
+            return
+        _SESSION_ALLOWED_CMDS.add(normalized)
 
 
 def agent_get_session_allowed() -> list[str]:
@@ -1198,6 +1560,9 @@ def agent_capture_permission_state() -> dict[str, object]:
         "allow_all_edits": bool(_ALLOW_ALL_EDITS),
         "session_allowed_paths": set(_SESSION_ALLOWED_PATHS),
         "session_allowed_repos": set(_SESSION_ALLOWED_REPOS),
+        "session_allowed_actions": set(_SESSION_ALLOWED_ACTIONS),
+        "once_allowed_actions": set(_ONCE_ALLOWED_ACTIONS),
+        "task_allowed_actions": {key: set(values) for key, values in _TASK_ALLOWED_ACTIONS.items()},
     }
 
 
@@ -1213,6 +1578,16 @@ def agent_restore_permission_state(state: dict[str, object] | None) -> None:
     _SESSION_ALLOWED_PATHS.update({str(item) for item in (snapshot.get("session_allowed_paths") or set()) if str(item)})
     _SESSION_ALLOWED_REPOS.clear()
     _SESSION_ALLOWED_REPOS.update({str(item) for item in (snapshot.get("session_allowed_repos") or set()) if str(item)})
+    _SESSION_ALLOWED_ACTIONS.clear()
+    _SESSION_ALLOWED_ACTIONS.update({str(item) for item in (snapshot.get("session_allowed_actions") or set()) if str(item)})
+    _ONCE_ALLOWED_ACTIONS.clear()
+    _ONCE_ALLOWED_ACTIONS.update({str(item) for item in (snapshot.get("once_allowed_actions") or set()) if str(item)})
+    _TASK_ALLOWED_ACTIONS.clear()
+    for key, values in dict(snapshot.get("task_allowed_actions") or {}).items():
+        clean_key = str(key).strip()
+        if not clean_key:
+            continue
+        _TASK_ALLOWED_ACTIONS[clean_key] = {str(item) for item in (values or set()) if str(item)}
 
 
 def _tool_read_file(path: str, max_kb: int = 512) -> str:
@@ -1275,7 +1650,7 @@ def _tool_shell_cmd(cmd: str, cwd: str = "", timeout: int = 30) -> str:
     if not parts:
         return "ERROR: Empty command."
     base_cmd = os.path.basename(parts[0])
-    if not _ALLOW_ALL_CMDS and base_cmd not in _effective_allowed_cmds():
+    if _command_requires_approval(parts, cmd=cmd, cwd=cwd):
         # Return structured blocked signal so the UI can offer an approval dialog
         return f"BLOCKED_CMD:{base_cmd}:{cmd}"
     work_dir = _resolve_agent_path(cwd, default_to_workspace=True) if cwd else _workspace_root()
@@ -1315,7 +1690,7 @@ def _tool_shell_bg(cmd: str, cwd: str = "", wait_seconds: int = 8) -> str:
     if not parts:
         return "ERROR: Empty command."
     base_cmd = os.path.basename(parts[0])
-    if not _ALLOW_ALL_CMDS and base_cmd not in _effective_allowed_cmds():
+    if _command_requires_approval(parts, cmd=cmd, cwd=cwd):
         return f"BLOCKED_CMD:{base_cmd}:{cmd}"
     work_dir = _resolve_agent_path(cwd, default_to_workspace=True) if cwd else _workspace_root()
     if os.path.isfile(work_dir):
@@ -1411,7 +1786,7 @@ def _tool_write_file(path: str, content: str) -> str:
     p = _resolve_agent_path(path)
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory."
-    if not _edit_is_allowed(p):
+    if not _edit_is_allowed(p, operation="write"):
         return f"BLOCKED_EDIT:write:{p}"
     os.makedirs(os.path.dirname(p), exist_ok=True)
     try:
@@ -1429,7 +1804,7 @@ def _tool_append_file(path: str, content: str = "") -> str:
     p = _resolve_agent_path(path)
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory."
-    if not _edit_is_allowed(p):
+    if not _edit_is_allowed(p, operation="append"):
         return f"BLOCKED_EDIT:append:{p}"
     os.makedirs(os.path.dirname(p), exist_ok=True)
     try:
@@ -1445,7 +1820,7 @@ def _tool_create_file(path: str, content: str = "") -> str:
     p = _resolve_agent_path(path)
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory."
-    if not _edit_is_allowed(p):
+    if not _edit_is_allowed(p, operation="create"):
         return f"BLOCKED_EDIT:create:{p}"
     if os.path.exists(p):
         return f"ERROR: File already exists: {p}"
@@ -1463,7 +1838,7 @@ def _tool_delete_file(path: str) -> str:
     p = _resolve_agent_path(path)
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory."
-    if not _edit_is_allowed(p):
+    if not _edit_is_allowed(p, operation="delete"):
         return f"BLOCKED_EDIT:delete:{p}"
     if not os.path.exists(p):
         return f"ERROR: File not found: {p}"
@@ -1483,7 +1858,7 @@ def _tool_edit_file(path: str, old_string: str, new_string: str, replace_all: bo
     p = _resolve_agent_path(path)
     if not p.startswith(_HOME):
         return "ERROR: Access outside home directory."
-    if not _edit_is_allowed(p):
+    if not _edit_is_allowed(p, operation="edit"):
         return f"BLOCKED_EDIT:edit:{p}"
     if not os.path.exists(p):
         return f"ERROR: File not found: {p}"
@@ -1847,6 +2222,40 @@ def _tool_http_get(url: str, headers: str = "") -> str:
     import urllib.error as _err
     if not url.startswith(("http://", "https://")):
         return "ERROR: Only http:// and https:// URLs are allowed."
+    runtime_ctx = _current_agent_runtime_context()
+    workspace_id = runtime_ctx.get("workspace_id")
+    fetch_policy = str(runtime_ctx.get("external_fetch_policy") or "cache_first").strip().lower()
+    if fetch_policy == "memory_first":
+        fetch_policy = "cache_first"
+    try:
+        cache_ttl = max(60, int(runtime_ctx.get("external_fetch_cache_ttl_seconds") or 21600))
+    except Exception:
+        cache_ttl = 21600
+    if fetch_policy != "live_first":
+        try:
+            with managed_connection(str(DEVBRAIN_DB_PATH), timeout=10, row_factory=sqlite3.Row) as conn:
+                row = conn.execute(
+                    """
+                    SELECT * FROM external_fetch_cache
+                    WHERE url = ?
+                      AND (expires_at IS NULL OR expires_at = '' OR expires_at > datetime('now'))
+                    """,
+                    (url,),
+                ).fetchone()
+                if row:
+                    title = str(row["title"] or "").strip()
+                    summary = str(row["summary"] or "").strip()
+                    content = str(row["content"] or "")
+                    status_code = int(row["status_code"] or 200)
+                    mime_type = str(row["mime_type"] or "")
+                    prefix = f"HTTP {status_code} — {mime_type or 'cached'}"
+                    if title:
+                        prefix += f" [{title}]"
+                    if summary:
+                        return f"{prefix}\n[cache hit]\n\n{summary}\n\n{content[:6144]}"
+                    return f"{prefix}\n[cache hit]\n\n{content[:6144]}"
+        except Exception:
+            pass
     try:
         req = _req.Request(url, headers={"User-Agent": "Axon/1.0 (axon-agent)"})
         if headers:
@@ -1859,7 +2268,82 @@ def _tool_http_get(url: str, headers: str = "") -> str:
             ct = resp.headers.get("Content-Type", "")
             raw = resp.read(6144)
             body = raw.decode("utf-8", errors="replace")
-        return f"HTTP {resp.status} — {ct}\n\n{body}"
+            title = ""
+            match = _re.search(r"<title[^>]*>(.*?)</title>", body, flags=_re.IGNORECASE | _re.DOTALL)
+            if match:
+                title = " ".join(match.group(1).split())[:160]
+        summary = " ".join(body.split())[:280]
+        try:
+            cache_key = hashlib.sha1(url.encode("utf-8")).hexdigest()
+            memory_key = f"cached_web:{cache_key}"
+            with managed_connection(str(DEVBRAIN_DB_PATH), timeout=10, row_factory=None) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO external_fetch_cache (
+                        cache_key, url, title, content, summary, status_code, mime_type,
+                        workspace_id, meta_json, fetched_at, expires_at, updated_at
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'),
+                        datetime('now', '+' || ? || ' seconds'),
+                        datetime('now')
+                    )
+                    ON CONFLICT(cache_key) DO UPDATE SET
+                        title = excluded.title,
+                        content = excluded.content,
+                        summary = excluded.summary,
+                        status_code = excluded.status_code,
+                        mime_type = excluded.mime_type,
+                        workspace_id = excluded.workspace_id,
+                        meta_json = excluded.meta_json,
+                        fetched_at = datetime('now'),
+                        expires_at = datetime('now', '+' || ? || ' seconds'),
+                        updated_at = datetime('now')
+                    """,
+                    (
+                        cache_key,
+                        url,
+                        title,
+                        body,
+                        summary,
+                        int(resp.status),
+                        ct,
+                        workspace_id,
+                        json.dumps({"source": "http_get", "url": url}, sort_keys=True, ensure_ascii=True),
+                        cache_ttl,
+                        cache_ttl,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO memory_items (
+                        memory_key, layer, memory_type, title, content, summary, source, source_id,
+                        source_ref, workspace_id, trust_level, relevance_score, meta_json, updated_at
+                    ) VALUES (?, 'resource', 'cached_external', ?, ?, ?, 'http_get', ?, ?, ?, 'medium', 0.45, ?, datetime('now'))
+                    ON CONFLICT(memory_key) DO UPDATE SET
+                        title = excluded.title,
+                        content = excluded.content,
+                        summary = excluded.summary,
+                        source_id = excluded.source_id,
+                        source_ref = excluded.source_ref,
+                        workspace_id = excluded.workspace_id,
+                        meta_json = excluded.meta_json,
+                        updated_at = datetime('now')
+                    """,
+                    (
+                        memory_key,
+                        title or url,
+                        body[:4000],
+                        summary,
+                        url,
+                        url,
+                        workspace_id,
+                        json.dumps({"ttl_seconds": cache_ttl, "url": url}, sort_keys=True, ensure_ascii=True),
+                    ),
+                )
+                conn.commit()
+        except Exception:
+            pass
+        return f"HTTP {resp.status} — {ct}\n[live fetch]\n\n{body}"
     except _err.HTTPError as e:
         return f"HTTP Error {e.code}: {e.reason}"
     except Exception as exc:
@@ -2030,21 +2514,35 @@ def _tool_generate_image(
 
 def _tool_remember(key: str, value: str) -> str:
     """Persist a named note in agent memory for later recall across sessions."""
-    import sqlite3 as _sq
     db = str(DEVBRAIN_DB_PATH)
+    memory_key = f"agent_memory:{key.strip()}"
+    workspace_id = _current_agent_runtime_context().get("workspace_id")
     try:
         with managed_connection(db, timeout=10, row_factory=None) as conn:
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS agent_notes (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at REAL NOT NULL
-                )
-            """)
-            conn.execute("""
-                INSERT INTO agent_notes (key, value, updated_at) VALUES (?, ?, ?)
-                ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
-            """, (key.strip(), value.strip(), time.time()))
+                INSERT INTO memory_items (
+                    memory_key, layer, memory_type, title, content, summary, source, source_id,
+                    source_ref, workspace_id, trust_level, relevance_score, meta_json, updated_at
+                ) VALUES (?, 'user', 'remember', ?, ?, ?, 'agent_tool', ?, ?, ?, 'high', 0.7, ?, datetime('now'))
+                ON CONFLICT(memory_key) DO UPDATE SET
+                    title = excluded.title,
+                    content = excluded.content,
+                    summary = excluded.summary,
+                    source_id = excluded.source_id,
+                    source_ref = excluded.source_ref,
+                    workspace_id = excluded.workspace_id,
+                    meta_json = excluded.meta_json,
+                    updated_at = datetime('now')
+            """, (
+                memory_key,
+                key.strip(),
+                value.strip(),
+                value.strip()[:220],
+                key.strip(),
+                key.strip(),
+                workspace_id,
+                json.dumps({"tool": "remember"}, sort_keys=True, ensure_ascii=True),
+            ))
             conn.commit()
         return f"Remembered: [{key}] = {value[:120]}"
     except Exception as exc:
@@ -2053,22 +2551,18 @@ def _tool_remember(key: str, value: str) -> str:
 
 def _tool_recall(query: str) -> str:
     """Search persisted agent notes. Returns all notes whose key or value contains the query."""
-    import sqlite3 as _sq
     db = str(DEVBRAIN_DB_PATH)
+    workspace_id = _current_agent_runtime_context().get("workspace_id")
     try:
         with managed_connection(db, timeout=10, row_factory=None) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS agent_notes (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at REAL NOT NULL
-                )
-            """)
             rows = conn.execute("""
-                SELECT key, value, updated_at FROM agent_notes
-                WHERE key LIKE ? OR value LIKE ?
-                ORDER BY updated_at DESC LIMIT 20
-            """, (f"%{query}%", f"%{query}%")).fetchall()
+                SELECT title, content, updated_at FROM memory_items
+                WHERE memory_type IN ('remember', 'facts', 'patterns', 'preferences', 'code', 'context', 'skills', 'project')
+                  AND (workspace_id = ? OR workspace_id IS NULL)
+                  AND (title LIKE ? OR content LIKE ? OR summary LIKE ?)
+                ORDER BY pinned DESC, COALESCE(last_accessed_at, updated_at) DESC
+                LIMIT 20
+            """, (workspace_id, f"%{query}%", f"%{query}%", f"%{query}%")).fetchall()
         if not rows:
             return f"No notes found matching '{query}'."
         lines = [f"**{r[0]}**: {r[1][:200]}" for r in rows]
@@ -2355,26 +2849,41 @@ def _tool_memory_write(category: str, key: str, value: str) -> str:
     Use this to build Axon's persistent knowledge base across sessions.
     Example: category='patterns', key='user_prefers_typescript', value='User always uses TypeScript with strict mode'
     """
-    import sqlite3 as _sq
     valid_cats = {"facts", "patterns", "preferences", "code", "context", "skills", "project"}
     category = category.strip().lower()
     if category not in valid_cats:
         category = "facts"
     db = str(DEVBRAIN_DB_PATH)
     compound_key = f"{category}:{key.strip()}"
+    workspace_id = _current_agent_runtime_context().get("workspace_id")
     try:
         with managed_connection(db, timeout=10, row_factory=None) as conn:
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS agent_notes (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at REAL NOT NULL
-                )
-            """)
-            conn.execute("""
-                INSERT INTO agent_notes (key, value, updated_at) VALUES (?, ?, ?)
-                ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
-            """, (compound_key, value.strip(), time.time()))
+                INSERT INTO memory_items (
+                    memory_key, layer, memory_type, title, content, summary, source, source_id,
+                    source_ref, workspace_id, trust_level, relevance_score, meta_json, updated_at
+                ) VALUES (?, 'user', ?, ?, ?, ?, 'agent_tool', ?, ?, ?, 'high', 0.72, ?, datetime('now'))
+                ON CONFLICT(memory_key) DO UPDATE SET
+                    memory_type = excluded.memory_type,
+                    title = excluded.title,
+                    content = excluded.content,
+                    summary = excluded.summary,
+                    source_id = excluded.source_id,
+                    source_ref = excluded.source_ref,
+                    workspace_id = excluded.workspace_id,
+                    meta_json = excluded.meta_json,
+                    updated_at = datetime('now')
+            """, (
+                f"agent_memory:{compound_key}",
+                category,
+                key.strip(),
+                value.strip(),
+                value.strip()[:220],
+                compound_key,
+                compound_key,
+                workspace_id,
+                json.dumps({"tool": "memory_write", "category": category}, sort_keys=True, ensure_ascii=True),
+            ))
             conn.commit()
         return f"Memory saved [{category}:{key}] — {len(value)} chars"
     except Exception as exc:
@@ -2385,43 +2894,43 @@ def _tool_memory_read(category: str = "", query: str = "") -> str:
     """Read from Axon's structured memory bank. Filter by category and/or search term.
     Categories: facts, patterns, preferences, code, context, skills, project
     """
-    import sqlite3 as _sq
     db = str(DEVBRAIN_DB_PATH)
+    workspace_id = _current_agent_runtime_context().get("workspace_id")
     try:
         with managed_connection(db, timeout=10, row_factory=None) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS agent_notes (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at REAL NOT NULL
-                )
-            """)
             if category and query:
                 rows = conn.execute(
-                    "SELECT key, value, updated_at FROM agent_notes "
-                    "WHERE key LIKE ? AND (key LIKE ? OR value LIKE ?) "
-                    "ORDER BY updated_at DESC LIMIT 30",
-                    (f"{category}:%", f"%{query}%", f"%{query}%")
+                    "SELECT memory_type, title, content, updated_at FROM memory_items "
+                    "WHERE memory_type = ? AND (workspace_id = ? OR workspace_id IS NULL) "
+                    "AND (title LIKE ? OR content LIKE ? OR summary LIKE ?) "
+                    "ORDER BY COALESCE(last_accessed_at, updated_at) DESC LIMIT 30",
+                    (category, workspace_id, f"%{query}%", f"%{query}%", f"%{query}%")
                 ).fetchall()
             elif category:
                 rows = conn.execute(
-                    "SELECT key, value, updated_at FROM agent_notes "
-                    "WHERE key LIKE ? ORDER BY updated_at DESC LIMIT 30",
-                    (f"{category.strip().lower()}:%",)
+                    "SELECT memory_type, title, content, updated_at FROM memory_items "
+                    "WHERE memory_type = ? AND (workspace_id = ? OR workspace_id IS NULL) "
+                    "ORDER BY COALESCE(last_accessed_at, updated_at) DESC LIMIT 30",
+                    (category.strip().lower(), workspace_id)
                 ).fetchall()
             elif query:
                 rows = conn.execute(
-                    "SELECT key, value, updated_at FROM agent_notes "
-                    "WHERE key LIKE ? OR value LIKE ? ORDER BY updated_at DESC LIMIT 30",
-                    (f"%{query}%", f"%{query}%")
+                    "SELECT memory_type, title, content, updated_at FROM memory_items "
+                    "WHERE (workspace_id = ? OR workspace_id IS NULL) "
+                    "AND (title LIKE ? OR content LIKE ? OR summary LIKE ?) "
+                    "ORDER BY COALESCE(last_accessed_at, updated_at) DESC LIMIT 30",
+                    (workspace_id, f"%{query}%", f"%{query}%", f"%{query}%")
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT key, value, updated_at FROM agent_notes ORDER BY updated_at DESC LIMIT 30"
+                    "SELECT memory_type, title, content, updated_at FROM memory_items "
+                    "WHERE workspace_id = ? OR workspace_id IS NULL "
+                    "ORDER BY COALESCE(last_accessed_at, updated_at) DESC LIMIT 30",
+                    (workspace_id,)
                 ).fetchall()
         if not rows:
             return f"No memory entries found (category='{category}', query='{query}')"
-        lines = [f"**[{r[0]}]**: {r[1][:300]}" for r in rows]
+        lines = [f"**[{r[0]}:{r[1]}]**: {r[2][:300]}" for r in rows]
         return f"## Axon memory ({len(rows)} entries):\n" + "\n\n".join(lines)
     except Exception as exc:
         return f"ERROR: {exc}"
@@ -2683,9 +3192,9 @@ async def _stream_cli(
     if cooldown.get("active"):
         fallback_binary = _find_codex_cli()
         if fallback_binary and os.path.realpath(fallback_binary) != os.path.realpath(binary):
-            _update_agent_runtime_context(cli_path=fallback_binary, cli_model="", backend="cli")
-            yield "⚠️ Claude CLI is cooling down after a rate limit. Falling back to Codex CLI.\n\n"
-            async for chunk in _stream_codex_cli(messages, binary=fallback_binary, model=""):
+            _update_agent_runtime_context(cli_path=fallback_binary, cli_model=_CODEX_SELF_HEAL_MODEL, backend="cli")
+            yield f"⚠️ Claude CLI is cooling down after a rate limit. Falling back to Codex CLI (`{_CODEX_SELF_HEAL_MODEL}`).\n\n"
+            async for chunk in _stream_codex_cli(messages, binary=fallback_binary, model=_CODEX_SELF_HEAL_MODEL):
                 yield chunk
             return
         raise RuntimeError(str(cooldown.get("message") or "Claude CLI is cooling down after a rate limit."))
@@ -2713,6 +3222,7 @@ async def _stream_cli(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=clean_env,
+        limit=_CLI_SUBPROCESS_STREAM_LIMIT_BYTES,
     )
 
     if proc.stdin is not None:
@@ -2922,13 +3432,14 @@ async def _stream_cli(
     exit_code = proc.returncode or 0
     stderr_text = " | ".join(chunk for chunk in stderr_chunks if chunk).strip()
     if fatal_error:
-        if _is_rate_limited_message(fatal_error):
-            await note_cli_cooldown(fatal_error, _CLI_RATE_LIMIT_COOLDOWN_SECONDS, key=runtime_key)
+        if _is_claude_recoverable_problem_message(fatal_error):
+            if _is_rate_limited_message(fatal_error):
+                await note_cli_cooldown(fatal_error, _CLI_RATE_LIMIT_COOLDOWN_SECONDS, key=runtime_key)
             fallback_binary = _find_codex_cli()
             if fallback_binary and os.path.realpath(fallback_binary) != os.path.realpath(binary):
-                _update_agent_runtime_context(cli_path=fallback_binary, cli_model="", backend="cli")
-                yield "⚠️ Claude CLI hit a rate limit. Falling back to Codex CLI.\n\n"
-                async for chunk in _stream_codex_cli(messages, binary=fallback_binary, model=""):
+                _update_agent_runtime_context(cli_path=fallback_binary, cli_model=_CODEX_SELF_HEAL_MODEL, backend="cli")
+                yield f"⚠️ Claude CLI is temporarily unavailable. Falling back to Codex CLI (`{_CODEX_SELF_HEAL_MODEL}`).\n\n"
+                async for chunk in _stream_codex_cli(messages, binary=fallback_binary, model=_CODEX_SELF_HEAL_MODEL):
                     yield chunk
                 return
         if stderr_text and stderr_text not in fatal_error:
@@ -2936,13 +3447,14 @@ async def _stream_cli(
         raise RuntimeError(fatal_error)
     if exit_code != 0 and not saw_success_result:
         normalized = _normalize_cli_failure(stderr_text, exit_code=exit_code)
-        if _is_rate_limited_message(normalized):
-            await note_cli_cooldown(normalized, _CLI_RATE_LIMIT_COOLDOWN_SECONDS, key=runtime_key)
+        if _is_claude_recoverable_problem_message(normalized):
+            if _is_rate_limited_message(normalized):
+                await note_cli_cooldown(normalized, _CLI_RATE_LIMIT_COOLDOWN_SECONDS, key=runtime_key)
             fallback_binary = _find_codex_cli()
             if fallback_binary and os.path.realpath(fallback_binary) != os.path.realpath(binary):
-                _update_agent_runtime_context(cli_path=fallback_binary, cli_model="", backend="cli")
-                yield "⚠️ Claude CLI hit a rate limit. Falling back to Codex CLI.\n\n"
-                async for chunk in _stream_codex_cli(messages, binary=fallback_binary, model=""):
+                _update_agent_runtime_context(cli_path=fallback_binary, cli_model=_CODEX_SELF_HEAL_MODEL, backend="cli")
+                yield f"⚠️ Claude CLI is temporarily unavailable. Falling back to Codex CLI (`{_CODEX_SELF_HEAL_MODEL}`).\n\n"
+                async for chunk in _stream_codex_cli(messages, binary=fallback_binary, model=_CODEX_SELF_HEAL_MODEL):
                     yield chunk
                 return
         raise RuntimeError(normalized)
@@ -2983,44 +3495,54 @@ async def _stream_codex_cli(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=clean_env,
+        limit=_CLI_SUBPROCESS_STREAM_LIMIT_BYTES,
     )
 
     yielded_any = False
     total_tokens = 0
     stderr_chunks: list[str] = []
     fatal_error = ""
+    chunk_limit_error = ""
+    emitted_text = ""
 
     try:
-        async for raw_line in proc.stdout:
-            line = raw_line.decode("utf-8", errors="replace").strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            etype = str(event.get("type") or "")
-            if etype == "item.completed":
-                item = event.get("item") or {}
-                if isinstance(item, dict) and item.get("type") == "agent_message":
-                    text = str(item.get("text") or "").strip()
-                    if text:
-                        yielded_any = True
-                        yield text
-            elif etype == "turn.completed":
-                usage = event.get("usage") or {}
-                if isinstance(usage, dict):
-                    total_tokens = int(usage.get("input_tokens", 0) or 0) + int(usage.get("output_tokens", 0) or 0)
-            elif etype == "error":
-                message = str(event.get("message") or "").strip()
-                if message:
-                    stderr_chunks.append(message)
-                    if _is_codex_fatal_error_message(message):
-                        fatal_error = message
-                        break
-                    if not yielded_any and _codex_retry_attempt(message) >= 3:
-                        fatal_error = message
-                        break
+        try:
+            async for raw_line in proc.stdout:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                etype = str(event.get("type") or "")
+                if etype == "item.completed":
+                    item = event.get("item") or {}
+                    if isinstance(item, dict) and item.get("type") == "agent_message":
+                        text = str(item.get("text") or "").strip()
+                        if text:
+                            yielded_any = True
+                            emitted_text += text
+                            yield text
+                elif etype == "turn.completed":
+                    usage = event.get("usage") or {}
+                    if isinstance(usage, dict):
+                        total_tokens = int(usage.get("input_tokens", 0) or 0) + int(usage.get("output_tokens", 0) or 0)
+                elif etype == "error":
+                    message = str(event.get("message") or "").strip()
+                    if message:
+                        stderr_chunks.append(message)
+                        if _is_codex_fatal_error_message(message):
+                            fatal_error = message
+                            break
+                        if not yielded_any and _codex_retry_attempt(message) >= 3:
+                            fatal_error = message
+                            break
+        except (asyncio.LimitOverrunError, ValueError) as exc:
+            if _is_cli_chunk_limit_message(str(exc)):
+                chunk_limit_error = str(exc).strip() or "Codex CLI emitted an oversized stream event."
+            else:
+                raise
     finally:
         if fatal_error and proc.returncode is None:
             proc.terminate()
@@ -3038,6 +3560,22 @@ async def _stream_codex_cli(
     if total_tokens:
         _track_usage(total_tokens, 0.0, backend="cli")
 
+    if chunk_limit_error:
+        recovered_text, _ = await _call_codex_exec_prompt(
+            prompt,
+            binary=binary,
+            model=model,
+            sandbox_mode="workspace-write",
+        )
+        if emitted_text and recovered_text.startswith(emitted_text):
+            recovered_text = recovered_text[len(emitted_text):]
+        if recovered_text:
+            yield recovered_text
+            return
+        raise RuntimeError(
+            "Codex CLI emitted an oversized stream event and Axon could not recover a usable reply."
+        )
+
     exit_code = proc.returncode or 0
     stderr_text = " | ".join(chunk for chunk in stderr_chunks if chunk).strip()
     if fatal_error:
@@ -3046,6 +3584,97 @@ async def _stream_codex_cli(
         raise RuntimeError(stderr_text or "Codex CLI request failed.")
     if not yielded_any:
         raise RuntimeError(stderr_text or "Codex CLI returned no usable output.")
+
+
+async def _call_codex_exec_prompt(
+    prompt: str,
+    *,
+    binary: str,
+    model: str = "",
+    sandbox_mode: str = "read-only",
+) -> tuple[str, int]:
+    model = normalize_cli_model(binary, model)
+    cmd = build_codex_exec_command(
+        binary,
+        prompt=prompt,
+        model=model,
+        cwd=_workspace_root(),
+        sandbox_mode=sandbox_mode,
+    )
+
+    await wait_for_cli_slot(_CODEX_CLI_MIN_INTERVAL_SECONDS, key=_cli_runtime_key(binary))
+
+    clean_env = {**os.environ, "NO_COLOR": "1"}
+    clean_env.pop("CLAUDECODE", None)
+    clean_env.pop("CLAUDE_CODE_ENTRYPOINT", None)
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=clean_env,
+        limit=_CLI_SUBPROCESS_STREAM_LIMIT_BYTES,
+    )
+
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_CODEX_CLI_CALL_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        if proc.returncode is None:
+            proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            proc.kill()
+        raise RuntimeError(f"Codex CLI timed out after {_CODEX_CLI_CALL_TIMEOUT_SECONDS}s.")
+
+    raw_output = stdout.decode("utf-8", errors="replace")
+    stderr_text = stderr.decode("utf-8", errors="replace").strip()
+    text = ""
+    tokens = 0
+    error_messages: list[str] = []
+    fatal_error = ""
+
+    for raw_line in raw_output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        etype = str(event.get("type") or "")
+        if etype == "item.completed":
+            item = event.get("item") or {}
+            if isinstance(item, dict) and item.get("type") == "agent_message":
+                text = str(item.get("text") or "").strip() or text
+        elif etype in {"error", "turn.failed"}:
+            message = str(event.get("message") or "").strip()
+            if not message and isinstance(event.get("error"), dict):
+                message = str((event.get("error") or {}).get("message") or "").strip()
+            if message:
+                error_messages.append(message)
+                if _is_codex_fatal_error_message(message):
+                    fatal_error = message
+                    break
+                if not text and _codex_retry_attempt(message) >= 3:
+                    fatal_error = message
+                    break
+        elif etype == "turn.completed":
+            usage = event.get("usage") or {}
+            if isinstance(usage, dict):
+                tokens = int(usage.get("input_tokens", 0) or 0) + int(usage.get("output_tokens", 0) or 0)
+
+    if tokens:
+        _track_usage(tokens, 0.0, backend="cli")
+
+    error_text = " | ".join(msg for msg in error_messages if msg).strip()
+    if fatal_error:
+        raise RuntimeError(fatal_error)
+    if proc.returncode != 0:
+        raise RuntimeError(error_text or stderr_text or text or "Codex CLI request failed.")
+    if not text:
+        raise RuntimeError(error_text or stderr_text or "Codex CLI returned no usable output.")
+    return text, tokens
 
 
 async def _call_cli(
@@ -3070,9 +3699,9 @@ async def _call_cli(
     if cooldown.get("active"):
         fallback_binary = _find_codex_cli()
         if fallback_binary and os.path.realpath(fallback_binary) != os.path.realpath(binary):
-            _update_agent_runtime_context(cli_path=fallback_binary, cli_model="", backend="cli")
-            content, tokens = await _call_codex_cli(prompt, system=system, binary=fallback_binary, model="")
-            return f"⚠️ Claude CLI is cooling down after a rate limit. Fell back to Codex CLI.\n\n{content}", tokens
+            _update_agent_runtime_context(cli_path=fallback_binary, cli_model=_CODEX_SELF_HEAL_MODEL, backend="cli")
+            content, tokens = await _call_codex_cli(prompt, system=system, binary=fallback_binary, model=_CODEX_SELF_HEAL_MODEL)
+            return f"⚠️ Claude CLI is cooling down after a rate limit. Fell back to Codex CLI (`{_CODEX_SELF_HEAL_MODEL}`).\n\n{content}", tokens
         raise RuntimeError(str(cooldown.get("message") or "Claude CLI is cooling down after a rate limit."))
 
     full_prompt = prompt
@@ -3099,6 +3728,7 @@ async def _call_cli(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=clean_env,
+        limit=_CLI_SUBPROCESS_STREAM_LIMIT_BYTES,
     )
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
     raw = stdout.decode("utf-8", errors="replace").strip()
@@ -3118,18 +3748,19 @@ async def _call_cli(
         tokens = 0
     if proc.returncode != 0:
         msg = err or text or "Claude CLI request failed."
-        if _is_rate_limited_message(msg):
-            await note_cli_cooldown(msg, _CLI_RATE_LIMIT_COOLDOWN_SECONDS, key=runtime_key)
+        if _is_claude_recoverable_problem_message(msg):
+            if _is_rate_limited_message(msg):
+                await note_cli_cooldown(msg, _CLI_RATE_LIMIT_COOLDOWN_SECONDS, key=runtime_key)
             fallback_binary = _find_codex_cli()
             if fallback_binary and os.path.realpath(fallback_binary) != os.path.realpath(binary):
-                _update_agent_runtime_context(cli_path=fallback_binary, cli_model="", backend="cli")
+                _update_agent_runtime_context(cli_path=fallback_binary, cli_model=_CODEX_SELF_HEAL_MODEL, backend="cli")
                 content, codex_tokens = await _call_codex_cli(
                     prompt,
                     system=system,
                     binary=fallback_binary,
-                    model="",
+                    model=_CODEX_SELF_HEAL_MODEL,
                 )
-                return f"⚠️ Claude CLI hit a rate limit. Fell back to Codex CLI.\n\n{content}", codex_tokens
+                return f"⚠️ Claude CLI is temporarily unavailable. Fell back to Codex CLI (`{_CODEX_SELF_HEAL_MODEL}`).\n\n{content}", codex_tokens
         raise RuntimeError(msg[:300])
 
     # Strip CLI sandbox/permission warning lines that pollute output
@@ -3157,7 +3788,6 @@ async def _call_codex_cli(
     binary: str,
     model: str = "",
 ) -> tuple[str, int]:
-    model = normalize_cli_model(binary, model)
     full_prompt = _cli_prompt_from_messages(
         [
             {"role": "system", "content": system or SYSTEM_PROMPT},
@@ -3165,89 +3795,12 @@ async def _call_codex_cli(
         ],
         disallow_native_tools=True,
     )
-    cmd = build_codex_exec_command(
-        binary,
-        prompt=full_prompt,
+    return await _call_codex_exec_prompt(
+        full_prompt,
+        binary=binary,
         model=model,
-        cwd=_workspace_root(),
         sandbox_mode="read-only",
     )
-
-    await wait_for_cli_slot(_CODEX_CLI_MIN_INTERVAL_SECONDS, key=_cli_runtime_key(binary))
-
-    clean_env = {**os.environ, "NO_COLOR": "1"}
-    clean_env.pop("CLAUDECODE", None)
-    clean_env.pop("CLAUDE_CODE_ENTRYPOINT", None)
-
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=clean_env,
-    )
-    text = ""
-    tokens = 0
-    error_messages: list[str] = []
-    fatal_error = ""
-    stderr_text = ""
-    try:
-        while True:
-            raw_line = await asyncio.wait_for(proc.stdout.readline(), timeout=_CODEX_CLI_CALL_TIMEOUT_SECONDS)
-            if not raw_line:
-                break
-            line = raw_line.decode("utf-8", errors="replace").strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            etype = str(event.get("type") or "")
-            if etype == "item.completed":
-                item = event.get("item") or {}
-                if isinstance(item, dict) and item.get("type") == "agent_message":
-                    text = str(item.get("text") or "").strip() or text
-            elif etype in {"error", "turn.failed"}:
-                message = str(event.get("message") or "").strip()
-                if not message and isinstance(event.get("error"), dict):
-                    message = str((event.get("error") or {}).get("message") or "").strip()
-                if message:
-                    error_messages.append(message)
-                    if _is_codex_fatal_error_message(message):
-                        fatal_error = message
-                        break
-                    if not text and _codex_retry_attempt(message) >= 3:
-                        fatal_error = message
-                        break
-            elif etype == "turn.completed":
-                usage = event.get("usage") or {}
-                if isinstance(usage, dict):
-                    tokens = int(usage.get("input_tokens", 0) or 0) + int(usage.get("output_tokens", 0) or 0)
-    except asyncio.TimeoutError:
-        fatal_error = f"Codex CLI timed out after {_CODEX_CLI_CALL_TIMEOUT_SECONDS}s."
-    finally:
-        if fatal_error and proc.returncode is None:
-            proc.terminate()
-        try:
-            raw_stderr = await asyncio.wait_for(proc.stderr.read(), timeout=3)
-            if raw_stderr:
-                stderr_text = raw_stderr.decode("utf-8", errors="replace").strip()
-        except (asyncio.TimeoutError, Exception):
-            stderr_text = ""
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=5)
-        except asyncio.TimeoutError:
-            proc.kill()
-    if tokens:
-        _track_usage(tokens, 0.0, backend="cli")
-    error_text = " | ".join(msg for msg in error_messages if msg).strip()
-    if fatal_error:
-        raise RuntimeError(fatal_error)
-    if proc.returncode != 0:
-        raise RuntimeError(error_text or stderr_text or text or "Codex CLI request failed.")
-    if not text:
-        raise RuntimeError(error_text or stderr_text or "Codex CLI returned no usable output.")
-    return text, tokens
 
 
 # Compatibility wrappers over the extracted agent core. These intentionally
@@ -3324,6 +3877,13 @@ async def run_agent(
     cli_model: str = "",
     cli_session_persistence: bool = False,
     backend: str = "",
+    workspace_id: Optional[int] = None,
+    autonomy_profile: str = "",
+    external_fetch_policy: str = "",
+    external_fetch_cache_ttl_seconds: int | str = "",
+    resume_session_id: str = "",
+    resume_reason: str = "",
+    continue_task: str = "",
     **extra_kwargs,
 ) -> AsyncGenerator[dict, None]:
     """Compatibility wrapper over the extracted ReAct-style agent loop.
@@ -3361,6 +3921,10 @@ async def run_agent(
         "cli_session_persistence": cli_session_persistence,
         "ollama_url": ollama_url,
         "ollama_model": ollama_model,
+        "autonomy_profile": autonomy_profile or "workspace_auto",
+        "workspace_id": workspace_id,
+        "external_fetch_policy": (external_fetch_policy or "cache_first"),
+        "external_fetch_cache_ttl_seconds": external_fetch_cache_ttl_seconds or "21600",
     }
     ctx_token = _ACTIVE_AGENT_RUNTIME_CONTEXT.set(runtime_ctx)
     global _ACTIVE_WORKSPACE_PATH
@@ -3393,6 +3957,10 @@ async def run_agent(
             cli_model=cli_model,
             cli_session_persistence=cli_session_persistence,
             backend=effective_backend or backend,
+            workspace_id=workspace_id,
+            resume_session_id=resume_session_id,
+            resume_reason=resume_reason,
+            continue_task=continue_task,
         ):
             yield event
     finally:

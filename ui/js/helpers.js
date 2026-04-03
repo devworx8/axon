@@ -295,29 +295,27 @@ function axonHelpersMixin() {
         `<div style="border-top:1px solid rgba(16,185,129,0.15);padding:5px 12px;background:rgba(6,78,59,0.2)">` +
         `<span style="font-size:10px;color:#34d399;font-family:monospace">✓ ${esc(msg)}</span></div>`;
 
-      // Blocked file-edit gate UI — Claude-style approval banner
+      const approvalInlineNote = (title, subject, detail) => {
+        const safeSubject = String(subject || '').trim();
+        return `<div class="axon-approval-note">`
+          + `<div class="axon-approval-note__header">`
+          + `<span class="axon-approval-note__badge">Approval required</span>`
+          + `<span class="axon-approval-note__title">${esc(title)}</span>`
+          + `</div>`
+          + (safeSubject ? `<code class="axon-approval-note__subject">${esc(safeSubject)}</code>` : '')
+          + `<div class="axon-approval-note__detail">${esc(detail)}</div>`
+          + `</div>`;
+      };
+
+      // Blocked file-edit gate UI — routed to the bottom composer approval dock
       const blockedEditHtml = (op, filePath) => {
         const shortPath = filePath.replace(/^\/home\/[^/]+/, '~').split('/').slice(-3).join('/');
         const opLabel = { write: 'Write', edit: 'Edit', delete: 'Delete', append: 'Append', create: 'Create' }[op] || op;
-        return `<div class="axon-approval">
-          <div class="axon-approval__header">
-            <svg class="axon-approval__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-            <div class="axon-approval__info">
-              <div class="axon-approval__title">Allow Axon to ${esc(opLabel.toLowerCase())} this file?</div>
-              <code class="axon-approval__path">${esc(shortPath)}</code>
-              <div class="axon-approval__subtitle">This step is paused until you approve or deny the file action.</div>
-            </div>
-          </div>
-          <div class="axon-approval__actions">
-            <button onclick="window.__axon_approve(this,'edit','${esc(filePath)}','file')" class="axon-approval__btn axon-approval__btn--primary">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="w-3.5 h-3.5"><polyline points="20 6 9 17 4 12"/></svg>
-              <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow once</span><span class="axon-approval__btn-meta">Retry just this file step</span></span>
-            </button>
-            <button onclick="window.__axon_approve(this,'edit-all')" class="axon-approval__btn axon-approval__btn--allow-all"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow for task</span><span class="axon-approval__btn-meta">Approve remaining edits in this run</span></span></button>
-            <button onclick="window.__axon_approve(this,'edit','${esc(filePath)}','repo')" class="axon-approval__btn axon-approval__btn--secondary"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow for repo</span><span class="axon-approval__btn-meta">Approve edits under this repo root</span></span></button>
-            <button onclick="window.__axon_deny(this)" class="axon-approval__btn axon-approval__btn--deny"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Deny</span><span class="axon-approval__btn-meta">Keep the task paused</span></span></button>
-          </div>
-        </div>`;
+        return approvalInlineNote(
+          `Axon is paused before it can ${opLabel.toLowerCase()} this file.`,
+          shortPath,
+          'Use the approval controls near the composer to continue the task from here.'
+        );
       };
 
       let html = '';
@@ -330,25 +328,11 @@ function axonHelpersMixin() {
           const parts = result.split(':');
           const blockedName = parts[1] || cmd.split(' ')[0];
           const fullCmd = parts.slice(2).join(':') || cmd;
-          html += `<div class="axon-approval">
-            <div class="axon-approval__header">
-              <svg class="axon-approval__icon axon-approval__icon--cmd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg>
-              <div class="axon-approval__info">
-                <div class="axon-approval__title">Allow Axon to run this command?</div>
-                <code class="axon-approval__path">${esc(blockedName)}</code>
-                <div class="axon-approval__subtitle">The command is blocked by Axon's shell allowlist until you approve it.</div>
-              </div>
-            </div>
-            <div class="axon-approval__actions">
-              <button onclick="window.__axon_approve(this,'cmd','${esc(blockedName)}',false,false)" class="axon-approval__btn axon-approval__btn--primary">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="w-3.5 h-3.5"><polyline points="20 6 9 17 4 12"/></svg>
-                <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow once</span><span class="axon-approval__btn-meta">Retry this exact command</span></span>
-              </button>
-              <button onclick="window.__axon_approve(this,'cmd-all')" class="axon-approval__btn axon-approval__btn--allow-all"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow for task</span><span class="axon-approval__btn-meta">Approve shell commands in this run</span></span></button>
-              <button onclick="window.__axon_approve(this,'cmd','${esc(blockedName)}',false,true)" class="axon-approval__btn axon-approval__btn--secondary"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Persist command</span><span class="axon-approval__btn-meta">Save to future Axon sessions</span></span></button>
-              <button onclick="window.__axon_deny(this)" class="axon-approval__btn axon-approval__btn--deny"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Deny</span><span class="axon-approval__btn-meta">Keep the task paused</span></span></button>
-            </div>
-          </div>`;
+          html += approvalInlineNote(
+            'Axon is paused before it can run this command.',
+            fullCmd || blockedName,
+            'Use the approval controls near the composer to allow or deny this step without losing continuity.'
+          );
         } else if (result) {
           html += section(result.slice(0, 1200), 'plaintext', 'output', false);
         } else if (isRunning && cmd) html += runningRow();
@@ -359,25 +343,12 @@ function axonHelpersMixin() {
         if (result && result.startsWith('BLOCKED_CMD:')) {
           const parts = result.split(':');
           const blockedName = parts[1] || cmd.split(' ')[0];
-          html += `<div class="axon-approval">
-            <div class="axon-approval__header">
-              <svg class="axon-approval__icon axon-approval__icon--cmd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg>
-              <div class="axon-approval__info">
-                <div class="axon-approval__title">Allow Axon to run this command?</div>
-                <code class="axon-approval__path">${esc(blockedName)}</code>
-                <div class="axon-approval__subtitle">The command is blocked by Axon's shell allowlist until you approve it.</div>
-              </div>
-            </div>
-            <div class="axon-approval__actions">
-              <button onclick="window.__axon_approve(this,'cmd','${esc(blockedName)}',false,false)" class="axon-approval__btn axon-approval__btn--primary">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="w-3.5 h-3.5"><polyline points="20 6 9 17 4 12"/></svg>
-                <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow once</span><span class="axon-approval__btn-meta">Retry this exact command</span></span>
-              </button>
-              <button onclick="window.__axon_approve(this,'cmd-all')" class="axon-approval__btn axon-approval__btn--allow-all"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow for task</span><span class="axon-approval__btn-meta">Approve shell commands in this run</span></span></button>
-              <button onclick="window.__axon_approve(this,'cmd','${esc(blockedName)}',false,true)" class="axon-approval__btn axon-approval__btn--secondary"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Persist command</span><span class="axon-approval__btn-meta">Save to future Axon sessions</span></span></button>
-              <button onclick="window.__axon_deny(this)" class="axon-approval__btn axon-approval__btn--deny"><span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Deny</span><span class="axon-approval__btn-meta">Keep the task paused</span></span></button>
-            </div>
-          </div>`;
+          const fullCmd = parts.slice(2).join(':') || cmd || blockedName;
+          html += approvalInlineNote(
+            'Axon is paused before it can run this background command.',
+            fullCmd,
+            'Use the approval controls near the composer to continue the same task from here.'
+          );
         } else if (result) html += section(result.slice(0, 2000), 'plaintext', 'process output', false);
         else if (isRunning && cmd) html += runningRow();
 

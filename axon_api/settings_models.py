@@ -15,6 +15,8 @@ class SettingsUpdate(BaseModel):
     notify_desktop: Optional[str] = None
     ai_backend: Optional[str] = None
     api_provider: Optional[str] = None
+    cli_runtime_path: Optional[str] = None
+    cli_runtime_model: Optional[str] = None
     claude_cli_path: Optional[str] = None
     claude_cli_model: Optional[str] = None
     claude_cli_session_persistence_enabled: Optional[bool] = None
@@ -78,3 +80,13 @@ class SettingsUpdate(BaseModel):
     dash_bridge_mode: Optional[str] = None
     max_agent_iterations: Optional[str] = None
     context_compact_enabled: Optional[bool] = None
+    autonomy_profile: Optional[str] = None
+    memory_first_enabled: Optional[bool] = None
+    external_fetch_policy: Optional[str] = None
+    quick_model: Optional[str] = None
+    standard_model: Optional[str] = None
+    deep_model: Optional[str] = None
+    workspace_snapshot_ttl_seconds: Optional[str] = None
+    memory_query_cache_ttl_seconds: Optional[str] = None
+    external_fetch_cache_ttl_seconds: Optional[str] = None
+    max_history_turns: Optional[str] = None

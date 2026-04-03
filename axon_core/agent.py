@@ -10,12 +10,12 @@ import re as _re
 from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
+from .approval_actions import build_command_approval_action, build_edit_approval_action
 from .agent_blocked_actions import blocked_tool_retry_prompt
 from .async_workers import run_sync_agent_call
 from .agent_file_actions import (
     _direct_agent_action,
     _extract_append_content,
-    _is_mutating_file_request,
     _extract_replace_strings,
     _extract_requested_content,
     _format_file_delete_answer,
@@ -62,32 +62,104 @@ from .agent_toolspecs import (
 )
 
 
-def _blocked_tool_event(tool_name: str, tool_args: dict[str, Any], result: str) -> Optional[dict[str, Any]]:
+def _tool_evidence_source(tool_name: str, result: str = "") -> str:
+    name = str(tool_name or "").strip().lower()
+    text = str(result or "")
+    if name == "http_get":
+        if "[cache hit]" in text:
+            return "cached_external"
+        if "[live fetch]" in text:
+            return "live_external"
+    if name in {"read_file", "list_dir", "show_diff", "git_status", "shell_cmd", "shell_bg", "shell_bg_check"}:
+        return "workspace"
+    if name.startswith("memory_") or name in {"remember", "recall"}:
+        return "memory"
+    if name == "generate_image":
+        return "resource"
+    return "deterministic"
+
+
+def _blocked_tool_event(
+    tool_name: str,
+    tool_args: dict[str, Any],
+    result: str,
+    *,
+    workspace_id: int | None = None,
+    session_id: str = "",
+) -> Optional[dict[str, Any]]:
     if not isinstance(result, str):
         return None
+    public_args = {
+        key: value
+        for key, value in dict(tool_args or {}).items()
+        if not str(key).startswith("_")
+    }
+    resume_task = str(tool_args.get("_resume_task") or "").strip()
+    draft_commit_message = str(tool_args.get("_draft_commit_message") or "").strip()
     if result.startswith("BLOCKED_EDIT:"):
         _, operation, target = result.split(":", 2)
         action = operation or tool_name.replace("_file", "")
-        return {
+        approval_action = build_edit_approval_action(
+            action,
+            target,
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
+        payload = {
             "type": "approval_required",
             "kind": "edit",
             "tool_name": tool_name,
             "action": action,
             "path": target,
-            "args": tool_args,
+            "args": public_args,
             "message": f"Approval required before Axon can {action} `{target}`.",
+            "approval_action": approval_action,
+            "action_fingerprint": approval_action.get("action_fingerprint"),
+            "action_type": approval_action.get("action_type"),
+            "scope_options": approval_action.get("scope_options"),
+            "persist_allowed": approval_action.get("persist_allowed"),
+            "summary": approval_action.get("summary"),
+            "repo_root": approval_action.get("repo_root"),
+            "workspace_id": workspace_id,
+            "evidence_source": approval_action.get("evidence_source", "deterministic"),
         }
+        if resume_task:
+            payload["resume_task"] = resume_task
+        return payload
     if result.startswith("BLOCKED_CMD:"):
         _, command_name, full_command = result.split(":", 2)
-        return {
+        approval_action = build_command_approval_action(
+            full_command,
+            cwd=str(tool_args.get("cwd") or ""),
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
+        message = f"Approval required before Axon can run `{full_command}`."
+        if draft_commit_message:
+            message += f" Drafted commit message: `{draft_commit_message}`."
+        payload = {
             "type": "approval_required",
             "kind": "command",
             "tool_name": tool_name,
             "command": command_name,
             "full_command": full_command,
-            "args": tool_args,
-            "message": f"Approval required before Axon can run `{full_command}`.",
+            "args": public_args,
+            "message": message,
+            "approval_action": approval_action,
+            "action_fingerprint": approval_action.get("action_fingerprint"),
+            "action_type": approval_action.get("action_type"),
+            "scope_options": approval_action.get("scope_options"),
+            "persist_allowed": approval_action.get("persist_allowed"),
+            "summary": approval_action.get("summary"),
+            "repo_root": approval_action.get("repo_root"),
+            "workspace_id": workspace_id,
+            "evidence_source": approval_action.get("evidence_source", "deterministic"),
         }
+        if resume_task:
+            payload["resume_task"] = resume_task
+        if draft_commit_message:
+            payload["draft_commit_message"] = draft_commit_message
+        return payload
     return None
 
 
@@ -202,6 +274,10 @@ async def run_agent(
     cli_model: str = "",
     cli_session_persistence: bool = False,
     backend: str = "",
+    workspace_id: Optional[int] = None,
+    resume_session_id: str = "",
+    resume_reason: str = "",
+    continue_task: str = "",
 ) -> AsyncGenerator[dict[str, Any], None]:
     """
     Async generator yielding agent events (ReAct-style, streaming-compatible):
@@ -226,37 +302,106 @@ async def run_agent(
     tool_log: list[dict] = []
     _resuming = False
     _resumed_messages: list[dict[str, Any]] = []
+    explicit_resume_target = str(resume_session_id or "").strip()
+    explicit_resume_reason = str(resume_reason or "").strip()
+    explicit_continue_task = str(continue_task or "").strip()
+    try:
+        import brain as _brain_mod
+    except Exception:
+        _brain_mod = None
 
-    if _ss and is_resume_request(user_message):
-        prev = _ss.get_interrupted(max_age_hours=4.0)
+    def _session_metadata(extra: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        metadata = dict(extra or {})
+        if workspace_id is not None:
+            metadata.setdefault("workspace_id", workspace_id)
+        if workspace_path:
+            metadata.setdefault("workspace_path", workspace_path)
+        if project_name:
+            metadata.setdefault("project_name", project_name)
+        if explicit_resume_reason:
+            metadata.setdefault("resume_reason", explicit_resume_reason)
+        return metadata
+
+    prefer_latest_continue_task = bool(explicit_continue_task and not explicit_resume_target)
+    if prefer_latest_continue_task:
+        yield {
+            "type": "text",
+            "chunk": (
+                "♻️ **Continuing the current task**\n"
+                "No paused session was found, so Axon is using the latest concrete task from this chat "
+                "instead of asking you to restate it.\n\n"
+            ),
+        }
+        user_message = explicit_continue_task
+    if _ss and not prefer_latest_continue_task and (explicit_resume_target or is_resume_request(user_message)):
+        prev = _ss.get_interrupted(
+            max_age_hours=4.0,
+            preferred_session_id=explicit_resume_target,
+            workspace_id=workspace_id,
+            workspace_path=workspace_path,
+            project_name=project_name,
+        )
         if prev:
+            prev_metadata = dict(prev.metadata or {})
+            resume_task_override = str(prev_metadata.get("resume_task") or "").strip()
             if not prev.tool_log:
                 _ss.mark_complete(prev.session_id)
+                if prev.task.strip():
+                    yield {
+                        "type": "text",
+                        "chunk": (
+                            "♻️ **Resuming task from the saved prompt**\n"
+                            "The previous run stopped before any verified tool actions were recorded, "
+                            "so Axon is restarting that task cleanly instead of guessing.\n\n"
+                        ),
+                    }
+                    user_message = prev.task
+                else:
+                    if explicit_continue_task:
+                        yield {
+                            "type": "text",
+                            "chunk": (
+                                "No paused session with verified work was available to resume, "
+                                "so Axon is continuing from the latest concrete task in this chat instead.\n\n"
+                            ),
+                        }
+                        user_message = explicit_continue_task
+                    else:
+                        yield {
+                            "type": "text",
+                            "chunk": (
+                                "No paused session with verified work was available to resume. "
+                                "Tell me what you'd like to work on and I'll get started."
+                            ),
+                        }
+                        yield {"type": "done", "iterations": 0}
+                        return
+            else:
                 yield {
                     "type": "text",
                     "chunk": (
-                        "⚠️ The previous session had no verified tool actions — "
-                        "discarding it to avoid repeating a hallucinated response.\n\n"
-                        "Please re-state your task and I'll execute it properly with real tools."
+                        f"♻️ **Resuming session** `{prev.session_id[:8]}…`\n"
+                        f"Task: _{prev.task[:120]}_\n"
+                        f"Last iteration: {prev.iteration}\n\n"
                     ),
                 }
-                yield {"type": "done", "iterations": 0}
-                return
+                session_id = prev.session_id
+                tool_log = prev.tool_log
+                _resuming = True
+                _resumed_messages = [
+                    m for m in prev.messages if m.get("role") in ("user", "assistant")
+                ]
+                user_message = resume_task_override or prev.task
+        elif explicit_continue_task:
             yield {
                 "type": "text",
                 "chunk": (
-                    f"♻️ **Resuming session** `{prev.session_id[:8]}…`\n"
-                    f"Task: _{prev.task[:120]}_\n"
-                    f"Last iteration: {prev.iteration}\n\n"
+                    "♻️ **Continuing the current task**\n"
+                    "No paused session was found, so Axon is using the latest concrete task from this chat "
+                    "instead of asking you to restate it.\n\n"
                 ),
             }
-            session_id = prev.session_id
-            tool_log = prev.tool_log
-            _resuming = True
-            _resumed_messages = [
-                m for m in prev.messages if m.get("role") in ("user", "assistant")
-            ]
-            user_message = prev.task
+            user_message = explicit_continue_task
         else:
             # No interrupted session found — tell the user directly instead of
             # letting the LLM see "please continue" and ask what to continue.
@@ -269,6 +414,12 @@ async def run_agent(
             }
             yield {"type": "done", "iterations": 0}
             return
+
+    if _brain_mod is not None and hasattr(_brain_mod, "_update_agent_runtime_context"):
+        try:
+            _brain_mod._update_agent_runtime_context(agent_session_id=session_id)
+        except Exception:
+            pass
 
     active_tool_names = sorted(deps.tool_registry.keys()) if tools is None else [
         tool_name for tool_name in tools if tool_name in deps.tool_registry
@@ -331,6 +482,7 @@ async def run_agent(
                 api_base_url=api_base_url,
                 api_model=api_model,
                 max_tokens=max_tokens,
+                api_provider=api_provider,
             ):
                 yield chunk
             return
@@ -391,6 +543,7 @@ async def run_agent(
                 api_base_url=api_base_url,
                 api_model=api_model,
                 max_tokens=300,
+                api_provider=api_provider,
             ):
                 yield {"type": "text", "chunk": chunk}
         else:
@@ -434,6 +587,7 @@ async def run_agent(
                 api_base_url=api_base_url,
                 api_model=api_model,
                 max_tokens=1200,
+                api_provider=api_provider,
             ):
                 yield {"type": "text", "chunk": chunk}
         else:
@@ -462,13 +616,7 @@ async def run_agent(
     # on the full ReAct path instead of letting the user-message heuristics
     # reinterpret a generated prompt as a direct local file command.
     if not force_tool_mode and not _resuming:
-        selected_cli_name = Path(resolved_cli).name.lower() if resolved_cli else ""
-        defer_mutating_request_to_cli = bool(
-            use_cli
-            and selected_cli_name == "codex"
-            and _is_mutating_file_request(user_message)
-        )
-        direct_action = None if defer_mutating_request_to_cli else _direct_agent_action(
+        direct_action = _direct_agent_action(
             user_message,
             history=history,
             project_name=project_name,
@@ -477,9 +625,16 @@ async def run_agent(
         )
         if direct_action:
             tool_name, tool_args, result, answer = direct_action
+            evidence_source = _tool_evidence_source(tool_name, str(result))
             yield {"type": "tool_call", "name": tool_name, "args": tool_args}
-            yield {"type": "tool_result", "name": tool_name, "result": result[:2500]}
-            blocked = _blocked_tool_event(tool_name, tool_args, str(result))
+            yield {"type": "tool_result", "name": tool_name, "result": result[:2500], "evidence_source": evidence_source}
+            blocked = _blocked_tool_event(
+                tool_name,
+                tool_args,
+                str(result),
+                workspace_id=workspace_id,
+                session_id=session_id,
+            )
             if blocked:
                 tool_log.append({"name": tool_name, "args": tool_args, "result": str(result)[:500]})
                 if _ss and session_id:
@@ -492,11 +647,13 @@ async def run_agent(
                         status="approval_required",
                         project_name=project_name,
                         backend=backend or ("cli" if use_cli else ("api" if use_api else "ollama")),
-                        metadata={k: v for k, v in blocked.items() if k != "type"},
+                        metadata=_session_metadata({k: v for k, v in blocked.items() if k != "type"}),
                     )
                 yield blocked
                 return
-            yield {"type": "text", "chunk": answer}
+            yield {"type": "text", "chunk": answer, "evidence_source": evidence_source}
+            if _ss and session_id:
+                _ss.mark_complete(session_id)
             yield {"type": "done", "iterations": 1}
             return
 
@@ -578,6 +735,7 @@ async def run_agent(
                         api_base_url=api_base_url,
                         api_model=api_model,
                         max_tokens=2400,
+                        api_provider=api_provider,
                     ):
                         yield chunk
                 else:
@@ -701,7 +859,7 @@ async def run_agent(
                     status="interrupted",
                     project_name=project_name,
                     backend=backend or ("cli" if use_cli else ("api" if use_api else "ollama")),
-                    metadata={"error_message": str(exc), "provider": provider_label.lower()},
+                    metadata=_session_metadata({"error_message": str(exc), "provider": provider_label.lower()}),
                 )
             yield {"type": "error", "message": f"{provider_label} error: {exc}"}
             return
@@ -724,10 +882,21 @@ async def run_agent(
 
             yield {"type": "tool_call", "name": tool_name, "args": tool_args}
             result = await run_sync_agent_call(_execute_tool, tool_name, tool_args, deps)
-            blocked = _blocked_tool_event(tool_name, tool_args, str(result))
+            blocked = _blocked_tool_event(
+                tool_name,
+                tool_args,
+                str(result),
+                workspace_id=workspace_id,
+                session_id=session_id,
+            )
             if tool_name in ("write_file", "edit_file") and not blocked and not str(result).startswith("ERROR:"):
                 wrote_files = True
-            yield {"type": "tool_result", "name": tool_name, "result": result[:2500]}
+            yield {
+                "type": "tool_result",
+                "name": tool_name,
+                "result": result[:2500],
+                "evidence_source": _tool_evidence_source(tool_name, str(result)),
+            }
 
             tool_log.append({"name": tool_name, "args": tool_args, "result": str(result)[:500]})
 
@@ -786,7 +955,7 @@ async def run_agent(
                         status="approval_required",
                         project_name=project_name,
                         backend=backend or ("cli" if use_cli else ("api" if use_api else "ollama")),
-                        metadata={k: v for k, v in blocked.items() if k != "type"},
+                        metadata=_session_metadata({k: v for k, v in blocked.items() if k != "type"}),
                     )
                 yield blocked
                 return
@@ -856,6 +1025,7 @@ async def run_agent(
                     status="active",
                     project_name=project_name,
                     backend=backend or ("cli" if use_cli else ("api" if use_api else "ollama")),
+                    metadata=_session_metadata(),
                 )
 
         elif answer_match:
@@ -909,6 +1079,8 @@ async def run_agent(
                         )
                         continue
                 yield {"type": "text", "chunk": guarded_text}
+                if _ss and session_id:
+                    _ss.mark_complete(session_id)
                 break
             if iteration < max_iterations - 1:
                 yield {"type": "thinking", "chunk": "⚠️ Correcting — must use tools, not narrate."}

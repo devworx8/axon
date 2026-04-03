@@ -52,7 +52,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
-  <link rel="stylesheet" href="/styles.css?v=20260331a">
+  <link rel="stylesheet" href="/styles.css?v=20260402e">
   <style>
     [x-cloak] { display: none !important; }
     /* xterm overrides to fit Axon dark theme */
@@ -75,7 +75,8 @@
 <!-- @include partials/auth.html -->
 
 <!-- ── App Shell ─────────────────────────────────────────────────── -->
-<div x-show="authenticated" x-cloak class="flex h-screen overflow-hidden">
+<div x-show="authenticated" x-cloak class="flex h-screen overflow-hidden"
+     :class="activeTab === 'chat' ? 'console-focus-shell' : ''">
 <!-- @include partials/sidebar.html -->
 
   <!-- ── Main content ──────────────────────────────────────────────── -->
@@ -97,11 +98,14 @@
       <div class="hidden md:flex items-center justify-between px-4 py-2.5 border-b border-slate-800 bg-slate-950/70 backdrop-blur shrink-0 gap-3 desktop-header-glass relative z-20">
         <!-- Left: back + title -->
         <div class="flex items-center gap-2 min-w-0">
-          <button x-show="chatProject" @click="activeTab = 'projects'"
-                  class="shrink-0 p-1 rounded-md text-slate-500 hover:text-white hover:bg-slate-800 transition">
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+          <button @click="setConsoleFocusMode(false); switchTab('dashboard')"
+                  class="shrink-0 inline-flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5 text-[11px] text-slate-300 transition hover:border-sky-500/30 hover:text-sky-200"
+                  title="Back to Dashboard">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+            <span class="hidden xl:inline">Back to Dashboard</span>
           </button>
           <span class="text-sm font-medium text-slate-300 truncate" x-text="chatProject ? chatProject.name : 'Axon Console'"></span>
+          <span class="rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-200">Console fullscreen</span>
         </div>
 
         <!-- Centre: model picker pill (always visible) -->
@@ -119,7 +123,7 @@
             <!-- Dropdown — shows all backends: Ollama + API providers + CLI -->
             <div x-show="chatModelOpen" @click.away="chatModelOpen=false" @keydown.escape.window="chatModelOpen=false"
                  x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 -translate-y-1" x-transition:enter-end="opacity-100 translate-y-0"
-                 class="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl z-[200] min-w-[260px] py-1 overflow-hidden max-h-[420px] overflow-y-auto">
+                 class="axon-floating-panel absolute top-full left-1/2 z-[220] mt-1.5 max-h-[420px] min-w-[260px] -translate-x-1/2 overflow-y-auto rounded-xl border border-slate-700/80 py-1 shadow-2xl">
 
               <!-- Ollama local models -->
               <div x-show="runtimeStatus.local_models_enabled">
@@ -162,10 +166,10 @@
                   <div class="px-3 py-1.5 text-[10px] text-slate-500 uppercase tracking-wider border-b border-slate-800/60">Local · CLI</div>
                   <template x-for="env in (runtimeStatus.cli_environments||[])" :key="env.path">
                     <button @click="selectCliEnvironment(env); chatModelOpen=false"
-                            :class="settingsForm.ai_backend==='cli' && ((settingsForm.claude_cli_path || runtimeStatus.cli_binary || '')===env.path) ? 'bg-amber-600/10 text-amber-200' : 'text-slate-300 hover:bg-slate-800/60'"
+                            :class="settingsForm.ai_backend==='cli' && ((settingsForm.cli_runtime_path || runtimeStatus.cli_binary || '')===env.path) ? 'bg-amber-600/10 text-amber-200' : 'text-slate-300 hover:bg-slate-800/60'"
                             class="w-full text-left px-3 py-2 text-[13px] flex items-center gap-2.5 transition">
                       <div class="w-1.5 h-1.5 rounded-full shrink-0"
-                           :class="settingsForm.ai_backend==='cli' && ((settingsForm.claude_cli_path || runtimeStatus.cli_binary || '')===env.path) ? 'bg-amber-400' : 'bg-slate-700'"></div>
+                           :class="settingsForm.ai_backend==='cli' && ((settingsForm.cli_runtime_path || runtimeStatus.cli_binary || '')===env.path) ? 'bg-amber-400' : 'bg-slate-700'"></div>
                       <span class="flex-1 truncate" x-text="env.label"></span>
                       <span class="text-[10px] text-slate-600 shrink-0"
                             x-text="env.family === 'codex' ? 'local extension' : 'local bridge'"></span>
@@ -179,12 +183,18 @@
 
         <!-- Right: terminal toggle + project filter + clear -->
         <div class="flex items-center gap-2 min-w-0">
+          <button @click="openConsoleInNewWindow()"
+                  title="Open a fresh console window"
+                  class="w-8 h-8 flex items-center justify-center rounded-lg bg-slate-800/60 border border-slate-700/60 text-slate-400 text-xs transition hover:border-sky-500/30 hover:text-sky-200"
+                  aria-label="Open a fresh console window">
+            <span aria-hidden="true">↗</span>
+          </button>
           <button @click="toggleTerminalMode()"
                   class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition press-scale"
                   :class="composerOptions.terminal_mode ? 'border border-amber-500/30 bg-amber-500/10 text-amber-200' : 'bg-slate-800/60 border border-slate-700/60 text-slate-400 hover:border-amber-500/30 hover:text-amber-200'">
             <span>⌨️</span><span>Terminal</span>
           </button>
-          <select x-model="chatProjectId" @change="updateChatProject()"
+          <select x-model="chatProjectId" @change="activateWorkspaceTab($event.target.value)"
                   class="bg-slate-800/60 border border-slate-700/60 text-slate-400 text-xs rounded-lg px-2 py-1.5 hover:border-slate-600 transition max-w-[140px] truncate">
             <option value="">All workspaces</option>
             <template x-for="p in projects" :key="p.id"><option :value="p.id" x-text="p.name"></option></template>
@@ -215,6 +225,74 @@
         <span class="text-[11px] text-blue-400">📁 Workspace:</span>
         <span class="text-[11px] font-semibold text-blue-300 flex-1 truncate" x-text="chatProject?.name"></span>
         <button @click="chatProjectId=''; updateChatProject()" class="text-[10px] text-slate-500 hover:text-slate-300">✕ Clear</button>
+      </div>
+
+      <div x-show="activeTab === 'chat'" class="shrink-0 border-b border-slate-800/70 bg-slate-950/30 px-4 py-2">
+        <div class="flex items-center gap-2 pb-0.5">
+          <div class="min-w-0 flex-1 overflow-x-auto">
+            <div class="flex items-center gap-2 min-w-max">
+              <template x-for="projectId in consoleWorkspaceTabs" :key="workspaceTabKey(projectId)">
+                <div class="flex items-center gap-1 rounded-xl border transition shrink-0"
+                     :class="String(chatProjectId || '') === String(projectId || '') ? 'border-blue-500/30 bg-blue-500/10 text-blue-100' : 'border-slate-800 bg-slate-900/60 text-slate-300'">
+                  <button @click="activateWorkspaceTab(projectId)"
+                          class="max-w-[92px] truncate px-2.5 py-1.5 text-[11px] font-medium md:max-w-[108px]"
+                          :title="workspaceTabLabel(projectId)"
+                          x-text="workspaceTabDisplayLabel(projectId)"></button>
+                  <button x-show="projectId"
+                          @click.stop="openWorkspaceInNewWindow(projectId)"
+                          title="Open this workspace in a fresh window"
+                          class="rounded-lg px-1.5 py-1 text-[10px] text-slate-400 transition hover:text-sky-200">
+                    ↗
+                  </button>
+                  <button x-show="projectId"
+                          @click.stop="closeWorkspaceTab(projectId)"
+                          title="Close workspace tab"
+                          class="rounded-lg pr-2 pl-0.5 py-1 text-[10px] text-slate-500 transition hover:text-rose-300">
+                    ✕
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
+          <div class="relative shrink-0 z-20" @keydown.escape.stop="workspaceTabMenuOpen = false">
+            <button @click="workspaceTabMenuOpen = !workspaceTabMenuOpen"
+                    title="Add workspace tab"
+                    class="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-slate-800 bg-slate-900/60 text-slate-400 transition hover:border-slate-600 hover:text-slate-200">
+              +
+            </button>
+            <div x-show="workspaceTabMenuOpen"
+                 x-cloak
+                 @click.outside="workspaceTabMenuOpen = false"
+                 class="axon-floating-panel absolute right-0 top-10 z-[220] w-56 rounded-2xl border border-slate-800 p-2 shadow-2xl shadow-black/35">
+              <button @click="addWorkspaceTab('')"
+                      class="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs text-slate-300 transition hover:bg-slate-900 hover:text-white">
+                <span>All workspaces</span>
+                <span class="text-[10px] text-slate-500">tab</span>
+              </button>
+              <template x-for="p in availableWorkspaceTabProjects()" :key="`workspace-picker-${p.id}`">
+                <button @click="addWorkspaceTab(p.id)"
+                        class="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs text-slate-300 transition hover:bg-slate-900 hover:text-white">
+                  <span class="truncate" x-text="p.name"></span>
+                  <span class="text-[10px] text-slate-500">add</span>
+                </button>
+              </template>
+              <div x-show="availableWorkspaceTabProjects().length === 0"
+                   class="px-3 py-2 text-[11px] text-slate-500">
+                All workspaces are already open as tabs.
+              </div>
+            </div>
+          </div>
+          <div class="ml-auto hidden md:flex items-center gap-2 text-[10px] text-slate-500 shrink-0">
+            <span x-show="autonomousConsoleActive()" class="rounded-full border border-emerald-500/20 bg-emerald-500/8 px-2 py-1 text-emerald-200">Auto</span>
+            <span x-show="!autonomousConsoleActive()" class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1 text-slate-400">Fresh window</span>
+            <span class="rounded-full border border-sky-500/20 bg-sky-500/8 px-2 py-1 text-sky-200">Fullscreen</span>
+            <button x-show="canFollowLiveWorkspace()"
+                    @click="followLiveWorkspace()"
+                    class="rounded-full border border-emerald-500/20 bg-emerald-500/8 px-2 py-1 text-emerald-200 transition hover:border-emerald-400/35 hover:text-emerald-100">
+              Follow live workspace
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Desktop: side-by-side | Mobile: stacked -->
@@ -272,7 +350,7 @@
                 <span>🧠</span>
               </template>
             </div>
-            <div class="chat-bubble" style="max-width:85%">
+            <div class="chat-bubble" :class="threadModeShellClass(msg)" style="max-width:85%">
               <div x-show="msg.role === 'assistant'" class="mb-2 flex flex-wrap items-center gap-2">
                 <span class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px]"
                       :class="providerIdentityTone(messageProviderIdentity(msg).providerId)">
@@ -283,6 +361,10 @@
                       x-text="messageProviderIdentity(msg).modelLabel || 'Saved default'"></span>
                 <span class="rounded-full border border-slate-800 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-500"
                       x-text="messageProviderIdentity(msg).transportLabel || 'Runtime'"></span>
+                <template x-for="source in (msg.evidenceSources || [])" :key="`${msg.id}-${source}`">
+                  <span class="rounded-full border border-sky-500/20 bg-sky-500/10 px-2.5 py-1 text-[10px] text-sky-200"
+                        x-text="source"></span>
+                </template>
               </div>
 
               <!-- ── Agent trace: thinking + working blocks (Cowork-style) ── -->
@@ -308,7 +390,7 @@
                                   :class="entry.block.status === 'active'
                                     ? 'text-violet-300 animate-pulse'
                                     : 'text-slate-400 group-hover:text-slate-200'"
-                                  x-text="entry.block.status === 'active' ? 'Reasoning…' : 'Reasoning notes'"></span>
+                                  x-text="entry.block.title || (entry.block.status === 'active' ? 'Reasoning…' : 'Reasoning notes')"></span>
                             <span class="rounded-full border border-slate-700/70 bg-slate-900/70 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.18em] text-slate-500">
                               unverified
                             </span>
@@ -344,7 +426,10 @@
                             <!-- Tool label -->
                             <span class="text-[11.5px] font-medium"
                                   :class="entry.block.status === 'running' ? 'text-amber-200' : 'text-slate-300 group-hover:text-white'"
-                                  x-text="prettyToolName(entry.block.name)"></span>
+                                  x-text="entry.block.title || prettyToolName(entry.block.name)"></span>
+                            <span x-show="entry.block.evidenceSource"
+                                  class="rounded-full border border-sky-500/20 bg-sky-500/10 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.16em] text-sky-200"
+                                  x-text="entry.block.evidenceSource"></span>
                             <!-- Inline preview when collapsed -->
                             <span x-show="!open"
                                   class="text-[10px] text-slate-500 font-mono truncate flex-1 max-w-[200px]"
@@ -379,13 +464,16 @@
                 </template>
               </div>
               <!-- Bubble -->
-              <div :class="msg.role === 'user'
-                ? 'bg-blue-600 text-white px-4 py-2.5 rounded-[20px] rounded-tr-[6px] text-sm shadow-md shadow-blue-500/20'
-                : (msg.error
-                  ? 'bg-red-950/60 border border-red-500/30 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm'
-                  : ((msg.mode === 'agent' || (msg.agentEvents && msg.agentEvents.length))
-                    ? 'bg-slate-900/80 border border-slate-700/40 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm'
-                    : 'bg-slate-800/90 border border-slate-700/50 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm'))">
+              <div :class="[
+                     msg.role === 'user'
+                       ? 'bg-blue-600 text-white px-4 py-2.5 rounded-[20px] rounded-tr-[6px] text-sm shadow-md shadow-blue-500/20'
+                       : (msg.error
+                         ? 'bg-red-950/60 border border-red-500/30 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm'
+                         : ((msg.mode === 'agent' || (msg.agentEvents && msg.agentEvents.length))
+                           ? 'bg-slate-900/80 border border-slate-700/40 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm'
+                           : 'bg-slate-800/90 border border-slate-700/50 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm')),
+                     threadModeBubbleClass(msg)
+                   ].join(' ')">
                 <div x-show="msg.role === 'assistant'" class="prose-dark text-sm"
                      :class="(msg.mode === 'agent' || msg.agentEvents?.length) && !msg.streaming ? 'max-h-[60vh] overflow-y-auto overscroll-contain' : ''">
                   <div x-html="renderMd(msg.content)"></div>
@@ -428,6 +516,17 @@
               <div class="flex items-center gap-1.5 mt-1 px-1"
                    :class="msg.role === 'user' ? 'justify-end' : 'justify-start'">
                 <span class="text-[10px] text-slate-600" x-text="formatTime(msg.created_at)"></span>
+                <span class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.16em]"
+                      :class="threadModeBadgeClass(msg)"
+                >
+                  <span x-text="threadModeIcon(msg)"></span>
+                  <span x-text="threadModeLabel(msg)"></span>
+                </span>
+                <span x-show="msg.role === 'assistant' && messageShowsWorkingSpinner(msg)"
+                      class="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-200">
+                  <span class="axon-spinner axon-spinner--sm axon-spinner--emerald"></span>
+                  <span x-text="messageWorkingLabel(msg)"></span>
+                </span>
 
                 <!-- ── User message actions ─────────────────────────────────── -->
                 <template x-if="msg.role === 'user'">
@@ -490,7 +589,7 @@
         </template>
 
         <!-- ── Interrupted session resume banner ──────────────────────────── -->
-        <div x-show="interruptedSession && !resumeBannerDismissed && !chatLoading"
+        <div x-show="interruptedSession && interruptedSession.status !== 'approval_required' && !resumeBannerDismissed && !chatLoading"
              x-transition
              class="mx-1 mt-2 rounded-2xl border border-amber-500/30 bg-amber-950/30 px-4 py-3">
           <div class="flex items-start gap-3">
@@ -557,6 +656,80 @@
 
       <!-- Input bar (bottom of canvas) -->
       <div class="chat-shell__composer shrink-0 px-3 md:px-5 py-2.5 border-t border-slate-800 bg-slate-950/80 backdrop-blur">
+        <div x-show="activePendingAgentApproval()" x-transition class="mb-3">
+          <div class="axon-approval-dock">
+            <div class="axon-approval-dock__header">
+              <span :class="agentApprovalStatusClass(activePendingAgentApproval())"
+                    x-text="agentApprovalStatusLabel(activePendingAgentApproval())"></span>
+              <div class="min-w-0 flex-1">
+                <div class="axon-approval-dock__title"
+                     x-text="activePendingAgentApproval()?.message || 'Approval required before Axon can continue this task.'"></div>
+                <div x-show="activePendingAgentApproval()?.task"
+                     class="axon-approval-dock__task">
+                  Task:
+                  <span x-text="activePendingAgentApproval()?.task"></span>
+                </div>
+                <code x-show="agentApprovalSubject(activePendingAgentApproval())"
+                      class="axon-approval-dock__subject"
+                      x-text="agentApprovalSubject(activePendingAgentApproval())"></code>
+                <div class="axon-approval-dock__hint"
+                     x-text="agentApprovalHint(activePendingAgentApproval())"></div>
+              </div>
+            </div>
+
+            <div x-show="!activePendingAgentApproval()?.resolved" class="axon-approval__actions mt-3">
+              <template x-if="activePendingAgentApproval()?.kind === 'edit'">
+                <div class="contents">
+                  <button @click="window.__axon?.approveAction(activePendingAgentApproval()?.approvalAction || activePendingAgentApproval(), 'once', { resume: true })"
+                          class="axon-approval__btn axon-approval__btn--primary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="w-3.5 h-3.5"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow once</span><span class="axon-approval__btn-meta">Retry this exact file action</span></span>
+                  </button>
+                  <button @click="window.__axon?.approveAction(activePendingAgentApproval()?.approvalAction || activePendingAgentApproval(), 'task', { resume: true })"
+                          class="axon-approval__btn axon-approval__btn--allow-all">
+                    <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow for task</span><span class="axon-approval__btn-meta">Approve only this action for this run</span></span>
+                  </button>
+                  <button @click="window.__axon?.approveAction(activePendingAgentApproval()?.approvalAction || activePendingAgentApproval(), 'session', { resume: true })"
+                          class="axon-approval__btn axon-approval__btn--secondary">
+                    <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow for session</span><span class="axon-approval__btn-meta">Approve this exact action while Axon stays open</span></span>
+                  </button>
+                  <button x-show="activePendingAgentApproval()?.persistAllowed"
+                          @click="window.__axon?.approveAction(activePendingAgentApproval()?.approvalAction || activePendingAgentApproval(), 'persist', { resume: true })"
+                          class="axon-approval__btn axon-approval__btn--secondary">
+                    <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Persist action</span><span class="axon-approval__btn-meta">Remember this exact approval</span></span>
+                  </button>
+                </div>
+              </template>
+              <template x-if="activePendingAgentApproval()?.kind === 'command'">
+                <div class="contents">
+                  <button @click="window.__axon?.approveAction(activePendingAgentApproval()?.approvalAction || activePendingAgentApproval(), 'once', { resume: true })"
+                          class="axon-approval__btn axon-approval__btn--primary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="w-3.5 h-3.5"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow once</span><span class="axon-approval__btn-meta">Retry this exact command</span></span>
+                  </button>
+                  <button @click="window.__axon?.approveAction(activePendingAgentApproval()?.approvalAction || activePendingAgentApproval(), 'task', { resume: true })"
+                          class="axon-approval__btn axon-approval__btn--allow-all">
+                    <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow for task</span><span class="axon-approval__btn-meta">Approve only this action for this task</span></span>
+                  </button>
+                  <button @click="window.__axon?.approveAction(activePendingAgentApproval()?.approvalAction || activePendingAgentApproval(), 'session', { resume: true })"
+                          class="axon-approval__btn axon-approval__btn--secondary">
+                    <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow for session</span><span class="axon-approval__btn-meta">Approve this exact action while Axon stays open</span></span>
+                  </button>
+                  <button x-show="activePendingAgentApproval()?.persistAllowed"
+                          @click="window.__axon?.approveAction(activePendingAgentApproval()?.approvalAction || activePendingAgentApproval(), 'persist', { resume: true })"
+                          class="axon-approval__btn axon-approval__btn--secondary">
+                    <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Persist action</span><span class="axon-approval__btn-meta">Save this exact action for future sessions</span></span>
+                  </button>
+                </div>
+              </template>
+              <button @click="window.__axon?.denyApproval({ resume: true })"
+                      class="axon-approval__btn axon-approval__btn--deny">
+                <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Deny</span><span class="axon-approval__btn-meta">Keep the task moving without the blocked step</span></span>
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div x-show="consoleHasImageAttachmentWithoutVision()" class="mb-2 rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2.5">
           <div class="flex items-start gap-3">
             <div class="text-amber-300 text-sm">⚠️</div>
@@ -625,24 +798,62 @@
           </template>
         </div>
 
-        <div class="flex gap-1.5 items-end">
+        <div x-show="!isMobile && composerCompactMode()" class="mb-2 hidden md:flex items-center gap-1.5">
+          <div class="min-w-0 flex-1 flex items-center h-9 gap-1.5 rounded-xl px-2.5 bg-slate-800/60 border border-slate-700/40 select-none font-mono text-[11px] text-slate-500 overflow-hidden"
+               :title="composerEnvLabel()">
+            <span x-show="composerEnvData().auto" class="rounded-full border border-emerald-500/20 bg-emerald-500/8 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.16em] text-emerald-200 shrink-0"
+                  x-text="composerEnvData().auto_label || 'worktree'"></span>
+            <span class="min-w-0 truncate text-slate-300" x-text="composerEnvData().work_dir || 'console'"></span>
+            <span x-show="composerEnvData().source_dir && composerEnvData().source_dir !== composerEnvData().work_dir" class="min-w-0 truncate text-slate-600">
+              src:<span class="text-slate-400" x-text="composerEnvData().source_dir"></span>
+            </span>
+          </div>
+          <button @click="openComposerMenu()"
+                  :class="showComposerMenu || composerSummaryChips().length ? 'bg-violet-500/15 text-violet-200 shadow-lg shadow-violet-500/10' : 'bg-slate-800 text-slate-400'"
+                  class="w-9 h-9 flex-none rounded-xl transition flex items-center justify-center press-scale" title="Composer controls">
+            <span class="text-lg leading-none">+</span>
+          </button>
+          <button @click="openResourcePicker()"
+                  :class="selectedResources.length ? 'bg-sky-500/15 text-sky-200 shadow-lg shadow-sky-500/10' : 'bg-slate-800 text-slate-400'"
+                  class="w-9 h-9 flex-none rounded-xl transition flex items-center justify-center press-scale" title="Attach resources">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21.44 11.05l-8.49 8.49a6 6 0 0 1-8.49-8.49l8.49-8.49a4 4 0 1 1 5.66 5.66l-8.5 8.49a2 2 0 1 1-2.82-2.83l7.78-7.78"/>
+            </svg>
+          </button>
+          <button @click="$refs.imageUploadInput.click()"
+                  class="w-9 h-9 flex-none rounded-xl bg-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition flex items-center justify-center press-scale"
+                  title="Upload image">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
+            </svg>
+          </button>
+          <button x-show="chatInput.trim()" @click="clearChatInput()"
+                  class="shrink-0 rounded-full border border-slate-800 bg-slate-900/70 px-2.5 py-1.5 text-[10px] text-slate-400 hover:text-slate-200 transition">
+            Clear
+          </button>
+        </div>
+
+        <div class="flex gap-1.5 items-end" :class="composerCompactMode() ? 'md:gap-2' : ''">
             <!-- Desktop: workspace / environment indicator -->
-            <div x-show="!isMobile" class="shrink-0 flex items-center h-9 gap-1.5 rounded-xl px-2.5 bg-slate-800/60 border border-slate-700/40 select-none font-mono text-[11px] text-slate-500" :title="composerEnvLabel()">
-              <span x-show="composerEnvData().venv" class="text-green-400/80" x-text="'(' + composerEnvData().venv + ')'"></span>
-              <span x-show="composerEnvData().venv" class="text-slate-600">→</span>
-              <span class="text-slate-400" x-text="composerEnvData().work_dir || 'console'"></span>
-              <span x-show="composerEnvData().git_branch" class="text-slate-600">git:(<span class="text-cyan-400/80" x-text="composerEnvData().git_branch"></span>)</span>
+            <div x-show="!isMobile && !composerCompactMode()"
+                 class="shrink-0 flex max-w-[30vw] items-center h-9 gap-1.5 rounded-xl px-2.5 bg-slate-800/60 border border-slate-700/40 select-none font-mono text-[11px] text-slate-500 overflow-hidden"
+                 :title="composerEnvLabel()">
+              <span x-show="composerEnvData().auto" class="rounded-full border border-emerald-500/20 bg-emerald-500/8 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.16em] text-emerald-200 shrink-0" x-text="composerEnvData().auto_label || 'worktree'"></span>
+              <span class="min-w-0 truncate text-slate-300" x-text="composerEnvData().work_dir || 'console'"></span>
+              <span x-show="composerEnvData().source_dir && composerEnvData().source_dir !== composerEnvData().work_dir" class="min-w-0 truncate text-slate-600">src:<span class="text-slate-400" x-text="composerEnvData().source_dir"></span></span>
+              <span class="rounded-full border border-slate-700 bg-slate-950/70 px-1.5 py-0.5 text-[9px] text-slate-400 shrink-0"
+                    x-text="runtimeStatus.effective_runtime_label || runtimeStatus.runtime_label || 'runtime'"></span>
             </div>
 
             <!-- Desktop: composer menu button -->
-            <button x-show="!isMobile" @click="openComposerMenu()"
+            <button x-show="!isMobile && !composerCompactMode()" @click="openComposerMenu()"
                     :class="showComposerMenu || composerSummaryChips().length ? 'bg-violet-500/15 text-violet-200 shadow-lg shadow-violet-500/10' : 'bg-slate-800 text-slate-400'"
                     class="w-9 h-9 flex-none rounded-xl transition flex items-center justify-center press-scale" title="Composer controls">
               <span class="text-lg leading-none">+</span>
             </button>
 
             <!-- Desktop: resource picker button -->
-            <button x-show="!isMobile" @click="openResourcePicker()"
+            <button x-show="!isMobile && !composerCompactMode()" @click="openResourcePicker()"
                     :class="selectedResources.length ? 'bg-sky-500/15 text-sky-200 shadow-lg shadow-sky-500/10' : 'bg-slate-800 text-slate-400'"
                     class="w-9 h-9 flex-none rounded-xl transition flex items-center justify-center press-scale" title="Attach resources">
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -653,7 +864,7 @@
             <!-- Desktop: direct image upload button -->
             <input x-ref="imageUploadInput" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" class="hidden"
                    @change="handleImageUpload($event)" />
-            <button x-show="!isMobile" @click="$refs.imageUploadInput.click()"
+            <button x-show="!isMobile && !composerCompactMode()" @click="$refs.imageUploadInput.click()"
                     class="w-9 h-9 flex-none rounded-xl bg-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition flex items-center justify-center press-scale" title="Upload image">
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
@@ -801,6 +1012,130 @@
         </div>
       </div>
 
+      <!-- Runtime login modal -->
+      <div x-show="runtimeLoginModal.open" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+           x-transition:leave="transition ease-in duration-100" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
+           @click.self="closeRuntimeLoginModal()" @keydown.escape.window="closeRuntimeLoginModal()"
+           class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm" style="display:none;">
+        <div class="w-[min(92vw,760px)] max-h-[88vh] overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-2xl">
+          <div class="flex items-center gap-3 border-b border-slate-800 px-4 py-3">
+            <div class="min-w-0 flex-1">
+              <div class="text-sm font-semibold text-slate-100" x-text="runtimeLoginFamilyLabel(runtimeLoginModal.family) + ' sign in'"></div>
+              <div class="truncate text-[11px] text-slate-500" x-text="runtimeLoginModal.session?.binary || runtimeLoginModal.session?.command_preview || 'Preparing local browser/device sign-in…'"></div>
+            </div>
+            <span class="rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.18em]"
+                  :class="runtimeLoginStatusClass(runtimeLoginModal.session?.status || (runtimeLoginModal.loading ? 'pending' : ''))"
+                  x-text="runtimeLoginModal.loading ? 'loading' : (runtimeLoginModal.session?.status || 'pending')"></span>
+            <button @click="closeRuntimeLoginModal()" class="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-[11px] text-slate-300 hover:text-white transition">Close</button>
+          </div>
+          <div class="max-h-[74vh] overflow-auto px-4 py-4 space-y-4">
+            <div x-show="runtimeLoginModal.loading" class="rounded-xl border border-amber-500/20 bg-amber-500/8 px-3 py-3 text-sm text-amber-200">
+              Starting the local sign-in flow…
+            </div>
+            <div x-show="runtimeLoginModal.error" class="rounded-xl border border-rose-500/20 bg-rose-500/8 px-3 py-3 text-sm text-rose-200" x-text="runtimeLoginModal.error"></div>
+
+            <div x-show="runtimeLoginModal.session" class="space-y-4">
+              <div class="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+                <div class="text-xs font-semibold text-slate-200">Status</div>
+                <div class="mt-1 text-sm text-slate-300" x-text="runtimeLoginModal.session?.message || 'Waiting for the runtime login flow.'"></div>
+              </div>
+
+              <div class="rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3">
+                <div class="text-xs font-semibold text-slate-200">Auth state</div>
+                <div class="mt-1 text-sm text-slate-300" x-text="runtimeLoginAuthSummary(runtimeLoginModal.session)"></div>
+                <div class="mt-2 flex flex-wrap gap-2">
+                  <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-1 text-[10px] text-slate-300"
+                        x-text="formatRuntimeAuthMethod(runtimeLoginModal.session?.auth_snapshot?.auth_method || '')"></span>
+                  <span x-show="runtimeLoginModal.session?.auth_snapshot?.subscription_type"
+                        class="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-200"
+                        x-text="runtimeLoginModal.session?.auth_snapshot?.subscription_type"></span>
+                </div>
+              </div>
+
+              <div x-show="runtimeLoginModal.session?.browser_url" class="rounded-xl border border-blue-500/20 bg-blue-500/8 px-4 py-3 space-y-3">
+                <div>
+                  <div class="text-xs font-semibold text-blue-200">Browser link</div>
+                  <div class="mt-1 break-all text-xs text-slate-200" x-text="runtimeLoginModal.session?.browser_url"></div>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <button @click="window.open(runtimeLoginModal.session?.browser_url, '_blank', 'noopener,noreferrer')"
+                          class="rounded-xl border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs font-medium text-blue-200 transition hover:bg-blue-500/15">
+                    Open browser
+                  </button>
+                  <button @click="copyRuntimeLoginValue(runtimeLoginModal.session?.browser_url, 'Login URL')"
+                          class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500">
+                    Copy link
+                  </button>
+                </div>
+              </div>
+
+              <div x-show="runtimeLoginModal.session?.user_code" class="rounded-xl border border-violet-500/20 bg-violet-500/8 px-4 py-3 space-y-3">
+                <div>
+                  <div class="text-xs font-semibold text-violet-200">Device code</div>
+                  <div class="mt-1 text-lg font-semibold tracking-[0.22em] text-slate-100" x-text="runtimeLoginModal.session?.user_code"></div>
+                </div>
+                <button @click="copyRuntimeLoginValue(runtimeLoginModal.session?.user_code, 'Device code')"
+                        class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500">
+                  Copy code
+                </button>
+              </div>
+
+              <div class="rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <div class="text-xs font-semibold text-slate-200">Prepared command</div>
+                    <div class="text-[11px] text-slate-500">Axon runs this locally and keeps polling until the CLI reports that you are signed in.</div>
+                  </div>
+                  <button @click="copyRuntimeLoginValue(runtimeLoginModal.session?.command_preview, 'Command')"
+                          class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500">
+                    Copy
+                  </button>
+                </div>
+                <pre class="mt-3 whitespace-pre-wrap break-all rounded-lg bg-slate-950 px-3 py-2 text-[11px] leading-5 text-slate-300" x-text="runtimeLoginModal.session?.command_preview || 'No command available.'"></pre>
+              </div>
+
+              <div class="rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <div class="text-xs font-semibold text-slate-200">Runtime output</div>
+                    <div class="text-[11px] text-slate-500">Live CLI output from the sign-in helper.</div>
+                  </div>
+                  <button @click="refreshRuntimeLoginSession()"
+                          class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500">
+                    Refresh
+                  </button>
+                </div>
+                <pre class="mt-3 max-h-[26vh] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-950 px-3 py-2 text-[11px] leading-5 text-slate-300" x-text="runtimeLoginModal.session?.log_tail || 'Waiting for runtime output…'"></pre>
+              </div>
+
+              <div class="flex flex-wrap gap-2">
+                <button @click="refreshRuntimeLoginSession()"
+                        class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500">
+                  Refresh status
+                </button>
+                <button x-show="runtimeLoginModal.session?.status === 'authenticated'"
+                        @click="loadRuntimeStatus(); showToast(runtimeLoginFamilyLabel(runtimeLoginModal.family) + ' runtime status refreshed')"
+                        class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-200 transition hover:bg-emerald-500/15">
+                  Refresh runtime
+                </button>
+                <button x-show="['failed','cancelled'].includes(String(runtimeLoginModal.session?.status || '').toLowerCase())"
+                        @click="retryRuntimeLoginSession()"
+                        :disabled="runtimeLoginModal.loading"
+                        class="rounded-xl border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-xs font-medium text-sky-200 transition hover:bg-sky-500/15 disabled:opacity-50">
+                  Retry sign in
+                </button>
+                <button x-show="runtimeLoginPendingStatus(runtimeLoginModal.session?.status)"
+                        @click="cancelRuntimeLoginSession()"
+                        :disabled="runtimeLoginModal.loading"
+                        class="rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200 transition hover:bg-rose-500/15 disabled:opacity-50">
+                  Cancel sign in
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       </div><!-- /canvas -->
 
       <!-- Composer sidebar — controls panel -->
@@ -816,11 +1151,15 @@
            x-transition:leave-start="opacity-100 translate-y-0"
            x-transition:leave-end="opacity-0 translate-y-4 md:translate-y-0 md:translate-x-2"
            class="chat-shell__sidebar md:border-l md:border-t-0 border-t border-slate-800 bg-slate-900/40 shrink-0 md:overflow-y-auto max-h-[35vh] md:max-h-full relative"
-           :style="isMobile ? '' : `width:${consolePanelWidth}px; min-width:320px; max-width:70vw;`">
+           :style="isMobile ? '' : `width:${consolePanelWidth}px; min-width:360px; max-width:78vw;`">
         <!-- Drag-to-resize handle (left edge) -->
-        <div class="hidden md:block absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-30 hover:bg-amber-500/20 active:bg-amber-500/30 transition-colors"
-             @mousedown.prevent="consolePanelResizing = true; consolePanelResizeStartX = $event.clientX; consolePanelResizeStartW = consolePanelWidth"
-             @touchstart.prevent="consolePanelResizing = true; consolePanelResizeStartX = $event.touches[0].clientX; consolePanelResizeStartW = consolePanelWidth">
+        <div class="console-panel-grip hidden md:flex absolute left-0 top-0 bottom-0 w-5 cursor-col-resize z-30 transition-colors"
+             @mousedown.prevent="beginConsolePanelResize($event.clientX)"
+             @touchstart.prevent="beginConsolePanelResize($event.touches[0].clientX)">
+          <div class="console-panel-grip__pill my-auto">
+            <span class="console-panel-grip__label">Drag</span>
+            <span></span><span></span><span></span>
+          </div>
         </div>
       <div class="chat-shell__sidebar-panel px-3 py-3">
         <div class="space-y-1.5">
@@ -848,9 +1187,9 @@
                   <path d="M18.6 4.8l.8 1.8 1.8.8-1.8.8-.8 1.8-.8-1.8-1.8-.8 1.8-.8.8-1.8z" fill="currentColor" stroke="none"/>
                 </svg>
               </span>
-              <span class="text-[11px] font-semibold truncate" x-text="agentMode ? (isMobile ? '#NEXT-GEN' : '#NEXT-GEN Agent') : 'Console mode'"></span>
+              <span class="text-[11px] font-semibold truncate" x-text="autonomousConsoleActive() ? '#NEXT-GEN Auto' : (agentMode ? (isMobile ? '#NEXT-GEN' : '#NEXT-GEN Agent') : 'Console mode')"></span>
               <span class="md:hidden shrink-0 rounded-full border border-slate-700/70 bg-slate-950/70 px-2 py-0.5 text-[9px] text-slate-400"
-                    x-text="agentMode ? 'Tools' : 'Smart'"></span>
+                    x-text="autonomousConsoleActive() ? 'Auto' : (agentMode ? 'Tools' : 'Smart')"></span>
             </button>
 
             <div class="flex min-w-0 items-center gap-1.5 w-full md:ml-auto md:w-auto md:gap-2">
@@ -888,7 +1227,7 @@
                 <div class="min-w-0 flex-1">
                      <div class="text-[10px] font-medium text-green-300 truncate"
                        x-text="cliRuntimeBinaryName()"></div>
-                  <select x-model="settingsForm.claude_cli_model" @change="saveCliModelQuiet()"
+                  <select x-model="settingsForm.cli_runtime_model" @change="saveCliModelQuiet()"
                           class="dark-select mt-1 w-full rounded-lg border border-green-500/20 bg-slate-950/40 px-2 py-1 text-[10px] text-green-200 focus:outline-none">
                     <template x-for="option in cliModelOptions()" :key="option.id || 'default'">
                       <option :value="option.id" x-text="option.label"></option>
@@ -897,7 +1236,7 @@
                 </div>
               </div>
 
-              <button x-show="chatInput.trim()" @click="clearChatInput()"
+            <button x-show="chatInput.trim() && !composerCompactMode()" @click="clearChatInput()"
                       class="shrink-0 rounded-full border border-slate-800 bg-slate-900/70 px-2 py-1.5 text-[10px] text-slate-400 hover:text-slate-200 transition md:px-2.5">
                 <span class="md:hidden">✕</span>
                 <span class="hidden md:inline">Clear</span>
@@ -905,25 +1244,75 @@
             </div>
           </div>
 
-          <div class="hidden md:flex flex-wrap items-center gap-2 px-1 pt-2" x-show="resolveChatMode(chatInput) === 'agent'">
-            <span class="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300">#NEXT-GEN</span>
-            <span class="tool-chip rounded-full px-2 py-1 text-[10px] text-slate-300">Files</span>
-            <span class="tool-chip rounded-full px-2 py-1 text-[10px] text-slate-300">Git</span>
-            <span class="tool-chip rounded-full px-2 py-1 text-[10px] text-slate-300">Search</span>
-            <span class="tool-chip hidden md:inline-flex rounded-full px-2 py-1 text-[10px] text-slate-300">Write</span>
-            <span class="md:hidden text-[10px] text-slate-500">+ write</span>
-            <span class="hidden md:inline text-[10px] text-slate-500">Axon will inspect and act instead of only giving shell instructions.</span>
+          <div class="px-1 pt-2" x-show="resolveChatMode(chatInput) === 'agent'">
+            <div class="rounded-2xl border border-slate-800 bg-slate-950/55 px-3 py-2">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span class="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300">#NEXT-GEN</span>
+                <span class="rounded-full border px-2 py-0.5 text-[10px]"
+                      :class="autonomousConsoleActive() ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200' : 'border-slate-700 bg-slate-900/60 text-slate-300'"
+                      x-text="autonomousConsoleActive() ? 'Autonomous' : (agentMode ? 'Workspace operator' : 'Auto-route')"></span>
+                <span x-show="chatProject"
+                      class="rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-200 max-w-[180px] truncate"
+                      :title="chatProject?.name"
+                      x-text="chatProject?.name"></span>
+                <span x-show="!chatProject"
+                      class="rounded-full border border-slate-800 bg-slate-900/70 px-2 py-0.5 text-[10px] text-slate-400">All workspaces</span>
+              </div>
+              <div class="pt-1 text-[10px] leading-5 text-slate-400"
+                   x-text="autonomousConsoleActive()
+                     ? 'Axon will keep working inside the selected workspace until the task is complete or clearly blocked.'
+                     : 'Axon will inspect and act in the selected workspace instead of stopping at shell instructions.'"></div>
+            </div>
           </div>
 
-          <div class="md:hidden flex items-center gap-2 px-1 pt-2 text-[10px]" x-show="resolveChatMode(chatInput) === 'agent'">
-            <span class="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300">#NEXT-GEN</span>
-            <span class="rounded-full border border-slate-800 bg-slate-950/60 px-2 py-0.5 text-slate-400">Files · Git · Search · Write</span>
-          </div>
-
-          <div x-show="isAutoRoutedAgent(chatInput) && !agentMode" class="flex flex-wrap items-center gap-1.5 px-1 pt-1">
-            <span class="rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200">Auto-route</span>
-            <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-300">Local operator</span>
-            <span class="text-[9px] text-slate-500">This prompt will use local tools when sent.</span>
+          <div class="px-1 pt-2" x-show="autonomousConsoleActive() && currentWorkspaceAutoSession()">
+            <div class="rounded-2xl border border-emerald-500/15 bg-emerald-500/5 px-3 py-2.5">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-300">Auto Session</span>
+                <span x-show="String(currentWorkspaceAutoSession()?.status || '') === 'running'" class="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-200">
+                  <span class="axon-spinner axon-spinner--sm axon-spinner--emerald"></span>
+                  <span>Working</span>
+                </span>
+                <span class="rounded-full border px-2 py-0.5 text-[10px]"
+                      :class="taskSandboxStatusClass(currentWorkspaceAutoSession()?.status)"
+                      x-text="taskSandboxStatusLabel(currentWorkspaceAutoSession()?.status)"></span>
+                <span x-show="currentWorkspaceAutoSession()?.changed_files_count"
+                      class="rounded-full border border-slate-700 bg-slate-900/70 px-2 py-0.5 text-[10px] text-slate-300"
+                      x-text="`${currentWorkspaceAutoSession()?.changed_files_count} changed`"></span>
+                <span x-show="currentWorkspaceAutoSession()?.sandbox_path"
+                      class="rounded-full border border-slate-700 bg-slate-900/70 px-2 py-0.5 text-[10px] text-slate-300 font-mono"
+                      x-text="(currentWorkspaceAutoSession()?.sandbox_path || '').split('/').filter(Boolean).slice(-1)[0]"></span>
+              </div>
+              <div class="pt-1 text-[11px] text-slate-300" x-text="currentWorkspaceAutoSession()?.title || 'Auto session'"></div>
+              <div class="pt-1 text-[10px] leading-5 text-slate-500">
+                <span x-text="currentWorkspaceAutoSession()?.detail || 'Axon is working in the sandbox and will stop at a reviewable handoff.'"></span>
+              </div>
+              <div class="pt-2 flex flex-wrap gap-2">
+                <button x-show="['approval_required','error','review_ready'].includes(String(currentWorkspaceAutoSession()?.status || ''))"
+                        @click="continueAutoSession(currentWorkspaceAutoSession()?.session_id)"
+                        class="rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[10px] font-medium text-amber-200 hover:bg-amber-500/15">
+                  Continue
+                </button>
+                <button @click="viewAutoSessionReport(currentWorkspaceAutoSession()?.session_id)"
+                        class="rounded-xl border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-[10px] font-medium text-slate-200 hover:border-slate-500">
+                  Report
+                </button>
+                <button @click="openWorkspaceTestTab()"
+                        class="rounded-xl border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-[10px] font-medium text-slate-200 hover:border-slate-500">
+                  Test Tab
+                </button>
+                <button x-show="currentWorkspaceAutoSession()?.apply_allowed"
+                        @click="applyAutoSession(currentWorkspaceAutoSession()?.session_id)"
+                        class="rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-medium text-cyan-200 hover:bg-cyan-500/15">
+                  Apply
+                </button>
+                <button x-show="currentWorkspaceAutoSession()?.status !== 'running' && currentWorkspaceAutoSession()?.status !== 'applied'"
+                        @click="discardAutoSession(currentWorkspaceAutoSession()?.session_id)"
+                        class="rounded-xl border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[10px] font-medium text-rose-200 hover:bg-rose-500/15">
+                  Discard
+                </button>
+              </div>
+            </div>
           </div>
 
           <div x-show="!usesOllamaBackend() && !agentMode" class="flex flex-wrap items-center gap-1.5 px-1 pt-1">
@@ -1058,14 +1447,16 @@
             <button @click="panelToolsOpen = !panelToolsOpen" class="flex items-center gap-1.5 px-1 w-full text-left group">
               <span class="text-[9px] text-slate-600 transition" :class="panelToolsOpen ? 'rotate-0' : '-rotate-90'" style="display:inline-block">▾</span>
               <span class="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300/70 group-hover:text-amber-200 transition">Local Tools</span>
-              <span class="ml-auto rounded-full border border-emerald-500/20 bg-emerald-500/8 px-2 py-0.5 text-[9px] text-emerald-400 uppercase tracking-wider">Sandboxed</span>
+              <span class="ml-auto rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-wider"
+                    :class="localToolsSafetyBadge().tone"
+                    :title="localToolsSafetyBadge().title"
+                    x-text="localToolsSafetyBadge().label"></span>
             </button>
             <div x-show="panelToolsOpen" x-transition class="flex flex-wrap items-center gap-1.5 px-1 pt-1.5">
-            <button @click="window.__axon?.allowAllEdits({ resume: false })"
-                    class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-emerald-300 hover:text-emerald-200 hover:border-emerald-400/40 border-emerald-500/25 bg-emerald-500/8 transition press-scale"
-                    title="Allow all file edits for this session">
-              🔓 Accept All Edits
-            </button>
+            <span class="tool-chip inline-flex rounded-full px-2.5 py-1 text-[10px] text-emerald-300 border border-emerald-500/20 bg-emerald-500/8"
+                  title="Axon now uses exact blocked-action approvals instead of broad edit grants">
+              🔐 Exact approval gate
+            </span>
             <button @click="chatInput = 'Browse my files in ~/'; $nextTick(() => $refs.chatComposer?.focus())"
                     class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-amber-200 hover:border-amber-500/30 transition press-scale"
                     title="Browse files in your home directory">
@@ -1083,10 +1474,14 @@
                     class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-cyan-200 hover:border-cyan-500/30 transition press-scale">
               🖥️ Desktop Preview
             </button>
-                <button @click="loadBrowserActions(); showToast('Review live page actions below')"
+                <button @click="ensureWorkspacePreview({ openExternal: false, attachBrowser: true })"
                   class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-sky-200 hover:border-sky-500/30 transition press-scale">
                   🌐 Live Page
                 </button>
+            <button @click="openWorkspaceTestTab()"
+                    class="tool-chip rounded-full px-2.5 py-1 text-[10px] text-slate-300 hover:text-emerald-200 hover:border-emerald-500/30 transition press-scale">
+              🧪 Test Tab
+            </button>
             <button @click="toggleTerminalMode()"
                     class="rounded-full px-2.5 py-1 text-[10px] transition press-scale"
                     :class="composerOptions.terminal_mode ? 'border border-amber-500/30 bg-amber-500/10 text-amber-200' : 'tool-chip text-slate-300 hover:text-amber-200 hover:border-amber-500/30'">
@@ -1161,6 +1556,18 @@
                 <span class="min-w-0 flex-1 truncate text-[11px] font-medium text-slate-100" x-text="liveOperator.title || 'Axon is working…'"></span>
               </div>
               <div class="mt-1 text-[10px] text-slate-400" x-text="liveOperator.detail || 'Streaming tool activity and reply progress live.'"></div>
+              <div class="mt-2 flex items-center gap-2">
+                <span x-show="liveOperator.workspaceId"
+                      class="max-w-[55%] truncate rounded-full border border-emerald-500/20 bg-emerald-500/8 px-2 py-0.5 text-[9px] text-emerald-200"
+                      x-text="liveOperatorWorkspaceName()"></span>
+                <span x-show="autonomousConsoleActive()"
+                      class="rounded-full border border-emerald-500/20 bg-emerald-500/8 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-emerald-200">Auto live</span>
+                <button x-show="canFollowLiveWorkspace()"
+                        @click="followLiveWorkspace()"
+                        class="ml-auto rounded-full border border-sky-500/20 bg-sky-500/10 px-2.5 py-1 text-[9px] text-sky-200">
+                  Follow
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1205,6 +1612,10 @@
               </template>
               <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400"
                     x-text="runtimeStatus.active_model || composerModelSummary() || 'Saved default'"></span>
+              <span x-show="panelBrowserOpen || browserSession()?.connected || currentWorkspacePreview()?.url"
+                    class="rounded-full border px-2 py-0.5 text-[10px]"
+                    :class="browserControlModeTone()"
+                    x-text="browserControlModeLabel()"></span>
             </div>
             <div class="mt-1 text-[9px] text-slate-500"
                  x-text="liveFeed.connected ? 'Live · ' + (liveFeed.latest?.at ? timeAgo(liveFeed.latest.at) : 'connected') : (liveFeed.reconnecting ? 'Reconnecting…' : 'Idle')"></div>
@@ -1214,114 +1625,168 @@
           <div class="mt-1.5 rounded-xl border border-sky-500/20 bg-slate-950/70 overflow-hidden">
             <button @click="panelBrowserOpen = !panelBrowserOpen" class="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-left group">
               <span class="text-[9px] text-sky-500/60 transition" :class="panelBrowserOpen ? 'rotate-0' : '-rotate-90'" style="display:inline-block">▾</span>
-              <span class="text-[11px] font-semibold text-white group-hover:text-sky-200 transition">Live Page Control</span>
+              <span class="text-[11px] font-semibold text-white group-hover:text-sky-200 transition">Axon Browser</span>
               <span class="ml-auto rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] shrink-0"
-                    :class="devPreview.url ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' : (browserActions.pending_count ? 'border-amber-500/20 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-950/60 text-slate-400')"
-                    x-text="devPreview.url ? 'Live' : (browserActions.pending_count ? `${browserActions.pending_count} pending` : (browserActions.session?.connected ? 'Attached' : 'No page'))"></span>
+                    :class="browserPendingProposalCount() && !browserFrameUrl() ? 'border-amber-500/20 bg-amber-500/10 text-amber-200' : browserPreviewStatusTone()"
+                    x-text="browserPendingProposalCount() && !browserFrameUrl() ? `${browserPendingProposalCount()} pending` : browserPreviewStatusLabel()"></span>
             </button>
             <div x-show="panelBrowserOpen" x-transition class="px-3 pb-3">
-            <!-- ── Dev Server Preview ── -->
-            <template x-if="devPreview.url">
-              <div class="mb-3">
-                <div class="flex items-center gap-2 mb-1.5">
-                  <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
-                  <span class="text-[11px] font-medium text-emerald-200 truncate" x-text="devPreview.url"></span>
-                  <button @click="$refs.devPreviewFrame && ($refs.devPreviewFrame.src = devPreview.url)"
-                          class="ml-auto rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[9px] text-slate-300 hover:border-slate-500 transition" title="Reload">↻</button>
-                  <button @click="window.open(devPreview.url, '_blank')"
-                          class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[9px] text-slate-300 hover:border-slate-500 transition" title="Open in browser">↗</button>
-                  <button @click="devPreview.url = ''; devPreview.visible = false"
-                          class="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[9px] text-rose-300 hover:bg-rose-500/20 transition" title="Close preview">✕</button>
+            <div class="mb-3 rounded-2xl border border-slate-800 bg-slate-950/70 overflow-hidden browser-stage">
+              <div class="border-b border-slate-800 bg-slate-950/90 px-3 py-3 browser-stage__header browser-stage__header--compact">
+                <div class="flex flex-wrap items-center gap-2">
+                  <div class="browser-stage__traffic shrink-0">
+                    <span></span><span></span><span></span>
+                  </div>
+                  <span class="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.16em]"
+                        :class="browserOwnershipTone()"
+                        x-text="browserOwnershipLabel()"></span>
+                  <span class="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.16em]"
+                        :class="browserControlModeTone()"
+                        x-text="browserControlModeLabel()"></span>
+                  <span class="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.16em]"
+                        :class="browserPreviewStatusTone()"
+                        x-text="browserPreviewStatusLabel()"></span>
+                  <span x-show="browserAttachedWorkspaceLabel()"
+                        class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-[10px] text-slate-300"
+                        x-text="browserAttachedWorkspaceLabel()"></span>
+                  <span x-show="browserPendingProposalCount()"
+                        class="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200"
+                        x-text="browserPendingProposalLabel()"></span>
                 </div>
-                <div class="rounded-lg border border-slate-700 overflow-hidden bg-white" style="height: 360px;">
-                  <iframe x-ref="devPreviewFrame" :src="devPreview.url" class="w-full h-full border-0"
-                          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                          loading="lazy"></iframe>
+
+                <div class="mt-3 browser-stage__address-row">
+                  <button @click="$refs.devPreviewFrame && browserFrameUrl() && ($refs.devPreviewFrame.src = browserFrameUrl())"
+                          class="browser-stage__icon-btn"
+                          title="Reload browser frame">↻</button>
+                  <div class="min-w-0 flex-1 rounded-xl border border-slate-800 bg-slate-950 px-3 py-2">
+                    <div class="truncate text-[11px] text-slate-200" x-text="browserFrameUrl() || 'No live page attached yet'"></div>
+                    <div class="mt-0.5 truncate text-[10px] text-slate-500" x-text="browserCommandLabel()"></div>
+                  </div>
+                  <button x-show="browserFrameUrl()"
+                          @click="window.open(browserFrameUrl(), '_blank', 'noopener,noreferrer')"
+                          class="browser-stage__icon-btn"
+                          title="Open in browser">↗</button>
+                </div>
+
+                <div class="mt-2 flex flex-wrap items-center gap-2 text-[10px] browser-stage__meta-line">
+                  <span x-show="currentWorkspacePreview()?.framework"
+                        class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 uppercase tracking-[0.16em] text-slate-400"
+                        x-text="currentWorkspacePreview()?.framework"></span>
+                  <span x-show="currentWorkspacePreview()?.status"
+                        class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 uppercase tracking-[0.16em] text-slate-400"
+                        x-text="String(currentWorkspacePreview()?.status || '').replace(/_/g, ' ')"></span>
+                  <span x-show="browserSession()?.last_seen_at"
+                        class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-slate-500"
+                        x-text="'Seen ' + timeAgo(browserSession().last_seen_at)"></span>
+                  <span x-show="browserSourcePath()"
+                        class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-slate-500"
+                        x-text="browserSourcePath()"></span>
+                </div>
+
+                <div class="mt-3 browser-stage__toolbar browser-stage__toolbar--ribbon">
+                  <button @click="browserPrimaryAction()"
+                          class="browser-stage__action browser-stage__action--primary"
+                          x-text="browserPrimaryActionLabel()"></button>
+                  <button @click="openWorkspaceTestTab()"
+                          class="browser-stage__action">
+                    Test Tab
+                  </button>
+                  <button @click="snapPreviewPanelHalf()"
+                          class="browser-stage__action">
+                    Split 50%
+                  </button>
+                  <button x-show="currentWorkspacePreview()?.url"
+                          @click="window.open(currentWorkspacePreview()?.url, '_blank', 'noopener,noreferrer')"
+                          class="browser-stage__action">
+                    Browser
+                  </button>
+                  <button x-show="currentWorkspacePreview()?.url"
+                          @click="navigator.clipboard?.writeText(currentWorkspacePreview()?.url || ''); showToast('Preview URL copied')"
+                          class="browser-stage__action">
+                    Copy URL
+                  </button>
+                  <button x-show="currentWorkspacePreview()?.url"
+                          @click="stopWorkspacePreview()"
+                          class="browser-stage__action browser-stage__action--danger">
+                    Stop
+                  </button>
                 </div>
               </div>
-            </template>
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="rounded-full border px-2 py-0.5 text-[10px]"
-                    :class="browserActions.session?.connected ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
-                    x-text="browserActions.session?.connected ? 'Page attached' : 'No page attached'"></span>
-              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400"
-                    x-text="browserActions.session?.mode === 'inspect_auto' ? 'Inspect auto-approved' : 'Act requires approval'"></span>
-              <button @click="loadBrowserActions()"
-                      class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-300 hover:border-slate-500 transition">
-                Refresh
-              </button>
+
+              <div class="bg-white/95 browser-stage__frame-shell">
+                <template x-if="browserFrameUrl()">
+                  <div class="preview-frame-shell overflow-hidden bg-white" style="height: min(62vh, 720px);">
+                    <iframe x-ref="devPreviewFrame" :src="browserFrameUrl()" class="w-full h-full border-0"
+                            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                            loading="lazy"></iframe>
+                  </div>
+                </template>
+                <div x-show="workspacePreview.loading" class="px-4 py-4 text-[11px] text-amber-100 bg-amber-500/10">
+                  <div class="flex items-center gap-2">
+                    <span class="axon-spinner axon-spinner--sm"></span>
+                    <span>Axon is starting the live page for <span class="font-semibold" x-text="workspacePreview.workspace_name || chatProject?.name || 'this workspace'"></span>.</span>
+                  </div>
+                </div>
+                <div x-show="workspacePreview.error || currentWorkspacePreview()?.last_error"
+                     class="px-4 py-4 text-[11px] text-rose-100 bg-rose-500/10">
+                  <div class="font-semibold text-rose-200">Browser surface needs attention</div>
+                  <div class="mt-1 leading-5 text-rose-100/90"
+                       x-text="workspacePreview.error || currentWorkspacePreview()?.last_error"></div>
+                </div>
+                <div x-show="!browserFrameUrl() && !workspacePreview.loading && !workspacePreview.error"
+                     class="browser-stage__empty">
+                  <div class="text-sm font-semibold text-slate-200">No live browser surface attached</div>
+                  <div class="mt-1 text-[11px] leading-5 text-slate-500">
+                    Start a live page to move this panel from passive preview to an explicit Axon-controlled browser surface for inspect, verify, and browser actions.
+                  </div>
+                  <div class="mt-3 flex flex-wrap justify-center gap-2">
+                    <button @click="browserPrimaryAction()"
+                            class="browser-stage__action browser-stage__action--primary">
+                      Start Live Page
+                    </button>
+                    <button @click="openWorkspaceTestTab()"
+                            class="browser-stage__action">
+                      Open Test Tab
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
-            <!-- Quick preview URL input -->
-            <div x-show="!devPreview.url" class="mt-2 flex gap-1.5">
+
+            <div x-show="!browserFrameUrl()" class="mt-2 flex gap-1.5">
               <input x-ref="previewUrlInput" type="text" placeholder="http://localhost:3000"
                      class="flex-1 rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-[11px] text-slate-200 placeholder-slate-600 focus:border-sky-500/50 transition font-mono"
                      @keydown.enter="if($el.value.trim()){devPreview.url=$el.value.trim();devPreview.visible=true;panelBrowserOpen=true;}" />
               <button @click="const v=$refs.previewUrlInput?.value?.trim();if(v){devPreview.url=v;devPreview.visible=true;panelBrowserOpen=true;}"
                       class="rounded-lg border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 text-[10px] text-sky-300 hover:bg-sky-500/20 transition">Preview</button>
             </div>
-            <div x-show="browserActions.session?.url" class="mt-2 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
-              <div class="truncate text-[11px] text-slate-200" x-text="browserActions.session?.title || 'Live page'"></div>
-              <div class="mt-1 truncate text-[10px] text-sky-300" x-text="browserActions.session?.url"></div>
-              <div class="mt-1 text-[10px] text-slate-500" x-text="browserActions.session?.last_seen_at ? 'Seen ' + timeAgo(browserActions.session.last_seen_at) : ''"></div>
-            </div>
-            <!-- Pending count badge -->
-            <div x-show="browserActions.proposals?.length" class="mt-2 mb-1 flex items-center gap-1.5">
-              <span class="rounded-full bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-widest text-amber-300"
-                    x-text="`${browserActions.proposals?.length || 0} pending approval`"></span>
-            </div>
-            <div class="mt-1 space-y-2" x-show="browserActions.proposals?.length">
-              <template x-for="proposal in (browserActions.proposals || [])" :key="proposal.id">
-                <div class="perm-card"
-                     :class="{'perm-card--high': String(proposal.risk||'').toLowerCase()==='high',
-                              'perm-card--medium': String(proposal.risk||'').toLowerCase()==='medium',
-                              'perm-card--low': String(proposal.risk||'').toLowerCase()==='low'}">
-                  <!-- Header row: icon + summary + risk badge -->
-                  <div class="flex items-start gap-2">
-                    <span class="mt-0.5 text-base leading-none shrink-0" x-text="browserActionIcon(proposal.action_type)"></span>
+
+            <div x-show="browserActions.proposals?.length" class="mt-3 browser-stage__pending-strip">
+              <div class="flex items-center justify-between gap-2">
+                <div class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Pending browser actions</div>
+                <span class="rounded-full border border-amber-500/30 bg-amber-500/12 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-widest text-amber-300"
+                      x-text="browserPendingProposalLabel()"></span>
+              </div>
+              <div class="mt-2 space-y-2">
+                <template x-for="proposal in (browserActions.proposals || [])" :key="proposal.id">
+                  <div class="browser-stage__pending-item">
                     <div class="min-w-0 flex-1">
                       <div class="flex flex-wrap items-center gap-1.5">
-                        <span class="text-[11.5px] font-semibold text-white leading-snug" x-text="proposal.summary"></span>
-                        <!-- Risk badge -->
-                        <span class="rounded-full border px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-widest"
-                              :class="{'border-rose-500/40 bg-rose-500/15 text-rose-300': String(proposal.risk||'').toLowerCase()==='high',
-                                       'border-amber-500/35 bg-amber-500/12 text-amber-200': String(proposal.risk||'').toLowerCase()==='medium',
-                                       'border-emerald-500/35 bg-emerald-500/12 text-emerald-200': String(proposal.risk||'').toLowerCase()==='low'}"
-                              x-text="proposal.risk || 'medium'"></span>
-                      </div>
-                      <!-- Scope + action type row -->
-                      <div class="mt-1 flex flex-wrap gap-1.5">
+                        <span class="text-[11px] font-semibold text-white" x-text="proposal.summary"></span>
                         <span class="rounded-full border border-slate-700/60 bg-slate-900/50 px-2 py-0.5 text-[9px] uppercase tracking-[0.12em] text-slate-400"
                               x-text="browserActionScopeLabel(proposal.scope)"></span>
-                        <span x-show="proposal.action_type"
-                              class="rounded-full border border-slate-700/60 bg-slate-900/50 px-2 py-0.5 text-[9px] uppercase tracking-[0.12em] text-slate-500"
-                              x-text="String(proposal.action_type||'').replace(/_/g,' ')"></span>
                       </div>
-                      <!-- Target / URL -->
                       <div x-show="proposal.target || proposal.url"
-                           class="mt-1.5 rounded-md bg-slate-900/60 px-2 py-1 text-[10px] text-slate-400 font-mono break-all leading-relaxed"
+                           class="mt-1 truncate text-[10px] text-slate-400"
                            x-text="proposal.target || proposal.url"></div>
-                      <!-- Value -->
-                      <div x-show="proposal.value"
-                           class="mt-1 rounded-md bg-slate-900/50 px-2 py-0.5 text-[10px] text-slate-300 break-all italic"
-                           x-text="`Value: ${proposal.value}`"></div>
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                      <button @click="rejectBrowserAction(proposal.id)" class="perm-reject-btn">Reject</button>
+                      <button @click="approveBrowserAction(proposal.id)" class="perm-approve-btn">Approve</button>
                     </div>
                   </div>
-                  <!-- Action buttons -->
-                  <div class="mt-2.5 flex items-center justify-end gap-2">
-                    <button @click="rejectBrowserAction(proposal.id)" class="perm-reject-btn">
-                      <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M6 18L18 6M6 6l12 12"/></svg>
-                      Reject
-                    </button>
-                    <button @click="approveBrowserAction(proposal.id)" class="perm-approve-btn">
-                      <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7"/></svg>
-                      Approve
-                    </button>
-                  </div>
-                </div>
-              </template>
-            </div>
-            <div x-show="!browserActions.proposals?.length" class="mt-3 rounded-xl border border-dashed border-slate-800 px-3 py-3 text-[11px] text-slate-500 leading-relaxed">
-              Pending actions appear here. Inspect is auto-approved — clicks, typing, navigation and submits require your explicit approval.
+                </template>
+              </div>
             </div>
             </div><!-- /panelBrowserOpen -->
           </div>
@@ -1647,38 +2112,51 @@
           <!-- Mode strip -->
           <div class="flex flex-wrap items-center gap-2 px-1 pb-2 border-b border-slate-800/70">
             <button
-              @click="setConversationModeAsk()"
-              class="rounded-full px-3 py-1.5 text-[11px] transition"
+              @click="chooseConversationModeAsk()"
+              class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] transition"
               :class="isPrimaryConversationMode('ask') ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'">
-              Ask
+              <span x-text="conversationModeIcon('ask')"></span>
+              <span>Ask</span>
             </button>
 
             <button
-              @click="setConversationModeAgent()"
-              class="rounded-full px-3 py-1.5 text-[11px] transition"
+              @click="chooseConversationModeAuto()"
+              class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] transition"
+              :class="isPrimaryConversationMode('auto') ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'">
+              <span x-text="conversationModeIcon('auto')"></span>
+              <span>Auto</span>
+            </button>
+
+            <button
+              @click="chooseConversationModeAgent()"
+              class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] transition"
               :class="isPrimaryConversationMode('agent') ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'">
-              Agent
+              <span x-text="conversationModeIcon('agent')"></span>
+              <span>Agent</span>
             </button>
 
             <button
-              @click="setConversationModeCode()"
-              class="rounded-full px-3 py-1.5 text-[11px] transition"
+              @click="chooseConversationModeCode()"
+              class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] transition"
               :class="isPrimaryConversationMode('code') ? 'bg-violet-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'">
-              Code
+              <span x-text="conversationModeIcon('code')"></span>
+              <span>Code</span>
             </button>
 
             <button
               @click="toggleBusinessMode(true)"
-              class="rounded-full px-3 py-1.5 text-[11px] transition"
+              class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] transition"
               :class="businessMode ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'">
-              &#x1F4BC; Business
+              <span x-text="conversationModeIcon('business')"></span>
+              <span>Business</span>
             </button>
 
             <button
-              @click="setConversationModeResearch()"
-              class="rounded-full px-3 py-1.5 text-[11px] transition"
+              @click="chooseConversationModeResearch()"
+              class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] transition"
               :class="isPrimaryConversationMode('research') ? 'bg-cyan-500 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'">
-              Research
+              <span x-text="conversationModeIcon('research')"></span>
+              <span>Research</span>
             </button>
           </div>
 
@@ -1943,6 +2421,10 @@
                 <button @click="editProjectNote(p); activeProjectMenu = null"
                         class="w-full justify-start rounded-xl px-3 py-2 text-sm text-slate-300 hover:bg-slate-800 transition">
                   📝 Workspace note
+                </button>
+                <button @click="deleteProject(p); activeProjectMenu = null"
+                        class="mt-1 w-full justify-start rounded-xl px-3 py-2 text-sm text-rose-300 hover:bg-rose-500/10 transition">
+                  🗑️ Delete workspace
                 </button>
               </div>
             </div>
@@ -2627,6 +3109,62 @@
                      x-html="renderMd(taskSandboxReview.sandbox?.report_markdown || '')"></div>
                 <div x-show="!taskSandboxReview.sandbox?.report_markdown" class="text-sm text-slate-400">
                   Axon has not written a sandbox report yet. Start the sandbox run or refresh once it finishes.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div x-show="autoSessionReview.open" x-cloak class="fixed inset-0 z-[122] flex items-end justify-center bg-slate-950/80 p-3 md:items-center md:p-6" @click.self="closeAutoSessionReport()">
+          <div class="w-full max-w-3xl max-h-[92vh] overflow-hidden rounded-[28px] border border-slate-800 bg-slate-950 shadow-2xl shadow-black/40">
+            <div class="flex items-start justify-between gap-3 border-b border-slate-800 px-4 py-4 md:px-5">
+              <div class="min-w-0">
+                <div class="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Console Auto</div>
+                <div class="mt-1 text-base font-semibold text-white" x-text="autoSessionReview.session?.title || 'Auto session report'"></div>
+                <div class="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                  <span class="rounded-full border px-2 py-0.5 font-semibold"
+                        :class="taskSandboxStatusClass(autoSessionReview.session?.status)"
+                        x-text="taskSandboxStatusLabel(autoSessionReview.session?.status)"></span>
+                  <span x-show="autoSessionReview.session?.branch_name"
+                        class="rounded-full border border-slate-700 bg-slate-900/80 px-2 py-0.5"
+                        x-text="autoSessionReview.session?.branch_name"></span>
+                  <span x-show="autoSessionReview.session?.changed_files_count"
+                        class="rounded-full border border-slate-700 bg-slate-900/80 px-2 py-0.5"
+                        x-text="`${autoSessionReview.session?.changed_files_count} changed file${autoSessionReview.session?.changed_files_count === 1 ? '' : 's'}`"></span>
+                </div>
+              </div>
+              <button @click="closeAutoSessionReport()" class="rounded-xl border border-slate-700 bg-slate-900/80 p-2 text-slate-400 transition hover:border-slate-500 hover:text-white">
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6 6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+            <div class="max-h-[calc(92vh-92px)] overflow-y-auto px-4 py-4 md:px-5">
+              <div class="flex flex-wrap items-center gap-2 pb-4">
+                <button @click="refreshAutoSession(autoSessionReview.session?.session_id)"
+                        class="rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:border-slate-500">
+                  Refresh report
+                </button>
+                <button x-show="autoSessionReview.session?.status === 'approval_required' || autoSessionReview.session?.status === 'error'"
+                        @click="continueAutoSession(autoSessionReview.session?.session_id)"
+                        class="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-200 transition hover:bg-amber-500/20">
+                  Continue Auto
+                </button>
+                <button x-show="autoSessionReview.session?.apply_allowed"
+                        @click="applyAutoSession(autoSessionReview.session?.session_id)"
+                        class="rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200 transition hover:bg-cyan-500/20">
+                  Apply changes
+                </button>
+                <button x-show="autoSessionReview.session?.status !== 'running' && autoSessionReview.session?.status !== 'applied'"
+                        @click="discardAutoSession(autoSessionReview.session?.session_id)"
+                        class="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-200 transition hover:bg-rose-500/20">
+                  Discard Auto
+                </button>
+              </div>
+              <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+                <div x-show="autoSessionReview.session?.report_markdown"
+                     class="prose prose-invert max-w-none prose-pre:whitespace-pre-wrap"
+                     x-html="renderMd(autoSessionReview.session?.report_markdown || '')"></div>
+                <div x-show="!autoSessionReview.session?.report_markdown" class="text-sm text-slate-400">
+                  Axon has not written an Auto session report yet. Continue the sandbox run or refresh once it finishes.
                 </div>
               </div>
             </div>
@@ -3712,6 +4250,10 @@
                   x-text="liveFeed.connected ? 'Connected' : 'Offline'"></span>
             <span x-show="connectionState.stable_domain_status === 'active'" class="shrink-0 rounded-full border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[9px] text-blue-300">Domain live</span>
             <span x-show="connectionState.stable_domain_status === 'configured'" class="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[9px] text-amber-300">Domain set</span>
+            <span x-show="liveOperator.active"
+                  class="shrink-0 rounded-full border px-2 py-0.5 text-[9px]"
+                  :class="autonomousConsoleActive() ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' : 'border-sky-500/30 bg-sky-500/10 text-sky-200'"
+                  x-text="autonomousConsoleActive() ? 'Auto live' : phaseLabel(liveOperator.phase || agentProgressState)"></span>
           </div>
         </div>
       </template>
@@ -3734,7 +4276,7 @@
         </button>
         <div x-show="chatModelOpen" @click.away="chatModelOpen = false"
              x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 -translate-y-1" x-transition:enter-end="opacity-100 translate-y-0"
-             class="absolute right-0 top-full mt-1.5 w-[260px] overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-900 shadow-2xl z-50">
+             class="axon-floating-panel absolute right-0 top-full z-[220] mt-1.5 w-[260px] overflow-hidden rounded-2xl border border-slate-700/80 shadow-2xl">
           <div class="border-b border-slate-800/80 px-3 py-2">
             <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Runtime</div>
             <div class="mt-1 flex items-center gap-2">
@@ -3769,10 +4311,10 @@
               </div>
               <template x-for="env in (runtimeStatus.cli_environments || [])" :key="env.path">
                 <button @click="selectCliEnvironment(env); chatModelOpen = false"
-                        :class="((settingsForm.claude_cli_path || runtimeStatus.cli_binary || '') === env.path) ? 'bg-amber-600/15 text-amber-200' : 'text-slate-300 hover:bg-slate-800/80'"
+                        :class="((settingsForm.cli_runtime_path || runtimeStatus.cli_binary || '') === env.path) ? 'bg-amber-600/15 text-amber-200' : 'text-slate-300 hover:bg-slate-800/80'"
                         class="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition">
                   <div class="w-1.5 h-1.5 rounded-full shrink-0"
-                       :class="((settingsForm.claude_cli_path || runtimeStatus.cli_binary || '') === env.path) ? 'bg-amber-400' : 'bg-slate-700'"></div>
+                       :class="((settingsForm.cli_runtime_path || runtimeStatus.cli_binary || '') === env.path) ? 'bg-amber-400' : 'bg-slate-700'"></div>
                   <span class="flex-1 truncate" x-text="env.label"></span>
                   <span class="shrink-0 text-[10px] text-slate-500" x-text="env.family"></span>
                 </button>
@@ -3783,11 +4325,11 @@
               <span class="text-[9px] text-emerald-300" x-text="cliRuntimeBinaryName()"></span>
             </div>
             <template x-for="option in cliModelOptions()" :key="option.id || 'default'">
-              <button @click="settingsForm.ai_backend = 'cli'; settingsForm.claude_cli_model = option.id || ''; saveCliModelQuiet(); chatModelOpen = false"
-                      :class="(settingsForm.claude_cli_model || '') === (option.id || '') ? 'bg-amber-600/15 text-amber-200' : 'text-slate-300 hover:bg-slate-800/80'"
+              <button @click="settingsForm.ai_backend = 'cli'; settingsForm.cli_runtime_model = option.id || ''; saveCliModelQuiet(); chatModelOpen = false"
+                      :class="(settingsForm.cli_runtime_model || '') === (option.id || '') ? 'bg-amber-600/15 text-amber-200' : 'text-slate-300 hover:bg-slate-800/80'"
                       class="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition">
                 <div class="w-1.5 h-1.5 rounded-full shrink-0"
-                     :class="(settingsForm.claude_cli_model || '') === (option.id || '') ? 'bg-amber-400' : 'bg-slate-700'"></div>
+                     :class="(settingsForm.cli_runtime_model || '') === (option.id || '') ? 'bg-amber-400' : 'bg-slate-700'"></div>
                 <span class="flex-1 truncate" x-text="option.label"></span>
               </button>
             </template>
@@ -3926,12 +4468,12 @@
 <script src="/js/helpers.js?v=20260331a"></script>
 <script src="/js/codeblocks.js?v=20260331a"></script>
 <script src="/js/auth.js?v=20260331b"></script>
-<script src="/js/dashboard.js?v=20260331c"></script>
-<script src="/js/chat.js?v=20260331b"></script>
+<script src="/js/dashboard.js?v=20260402d"></script>
+<script src="/js/chat.js?v=20260402c"></script>
 <script src="/js/voice.js?v=20260331a"></script>
 <script src="/js/settings.js?v=20260331b"></script>
 <script src="/js/resources.js?v=20260331a"></script>
-<script src="/js/projects.js?v=20260331a"></script>
+<script src="/js/projects.js?v=20260402b"></script>
 <script src="/js/tasks.js?v=20260331b"></script>
 <script src="/js/notifications.js?v=20260331a"></script>
 <script src="/js/mobile.js?v=20260331a"></script>
@@ -4009,6 +4551,15 @@ function devbrain() {
       runtime_state: 'standby',
       runtime_label: 'Local-first',
       active_model: '',
+      selected_runtime: '',
+      selected_runtime_label: '',
+      effective_runtime: '',
+      effective_runtime_label: '',
+      auth_method: '',
+      subscription_type: '',
+      cooldown_source: '',
+      fallback_reason: '',
+      provider_error: '',
       vault_state: 'Locked',
       memory_state: 'Ready',
       active_agents_count: 0,
@@ -4033,12 +4584,22 @@ function devbrain() {
     // Chat
     chatInput: '',
     chatMessages: [],
+    _chatHistoryRequestSeq: 0,
+    _chatHistoryScopeKey: '',
+    _interruptedSessionRequestSeq: 0,
+    _workspacePreviewRequestSeq: 0,
+    _workspacePreviewScopeKey: '',
     chatLoading: false,
     _chatAbortController: null,
     chatProjectId: '',
     chatProject: null,
+    consoleWorkspaceTabs: [''],
+    workspaceTabMenuOpen: false,
     _workspaceEnv: null,
+    windowId: '',
+    windowChannel: null,
     agentMode: false,
+    consoleFocusMode: false,
     consoleZoom: 1,
     selectedChatModel: '',
     followUpSuggestions: [],
@@ -4116,10 +4677,11 @@ function devbrain() {
     agentCtxIter: 0,
     agentMaxIter: 75,
     interruptedSession: null,
+    pendingAgentApproval: null,
     resumeBannerDismissed: false,
     liveOperator: {
       active: false, mode: 'chat', phase: 'observe',
-      title: '', detail: '', tool: '', startedAt: '',
+      title: '', detail: '', tool: '', startedAt: '', workspaceId: '', updatedAt: '',
     },
     liveOperatorFeed: [],
     liveOperatorTimer: null,
@@ -4144,6 +4706,8 @@ function devbrain() {
       connected: false, connecting: false, reconnecting: false,
       latest: null, error: '', controller: null,
     },
+    autoSessions: [],
+    autoSessionReview: { open: false, session: null },
     terminal: {
       panelOpen: false, sessions: [], activeSessionId: null,
       sessionDetail: null, loading: false, detailLoading: false,
@@ -4166,7 +4730,23 @@ function devbrain() {
     consolePanelResizeStartW: 420,
     _ptySessionId: null,
     browserActions: {
-      session: { connected: false, url: '', title: '', last_seen_at: '', mode: 'approval_required' },
+      session: {
+        connected: false,
+        url: '',
+        title: '',
+        last_seen_at: '',
+        mode: 'approval_required',
+        control_owner: 'manual',
+        control_state: 'idle',
+        ownership_label: 'Manual browser',
+        attached_preview_url: '',
+        attached_preview_status: '',
+        attached_workspace_id: null,
+        attached_workspace_name: '',
+        attached_auto_session_id: '',
+        attached_scope_key: '',
+        attached_source_workspace_path: '',
+      },
       proposals: [],
       history: [],
       pending_count: 0,
@@ -4182,6 +4762,7 @@ function devbrain() {
       tail: 200,
       available: false,
     },
+    workspacePreview: { session: null, loading: false, error: '', workspace_id: null, auto_session_id: '' },
     devPreview: { url: '', visible: false },
     imageModal: { open: false, src: '', title: '' },
 
@@ -4272,8 +4853,8 @@ function devbrain() {
     settingsForm: {
       ai_backend: 'api',
       api_provider: 'deepseek',
-      claude_cli_path: '',
-      claude_cli_model: '',
+      cli_runtime_path: '',
+      cli_runtime_model: '',
       claude_cli_session_persistence_enabled: true,
       anthropic_api_key: '',
       anthropic_base_url: '',
@@ -4333,9 +4914,18 @@ function devbrain() {
     vaultProviderKeys: {},
     settingsSaving: false,
     settingsSaved: false,
-    cliRuntimeActionLoading: { install: false, login: false, codex_install: false, codex_login: false },
+    cliRuntimeActionLoading: { install: false, login: false, logout: false, codex_install: false, codex_login: false, codex_logout: false },
     cliRuntimeActionResult: null,
     codexRuntimeActionResult: null,
+    runtimeLoginModal: {
+      open: false,
+      family: '',
+      session: null,
+      loading: false,
+      error: '',
+      autoOpenedUrl: '',
+      pollHandle: null,
+    },
     ollamaStatus: { running: false, models: [], url: '', runtime_mode: 'gpu_default', service_detail: '', service_mode: '' },
     systemActionsLoading: false,
     systemStatus: {
@@ -4486,6 +5076,10 @@ function devbrain() {
     },
 
     async _bootApp() {
+      window.__axonRoot = this;
+      try {
+        if (window.Alpine?.store) Alpine.store('root', this);
+      } catch (_) {}
       this.initCodeblocks();
       this.refreshVoiceCapability();
       this.loadVoiceStatus();
@@ -4525,17 +5119,31 @@ function devbrain() {
         window.addEventListener('keydown', onConsoleZoomKey);
         this.consoleZoomShortcutsBound = true;
       }
+      if (!this.liveFeedVisibilityBound) {
+        document.addEventListener('visibilitychange', () => {
+          if (document.hidden) return;
+          if (!this.authenticated || !this.settingsForm.live_feed_enabled) return;
+          if (!this.liveFeed.connected && !this.liveFeed.connecting) {
+            this.connectLiveFeed?.();
+          }
+        });
+        this.liveFeedVisibilityBound = true;
+      }
       this.isMobile = window.innerWidth < 768;
+      this.initWindowScope();
       this.loadUiPrefs();
+      if (this.activeTab !== 'chat' && this.consoleFocusMode) this.consoleFocusMode = false;
       await this.loadSettings();
       this.restoreConversationModePreference?.();
       await this.loadProjects();
+      this.syncWorkspaceTabs();
       // Restore last workspace if saved
       if (this.chatProjectId && this.projects.some(p => p.id == this.chatProjectId)) {
         this.updateChatProject();
       } else {
         this.chatProjectId = '';
       }
+      if (typeof this.loadAutoSessions === 'function') await this.loadAutoSessions();
       this.loadTasks();
       this._startMissionReminders();
       this._startDailyDigestCheck();
@@ -4555,8 +5163,10 @@ function devbrain() {
       this.loadBrowserActions();
       this.loadChatHistory();
       this.$watch('activeTab', tab => {
+        this.writeWindowPref?.('activeTab', tab || '');
         this.showMoreMenu = false;
         this.activeProjectMenu = null;
+        if (tab !== 'chat' && this.consoleFocusMode) this.setConsoleFocusMode(false);
         if (tab === 'chat') {
           if (!this.chatMessages.length) {
             this.loadChatHistory();
@@ -4576,8 +5186,9 @@ function devbrain() {
         }
       });
       this.$watch('chatProjectId', value => {
-        if (value) localStorage.setItem('axon.lastProjectId', value);
-        else localStorage.removeItem('axon.lastProjectId');
+        this.writeWindowPref?.('lastProjectId', value || '');
+        this.ensureWorkspaceTab?.(value || '');
+        this.persistWorkspaceTabs?.();
       });
 
       // xterm drag-to-resize global handlers
@@ -4598,18 +5209,13 @@ function devbrain() {
 
       // Console panel horizontal drag-to-resize
       window.addEventListener('mousemove', (e) => {
-        if (!this.consolePanelResizing) return;
-        const delta = this.consolePanelResizeStartX - e.clientX;
-        this.consolePanelWidth = Math.max(320, Math.min(window.innerWidth * 0.7, this.consolePanelResizeStartW + delta));
-        setTimeout(() => this.fitXterm?.(), 50);
+        this.updateConsolePanelResize?.(e.clientX);
       });
-      window.addEventListener('mouseup', () => { this.consolePanelResizing = false; });
+      window.addEventListener('mouseup', () => { this.finishConsolePanelResize?.(); });
       window.addEventListener('touchmove', (e) => {
-        if (!this.consolePanelResizing) return;
-        const delta = this.consolePanelResizeStartX - e.touches[0].clientX;
-        this.consolePanelWidth = Math.max(320, Math.min(window.innerWidth * 0.7, this.consolePanelResizeStartW + delta));
+        this.updateConsolePanelResize?.(e.touches[0].clientX);
       }, { passive: true });
-      window.addEventListener('touchend', () => { this.consolePanelResizing = false; });
+      window.addEventListener('touchend', () => { this.finishConsolePanelResize?.(); });
     },
 
     _tabHistory: [],
@@ -4653,20 +5259,212 @@ function devbrain() {
       return this._tabHistory.length > 0;
     },
 
+    workspaceTabKey(projectId = '') {
+      const value = String(projectId || '').trim();
+      return value ? `workspace:${value}` : 'workspace:all';
+    },
+
+    workspaceTabLabel(projectId = '') {
+      const value = String(projectId || '').trim();
+      if (!value) return 'All workspaces';
+      return this.projects.find(p => String(p.id) === value)?.name || `Workspace ${value}`;
+    },
+
+    workspaceTabDisplayLabel(projectId = '') {
+      const value = String(projectId || '').trim();
+      if (!value) return 'All';
+      const label = this.workspaceTabLabel(value);
+      if (label.length <= 14) return label;
+      return `${label.slice(0, 13)}…`;
+    },
+
+    availableWorkspaceTabProjects() {
+      const open = new Set((this.consoleWorkspaceTabs || []).map(value => String(value || '').trim()).filter(Boolean));
+      return (this.projects || []).filter(project => !open.has(String(project?.id || '').trim()));
+    },
+
+    persistWorkspaceTabs() {
+      const deduped = [];
+      for (const raw of Array.isArray(this.consoleWorkspaceTabs) ? this.consoleWorkspaceTabs : ['']) {
+        const value = String(raw || '').trim();
+        if (!deduped.includes(value)) deduped.push(value);
+      }
+      if (!deduped.includes('')) deduped.unshift('');
+      this.consoleWorkspaceTabs = deduped;
+      this.writeWindowPref?.('workspaceTabs', JSON.stringify(deduped));
+    },
+
+    syncWorkspaceTabs() {
+      const existing = new Set((this.projects || []).map(p => String(p.id)));
+      let next = Array.isArray(this.consoleWorkspaceTabs) && this.consoleWorkspaceTabs.length ? [...this.consoleWorkspaceTabs] : [''];
+      next = next
+        .map(value => String(value || '').trim())
+        .filter((value, idx, arr) => arr.indexOf(value) === idx)
+        .filter(value => !value || existing.has(value));
+      if (!next.includes('')) next.unshift('');
+      const current = String(this.chatProjectId || '').trim();
+      if (current && existing.has(current) && !next.includes(current)) next.push(current);
+      this.consoleWorkspaceTabs = next;
+      this.persistWorkspaceTabs();
+      if (current && !existing.has(current)) {
+        this.chatProjectId = '';
+        this.chatProject = null;
+      }
+    },
+
+    ensureWorkspaceTab(projectId = '') {
+      const value = String(projectId || '').trim();
+      if (!Array.isArray(this.consoleWorkspaceTabs) || !this.consoleWorkspaceTabs.length) this.consoleWorkspaceTabs = [''];
+      if (!this.consoleWorkspaceTabs.includes(value)) this.consoleWorkspaceTabs = [...this.consoleWorkspaceTabs, value];
+      this.persistWorkspaceTabs();
+      return value;
+    },
+
+    activateWorkspaceTab(projectId = '') {
+      const value = this.ensureWorkspaceTab(projectId);
+      this.workspaceTabMenuOpen = false;
+      this.chatProjectId = value;
+      this.updateChatProject?.();
+    },
+
+    addWorkspaceTab(projectId = '') {
+      this.activateWorkspaceTab(projectId);
+    },
+
+    closeWorkspaceTab(projectId = '') {
+      const value = String(projectId || '').trim();
+      if (!value) return;
+      const wasActive = String(this.chatProjectId || '').trim() === value;
+      this.consoleWorkspaceTabs = (this.consoleWorkspaceTabs || []).filter(item => String(item || '').trim() !== value);
+      this.persistWorkspaceTabs();
+      if (wasActive) {
+        const fallback = this.consoleWorkspaceTabs[this.consoleWorkspaceTabs.length - 1] || '';
+        this.chatProjectId = String(fallback || '').trim();
+        this.updateChatProject?.();
+      }
+      this.workspaceTabMenuOpen = false;
+    },
+
+    windowScopedKey(key) {
+      const suffix = String(key || '').trim();
+      return this.windowId && suffix ? `axon.window.${this.windowId}.${suffix}` : `axon.${suffix}`;
+    },
+
+    readWindowPref(key, fallback = '') {
+      try {
+        const value = localStorage.getItem(this.windowScopedKey(key));
+        return value == null ? fallback : value;
+      } catch (_) {
+        return fallback;
+      }
+    },
+
+    writeWindowPref(key, value) {
+      try {
+        const storageKey = this.windowScopedKey(key);
+        if (value === null || value === undefined || value === '') localStorage.removeItem(storageKey);
+        else localStorage.setItem(storageKey, String(value));
+      } catch (_) {}
+    },
+
+    broadcastWindowEvent(type, payload = {}) {
+      try {
+        this.windowChannel?.postMessage({ source: this.windowId, type, payload });
+      } catch (_) {}
+    },
+
+    initWindowScope() {
+      if (this.windowId) return;
+      const url = new URL(window.location.href);
+      let id = url.searchParams.get('window_id') || '';
+      if (!id) {
+        try { id = sessionStorage.getItem('axon.windowId') || ''; } catch (_) {}
+      }
+      if (!id) id = window.crypto?.randomUUID?.() || `w${Date.now()}${Math.random().toString(16).slice(2, 8)}`;
+      this.windowId = id;
+      try { sessionStorage.setItem('axon.windowId', id); } catch (_) {}
+      if (url.searchParams.get('window_id') !== id) {
+        url.searchParams.set('window_id', id);
+        history.replaceState({}, '', url.toString());
+      }
+      const forcedTab = String(url.searchParams.get('tab') || '').trim();
+      const forcedProject = String(url.searchParams.get('project_id') || '').trim();
+      if (forcedTab) this.activeTab = forcedTab;
+      if (forcedProject) this.chatProjectId = forcedProject;
+      if (!this.windowChannel && 'BroadcastChannel' in window) {
+        this.windowChannel = new BroadcastChannel('axon-shared');
+        this.windowChannel.onmessage = (event) => {
+          const data = event?.data || {};
+          if (!data || data.source === this.windowId) return;
+          if (data.type === 'settings_saved' || data.type === 'runtime_changed') {
+            this.loadRuntimeStatus?.();
+          }
+          if (data.type === 'vault_changed') {
+            this.loadVaultStatus?.();
+          }
+          if (data.type === 'workspace_deleted') {
+            const deletedProjectId = Number(data.payload?.projectId || 0);
+            if (deletedProjectId && Number(this.chatProjectId || 0) === deletedProjectId) {
+              this.chatProjectId = '';
+              this.chatProject = null;
+            }
+            this.projects = (this.projects || []).filter(project => Number(project?.id || 0) !== deletedProjectId);
+            this.syncWorkspaceTabs?.();
+          }
+        };
+      }
+    },
+
+    openConsoleInNewWindow(projectId = '') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('window_id', window.crypto?.randomUUID?.() || `w${Date.now()}${Math.random().toString(16).slice(2, 8)}`);
+      url.searchParams.set('tab', 'chat');
+      const selectedProject = String(projectId || '').trim();
+      if (selectedProject) url.searchParams.set('project_id', selectedProject);
+      else url.searchParams.delete('project_id');
+      window.open(url.toString(), '_blank', 'noopener');
+    },
+
+    openWorkspaceInNewWindow(projectId = '') {
+      this.openConsoleInNewWindow(projectId);
+    },
+
+    setConsoleFocusMode(enabled) {
+      this.consoleFocusMode = !!enabled;
+      this.writeWindowPref?.('consoleFocusMode', this.consoleFocusMode ? 'true' : 'false');
+    },
+
     loadUiPrefs() {
-      this.showGithubStatus = localStorage.getItem('devbrain.showGithubStatus') !== 'false';
+      this.showGithubStatus = this.readWindowPref('showGithubStatus', 'true') !== 'false';
+      const savedTabs = this.readWindowPref('workspaceTabs', '');
+      if (savedTabs) {
+        try {
+          const parsed = JSON.parse(savedTabs);
+          if (Array.isArray(parsed) && parsed.length) {
+            this.consoleWorkspaceTabs = parsed.map(value => String(value || '').trim());
+          }
+        } catch (_) {}
+      }
       // Restore last active workspace
-      const savedProject = localStorage.getItem('axon.lastProjectId');
+      const savedProject = this.readWindowPref('lastProjectId', '');
       if (savedProject) this.chatProjectId = savedProject;
-      const savedZoom = Number(localStorage.getItem('axon.consoleZoom') || 1);
+      const savedTab = String(this.readWindowPref('activeTab', '') || '').trim();
+      if (savedTab) this.activeTab = savedTab;
+      const savedZoom = Number(this.readWindowPref('consoleZoom', '1') || 1);
       if (Number.isFinite(savedZoom) && savedZoom > 0) {
         this.consoleZoom = Math.max(0.9, Math.min(1.45, savedZoom));
       }
+      const savedPanelWidth = Number(this.readWindowPref('consolePanelWidth', '420') || 420);
+      if (Number.isFinite(savedPanelWidth) && savedPanelWidth >= 340) {
+        this.consolePanelWidth = this.normalizeConsolePanelWidth?.(savedPanelWidth) || savedPanelWidth;
+      }
+      this.consoleFocusMode = this.readWindowPref('consoleFocusMode', 'false') === 'true';
+      this.persistWorkspaceTabs();
     },
 
     setGithubVisibility(enabled) {
       this.showGithubStatus = !!enabled;
-      localStorage.setItem('devbrain.showGithubStatus', this.showGithubStatus ? 'true' : 'false');
+      this.writeWindowPref('showGithubStatus', this.showGithubStatus ? 'true' : 'false');
       if (!this.showGithubStatus) {
         this.projectGithubSummaries = {};
         this.githubData = null;
@@ -4706,8 +5504,13 @@ window.axon = devbrain;
 
 // ── Command approval bridge (called from inline renderToolBlock buttons) ──────
 function __axonApp() {
-  return window.axon?._x_dataStack?.[0] ?? Alpine?.store?.('root') ?? null;
+  return window.__axonRoot
+    ?? document.documentElement?._x_dataStack?.[0]
+    ?? document.querySelector('[x-data]')?._x_dataStack?.[0]
+    ?? Alpine?.store?.('root')
+    ?? null;
 }
+window.__axonApp = __axonApp;
 
 function __axonAuthHeaders(extra = {}) {
   const app = __axonApp();
@@ -4763,8 +5566,19 @@ function __axonToast(message, { error = false } = {}) {
 }
 
 window.__axon = {
+  pendingApprovalAction() {
+    const app = __axonApp?.();
+    const pending = app?.activePendingAgentApproval?.();
+    return pending?.approvalAction || pending || null;
+  },
+
   async waitForAgentIdle(timeoutMs = 4000) {
-    const app = window.__axonApp?.();
+    let app = window.__axonApp?.();
+    const waitStarted = Date.now();
+    while (!app && (Date.now() - waitStarted) < timeoutMs) {
+      await new Promise(resolve => setTimeout(resolve, 120));
+      app = window.__axonApp?.();
+    }
     if (!app) return null;
     const started = Date.now();
     while (app.chatLoading && (Date.now() - started) < timeoutMs) {
@@ -4783,73 +5597,82 @@ window.__axon = {
     }
     const app = await window.__axon.waitForAgentIdle();
     if (app && typeof app.sendChatSilent === 'function') {
-      app.sendChatSilent('please continue', 'agent');
+      const interrupted = app.interruptedSession ? { ...app.interruptedSession } : null;
+      const resumePayload = interrupted?.session_id
+        ? { resume_session_id: interrupted.session_id, resume_reason: 'approval_continue' }
+        : { resume_reason: 'approval_continue' };
+      app.prepareInterruptedSessionResume?.();
+      app.sendChatSilent('please continue', 'agent', resumePayload);
     }
   },
 
-  allowCommand(command, allowAll, persist, options = {}) {
-    __axonPost('/api/agent/allow-command', {
-      command: command || '',
-      allow_all: !!allowAll,
-      persist: !!persist,
+  approveAction(action, scope, options = {}) {
+    __axonPost('/api/agent/approve-action', {
+      action: action || {},
+      scope: scope || 'once',
+      session_id: action?.session_id || action?.sessionId || '',
     }).then(() => {
-      const label = allowAll
-        ? 'All commands allowed for this task'
-        : persist
-          ? `'${command}' saved for future Axon sessions`
-          : `'${command}' allowed once`;
+      const label = scope === 'persist'
+        ? 'Action saved for future Axon sessions'
+        : scope === 'session'
+          ? 'Action approved for this Axon session'
+          : scope === 'task'
+            ? 'Action approved for this task'
+            : 'Action approved once';
+      __axonApp()?.markPendingAgentApprovalResolved?.('approved', 'Permission granted. Axon is continuing the same task.');
       __axonToast(`✓ ${label}`);
       if (options.resume !== false) {
-        const note = allowAll
-          ? 'Permission granted: commands for this task are approved. Retry the blocked command if it is still needed, then continue.'
-          : persist
-            ? `Permission granted: the command \`${command}\` is now saved for future Axon sessions. Retry it if it is still needed, then continue the same task.`
-            : `Permission granted: you may run the blocked command \`${command}\` once. Retry it if it is still needed, then continue the same task.`;
+        const note = scope === 'persist'
+          ? 'Permission granted: the exact blocked action is now saved for future Axon sessions. Retry it if it is still needed, then continue the same task.'
+          : scope === 'session'
+            ? 'Permission granted: the exact blocked action is approved for this Axon session. Retry it if it is still needed, then continue the same task.'
+            : scope === 'task'
+              ? 'Permission granted: the exact blocked action is approved for this task. Retry it if it is still needed, then continue the same task.'
+              : 'Permission granted: you may run the exact blocked action once. Retry it if it is still needed, then continue the same task.';
         window.__axon.resumePausedTask(note);
       }
     }).catch(e => {
-      __axonToast(`Allow command failed: ${e.message || e}`, { error: true });
-      console.error('allow-command failed:', e);
+      __axonToast(`Approve action failed: ${e.message || e}`, { error: true });
+      console.error('approve-action failed:', e);
     });
+  },
+
+  allowCommand(command, allowAll, persist, options = {}) {
+    const action = window.__axon.pendingApprovalAction();
+    if (!action) {
+      __axonToast('No exact blocked action is waiting for approval.', { error: true });
+      return;
+    }
+    const scope = persist ? 'persist' : (allowAll ? 'session' : 'once');
+    window.__axon.approveAction(action, scope, options);
   },
 
   allowEdit(path, scope, options = {}) {
-    __axonPost('/api/agent/allow-edit', {
-      path: path || '',
-      scope: scope || 'file',
-    }).then(() => {
-      const label = scope === 'session' ? 'All edits allowed for this task'
-                  : scope === 'repo'    ? 'Edits allowed for this repo'
-                                        : 'Edit allowed once';
-      __axonToast(`✓ ${label}`);
-      if (options.resume !== false) {
-        const note = scope === 'session'
-          ? 'Permission granted: edits for this task are approved. Retry the blocked edit if it is still needed, then continue.'
-          : scope === 'repo'
-            ? `Permission granted: edits in the repo containing \`${path}\` are now approved. Retry the blocked edit if it is still needed, then continue.`
-            : `Permission granted: you may edit \`${path}\` once. Retry the blocked edit if it is still needed, then continue the same task.`;
-        window.__axon.resumePausedTask(note);
-      }
-    }).catch(e => {
-      __axonToast(`Allow edit failed: ${e.message || e}`, { error: true });
-      console.error('allow-edit failed:', e);
-    });
+    const action = window.__axon.pendingApprovalAction();
+    if (!action) {
+      __axonToast('No exact blocked file action is waiting for approval.', { error: true });
+      return;
+    }
+    const normalized = String(scope || 'file');
+    const mappedScope = normalized === 'session' ? 'session' : normalized === 'repo' ? 'task' : 'once';
+    window.__axon.approveAction(action, mappedScope, options);
   },
 
   allowAllEdits(options = {}) {
-    __axonPost('/api/agent/allow-edit', {
-      path: '',
-      scope: 'session',
-    }).then(() => {
-      __axonToast('✓ All edits allowed for this task');
-      if (options.resume !== false) {
-        window.__axon.resumePausedTask(
-          'Permission granted: edits for this task are approved. Retry the blocked edit if it is still needed, then continue.'
-        );
-      }
-    }).catch(e => {
-      __axonToast(`Allow all edits failed: ${e.message || e}`, { error: true });
-    });
+    const action = window.__axon.pendingApprovalAction();
+    if (!action) {
+      __axonToast('Broad edit grants are disabled. Use the exact approval card when Axon pauses.', { error: true });
+      return;
+    }
+    window.__axon.approveAction(action, 'session', options);
+  },
+
+  denyApproval(options = {}) {
+    __axonApp()?.markPendingAgentApprovalResolved?.('denied', 'Permission denied. Axon will continue with safer alternatives.');
+    __axonToast('⊘ Permission denied');
+    if (options.resume !== false) {
+      window.__axon.resumePausedTask('The user denied permission for the blocked operation. Do not retry it. Skip that step and continue the same task with safe alternatives.');
+    }
   }
 };
 
@@ -4879,8 +5702,7 @@ window.__axon_approve = function(btn, type, ...rest) {
 window.__axon_deny = function(btn) {
   const denyHtml = '<div class="axon-approval__resolved axon-approval__resolved--deny"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Denied</div>';
   _resolveCard(btn, denyHtml);
-  __axonToast('⊘ Permission denied');
-  window.__axon.resumePausedTask('The user denied permission for the blocked operation. Do not retry it. Skip that step and continue the same task with safe alternatives.');
+  window.__axon.denyApproval({ resume: true });
 };
 </script>
 </body>

@@ -175,6 +175,20 @@ def runtime_api_config(settings: dict) -> dict:
     }
 
 
+def public_runtime_api_config(settings: dict) -> dict:
+    spec = PROVIDER_BY_ID[selected_api_provider_id(settings)]
+    state = provider_state(spec, settings, selected_api_provider=spec.provider_id)
+    return {
+        "provider_id": spec.provider_id,
+        "provider_label": spec.label,
+        "transport": spec.transport,
+        "api_base_url": state["base_url"],
+        "api_model": state["model"] or spec.default_model,
+        "api_key_configured": bool((settings.get(spec.key_setting) or "").strip()),
+        "key_hint": state["key_hint"],
+    }
+
+
 def model_supports_vision(provider_id: str, model: str = "") -> bool:
     provider = (provider_id or "").strip().lower()
     model_name = (model or "").strip().lower()

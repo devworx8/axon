@@ -209,6 +209,7 @@ def build_cli_runtime_snapshot(cli_path_override: str = "") -> StatusRecord:
     version = _cli_version(binary)
     auth = _auth_status(binary)
     login_parts = [binary or "claude", "auth", "login", "--claudeai"]
+    logout_parts = [binary or "claude", "auth", "logout"]
     status_parts = [binary or "claude", "auth", "status", "--json"]
     install_parts = [npm_binary or "npm", "install", "-g", _CLAUDE_CODE_PACKAGE]
 
@@ -227,6 +228,7 @@ def build_cli_runtime_snapshot(cli_path_override: str = "") -> StatusRecord:
         "using_auto_discovery": bool(binary and not cli_path_override),
         "install_command": _command_preview(install_parts),
         "login_command": _command_preview(login_parts),
+        "logout_command": _command_preview(logout_parts),
         "status_command": _command_preview(status_parts),
         "auth": auth,
     }
@@ -284,4 +286,35 @@ def prepare_claude_cli_login(cli_path_override: str = "", *, mode: str = "claude
         "message": "Run the Claude CLI login flow locally to finish authentication. The command has been prepared for you.",
         "command_preview": _command_preview(parts),
         "cli_runtime": snapshot,
+    }
+
+
+def logout_claude_cli(cli_path_override: str = "") -> StatusRecord:
+    snapshot = build_cli_runtime_snapshot(cli_path_override)
+    if not snapshot.get("installed"):
+        return {
+            "status": "manual_required",
+            "message": "Install Claude CLI before signing out.",
+            "command_preview": snapshot.get("install_command", ""),
+            "cli_runtime": snapshot,
+        }
+    if not snapshot.get("auth", {}).get("logged_in"):
+        return {
+            "status": "completed",
+            "message": "Claude CLI is already signed out.",
+            "command_preview": snapshot.get("status_command", ""),
+            "cli_runtime": snapshot,
+        }
+    binary = str(snapshot.get("binary") or "claude")
+    proc = _run_command([binary, "auth", "logout"], timeout=_STATUS_TIMEOUT_SECONDS)
+    output = (proc.stdout or proc.stderr or "").strip()
+    if proc.returncode != 0:
+        raise RuntimeError(output or "Claude CLI sign out failed.")
+    refreshed = build_cli_runtime_snapshot(cli_path_override)
+    return {
+        "status": "completed",
+        "message": "Claude CLI signed out.",
+        "command_preview": refreshed.get("status_command", ""),
+        "cli_runtime": refreshed,
+        "output": output,
     }

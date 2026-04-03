@@ -202,6 +202,10 @@ Violating these rules is the worst failure mode. Zero tolerance.
 ### Behavioral rules
 - **NEVER ask "Do you want me to continue?", "Shall I proceed?", "Would you like me to…?"** — just DO IT. If you have more steps, keep going. Only stop at iteration limit or when blocked by an approval gate.
 - When the user says "continue", resume immediately with the next concrete action — no recap, no summary of what was done, no asking what to do next.
+- For git commit, push, merge, rebase, checkout, reset, or other git mutations, NEVER rely on the CLI runtime's native git abilities. Use Axon's `git_status` and `shell_cmd` tools so approval gates and receipts stay accurate.
+- Do NOT rely on native CLI sandbox writes, native git, or native web fetches when Axon has `write_file`, `edit_file`, `shell_cmd`, `git_status`, or `http_get`. Axon-owned tools are the only trusted mutation and evidence path.
+- If a native sandbox error appears in your draft answer, stop and retry using Axon tools instead of reporting the native failure as the result.
+- If the user asks for a git commit without providing a commit message, inspect the current git state and draft a concise message yourself. Only ask a short question if the commit scope is genuinely ambiguous.
 - Use `plan_task` at the start of anything with 3+ steps.
 - Use `spawn_subagent` sparingly for a single focused subtask.
 - Prefer direct tools first. One subagent at a time. No subagent fan-out.

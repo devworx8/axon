@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import re as _re
 from pathlib import Path
 from typing import Any, Optional
@@ -12,6 +13,12 @@ from .agent_paths import (
     _repo_root_path,
     _resolve_user_path,
     _workspace_root_path,
+)
+from .github_orchestrator import (
+    extract_quoted_value,
+    push_branch,
+    read_workflow_status,
+    upsert_pr,
 )
 from .agent_toolspecs import AgentRuntimeDeps, _execute_tool
 
@@ -54,18 +61,16 @@ def _extract_requested_content(user_message: str) -> Optional[str]:
         r"\bwith content\s*:?\s*(.+?)(?=\s+(?:then|and)\s+(?:verify|show|check|confirm)\b|$)",
         r"\bcontaining\s*:?\s*(.+?)(?=\s+(?:then|and)\s+(?:verify|show|check|confirm)\b|$)",
         r"\bexactly\s*:?\s*(.+?)(?=\s+(?:then|and)\s+(?:verify|show|check|confirm)\b|$)",
+        r"\b(?:write|put|save)\s+(?:the\s+)?(?:single\s+)?word\s+(.+?)\s+\b(?:to|into|in)\b",
+        r"\bwrite\s+(.+?)\s+\b(?:to|into)\b",
+        r"\bput\s+(.+?)\s+\b(?:into|in)\b",
+        r"\bsave\s+(.+?)\s+\b(?:to|into|in)\b",
+        r"\breplace the contents of\b.+?\bwith\s*:?\s*(.+?)(?=\s+(?:then|and)\s+(?:verify|show|check|confirm)\b|$)",
     )
     for pattern in patterns:
         match = _re.search(pattern, user_message, flags=_re.IGNORECASE | _re.DOTALL)
         if match:
-            content = match.group(1).strip()
-            if (
-                len(content) >= 2
-                and content[0] == content[-1]
-                and content[0] in {'"', "'", "`"}
-            ):
-                content = content[1:-1]
-            return content
+            return _normalize_inline_content(match.group(1).strip())
     return None
 
 
@@ -94,6 +99,200 @@ def _strip_wrapping_quotes(text: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'", "`"}:
         return value[1:-1]
     return value
+
+
+def _normalize_inline_content(text: str) -> str:
+    value = _strip_wrapping_quotes(text)
+    if _re.fullmatch(r"[A-Za-z0-9_-]+[.,;:!?]", value):
+        return value[:-1]
+    return value
+
+
+def _extract_http_url(user_message: str) -> Optional[str]:
+    match = _re.search(r"https?://[^\s<>()]+", user_message or "", flags=_re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(0).rstrip(".,);!?]}>\"'")
+
+
+def _looks_like_url_fetch_request(user_message: str, url: str) -> bool:
+    raw = str(user_message or "").strip()
+    if not raw:
+        return False
+    bare = raw.strip().strip("`'\"")
+    if bare == url or bare == f"<{url}>":
+        return True
+    lower = raw.lower()
+    fetch_phrases = (
+        "look at",
+        "take a look",
+        "open this",
+        "open the link",
+        "fetch",
+        "read this",
+        "read the page",
+        "review this",
+        "inspect this",
+        "visit",
+        "analyze this",
+        "analyse this",
+        "summarize this",
+        "check this link",
+        "check this url",
+    )
+    return any(phrase in lower for phrase in fetch_phrases)
+
+
+def _extract_explicit_shell_command(user_message: str) -> Optional[str]:
+    raw = " ".join(str(user_message or "").strip().split())
+    if not raw:
+        return None
+
+    normalized = _re.sub(
+        r"^(?:please\s+)?(?:can you|could you|would you)\s+",
+        "",
+        raw,
+        flags=_re.IGNORECASE,
+    )
+    normalized = _re.sub(r"^(?:please|axon)[,:]?\s+", "", normalized, flags=_re.IGNORECASE)
+
+    backtick_match = _re.search(r"`((?:git|gh)\b[^`]+)`", normalized, flags=_re.IGNORECASE)
+    if backtick_match:
+        return backtick_match.group(1).strip().rstrip(".,;:!?")
+
+    prefixed_request = False
+    candidate = normalized
+    for prefix in (
+        "please run ",
+        "run ",
+        "please execute ",
+        "execute ",
+        "check ",
+        "show ",
+    ):
+        if normalized.lower().startswith(prefix):
+            candidate = normalized[len(prefix):].strip()
+            prefixed_request = True
+            break
+
+    if not _re.match(r"^(?:git|gh)\b", candidate, flags=_re.IGNORECASE):
+        return None
+    if not prefixed_request:
+        conversational_sequence = _re.search(
+            r"\b(?:and|then)\b.+\b(?:we|debug|fix|review|continue|start|commit|push|deploy)\b",
+            candidate,
+            flags=_re.IGNORECASE,
+        )
+        if conversational_sequence:
+            return None
+    return candidate.rstrip(".,;:!?")
+
+
+def _looks_like_commit_request(user_message: str) -> bool:
+    lower = (user_message or "").lower()
+    commit_phrases = (
+        "git commit",
+        "git add and commit",
+        "add and commit",
+        "stage and commit",
+        "stage the changes and commit",
+        "stage everything and commit",
+        "commit everything",
+        "commit all changes",
+        "commit the changes",
+        "commit these changes",
+        "commit the current changes",
+        "commit the worktree",
+        "commit the current worktree",
+        "create a local commit",
+        "make a local commit",
+        "create a git commit",
+        "make a git commit",
+    )
+    return any(phrase in lower for phrase in commit_phrases)
+
+
+def _looks_like_push_request(user_message: str) -> bool:
+    lower = (user_message or "").lower()
+    return any(phrase in lower for phrase in (
+        "git push",
+        "push this branch",
+        "push the branch",
+        "push branch",
+        "push my changes",
+        "push the changes",
+        "publish the branch",
+    ))
+
+
+def _looks_like_pr_request(user_message: str) -> bool:
+    lower = (user_message or "").lower()
+    return any(phrase in lower for phrase in (
+        "open a pr",
+        "open pr",
+        "open a pull request",
+        "create a pr",
+        "create pr",
+        "create a pull request",
+        "update the pr",
+        "update pr",
+    ))
+
+
+def _looks_like_workflow_status_request(user_message: str) -> bool:
+    lower = (user_message or "").lower()
+    return any(phrase in lower for phrase in (
+        "workflow status",
+        "check ci",
+        "check the ci",
+        "check github actions",
+        "github actions status",
+        "workflow runs",
+        "pipeline status",
+    ))
+
+
+def _commit_scope_is_all_changes(user_message: str) -> bool:
+    lower = (user_message or "").lower()
+    scope_phrases = (
+        "everything",
+        "all changes",
+        "full worktree",
+        "whole worktree",
+        "entire worktree",
+        "full repo",
+        "entire repo",
+    )
+    return any(phrase in lower for phrase in scope_phrases) or _commit_scope_is_stage_all_request(user_message)
+
+
+def _extract_commit_message(user_message: str) -> Optional[str]:
+    patterns = (
+        r'\b(?:with|using)\s+(?:the\s+)?commit message\s+["\'`]([^"\']+?)["\'`]',
+        r'\bcommit message\s*[:=]?\s*["\'`]([^"\']+?)["\'`]',
+        r'\bmessage\s*[:=]?\s*["\'`]([^"\']+?)["\'`]',
+        r'\bas\s+["\'`]([^"\']+?)["\'`]',
+        r'\bcalled\s+["\'`]([^"\']+?)["\'`]',
+        r'\bnamed\s+["\'`]([^"\']+?)["\'`]',
+    )
+    for pattern in patterns:
+        match = _re.search(pattern, user_message, flags=_re.IGNORECASE | _re.DOTALL)
+        if match:
+            return _strip_wrapping_quotes(match.group(1).strip())
+    return None
+
+
+def _commit_scope_is_stage_all_request(user_message: str) -> bool:
+    lower = (user_message or "").lower()
+    scope_phrases = (
+        "git add and commit",
+        "add and commit",
+        "stage and commit",
+        "stage the changes and commit",
+        "stage everything and commit",
+        "stage all changes and commit",
+    )
+    return any(phrase in lower for phrase in scope_phrases)
 
 
 def _mentions_workspace_root(user_message: str) -> bool:
@@ -130,6 +329,66 @@ def _extract_named_file_hint(user_message: str) -> Optional[str]:
     return None
 
 
+def _git_status_changed_entries(status_text: str) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
+    in_status = False
+    for raw_line in (status_text or "").splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped == "Status:":
+            in_status = True
+            continue
+        if stripped == "Recent commits:":
+            break
+        if not in_status:
+            continue
+        if stripped in {"Working tree clean.", "nothing to commit, working tree clean"}:
+            return []
+        if len(line) >= 2 and line[0] in {"M", "A", "D", "R", "C", "?", "U", " "} and line[1] in {"M", "A", "D", "R", "C", "?", "U", " "}:
+            code = line[:2].strip() or line[:2]
+            path = line[2:].strip()
+            if path:
+                entries.append((code, path))
+    return entries
+
+
+def _draft_commit_message_from_git_status(status_text: str) -> str:
+    entries = _git_status_changed_entries(status_text)
+    if not entries:
+        return "chore: checkpoint current changes"
+
+    paths = [path for _code, path in entries]
+    lower_paths = [path.lower() for path in paths]
+
+    topical_labels = (
+        ("payment", ("payment", "invoice", "billing", "pop")),
+        ("missions", ("mission",)),
+        ("navigation", ("navigation", "tabbar", "layout", "weblayout")),
+        ("dashboard", ("dashboard",)),
+        ("tests", ("test", "__tests__")),
+    )
+    picked_topics: list[str] = []
+    for label, needles in topical_labels:
+        if any(any(needle in path for needle in needles) for path in lower_paths):
+            picked_topics.append(label)
+        if len(picked_topics) >= 3:
+            break
+
+    untracked_count = sum(1 for code, _path in entries if "?" in code)
+    if picked_topics:
+        summary = ", ".join(picked_topics[:2]) if len(picked_topics) <= 2 else f"{picked_topics[0]}, {picked_topics[1]}, and {picked_topics[2]}"
+        prefix = "feat" if untracked_count else "chore"
+        return f"{prefix}: update {summary}"
+
+    first_names = [Path(path).stem.replace("-", " ").replace("_", " ") for path in paths[:2]]
+    detail = " and ".join(name for name in first_names if name).strip()
+    if detail:
+        return f"chore: update {detail}"
+    return "chore: checkpoint current changes"
+
+
 def _is_mutating_file_request(user_message: str) -> bool:
     lower = (user_message or "").lower()
     mutate_phrases = (
@@ -140,6 +399,8 @@ def _is_mutating_file_request(user_message: str) -> bool:
         "write a file",
         "write file",
         "save a file",
+        "save ",
+        "put ",
         "edit a file",
         "edit file",
         "rewrite a file",
@@ -148,6 +409,7 @@ def _is_mutating_file_request(user_message: str) -> bool:
         "overwrite file",
         "update the file",
         "update file",
+        "replace the contents of",
         "append the line",
         "append line",
         "append ",
@@ -297,6 +559,20 @@ def _direct_agent_action(
     """
     lower = user_message.lower()
     tail_count = _requested_tail_line_count(user_message)
+    explicit_url = _extract_http_url(user_message)
+    explicit_command = _extract_explicit_shell_command(user_message)
+
+    if explicit_url and _looks_like_url_fetch_request(user_message, explicit_url):
+        tool_name = "http_get"
+        tool_args = {"url": explicit_url}
+        tool_result = _execute_tool(tool_name, tool_args, deps)
+        if _tool_result_needs_attention(tool_result):
+            return tool_name, tool_args, tool_result, tool_result
+        rendered = tool_result.strip()
+        if len(rendered) > 8000:
+            rendered = rendered[:8000].rstrip() + "\n... (truncated)"
+        answer = f"I fetched `{explicit_url}`:\n\n```\n{rendered}\n```"
+        return tool_name, tool_args, tool_result, answer
 
     power_phrases = (
         "reboot", "restart the system", "restart my system", "restart the machine",
@@ -332,17 +608,129 @@ def _direct_agent_action(
 
     if path:
         path = _resolve_user_path(path, workspace_path=workspace_path)
-    repo_path = _repo_root_path(path, workspace_path=workspace_path) if path and lower_has_git else None
+    shell_targets_repo = bool(explicit_command and explicit_command.lower().startswith(("git ", "gh ")))
+    repo_path = _repo_root_path(path, workspace_path=workspace_path) if path and (lower_has_git or shell_targets_repo) else None
 
     if not path:
         return None
 
-    write_phrases = ("write a file", "write file", "save a file")
+    if explicit_command:
+        shell_cwd = repo_path or path
+        tool_name = "shell_cmd"
+        tool_args: dict[str, Any] = {"cmd": explicit_command, "cwd": shell_cwd, "timeout": 30}
+        tool_result = _execute_tool(tool_name, tool_args, deps)
+        if _tool_result_needs_attention(tool_result):
+            return tool_name, tool_args, tool_result, tool_result
+        resolved_cwd = os.path.realpath(os.path.expanduser(shell_cwd))
+        rendered = tool_result.strip()
+        if len(rendered) > 8000:
+            rendered = rendered[:8000].rstrip() + "\n... (truncated)"
+        answer = f"Ran `{explicit_command}` in `{resolved_cwd}`.\n\n```\n{rendered}\n```"
+        return tool_name, tool_args, tool_result, answer
+
+    if _looks_like_commit_request(user_message):
+        repo_target = repo_path or path
+        commit_message = _extract_commit_message(user_message)
+        auto_generated_message = False
+        if not commit_message:
+            tool_name = "git_status"
+            tool_args = {"path": repo_target}
+            tool_result = _execute_tool(tool_name, tool_args, deps)
+            if _tool_result_needs_attention(tool_result):
+                return tool_name, tool_args, tool_result, tool_result
+            changed_entries = _git_status_changed_entries(tool_result)
+            if not changed_entries:
+                resolved_repo = os.path.realpath(os.path.expanduser(repo_target))
+                answer = f"`{resolved_repo}` has no tracked or untracked changes to commit."
+                return tool_name, tool_args, tool_result, answer
+            commit_message = _draft_commit_message_from_git_status(tool_result)
+            auto_generated_message = True
+
+        if _commit_scope_is_all_changes(user_message):
+            staged_cmd = "git add -A"
+            tool_name = "shell_cmd"
+            tool_args = {"cmd": staged_cmd, "cwd": repo_target, "timeout": 30}
+            if auto_generated_message and commit_message:
+                tool_args["_resume_task"] = f'Commit everything with commit message "{commit_message}".'
+                tool_args["_draft_commit_message"] = commit_message
+            tool_result = _execute_tool(tool_name, tool_args, deps)
+            if _tool_result_needs_attention(tool_result):
+                return tool_name, tool_args, tool_result, tool_result
+            resolved_repo = os.path.realpath(os.path.expanduser(repo_target))
+            drafted = f"I drafted commit message `{commit_message}` and " if auto_generated_message else ""
+            answer = f"{drafted}staged the full worktree in `{resolved_repo}` and I’m ready to create the commit next."
+            return tool_name, tool_args, tool_result, answer
+
+        commit_cmd = f"git commit -m {shlex.quote(commit_message)}"
+        tool_name = "shell_cmd"
+        tool_args = {"cmd": commit_cmd, "cwd": repo_target, "timeout": 30}
+        if auto_generated_message and commit_message:
+            tool_args["_resume_task"] = f'Run {commit_cmd}.'
+            tool_args["_draft_commit_message"] = commit_message
+        tool_result = _execute_tool(tool_name, tool_args, deps)
+        if _tool_result_needs_attention(tool_result):
+            return tool_name, tool_args, tool_result, tool_result
+        resolved_repo = os.path.realpath(os.path.expanduser(repo_target))
+        prefix = f"I drafted commit message `{commit_message}` and then " if auto_generated_message else ""
+        answer = f"{prefix}ran `{commit_cmd}` in `{resolved_repo}`.\n\n```\n{tool_result}\n```"
+        return tool_name, tool_args, tool_result, answer
+
+    if _looks_like_push_request(user_message):
+        repo_target = repo_path or path
+        remote = "origin"
+        remote_match = _re.search(r"\bto\s+([A-Za-z0-9._/-]+)\b", user_message, flags=_re.IGNORECASE)
+        if remote_match:
+            candidate_remote = remote_match.group(1).strip()
+            if candidate_remote and candidate_remote.lower() not in {"branch", "pr", "pull", "request"}:
+                remote = candidate_remote
+        shell_cwd, push_cmd = push_branch(repo_path=repo_target, remote=remote)
+        tool_name = "shell_cmd"
+        tool_args = {"cmd": push_cmd, "cwd": shell_cwd, "timeout": 45}
+        tool_result = _execute_tool(tool_name, tool_args, deps)
+        if _tool_result_needs_attention(tool_result):
+            return tool_name, tool_args, tool_result, tool_result
+        answer = f"Pushed the active branch from `{os.path.realpath(os.path.expanduser(shell_cwd))}` with `{push_cmd}`.\n\n```\n{tool_result}\n```"
+        return tool_name, tool_args, tool_result, answer
+
+    if _looks_like_pr_request(user_message):
+        repo_target = repo_path or path
+        title = extract_quoted_value(user_message, "title")
+        body = extract_quoted_value(user_message, "body")
+        base = extract_quoted_value(user_message, "base")
+        shell_cwd, pr_cmd = upsert_pr(repo_path=repo_target, title=title, body=body, base=base)
+        tool_name = "shell_cmd"
+        tool_args = {"cmd": pr_cmd, "cwd": shell_cwd, "timeout": 60}
+        tool_result = _execute_tool(tool_name, tool_args, deps)
+        if _tool_result_needs_attention(tool_result):
+            return tool_name, tool_args, tool_result, tool_result
+        answer = f"Opened or updated a PR from `{os.path.realpath(os.path.expanduser(shell_cwd))}`.\n\n```\n{tool_result}\n```"
+        return tool_name, tool_args, tool_result, answer
+
+    if _looks_like_workflow_status_request(user_message):
+        repo_target = repo_path or path
+        shell_cwd, workflow_cmd = read_workflow_status(repo_path=repo_target)
+        tool_name = "shell_cmd"
+        tool_args = {"cmd": workflow_cmd, "cwd": shell_cwd, "timeout": 30}
+        tool_result = _execute_tool(tool_name, tool_args, deps)
+        if tool_result.startswith("ERROR:"):
+            return tool_name, tool_args, tool_result, tool_result
+        answer = f"Recent workflow runs for `{os.path.realpath(os.path.expanduser(shell_cwd))}`:\n\n```\n{tool_result}\n```"
+        return tool_name, tool_args, tool_result, answer
+
+    if any(token in lower for token in ("deploy", "rollback", "roll back", "go live", "ship to production")):
+        answer = (
+            "Direct production deploys are intentionally disabled in Axon's unattended path.\n\n"
+            "- Safe flow: edit -> test -> commit -> push branch -> open or update PR.\n"
+            "- Production rollout should happen through protected CI/CD after merge."
+        )
+        return "shell_cmd", {"cmd": "echo blocked-direct-deploy"}, "BLOCKED: direct deploys disabled", answer
+
+    write_phrases = ("write a file", "write file", "save a file", "save ", "put ")
     create_phrases = ("create a file", "create file", "make a file", "make file")
     overwrite_phrases = (
         "edit a file", "edit file", "rewrite a file", "rewrite file",
         "overwrite a file", "overwrite file", "set the file", "set file",
-        "update the file", "update file",
+        "update the file", "update file", "replace the contents of",
     )
     append_phrases = ("append the line", "append line", "append ")
     replace_phrases = ("replace ", "change ")

@@ -42,10 +42,14 @@ def select_history_for_chat(
     history: list[dict],
     *,
     backend: str,
+    max_turns: Optional[int] = None,
     resource_image_paths: Optional[list[str]] = None,
 ) -> list[dict]:
     if not history:
         return []
     if resource_image_paths and _is_image_focused_question(user_message):
         return []
-    return history[-_history_limit_for_backend(backend):]
+    limit = _history_limit_for_backend(backend)
+    if max_turns is not None:
+        limit = max(1, int(max_turns))
+    return history[-limit:]
