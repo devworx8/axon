@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import brain
 from axon_api.services import claude_cli_runtime as _shared
+from axon_api.services import local_tool_env
 
 _CODEX_PACKAGE = "@openai/codex"
 
@@ -106,7 +107,7 @@ def build_codex_runtime_snapshot(codex_path_override: str = "") -> StatusRecord:
     npm_binary = _shared._find_npm_binary()
     version = _codex_version(binary)
     auth = _auth_status(binary)
-    install_parts = [npm_binary or "npm", "install", "-g", _CODEX_PACKAGE]
+    install_parts = _shared._npm_install_parts(npm_binary or "npm", _CODEX_PACKAGE)
     login_parts = [binary or "codex", "login"]
     logout_parts = [binary or "codex", "logout"]
     status_parts = [binary or "codex", "login", "status"]
@@ -124,6 +125,8 @@ def build_codex_runtime_snapshot(codex_path_override: str = "") -> StatusRecord:
         "environments": environments,
         "manual_override_path": codex_path_override or "",
         "using_auto_discovery": bool(binary and not codex_path_override),
+        "install_scope": "axon_local",
+        "install_root": local_tool_env.install_scope_label(),
         "install_command": _shared._command_preview(install_parts),
         "login_command": _shared._command_preview(login_parts),
         "logout_command": _shared._command_preview(logout_parts),
@@ -143,14 +146,15 @@ def install_codex_cli(codex_path_override: str = "") -> StatusRecord:
             "cli_runtime": snapshot,
         }
 
-    proc = _shared._run_command([npm_binary, "install", "-g", _CODEX_PACKAGE], timeout=_shared._INSTALL_TIMEOUT_SECONDS)
+    install_parts = _shared._npm_install_parts(npm_binary, _CODEX_PACKAGE)
+    proc = _shared._run_command(install_parts, timeout=_shared._INSTALL_TIMEOUT_SECONDS)
     snapshot = build_codex_runtime_snapshot(codex_path_override)
     output = (proc.stdout or proc.stderr or "").strip()
     if proc.returncode != 0:
         raise RuntimeError(output or "Codex CLI install failed.")
     return {
         "status": "completed",
-        "message": "Codex CLI installed and ready for discovery.",
+        "message": f"Codex CLI installed into Axon's local toolchain at {snapshot['install_root']}.",
         "command_preview": snapshot["install_command"],
         "cli_runtime": snapshot,
         "output": output,

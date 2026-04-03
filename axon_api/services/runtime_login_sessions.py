@@ -24,7 +24,10 @@ _DEVICE_CODE_RE = re.compile(
 )
 _ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
-_CODEX_LOGIN_URL = "https://auth.openai.com/log-in"
+_CODEX_DEVICE_AUTH_URL = "https://auth.openai.com/codex/device"
+_CODEX_LEGACY_LOGIN_URL = "https://auth.openai.com/log-in"
+_TIMEOUT_MARKERS = ("timed out", "time out", "expired")
+_STANDALONE_DEVICE_CODE_RE = re.compile(r"^[A-Z0-9]{4,}(?:-[A-Z0-9]{4,10})+$")
 
 
 def _now_iso() -> str:
@@ -77,6 +80,18 @@ def _stop_process(meta: dict[str, Any]) -> None:
             pass
 
 
+def _same_binary_path(left: str, right: str) -> bool:
+    left_path = str(left or "").strip()
+    right_path = str(right or "").strip()
+    if not left_path or not right_path:
+        return False
+    return os.path.realpath(left_path) == os.path.realpath(right_path)
+
+
+def _same_command_preview(left: str, right: str) -> bool:
+    return str(left or "").strip() == str(right or "").strip()
+
+
 def _tail(path: str, limit: int = 8000) -> str:
     if not path:
         return ""
@@ -117,31 +132,52 @@ def _family_login_command(
             parts.extend(["--email", email])
         return parts
     if family == "codex":
-        return [binary, "login", "--device-auth"]
+        codex_mode = str(mode or "").strip().lower()
+        if codex_mode in {"device", "device_auth", "device-auth"}:
+            return [binary, "login", "--device-auth"]
+        return [binary, "login"]
     raise ValueError(f"Unsupported runtime login family: {family}")
 
 
 def _normalize_browser_url(url: str, *, family: str = "") -> str:
     cleaned = _clean_terminal_text(url).strip().rstrip(").,")
-    if family == "codex" and ("auth.openai.com" in cleaned or not cleaned):
-        return _CODEX_LOGIN_URL
+    if family == "codex":
+        if not cleaned:
+            return ""
+        if cleaned == _CODEX_LEGACY_LOGIN_URL:
+            return _CODEX_DEVICE_AUTH_URL
+        if "auth.openai.com" in cleaned:
+            return cleaned
     return cleaned
 
 
 def _extract_browser_url(text: str, *, family: str = "") -> str:
-    for match in _LOGIN_URL_RE.findall(_clean_terminal_text(text)):
-        url = _normalize_browser_url(match, family=family)
-        if "localhost:7734" in url:
+    matches = [
+        _normalize_browser_url(match, family=family)
+        for match in _LOGIN_URL_RE.findall(_clean_terminal_text(text))
+    ]
+    if family == "codex":
+        for url in matches:
+            if "auth.openai.com" in url:
+                return url
+    for url in matches:
+        lowered = url.lower()
+        if "localhost:7734" in lowered:
+            continue
+        if "localhost:" in lowered or "127.0.0.1:" in lowered:
             continue
         return url
-    if family == "codex":
-        return _CODEX_LOGIN_URL
     return ""
 
 
 def _extract_user_code(text: str) -> str:
-    match = _DEVICE_CODE_RE.search(_clean_terminal_text(text))
+    cleaned = _clean_terminal_text(text)
+    match = _DEVICE_CODE_RE.search(cleaned)
     if not match:
+        for raw_line in reversed(cleaned.splitlines()):
+            candidate = raw_line.strip().replace(" ", "-").upper()
+            if _STANDALONE_DEVICE_CODE_RE.fullmatch(candidate):
+                return candidate
         return ""
     return match.group(1).strip().replace(" ", "-").upper()
 
@@ -159,6 +195,8 @@ def _status_from_meta(meta: dict[str, Any], snapshot: dict[str, Any], log_tail: 
     last_message = str(auth.get("message") or "").strip()
     status = str(meta.get("status") or "pending")
     return_code = meta.get("returncode")
+    lower_log = _clean_terminal_text(log_tail).lower()
+    login_timed_out = any(marker in lower_log for marker in _TIMEOUT_MARKERS)
 
     if auth.get("logged_in"):
         status = "authenticated"
@@ -170,16 +208,30 @@ def _status_from_meta(meta: dict[str, Any], snapshot: dict[str, Any], log_tail: 
         last_message = last_message or "Login cancelled."
     elif alive:
         status = "browser_opened" if browser_url else "waiting"
-        last_message = last_message or ("Browser opened. Finish sign-in to continue." if browser_url else "Waiting for sign-in to complete.")
+        if browser_url and user_code:
+            last_message = f"Open the browser link and enter code {user_code} to finish sign-in."
+        elif browser_url:
+            last_message = "Open the browser link to continue sign-in."
+        else:
+            last_message = "Waiting for sign-in to complete."
+    elif login_timed_out:
+        status = "failed"
+        lines = [line.strip() for line in _clean_terminal_text(log_tail).splitlines() if line.strip()]
+        last_message = lines[-1][:300] if lines else "Runtime login timed out."
     elif browser_url or user_code:
         status = "waiting"
-        last_message = last_message or "Continue sign-in in the browser, then refresh or wait for Axon to detect completion."
+        if browser_url and user_code:
+            last_message = f"Continue sign-in in the browser and enter code {user_code}, then refresh or wait for Axon to detect completion."
+        elif browser_url:
+            last_message = "Continue sign-in in the browser, then refresh or wait for Axon to detect completion."
+        else:
+            last_message = f"Enter code {user_code} to continue sign-in, then refresh or wait for Axon to detect completion."
     elif return_code not in (None, 0):
         status = "failed"
         last_message = log_tail.splitlines()[-1][:300] if log_tail.splitlines() else "Runtime login failed."
     elif not auth.get("logged_in") and str(meta.get("started_at") or ""):
         status = "waiting"
-        last_message = last_message or "Waiting for the runtime to finish the sign-in flow."
+        last_message = "Waiting for the runtime to finish the sign-in flow."
 
     refreshed = {
         **meta,
@@ -256,11 +308,20 @@ def list_login_sessions(family: str) -> list[dict[str, Any]]:
     return rows
 
 
-def find_active_login_session(family: str) -> dict[str, Any] | None:
+def find_active_login_session(family: str, *, binary: str = "", command_preview: str = "") -> dict[str, Any] | None:
     for session in list_login_sessions(family):
         status = str(session.get("status") or "")
-        if status in {"pending", "browser_opened", "waiting"}:
-            return refresh_login_session(family, str(session.get("session_id") or "")) or session
+        if status not in {"pending", "browser_opened", "waiting"}:
+            continue
+        refreshed = refresh_login_session(family, str(session.get("session_id") or "")) or session
+        refreshed_status = str(refreshed.get("status") or "")
+        if refreshed_status not in {"pending", "browser_opened", "waiting"}:
+            continue
+        if binary and not _same_binary_path(str(refreshed.get("binary") or ""), binary):
+            continue
+        if command_preview and not _same_command_preview(str(refreshed.get("command_preview") or ""), command_preview):
+            continue
+        return refreshed
     return None
 
 
@@ -272,16 +333,21 @@ def start_login_session(
     email: str = "",
 ) -> dict[str, Any]:
     family_name = str(family or "").strip().lower()
-    active = find_active_login_session(family_name)
+    snapshot = _family_snapshot(family_name, override_path)
+    requested_binary = str(snapshot.get("binary") or "")
+    command_parts = _family_login_command(family_name, snapshot, mode=mode, email=email)
+    command_preview = claude_cli_runtime._command_preview(command_parts)
+    active = find_active_login_session(
+        family_name,
+        binary=requested_binary,
+        command_preview=command_preview,
+    )
     if active:
         return active
 
-    snapshot = _family_snapshot(family_name, override_path)
     auth = dict(snapshot.get("auth") or {})
     session_id = f"{int(_time.time() * 1000)}-{family_name}"
     title = f"{family_name} login"
-    command_parts = _family_login_command(family_name, snapshot, mode=mode, email=email)
-    command_preview = claude_cli_runtime._command_preview(command_parts)
 
     initial = {
         "session_id": session_id,
@@ -291,7 +357,7 @@ def start_login_session(
         "mode": str(mode or ""),
         "email": str(email or ""),
         "command_preview": command_preview,
-        "browser_url": _CODEX_LOGIN_URL if family_name == "codex" else "",
+        "browser_url": "",
         "user_code": "",
         "status": "pending",
         "auth_snapshot": auth,

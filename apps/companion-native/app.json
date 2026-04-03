@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "Axon Companion",
+    "slug": "axon-companion-native",
+    "scheme": "axoncompanion",
+    "platforms": ["ios", "android", "web"],
+    "orientation": "portrait",
+    "plugins": ["expo-secure-store"],
+    "extra": {
+      "apiBaseUrl": "http://127.0.0.1:7734",
+      "defaultWorkspaceId": null
+    }
+  }
+}
+

@@ -2,6 +2,13 @@
 
 Axon is a local-first AI operator console for code work. It runs on your machine, monitors workspaces, keeps missions and playbooks in context, and routes local model work through Ollama by default.
 
+## Axon Online docs
+
+If you are using Axon on a web or app workspace, start with:
+
+- [`docs/axon-online.md`](docs/axon-online.md) for the tracked-workspace, Live Page, and Auto sandbox workflow
+- [`ui/manual.html`](ui/manual.html) for mobile access, stable domain, PWA, and operator concepts
+
 ## Product language
 
 - `Axon` — app name
@@ -50,6 +57,14 @@ axon
 
 Open `http://localhost:7734` and finish setup in `Settings -> Runtime`.
 
+Typical web-workspace flow:
+
+1. Add the repo as a workspace.
+2. Select that workspace in Console.
+3. Start the Live Page so Axon has a browser surface for preview and verification.
+4. Use Auto mode when you want changes made in an isolated git worktree first.
+5. Apply the Auto session only after review.
+
 ## Engineering guardrails
 
 Axon is under active anti-monolith refactor. Start here before major changes:
@@ -71,7 +86,3 @@ python3 scripts/guardrails/check_boundaries.py
 - Runtime state lives locally in `~/.devbrain/devbrain.db` and is intentionally gitignored.
 - Logs, pid files, and bundled binaries are excluded from version control in this repo.
 - On display-attached 6GB NVIDIA GPUs, Axon guards large Ollama models to avoid desktop blanking or compositor resets.
-
-## Self-edit verification
-
-Axon can modify its own codebase when a real tool-backed file write succeeds. This section was added as a tiny local proof edit and should appear in `git diff` immediately after the change.

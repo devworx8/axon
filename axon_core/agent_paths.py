@@ -99,7 +99,7 @@ def _extract_path_from_text(
     workspace_path: str = "",
 ) -> Optional[str]:
     """Best-effort path extraction for common local-path requests."""
-    candidates = _re.findall(r'(~\/[^\s,"\')]+|\/home\/[^\s,"\')]+)', text)
+    candidates = _re.findall(r'(~\/[^\s,"\')]+|(?<!:)/[^\s,"\')]+)', text)
     if candidates:
         return _resolve_user_path(candidates[0].rstrip(".,:;!?`"), workspace_path=workspace_path)
 

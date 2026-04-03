@@ -27,6 +27,17 @@ def normalize_command_preview(command: str) -> str:
     return re.sub(r"\s+", " ", str(command or "").strip())
 
 
+def _path_within_root(path: str, root: str = "") -> bool:
+    target = os.path.realpath(os.path.expanduser(str(path or "").strip()))
+    base = os.path.realpath(os.path.expanduser(str(root or "").strip()))
+    if not target or not base:
+        return False
+    try:
+        return os.path.commonpath([target, base]) == base
+    except ValueError:
+        return False
+
+
 def resolve_repo_root(path: str = "") -> str:
     raw = os.path.realpath(os.path.expanduser(str(path or "").strip() or "."))
     probe = Path(raw)
@@ -203,6 +214,7 @@ def build_edit_approval_action(
     workspace_id: int | None = None,
     session_id: str = "",
     summary: str = "",
+    workspace_root: str = "",
 ) -> dict[str, Any]:
     resolved_path = os.path.realpath(os.path.expanduser(path))
     repo_root = resolve_repo_root(resolved_path)
@@ -215,14 +227,18 @@ def build_edit_approval_action(
         "path": resolved_path,
         "operation": operation_name,
     }
+    destructive = operation_name in {"delete"}
+    persist_allowed = persist_allowed_for_action({**payload, "destructive": destructive})
+    if workspace_root and not _path_within_root(resolved_path, workspace_root):
+        persist_allowed = False
     return {
         **payload,
         "action_fingerprint": _hash_payload(payload),
         "summary": summary or f"{operation_name.title()} {Path(resolved_path).name}",
-        "destructive": operation_name in {"delete"},
-        "persist_allowed": persist_allowed_for_action({**payload, "destructive": operation_name in {"delete"}}),
+        "destructive": destructive,
+        "persist_allowed": persist_allowed,
         "scope_options": ["once", "task", "session"]
-        + ([] if operation_name in {"delete"} else ["persist"]),
+        + ([] if not persist_allowed else ["persist"]),
         "session_id": session_id,
         "evidence_source": "deterministic",
     }

@@ -31,6 +31,55 @@ def _tool_result_needs_attention(result: str) -> bool:
     )
 
 
+def _looks_like_external_network_error(result: str) -> bool:
+    lower = str(result or "").strip().lower()
+    if not lower:
+        return False
+    return any(token in lower for token in (
+        "could not resolve host",
+        "temporary failure in name resolution",
+        "name or service not known",
+        "could not resolve proxy",
+        "network is unreachable",
+        "failed to connect to",
+        "connection timed out",
+        "failed to connect",
+        "couldn't connect to server",
+    ))
+
+
+def _extract_failed_host(result: str) -> str:
+    text = str(result or "")
+    match = _re.search(r"could not resolve host:\s*([A-Za-z0-9._-]+)", text, flags=_re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    match = _re.search(r"failed to connect to\s+([A-Za-z0-9._-]+)", text, flags=_re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
+def _normalize_shell_error(result: str, *, command: str = "", cwd: str = "") -> str:
+    if not isinstance(result, str):
+        return result
+    if result.startswith(("ERROR:", "BLOCKED_CMD:", "BLOCKED_EDIT:")):
+        return result
+    if not _looks_like_external_network_error(result):
+        return result
+    host = _extract_failed_host(result)
+    command_preview = " ".join(str(command or "").split()) or "shell command"
+    resolved_cwd = os.path.realpath(os.path.expanduser(str(cwd or ".").strip() or "."))
+    host_line = f"- Host: `{host}`\n" if host else ""
+    return (
+        "ERROR: External network access is unavailable from this Axon runtime right now.\n\n"
+        f"- Command: `{command_preview}`\n"
+        f"- Repo: `{resolved_cwd}`\n"
+        f"{host_line}"
+        "- Next step: retry from an unsandboxed host shell or run Axon with host-network access enabled.\n\n"
+        f"Original error:\n{result.strip()}"
+    )
+
+
 def _parse_list_dir_entries(result: str) -> list[tuple[str, str]]:
     """Parse list_dir output into (kind, name) pairs."""
     entries: list[tuple[str, str]] = []
@@ -56,16 +105,17 @@ def _format_listing_answer(path: str, names: list[str], label: str) -> str:
 
 def _extract_requested_content(user_message: str) -> Optional[str]:
     """Best-effort content extraction for create/write requests."""
+    stop_clause = r"(?=\s+(?:then|and)\s+(?:verify|show|check|confirm|reply|respond|return|say)\b|$)"
     patterns = (
-        r"\bcontaining exactly\s*:?\s*(.+?)(?=\s+(?:then|and)\s+(?:verify|show|check|confirm)\b|$)",
-        r"\bwith content\s*:?\s*(.+?)(?=\s+(?:then|and)\s+(?:verify|show|check|confirm)\b|$)",
-        r"\bcontaining\s*:?\s*(.+?)(?=\s+(?:then|and)\s+(?:verify|show|check|confirm)\b|$)",
-        r"\bexactly\s*:?\s*(.+?)(?=\s+(?:then|and)\s+(?:verify|show|check|confirm)\b|$)",
+        rf"\bcontaining exactly\s*:?\s*(.+?){stop_clause}",
+        rf"\bwith content\s*:?\s*(.+?){stop_clause}",
+        rf"\bcontaining\s*:?\s*(.+?){stop_clause}",
+        rf"\bexactly\s*:?\s*(.+?){stop_clause}",
         r"\b(?:write|put|save)\s+(?:the\s+)?(?:single\s+)?word\s+(.+?)\s+\b(?:to|into|in)\b",
         r"\bwrite\s+(.+?)\s+\b(?:to|into)\b",
         r"\bput\s+(.+?)\s+\b(?:into|in)\b",
         r"\bsave\s+(.+?)\s+\b(?:to|into|in)\b",
-        r"\breplace the contents of\b.+?\bwith\s*:?\s*(.+?)(?=\s+(?:then|and)\s+(?:verify|show|check|confirm)\b|$)",
+        rf"\breplace the contents of\b.+?\bwith\s*:?\s*(.+?){stop_clause}",
     )
     for pattern in patterns:
         match = _re.search(pattern, user_message, flags=_re.IGNORECASE | _re.DOTALL)
@@ -406,11 +456,15 @@ def _is_mutating_file_request(user_message: str) -> bool:
     lower = (user_message or "").lower()
     mutate_phrases = (
         "create a file",
+        "create the file",
         "create file",
         "make a file",
+        "make the file",
         "make file",
         "write a file",
+        "write the file",
         "write file",
+        "save the file",
         "save a file",
         "save ",
         "put ",
@@ -632,6 +686,7 @@ def _direct_agent_action(
         tool_name = "shell_cmd"
         tool_args: dict[str, Any] = {"cmd": explicit_command, "cwd": shell_cwd, "timeout": 30}
         tool_result = _execute_tool(tool_name, tool_args, deps)
+        tool_result = _normalize_shell_error(tool_result, command=explicit_command, cwd=shell_cwd)
         if _tool_result_needs_attention(tool_result):
             return tool_name, tool_args, tool_result, tool_result
         resolved_cwd = os.path.realpath(os.path.expanduser(shell_cwd))
@@ -672,6 +727,7 @@ def _direct_agent_action(
                 tool_args["_resume_task"] = f'Commit everything with commit message "{commit_message}".{push_follow_up}'
                 tool_args["_draft_commit_message"] = commit_message
             tool_result = _execute_tool(tool_name, tool_args, deps)
+            tool_result = _normalize_shell_error(tool_result, command=staged_cmd, cwd=repo_target)
             if _tool_result_needs_attention(tool_result):
                 return tool_name, tool_args, tool_result, tool_result
             resolved_repo = os.path.realpath(os.path.expanduser(repo_target))
@@ -691,6 +747,7 @@ def _direct_agent_action(
         if auto_generated_message and commit_message:
             tool_args["_draft_commit_message"] = commit_message
         tool_result = _execute_tool(tool_name, tool_args, deps)
+        tool_result = _normalize_shell_error(tool_result, command=commit_cmd, cwd=repo_target)
         if _tool_result_needs_attention(tool_result):
             return tool_name, tool_args, tool_result, tool_result
         resolved_repo = os.path.realpath(os.path.expanduser(repo_target))
@@ -705,6 +762,7 @@ def _direct_agent_action(
         tool_name = "shell_cmd"
         tool_args = {"cmd": push_cmd, "cwd": shell_cwd, "timeout": 45}
         tool_result = _execute_tool(tool_name, tool_args, deps)
+        tool_result = _normalize_shell_error(tool_result, command=push_cmd, cwd=shell_cwd)
         if _tool_result_needs_attention(tool_result):
             return tool_name, tool_args, tool_result, tool_result
         answer = f"Pushed the active branch from `{os.path.realpath(os.path.expanduser(shell_cwd))}` with `{push_cmd}`.\n\n```\n{tool_result}\n```"
@@ -719,6 +777,7 @@ def _direct_agent_action(
         tool_name = "shell_cmd"
         tool_args = {"cmd": pr_cmd, "cwd": shell_cwd, "timeout": 60}
         tool_result = _execute_tool(tool_name, tool_args, deps)
+        tool_result = _normalize_shell_error(tool_result, command=pr_cmd, cwd=shell_cwd)
         if _tool_result_needs_attention(tool_result):
             return tool_name, tool_args, tool_result, tool_result
         answer = f"Opened or updated a PR from `{os.path.realpath(os.path.expanduser(shell_cwd))}`.\n\n```\n{tool_result}\n```"
@@ -730,6 +789,7 @@ def _direct_agent_action(
         tool_name = "shell_cmd"
         tool_args = {"cmd": workflow_cmd, "cwd": shell_cwd, "timeout": 30}
         tool_result = _execute_tool(tool_name, tool_args, deps)
+        tool_result = _normalize_shell_error(tool_result, command=workflow_cmd, cwd=shell_cwd)
         if tool_result.startswith("ERROR:"):
             return tool_name, tool_args, tool_result, tool_result
         answer = f"Recent workflow runs for `{os.path.realpath(os.path.expanduser(shell_cwd))}`:\n\n```\n{tool_result}\n```"
@@ -743,8 +803,8 @@ def _direct_agent_action(
         )
         return "shell_cmd", {"cmd": "echo blocked-direct-deploy"}, "BLOCKED: direct deploys disabled", answer
 
-    write_phrases = ("write a file", "write file", "save a file", "save ", "put ")
-    create_phrases = ("create a file", "create file", "make a file", "make file")
+    write_phrases = ("write a file", "write the file", "write file", "save a file", "save the file", "save ", "put ")
+    create_phrases = ("create a file", "create the file", "create file", "make a file", "make the file", "make file")
     overwrite_phrases = (
         "edit a file", "edit file", "rewrite a file", "rewrite file",
         "overwrite a file", "overwrite file", "set the file", "set file",

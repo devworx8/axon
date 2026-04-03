@@ -1,3 +1,4 @@
+    <!-- ═══════════════════════════════════════════════════════════
          TAB: DASHBOARD
     ════════════════════════════════════════════════════════════ -->
     <div x-show="activeTab === 'dashboard'" class="dashboard-page flex flex-col h-full">
@@ -164,6 +165,173 @@
                   </div>
                 </section>
               </div>
+
+              <section class="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.95fr)]">
+                <section class="rounded-[26px] border border-slate-800 bg-slate-900/65 p-4 shadow-[0_18px_60px_rgba(15,23,42,0.2)] md:p-5">
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.22em] text-rose-300/75">Attention Inbox</div>
+                      <div class="mt-2 text-lg font-semibold text-white">What needs you now</div>
+                      <div class="mt-1 text-sm leading-6 text-slate-400">A normalized view of urgent items, approvals, and watch-list drift across Axon.</div>
+                    </div>
+                    <button @click="loadAttentionInbox()"
+                            class="rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2 text-[11px] text-slate-300 transition hover:border-slate-500">
+                      Refresh inbox
+                    </button>
+                  </div>
+
+                  <div class="mt-4 flex flex-wrap gap-2">
+                    <template x-for="bucket in ['now', 'waiting_on_me', 'watch']" :key="bucket">
+                      <div class="rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
+                           :class="attentionBucketTone(bucket)">
+                        <span x-text="attentionBucketLabel(bucket)"></span>
+                        <span class="ml-1 text-slate-100" x-text="attentionBucketCount(bucket)"></span>
+                      </div>
+                    </template>
+                    <span x-show="attentionUpdatedAt"
+                          class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-400"
+                          x-text="'Updated ' + timeAgo(attentionUpdatedAt)"></span>
+                  </div>
+
+                  <div x-show="attentionError" class="mt-4 rounded-2xl border border-rose-500/20 bg-rose-500/8 px-4 py-3 text-sm text-rose-200" x-text="attentionError"></div>
+                  <div x-show="attentionLoading" class="mt-4 rounded-2xl border border-slate-800 bg-slate-950/60 px-4 py-6 text-sm text-slate-400">Refreshing attention inbox…</div>
+
+                  <div class="mt-4 grid gap-3 xl:grid-cols-3">
+                    <template x-for="bucket in ['now', 'waiting_on_me', 'watch']" :key="`inbox-${bucket}`">
+                      <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+                        <div class="flex items-center justify-between gap-2">
+                          <div class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300" x-text="attentionBucketLabel(bucket)"></div>
+                          <span class="rounded-full border px-2 py-0.5 text-[9px]"
+                                :class="attentionBucketTone(bucket)"
+                                x-text="attentionBucketCount(bucket)"></span>
+                        </div>
+                        <div class="mt-3 space-y-2">
+                          <template x-if="!attentionBucketItems(bucket).length && !attentionLoading">
+                            <div class="rounded-xl border border-dashed border-slate-800 bg-slate-950/70 px-3 py-3 text-[11px] text-slate-500">
+                              Nothing urgent here right now.
+                            </div>
+                          </template>
+                          <template x-for="item in attentionBucketItems(bucket)" :key="`attention-${bucket}-${item.id}`">
+                            <div class="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-3">
+                              <div class="flex items-start justify-between gap-2">
+                                <div class="min-w-0">
+                                  <div class="flex flex-wrap items-center gap-1.5">
+                                    <span class="rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.14em]"
+                                          :class="attentionSourceTone(item.source)"
+                                          x-text="item.source || 'system'"></span>
+                                    <span class="text-[10px] font-medium"
+                                          :class="attentionSeverityTone(item)"
+                                          x-text="item.severity || 'medium'"></span>
+                                  </div>
+                                  <div class="mt-1.5 text-[13px] font-medium leading-5 text-slate-100" x-text="item.title"></div>
+                                  <div x-show="item.summary || item.detail" class="mt-1 text-[11px] leading-5 text-slate-400 line-clamp-3" x-text="item.summary || item.detail"></div>
+                                </div>
+                                <button @click="openAttentionItem(item)"
+                                        class="shrink-0 rounded-xl border border-slate-700 bg-slate-900/70 px-2.5 py-1.5 text-[10px] text-slate-200 transition hover:border-slate-500"
+                                        x-text="attentionPrimaryActionLabel(item)"></button>
+                              </div>
+                              <div class="mt-3 flex items-center justify-between gap-2">
+                                <div class="truncate text-[10px] text-slate-500" x-text="item.project_name || (item.workspace_id ? `Workspace #${item.workspace_id}` : 'Global')"></div>
+                                <div class="flex items-center gap-1.5">
+                                  <button @click.stop="acknowledgeAttentionItem(item)"
+                                          class="rounded-lg border border-amber-500/20 bg-amber-500/8 px-2 py-1 text-[10px] text-amber-200 transition hover:bg-amber-500/12">
+                                    Ack
+                                  </button>
+                                  <button @click.stop="resolveAttentionItem(item)"
+                                          class="rounded-lg border border-emerald-500/20 bg-emerald-500/8 px-2 py-1 text-[10px] text-emerald-200 transition hover:bg-emerald-500/12">
+                                    Resolve
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </template>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                </section>
+
+                <section class="rounded-[26px] border border-slate-800 bg-slate-900/65 p-4 shadow-[0_18px_60px_rgba(15,23,42,0.2)] md:p-5">
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.22em] text-cyan-300/75">Jarvis Surface</div>
+                      <div class="mt-2 text-lg font-semibold text-white">Companion and linked systems</div>
+                      <div class="mt-1 text-sm leading-6 text-slate-400">The mobile companion, active sessions, and the external systems Axon can correlate with your workspaces.</div>
+                    </div>
+                    <button @click="refreshJarvisSurfaces()"
+                            class="rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2 text-[11px] text-slate-300 transition hover:border-slate-500">
+                      Refresh
+                    </button>
+                  </div>
+
+                  <div class="mt-4 rounded-2xl border px-4 py-3"
+                       :class="companionStatusTone()">
+                    <div class="flex items-center justify-between gap-3">
+                      <div>
+                        <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Companion status</div>
+                        <div class="mt-1 text-sm font-medium text-slate-100" x-text="companionDeviceName() || 'No paired mobile companion yet'"></div>
+                      </div>
+                      <span class="rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.16em]"
+                            :class="companionStatusTone()"
+                            x-text="companionStatus.session_valid ? 'Connected' : 'Idle'"></span>
+                    </div>
+                    <div class="mt-2 text-[11px] leading-5 text-slate-400" x-text="companionPresenceSummary()"></div>
+                  </div>
+
+                  <div class="mt-4 grid grid-cols-3 gap-2">
+                    <div class="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-3">
+                      <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Devices</div>
+                      <div class="mt-1 text-lg font-semibold text-white" x-text="companionStatus.counts?.devices || 0"></div>
+                    </div>
+                    <div class="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-3">
+                      <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Sessions</div>
+                      <div class="mt-1 text-lg font-semibold text-white" x-text="companionStatus.counts?.sessions || 0"></div>
+                    </div>
+                    <div class="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-3">
+                      <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Presence</div>
+                      <div class="mt-1 text-lg font-semibold text-white" x-text="companionStatus.counts?.presence || 0"></div>
+                    </div>
+                  </div>
+
+                  <div class="mt-4">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Workspace links</div>
+                      <span class="text-[10px] text-slate-500" x-text="`${connectorWorkspaceItems().length} workspaces`"></span>
+                    </div>
+                    <div x-show="connectorsError" class="mt-3 rounded-2xl border border-rose-500/20 bg-rose-500/8 px-3 py-3 text-[11px] text-rose-200" x-text="connectorsError"></div>
+                    <div x-show="connectorsLoading" class="mt-3 rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-3 text-[11px] text-slate-400">Refreshing connector graph…</div>
+                    <div class="mt-3 space-y-2">
+                      <template x-if="!connectorWorkspaceItems().length && !connectorsLoading">
+                        <div class="rounded-2xl border border-dashed border-slate-800 bg-slate-950/60 px-3 py-3 text-[11px] text-slate-500">
+                          No linked workspaces yet. Axon will surface GitHub, Vercel, and Sentry here as relationships are inferred or linked.
+                        </div>
+                      </template>
+                      <template x-for="entry in connectorWorkspaceItems()" :key="`connector-workspace-${entry.workspace?.id || entry.workspace?.name}`">
+                        <button @click="openConnectorWorkspace(entry)"
+                                class="w-full rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-3 text-left transition hover:border-cyan-500/25 hover:bg-cyan-500/8">
+                          <div class="flex items-start justify-between gap-3">
+                            <div class="min-w-0">
+                              <div class="text-sm font-medium text-slate-100 truncate" x-text="entry.workspace?.name || 'Unknown workspace'"></div>
+                              <div class="mt-1 text-[11px] text-slate-500" x-text="entry.workspace?.path || 'No path recorded'"></div>
+                            </div>
+                            <div class="text-right text-[10px] text-slate-500 shrink-0">
+                              <div x-text="`${entry.attention?.counts?.now || 0} now`"></div>
+                              <div x-text="`${entry.attention?.counts?.waiting_on_me || 0} waiting`"></div>
+                            </div>
+                          </div>
+                          <div class="mt-3 flex flex-wrap gap-1.5">
+                            <template x-for="relationship in connectorRelationshipItems(entry)" :key="`${entry.workspace?.id}-${relationship.external_system}-${relationship.external_id || relationship.external_name}`">
+                              <span class="rounded-full border px-2 py-0.5 text-[10px]"
+                                    :class="connectorSystemTone(relationship.external_system)"
+                                    x-text="connectorRelationshipLabel(relationship)"></span>
+                            </template>
+                          </div>
+                        </button>
+                      </template>
+                    </div>
+                  </div>
+                </section>
+              </section>
 
               <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
                 <div class="stat-card rounded-3xl border border-slate-700/50 bg-slate-900/55 p-4">

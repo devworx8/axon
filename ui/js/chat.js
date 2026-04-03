@@ -5,26 +5,45 @@
 function axonChatMixin() {
   return {
 
+    /* ── Workspace-scoped loading ────────────────────────────── */
+
+    /** True only when chatLoading AND the running workspace matches the active tab */
+    isChatLoadingHere() {
+      return !!this.currentWorkspaceRunActive?.();
+    },
+
+    /** Label for cross-workspace agent banner (e.g. "Agent working in Axon…") */
+    crossWorkspaceAgentLabel() {
+      if (!this.chatLoading || this.isChatLoadingHere()) return '';
+      const wsId = String(this._chatLoadingWorkspaceId || this.firstOtherActiveWorkspaceId?.() || '').trim();
+      if (!wsId) return '';
+      const project = (this.projects || []).find(p => String(p.id) === wsId);
+      return project ? `Agent working in ${project.name}…` : '';
+    },
+
     /* ── Composer helpers ─────────────────────────────────────── */
 
     chatComposerPlaceholder() {
-      if (this.chatLoading) return 'Steer agent or add to queue…';
+      if (this.chatLoading && this.isChatLoadingHere()) return 'Steer agent or add to queue…';
+      if (this.chatLoading && !this.isChatLoadingHere()) {
+        const label = this.crossWorkspaceAgentLabel();
+        return label || 'Agent running in another workspace…';
+      }
       if (this.businessMode) {
         if (this.businessView === 'quote') return 'Create a quote for Khanyisa with line items, discount, and total...';
         if (this.businessView === 'client') return 'Draft a client profile, follow-up email, or billing summary...';
         if (this.businessView === 'receipt') return 'Create a receipt with payment confirmation details...';
         return 'Create an invoice with line items, discount, due date, and client details...';
       }
+      const wsName = this.chatProject?.name;
       const agent = this.resolveChatMode(this.chatInput) === 'agent';
       const opts = this.normalizedComposerOptions();
       if (!agent) {
         if (opts.intelligence_mode === 'deep_research') return 'Ask Axon to research, synthesize, and explain...';
         if (opts.action_mode === 'generate') return 'Tell Axon what to create...';
-        return 'Give Axon a goal, task, or command...';
+        return wsName ? `Message Axon in ${wsName}...` : 'Give Axon a goal, task, or command...';
       }
-      return this.isMobile
-        ? 'Give Axon a goal, task, or command...'
-        : 'Give Axon a goal, task, or command...';
+      return wsName ? `Message Axon in ${wsName}...` : 'Give Axon a goal, task, or command...';
     },
 
     clearChatInput() {
@@ -442,6 +461,8 @@ function axonChatMixin() {
         if (typeof this.writeWindowPref === 'function') this.writeWindowPref('consoleZoom', String(next));
         else localStorage.setItem('axon.consoleZoom', String(next));
       } catch (_) {}
+      // Sync --ui-scale so all text-[Npx] classes scale globally
+      try { document.documentElement.style.setProperty('--ui-scale', String(next)); } catch (_) {}
     },
 
     adjustConsoleZoom(delta = 0) {
@@ -974,6 +995,7 @@ function axonChatMixin() {
         threadMode,
         resources: [],
       });
+      this._generateFollowUpSuggestions(question, msg);
       this.scrollChat(true);
     },
 
@@ -1080,28 +1102,9 @@ function axonChatMixin() {
 
     /* ── Live operator ────────────────────────────────────────── */
 
-    beginLiveOperator(mode, msg = '') {
-      if (this.liveOperatorTimer) clearTimeout(this.liveOperatorTimer);
-      this.liveOperator = {
-        active: true,
-        mode,
-        phase: mode === 'agent' ? 'observe' : 'plan',
-        title: mode === 'agent' ? 'Observing the task' : 'Opening the reply stream',
-        detail: mode === 'agent'
-          ? 'Axon is checking your goal and lining up the first safe step.'
-          : 'Axon is preparing a response.',
-        tool: '',
-        startedAt: new Date().toISOString(),
-        workspaceId: String(this.chatProjectId || '').trim(),
-        autoSessionId: '',
-        updatedAt: new Date().toISOString(),
-      };
-      this.liveOperatorFeed = [];
-      this.pushLiveOperatorFeed(
-        this.liveOperator.phase,
-        this.liveOperator.title,
-        msg ? `Goal received: ${msg.slice(0, 120)}` : this.liveOperator.detail,
-      );
+    beginLiveOperator(mode, msg = '', workspaceId = '') {
+      const targetWorkspaceId = String(workspaceId || this.chatProjectId || '').trim();
+      this.beginWorkspaceLiveOperator?.(targetWorkspaceId, mode, msg);
       if (mode === 'agent') { this.setAgentStage('observe'); this.agentCtxPct = 0; this.agentCtxIter = 0; }
       if (this.desktopPreview.enabled) {
         this.refreshDesktopPreview(true);
@@ -1109,62 +1112,63 @@ function axonChatMixin() {
       }
     },
 
-    updateLiveOperator(mode, event = {}) {
-      if (!this.liveOperator.active) this.beginLiveOperator(mode);
+    updateLiveOperator(mode, event = {}, workspaceId = '') {
+      const targetWorkspaceId = String(
+        workspaceId
+        || event.workspace_id
+        || event.workspaceId
+        || this.liveOperator.workspaceId
+        || this.chatProjectId
+        || ''
+      ).trim();
+      const state = this.workspaceRunStateFor?.(targetWorkspaceId);
+      if (!state?.liveOperator?.active) this.beginLiveOperator(mode, '', targetWorkspaceId);
       const updatedAt = new Date().toISOString();
-      const workspaceId = String(this.liveOperator.workspaceId || this.chatProjectId || '').trim();
+      const currentOperator = this.workspaceRunStateFor?.(targetWorkspaceId)?.liveOperator || this.liveOperator || {};
       if (mode !== 'agent') {
         if (event.error) {
-          this.liveOperator = {
-            ...this.liveOperator,
+          this.patchWorkspaceLiveOperator?.(targetWorkspaceId, {
             active: true,
             phase: 'recover',
             title: 'Reply interrupted',
             detail: event.error,
-            workspaceId,
             updatedAt,
-          };
-          this.pushLiveOperatorFeed('recover', 'Reply interrupted', event.error);
+          });
+          this.pushWorkspaceLiveOperatorFeed?.(targetWorkspaceId, 'recover', 'Reply interrupted', event.error);
           return;
         }
         if (event.done) {
-          this.liveOperator = {
-            ...this.liveOperator,
+          this.patchWorkspaceLiveOperator?.(targetWorkspaceId, {
             active: true,
             phase: 'verify',
             title: 'Reply complete',
             detail: 'Axon finished streaming the answer.',
-            workspaceId,
             updatedAt,
-          };
-          this.pushLiveOperatorFeed('verify', 'Reply complete', 'Axon finished streaming the answer.');
+          });
+          this.pushWorkspaceLiveOperatorFeed?.(targetWorkspaceId, 'verify', 'Reply complete', 'Axon finished streaming the answer.');
           return;
         }
-        this.liveOperator = {
-          ...this.liveOperator,
+        this.patchWorkspaceLiveOperator?.(targetWorkspaceId, {
           active: true,
           phase: 'execute',
           title: 'Writing the reply',
           detail: 'Live response is flowing into the console now.',
-          workspaceId,
           updatedAt,
-        };
-        this.pushLiveOperatorFeed('execute', 'Writing the reply', 'Live response is flowing into the console now.');
+        });
+        this.pushWorkspaceLiveOperatorFeed?.(targetWorkspaceId, 'execute', 'Writing the reply', 'Live response is flowing into the console now.');
         return;
       }
 
       if (event.type === 'tool_call') {
-        this.liveOperator = {
-          ...this.liveOperator,
+        this.patchWorkspaceLiveOperator?.(targetWorkspaceId, {
           active: true,
           phase: 'execute',
           title: `Running ${this.prettyToolName(event.name)}`,
           detail: event.args ? JSON.stringify(event.args).slice(0, 96) : 'Using a local operator tool.',
           tool: event.name || '',
-          workspaceId,
           updatedAt,
-        };
-        this.pushLiveOperatorFeed('execute', `Running ${this.prettyToolName(event.name)}`, event.args ? JSON.stringify(event.args).slice(0, 96) : 'Using a local operator tool.');
+        });
+        this.pushWorkspaceLiveOperatorFeed?.(targetWorkspaceId, 'execute', `Running ${this.prettyToolName(event.name)}`, event.args ? JSON.stringify(event.args).slice(0, 96) : 'Using a local operator tool.');
         // Mirror shell commands to the integrated terminal
         if ((event.name === 'shell_cmd' || event.name === 'shell_bg') && event.args?.cmd) {
           this._mirrorShellToTerminal(event.args.cmd, event.args.cwd);
@@ -1172,17 +1176,15 @@ function axonChatMixin() {
         return;
       }
       if (event.type === 'tool_result') {
-        this.liveOperator = {
-          ...this.liveOperator,
+        this.patchWorkspaceLiveOperator?.(targetWorkspaceId, {
           active: true,
           phase: 'verify',
           title: `Checking ${this.prettyToolName(event.name)}`,
           detail: (event.result || 'Axon is reviewing the tool output.').slice(0, 120),
-          tool: event.name || this.liveOperator.tool,
-          workspaceId,
+          tool: event.name || currentOperator.tool || '',
           updatedAt,
-        };
-        this.pushLiveOperatorFeed('verify', `Checking ${this.prettyToolName(event.name)}`, (event.result || 'Axon is reviewing the tool output.').slice(0, 120));
+        });
+        this.pushWorkspaceLiveOperatorFeed?.(targetWorkspaceId, 'verify', `Checking ${this.prettyToolName(event.name)}`, (event.result || 'Axon is reviewing the tool output.').slice(0, 120));
         // Mirror shell output to the integrated terminal
         if ((event.name === 'shell_cmd' || event.name === 'shell_bg' || event.name === 'shell_bg_check') && event.result) {
           this._mirrorShellResultToTerminal(event.result);
@@ -1194,98 +1196,65 @@ function axonChatMixin() {
         return;
       }
       if (event.type === 'text') {
-        this.liveOperator = {
-          ...this.liveOperator,
+        const priorOperator = this.workspaceRunStateFor?.(targetWorkspaceId)?.liveOperator || currentOperator;
+        this.patchWorkspaceLiveOperator?.(targetWorkspaceId, {
           active: true,
-          phase: this.liveOperator.tool ? 'verify' : 'plan',
-          title: this.liveOperator.tool ? 'Writing the result' : 'Planning the next step',
-          detail: this.liveOperator.tool
+          phase: priorOperator.tool ? 'verify' : 'plan',
+          title: priorOperator.tool ? 'Writing the result' : 'Planning the next step',
+          detail: priorOperator.tool
             ? 'Axon is turning tool output into a final answer.'
             : 'Axon is reasoning through the task before it acts.',
-          workspaceId,
           updatedAt,
-        };
-        this.pushLiveOperatorFeed(
-          this.liveOperator.tool ? 'verify' : 'plan',
-          this.liveOperator.tool ? 'Writing the result' : 'Planning the next step',
-          this.liveOperator.tool
+        });
+        this.pushWorkspaceLiveOperatorFeed?.(
+          targetWorkspaceId,
+          priorOperator.tool ? 'verify' : 'plan',
+          priorOperator.tool ? 'Writing the result' : 'Planning the next step',
+          priorOperator.tool
             ? 'Axon is turning tool output into a final answer.'
             : 'Axon is reasoning through the task before it acts.',
         );
         return;
       }
       if (event.type === 'done') {
-        this.liveOperator = {
-          ...this.liveOperator,
+        this.patchWorkspaceLiveOperator?.(targetWorkspaceId, {
           active: true,
           phase: 'verify',
           title: 'Task complete',
           detail: 'Axon finished the operator pass.',
-          workspaceId,
           updatedAt,
-        };
-        this.pushLiveOperatorFeed('verify', 'Task complete', 'Axon finished the operator pass.');
+        });
+        this.pushWorkspaceLiveOperatorFeed?.(targetWorkspaceId, 'verify', 'Task complete', 'Axon finished the operator pass.');
         return;
       }
       if (event.type === 'error') {
-        this.liveOperator = {
-          ...this.liveOperator,
+        this.patchWorkspaceLiveOperator?.(targetWorkspaceId, {
           active: true,
           phase: 'recover',
           title: 'Needs attention',
           detail: event.message || 'Axon hit an error and stopped safely.',
-          workspaceId,
           updatedAt,
-        };
-        this.pushLiveOperatorFeed('recover', 'Needs attention', event.message || 'Axon hit an error and stopped safely.');
+        });
+        this.pushWorkspaceLiveOperatorFeed?.(targetWorkspaceId, 'recover', 'Needs attention', event.message || 'Axon hit an error and stopped safely.');
         return;
       }
       if (event.type === 'approval_required') {
-        this.liveOperator = {
-          ...this.liveOperator,
+        this.patchWorkspaceLiveOperator?.(targetWorkspaceId, {
           active: true,
           phase: 'recover',
           title: 'Awaiting approval',
           detail: event.message || 'Axon paused until you approve or deny the blocked action.',
-          workspaceId,
           updatedAt,
-        };
-        this.pushLiveOperatorFeed('recover', 'Awaiting approval', event.message || 'Axon paused until you approve or deny the blocked action.');
+        });
+        this.pushWorkspaceLiveOperatorFeed?.(targetWorkspaceId, 'recover', 'Awaiting approval', event.message || 'Axon paused until you approve or deny the blocked action.');
       }
     },
 
     syncLiveOperatorFromSnapshot(snapshot = {}) {
       if (!snapshot || typeof snapshot !== 'object') return;
-      const active = !!snapshot.active;
-      if (!active) {
-        if (!this.chatLoading) this.clearLiveOperator(0);
-        return;
-      }
-      const workspaceId = String(snapshot.workspace_id || this.liveOperator.workspaceId || '').trim();
+      const workspaceId = String(snapshot.workspace_id || '').trim();
       if (workspaceId) this.ensureWorkspaceTab?.(workspaceId);
-      const autoSessionId = String(snapshot.auto_session_id || this.liveOperator.autoSessionId || '').trim();
-      this.liveOperator = {
-        ...this.liveOperator,
-        active: true,
-        mode: snapshot.mode || this.liveOperator.mode || 'chat',
-        phase: snapshot.phase || this.liveOperator.phase || 'observe',
-        title: snapshot.title || this.liveOperator.title || 'Axon is working…',
-        detail: snapshot.detail || snapshot.summary || this.liveOperator.detail || '',
-        tool: snapshot.tool || this.liveOperator.tool || '',
-        startedAt: snapshot.started_at || this.liveOperator.startedAt || '',
-        workspaceId,
-        autoSessionId,
-        updatedAt: snapshot.updated_at || this.liveOperator.updatedAt || new Date().toISOString(),
-      };
-      if (Array.isArray(snapshot.feed) && snapshot.feed.length) {
-        this.liveOperatorFeed = snapshot.feed.slice(-6).map(entry => ({
-          id: String(entry?.id || `${entry?.at || Date.now()}-${entry?.phase || 'observe'}`),
-          phase: String(entry?.phase || 'observe'),
-          title: String(entry?.title || 'Working'),
-          detail: String(entry?.detail || ''),
-          at: String(entry?.at || new Date().toISOString()),
-        }));
-      }
+      this.syncWorkspaceLiveOperatorSnapshot?.(snapshot);
       this.syncAutoSessionNoticeForCurrentWorkspace?.();
     },
 
@@ -1311,28 +1280,9 @@ function axonChatMixin() {
       this.showToast?.(`Following ${this.liveOperatorWorkspaceName()}`);
     },
 
-    clearLiveOperator(delay = 0) {
-      if (this.liveOperatorTimer) clearTimeout(this.liveOperatorTimer);
-      const reset = () => {
-        this.liveOperator = {
-          active: false,
-          mode: 'chat',
-          phase: 'observe',
-          title: '',
-          detail: '',
-          tool: '',
-          startedAt: '',
-          workspaceId: '',
-          autoSessionId: '',
-          updatedAt: '',
-        };
-        this.stopDesktopPreview();
-      };
-      if (delay > 0) {
-        this.liveOperatorTimer = setTimeout(reset, delay);
-      } else {
-        reset();
-      }
+    clearLiveOperator(delay = 0, workspaceId = '') {
+      const targetWorkspaceId = String(workspaceId || this.liveOperator.workspaceId || this.chatProjectId || '').trim();
+      this.clearWorkspaceLiveOperator?.(targetWorkspaceId, delay);
     },
 
     rememberOperatorOutcome(mode, message) {
@@ -1516,16 +1466,13 @@ function axonChatMixin() {
     },
 
     stopGeneration() {
-      if (this._chatAbortController) {
-        this._chatAbortController.abort();
-        this._chatAbortController = null;
-      }
+      const workspaceId = String(this.chatProjectId || '').trim();
+      this.stopWorkspaceRun?.(workspaceId);
       // Mark all streaming messages as done
       this.chatMessages.forEach(m => {
         if (m.streaming) m.streaming = false;
       });
-      this.chatLoading = false;
-      this.clearLiveOperator(400);
+      this.clearLiveOperator(400, workspaceId);
       this.showToast('Generation stopped');
     },
 
@@ -1548,24 +1495,26 @@ function axonChatMixin() {
         composer_options: this.normalizedComposerOptions(),
         ...extraPayload,
       };
+      const workspaceId = String(payload.project_id || '').trim();
       if (this.usesOllamaBackend()) payload.model = this.activeChatModel() || '';
 
-      this._chatAbortController = new AbortController();
+      const controller = new AbortController();
+      this.setWorkspaceAbortController?.(workspaceId, controller);
       const resp = await fetch(endpoint, {
         method: 'POST',
         headers: this.authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
-        signal: this._chatAbortController.signal,
+        signal: controller.signal,
       });
 
       if (resp.status === 401) {
         this.handleAuthRequired();
-        this.updateLiveOperator(mode, { type: 'error', message: 'Session expired.' });
+        this.updateLiveOperator(mode, { type: 'error', message: 'Session expired.' }, workspaceId);
         throw new Error('Session expired');
       }
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-        this.updateLiveOperator(mode, { type: 'error', message: err.detail || resp.statusText });
+        this.updateLiveOperator(mode, { type: 'error', message: err.detail || resp.statusText }, workspaceId);
         throw new Error(err.detail || resp.statusText);
       }
 
@@ -1573,10 +1522,10 @@ function axonChatMixin() {
       const decoder = new TextDecoder();
       let buf = '';
       if (effectiveMode === 'agent') {
-        this.setAgentStage('plan');
-        this.updateLiveOperator(effectiveMode, { type: 'text' });
+        if (String(this.chatProjectId || '').trim() === workspaceId) this.setAgentStage('plan');
+        this.updateLiveOperator(effectiveMode, { type: 'text' }, workspaceId);
       } else {
-        this.updateLiveOperator(effectiveMode, { chunk: 'stream-open' });
+        this.updateLiveOperator(effectiveMode, { chunk: 'stream-open' }, workspaceId);
       }
 
       while (true) {
@@ -1590,103 +1539,132 @@ function axonChatMixin() {
           try {
             const data = JSON.parse(line.slice(6));
             const idx = this.chatMessages.findIndex(m => m.id === respId);
-            if (idx < 0) continue;
-            this.ensureAssistantMessageBlocks(this.chatMessages[idx]);
+            const message = idx >= 0 ? this.chatMessages[idx] : null;
+            if (message) this.ensureAssistantMessageBlocks(message);
 
             if (effectiveMode === 'agent') {
               if (data.type === 'thinking') {
                 this.clearPendingAgentApproval();
-                this.setAgentStage('plan');
-                this.appendThinkingBlock(this.chatMessages[idx], data.chunk);
-                this.updateLiveOperator(effectiveMode, { type: 'text' });
+                if (String(this.chatProjectId || '').trim() === workspaceId) this.setAgentStage('plan');
+                if (message) this.appendThinkingBlock(message, data.chunk);
+                this.updateLiveOperator(effectiveMode, { type: 'text' }, workspaceId);
                 this.scrollChat();
               } else if (data.type === 'text') {
                 this.clearPendingAgentApproval();
-                this.finalizeThinkingBlocks(this.chatMessages[idx]);
-                if (this.chatMessages[idx].agentEvents?.length) this.setAgentStage('verify');
-                this.chatMessages[idx].content += data.chunk;
-                this.addMessageEvidenceSource(this.chatMessages[idx], data.evidence_source || data.evidenceSource || '');
-                this.updateLiveOperator(effectiveMode, data);
+                if (message) this.finalizeThinkingBlocks(message);
+                if (message?.agentEvents?.length && String(this.chatProjectId || '').trim() === workspaceId) {
+                  this.setAgentStage('verify');
+                }
+                if (message) {
+                  message.content += data.chunk;
+                  this.addMessageEvidenceSource(message, data.evidence_source || data.evidenceSource || '');
+                }
+                this.updateLiveOperator(effectiveMode, data, workspaceId);
                 this.scrollChat();
               } else if (data.type === 'tool_call' || data.type === 'tool_result') {
                 this.clearPendingAgentApproval();
-                this.setAgentStage(data.type === 'tool_call' ? 'execute' : 'verify');
-                this.chatMessages[idx].agentEvents.push(data);
-                if (data.type === 'tool_call') {
-                  this.finalizeThinkingBlocks(this.chatMessages[idx]);
-                  this.appendWorkingBlock(this.chatMessages[idx], data);
-                } else {
-                  this.resolveWorkingBlock(this.chatMessages[idx], data);
-                  if (data.name === 'generate_image') {
-                    this.attachGeneratedResource(this.chatMessages[idx], data.result);
+                if (String(this.chatProjectId || '').trim() === workspaceId) {
+                  this.setAgentStage(data.type === 'tool_call' ? 'execute' : 'verify');
+                }
+                if (message) {
+                  message.agentEvents.push(data);
+                  if (data.type === 'tool_call') {
+                    this.finalizeThinkingBlocks(message);
+                    this.appendWorkingBlock(message, data);
+                  } else {
+                    this.resolveWorkingBlock(message, data);
+                    if (data.name === 'generate_image') {
+                      this.attachGeneratedResource(message, data.result);
+                    }
                   }
                 }
-                this.updateLiveOperator(effectiveMode, data);
+                this.updateLiveOperator(effectiveMode, data, workspaceId);
                 this.scrollChat();
               } else if (data.type === 'context_usage') {
-                this.agentCtxPct = data.pct || 0;
-                this.agentCtxIter = data.iteration || 0;
-                this.agentMaxIter = data.max_iterations || this.agentMaxIter || 75;
+                if (String(this.chatProjectId || '').trim() === workspaceId) {
+                  this.agentCtxPct = data.pct || 0;
+                  this.agentCtxIter = data.iteration || 0;
+                  this.agentMaxIter = data.max_iterations || this.agentMaxIter || 75;
+                }
               } else if (data.type === 'done') {
                 this.clearPendingAgentApproval();
-                this.setAgentStage('verify');
-                this.finalizeThinkingBlocks(this.chatMessages[idx]);
-                this.finalizeWorkingBlocks(this.chatMessages[idx]);
-                this.chatMessages[idx].streaming = false;
-                // Auto-speak response if voice mode is active
-                if (typeof this.autoSpeakResponse === 'function') {
-                  this.autoSpeakResponse(this.chatMessages[idx].content);
+                if (String(this.chatProjectId || '').trim() === workspaceId) this.setAgentStage('verify');
+                if (message) {
+                  this.finalizeThinkingBlocks(message);
+                  this.finalizeWorkingBlocks(message);
+                  message.streaming = false;
                 }
-                this.updateLiveOperator(effectiveMode, data);
+                // Auto-speak response if voice mode is active
+                if (message && typeof this.autoSpeakResponse === 'function') {
+                  this.autoSpeakResponse(message.content);
+                }
+                this.updateLiveOperator(effectiveMode, data, workspaceId);
               } else if (data.type === 'error') {
                 this.clearPendingAgentApproval();
-                this.setAgentStage('recover');
-                this.finalizeThinkingBlocks(this.chatMessages[idx]);
-                this.finalizeWorkingBlocks(this.chatMessages[idx]);
-                this.chatMessages[idx].content += `\n⚠️ ${data.message}`;
-                this.chatMessages[idx].streaming = false;
-                this.chatMessages[idx].error = true;
-                this.chatMessages[idx].retryMsg = msg;
-                this.updateLiveOperator(effectiveMode, data);
+                if (String(this.chatProjectId || '').trim() === workspaceId) this.setAgentStage('recover');
+                if (message) {
+                  this.finalizeThinkingBlocks(message);
+                  this.finalizeWorkingBlocks(message);
+                  message.content += `\n⚠️ ${data.message}`;
+                  message.streaming = false;
+                  message.error = true;
+                  message.retryMsg = msg;
+                }
+                this.updateLiveOperator(effectiveMode, data, workspaceId);
               } else if (data.type === 'approval_required') {
-                this.setAgentStage('recover');
-                this.finalizeThinkingBlocks(this.chatMessages[idx]);
-                this.finalizeWorkingBlocks(this.chatMessages[idx]);
-                this.chatMessages[idx].streaming = false;
-                this.chatMessages[idx].pendingApproval = data;
+                if (String(this.chatProjectId || '').trim() === workspaceId) this.setAgentStage('recover');
+                if (message) {
+                  this.finalizeThinkingBlocks(message);
+                  this.finalizeWorkingBlocks(message);
+                  message.streaming = false;
+                  message.pendingApproval = data;
+                }
                 this.syncPendingAgentApproval(data);
-                this.updateLiveOperator(effectiveMode, data);
+                this.updateLiveOperator(effectiveMode, data, workspaceId);
                 this.checkInterruptedSession();
                 this.showToast(data.message || 'Approval required to continue this task');
               }
             } else {
               if (data.chunk) {
-                this.chatMessages[idx].content += data.chunk;
-                this.addMessageEvidenceSource(this.chatMessages[idx], data.evidence_source || data.evidenceSource || '');
-                this.updateLiveOperator(effectiveMode, data);
+                if (message) {
+                  message.content += data.chunk;
+                  this.addMessageEvidenceSource(message, data.evidence_source || data.evidenceSource || '');
+                }
+                this.updateLiveOperator(effectiveMode, data, workspaceId);
                 this.scrollChat();
               }
+              if (data.console_command && data.runtime_login_session) {
+                this.openRuntimeLoginModalFromConsoleSession?.(
+                  data.runtime_login_session,
+                  data.family || data.runtime_login_session?.family || '',
+                );
+              }
+              if (data.console_command && ['install', 'login'].includes(String(data.command || '').toLowerCase())) {
+                await this.loadRuntimeStatus?.();
+              }
               if (data.done) {
-                this.chatMessages[idx].streaming = false;
+                if (message) message.streaming = false;
                 // Auto-speak response if voice mode is active
-                if (typeof this.autoSpeakResponse === 'function') {
-                  this.autoSpeakResponse(this.chatMessages[idx].content);
+                if (message && typeof this.autoSpeakResponse === 'function') {
+                  this.autoSpeakResponse(message.content);
                 }
-                this.updateLiveOperator(effectiveMode, data);
+                this.updateLiveOperator(effectiveMode, data, workspaceId);
               }
               if (data.error) {
-                this.chatMessages[idx].content += `\n⚠️ ${data.error}`;
-                this.chatMessages[idx].streaming = false;
-                this.chatMessages[idx].error = true;
-                this.chatMessages[idx].retryMsg = msg;
-                this.updateLiveOperator(mode, { error: data.error });
+                if (message) {
+                  message.content += `\n⚠️ ${data.error}`;
+                  message.streaming = false;
+                  message.error = true;
+                  message.retryMsg = msg;
+                }
+                this.updateLiveOperator(mode, { error: data.error }, workspaceId);
               }
             }
           } catch(_) {}
         }
       }
 
-      this._chatAbortController = null;
+      this.setWorkspaceAbortController?.(workspaceId, null);
       const idx = this.chatMessages.findIndex(m => m.id === respId);
       if (idx >= 0) {
         this.finalizeThinkingBlocks(this.chatMessages[idx]);
@@ -1707,58 +1685,16 @@ function axonChatMixin() {
         // Generate follow-up suggestion chips
         this._generateFollowUpSuggestions(this.chatMessages[idx].content, msg);
       }
-      this.clearLiveOperator(this.liveOperator.phase === 'recover' ? 4200 : 1400);
+      const activeOperator = this.workspaceRunStateFor?.(workspaceId)?.liveOperator || this.liveOperator;
+      this.clearLiveOperator(activeOperator.phase === 'recover' ? 4200 : 1400, workspaceId);
     },
 
     _generateFollowUpSuggestions(response, userMessage) {
-      const suggestions = [];
-      const lower = response.toLowerCase();
-      const userLower = (userMessage || '').toLowerCase();
-      const trimmed = response.trim();
-
-      // Detect model asking for continuation ("Continue.", "please continue", etc.)
-      if (/\bcontinue\.?\s*$/i.test(trimmed) || /\bplease continue\b/i.test(trimmed)) {
-        suggestions.push('→ Continue');
-      }
-
-      // Context-aware suggestions based on response content
-      if (/\b(created|saved|added)\b.{0,30}\b(mission|task)/i.test(response)) {
-        suggestions.push('Show my active missions');
-      }
-      if (/\b(created|saved|added)\b.{0,30}\b(playbook|prompt)/i.test(response)) {
-        suggestions.push('Open playbooks');
-      }
-      if (/```[\s\S]{20,}```/.test(response)) {
-        suggestions.push('Explain this code');
-        suggestions.push('Optimize this code');
-      }
-      if (/\b(plan|roadmap|strategy|steps?)\b/i.test(response) && suggestions.length < 3) {
-        suggestions.push('Turn this into missions');
-      }
-      if (/\b(error|bug|issue|fix)\b/i.test(lower) && suggestions.length < 3) {
-        suggestions.push('How do I debug this?');
-      }
-      if (/\b(api|endpoint|route)\b/i.test(lower) && suggestions.length < 3) {
-        suggestions.push('Show example request');
-      }
-
-      // Generic fallbacks — always offer at least 2
-      if (suggestions.length === 0) {
-        suggestions.push('Tell me more');
-        suggestions.push('What should I do next?');
-      } else if (suggestions.length === 1) {
-        suggestions.push('What should I do next?');
-      }
-
-      this.followUpSuggestions = suggestions.slice(0, 3);
+      axonApplyFollowUpSuggestions.call(this, response, userMessage);
     },
 
     useSuggestion(text) {
-      this.followUpSuggestions = [];
-      // "→ Continue" chip sends a continuation prompt
-      const msg = text === '→ Continue' ? 'please continue' : text;
-      this.chatInput = msg;
-      this.$nextTick(() => this.sendChat());
+      axonUseFollowUpSuggestion.call(this, text);
     },
 
     /* ── Chat CRUD ────────────────────────────────────────────── */
@@ -1895,7 +1831,7 @@ function axonChatMixin() {
 
     async retryUserMessage(msg) {
       // Re-send the user message exactly as-is (creates new assistant response)
-      if (this.chatLoading) return;
+      if (this.currentWorkspaceRunActive?.()) return;
       this.chatInput = msg.content;
       await this.$nextTick();
       this.sendChat();
@@ -1967,7 +1903,7 @@ function axonChatMixin() {
 
     async quickResume() {
       // Inject "please continue" as a user message to resume the last agent session
-      if (this.chatLoading) return;
+      if (this.currentWorkspaceRunActive?.()) return;
       const autoSession = this.preferredResumeAutoSession('please continue', 'quick_resume');
       if (autoSession?.session_id) {
         if (String(this.chatProjectId || '') !== String(autoSession.workspace_id || '')) {
@@ -2399,11 +2335,12 @@ function axonChatMixin() {
     async sendChatSilent(message, forceMode, extraPayload = {}) {
       const msg = (message || '').trim();
       if (!msg) return;
+      const workspaceId = String(this.chatProjectId || '').trim();
       const started = Date.now();
-      while (this.chatLoading && (Date.now() - started) < 5000) {
+      while (this.currentWorkspaceRunActive?.() && (Date.now() - started) < 5000) {
         await new Promise(resolve => setTimeout(resolve, 120));
       }
-      if (this.chatLoading) {
+      if (this.currentWorkspaceRunActive?.()) {
         this.showToast('Axon is still finishing the previous step. Try continue again in a moment.');
         return;
       }
@@ -2416,8 +2353,8 @@ function axonChatMixin() {
       if (autoResumeSession?.session_id && this.currentBackendSupportsAgent()) {
         this.setConversationModeAuto({ persist: false });
       }
-      this.chatLoading = true;
-      this.beginLiveOperator(mode, msg);
+      this.setWorkspaceRunLoading?.(workspaceId, true);
+      this.beginLiveOperator(mode, msg, workspaceId);
       if (autoResumeSession?.session_id) {
         try {
           if (String(this.chatProjectId || '') !== String(autoResumeSession.workspace_id || '')) {
@@ -2437,7 +2374,7 @@ function axonChatMixin() {
             resources: [],
           });
         }
-        this.chatLoading = false;
+        this.setWorkspaceRunLoading?.(workspaceId, false);
         this.scrollChat();
         this._processQueue();
         return;
@@ -2463,7 +2400,7 @@ function axonChatMixin() {
             resources: [],
           });
         }
-        this.chatLoading = false;
+        this.setWorkspaceRunLoading?.(workspaceId, false);
         this.scrollChat();
         this._processQueue();
         return;
@@ -2474,7 +2411,7 @@ function axonChatMixin() {
       try {
         await this.streamChatMessage(msg, mode, respId, [], extraPayload);
       } catch(e) {
-        if (e.name === 'AbortError') { this.chatLoading = false; return; }
+        if (e.name === 'AbortError') { this.setWorkspaceRunLoading?.(workspaceId, false); return; }
         const idx = this.chatMessages.findIndex(m => m.id === respId);
         if (idx >= 0) {
           this.chatMessages[idx].content = `⚠️ ${e.message}`;
@@ -2482,7 +2419,7 @@ function axonChatMixin() {
           this.chatMessages[idx].error = true;
         }
       }
-      this.chatLoading = false;
+      this.setWorkspaceRunLoading?.(workspaceId, false);
       this.scrollChat();
       this._processQueue();
     },
@@ -2493,15 +2430,15 @@ function axonChatMixin() {
     enqueueMessage(msg) {
       const text = (msg || '').trim();
       if (!text) return;
-      if (!Array.isArray(this._messageQueue)) this._messageQueue = [];
-      this._messageQueue.push(text);
-      this.showToast(`Queued: "${text.slice(0, 40)}${text.length > 40 ? '…' : ''}" (${this._messageQueue.length} in queue)`);
+      const workspaceId = String(this.chatProjectId || '').trim();
+      const size = this.queueWorkspaceMessage?.(workspaceId, text) || 0;
+      this.showToast(`Queued: "${text.slice(0, 40)}${text.length > 40 ? '…' : ''}" (${size} in queue)`);
     },
 
     _processQueue() {
-      if (!Array.isArray(this._messageQueue) || !this._messageQueue.length) return;
-      if (this.chatLoading) return;
-      const next = this._messageQueue.shift();
+      const workspaceId = String(this.chatProjectId || '').trim();
+      if (this.currentWorkspaceRunActive?.()) return;
+      const next = this.shiftWorkspaceMessage?.(workspaceId);
       if (next) {
         this.chatInput = next;
         this.$nextTick(() => this.sendChat());
@@ -2513,7 +2450,10 @@ function axonChatMixin() {
       const text = (guidance || '').trim();
       if (!text) return;
       try {
-        await this.api('POST', '/api/agent/steer', { message: text });
+        await this.api('POST', '/api/agent/steer', {
+          message: text,
+          project_id: this.chatProjectId ? parseInt(this.chatProjectId, 10) : null,
+        });
         this.showToast(`Steered: "${text.slice(0, 50)}…"`);
       } catch(e) {
         // Fallback: steer not supported by backend, queue instead
@@ -2565,7 +2505,15 @@ function axonChatMixin() {
         this.agentMode = false;
       }
       const msg = this.chatInput.trim();
-      if (!msg || this.chatLoading) return;
+      if (!msg || this.currentWorkspaceRunActive?.()) return;
+      const workspaceId = String(this.chatProjectId || '').trim();
+      if (this.slashMenu) {
+        this.slashMenu.open = false;
+        this.slashMenu.query = '';
+        this.slashMenu.filtered = [];
+        this.slashMenu.selectedIdx = 0;
+      }
+      if (await this.maybeHandleInteractiveConsoleCommand?.(msg)) return;
       const mode = this.effectiveChatMode(msg);
       const researchPack = this.currentResearchPack();
       const packResources = researchPack?.resources || [];
@@ -2613,8 +2561,8 @@ function axonChatMixin() {
         threadMode: autoResumeSession?.session_id ? 'auto' : this.currentThreadMode(mode),
         resources: attachedResources,
       });
-      this.chatLoading = true;
-      this.beginLiveOperator(mode, msg);
+      this.setWorkspaceRunLoading?.(workspaceId, true);
+      this.beginLiveOperator(mode, msg, workspaceId);
       this.scrollChat();
 
       if (autoResumeSession?.session_id) {
@@ -2636,11 +2584,11 @@ function axonChatMixin() {
             retryResources: attachedResourceIds,
             resources: [],
           });
-          this.setAgentStage('recover');
-          this.updateLiveOperator(mode, { type: 'error', message: e.message });
-          this.clearLiveOperator(4200);
+          if (String(this.chatProjectId || '').trim() === workspaceId) this.setAgentStage('recover');
+          this.updateLiveOperator(mode, { type: 'error', message: e.message }, workspaceId);
+          this.clearLiveOperator(4200, workspaceId);
         }
-        this.chatLoading = false;
+        this.setWorkspaceRunLoading?.(workspaceId, false);
         this.scrollChat();
         this._processQueue();
         return;
@@ -2667,11 +2615,11 @@ function axonChatMixin() {
             retryResources: attachedResourceIds,
             resources: [],
           });
-          this.setAgentStage('recover');
-          this.updateLiveOperator(mode, { type: 'error', message: e.message });
-          this.clearLiveOperator(4200);
+          if (String(this.chatProjectId || '').trim() === workspaceId) this.setAgentStage('recover');
+          this.updateLiveOperator(mode, { type: 'error', message: e.message }, workspaceId);
+          this.clearLiveOperator(4200, workspaceId);
         }
-        this.chatLoading = false;
+        this.setWorkspaceRunLoading?.(workspaceId, false);
         this.scrollChat();
         this._processQueue();
         return;
@@ -2685,7 +2633,7 @@ function axonChatMixin() {
       } catch(e) {
         if (e.name === 'AbortError') {
           // User clicked stop — not an error
-          this.chatLoading = false;
+          this.setWorkspaceRunLoading?.(workspaceId, false);
           this.scrollChat();
           return;
         }
@@ -2706,12 +2654,16 @@ function axonChatMixin() {
           // Refresh interrupted session banner after disconnect
           if (isAgentDisconnect) setTimeout(() => this.checkInterruptedSession(), 1500);
         }
-        if (mode === 'agent') this.setAgentStage('recover');
-        this.updateLiveOperator(mode, { type: 'error', message: e.message === 'Failed to fetch' || e.message.includes('NetworkError') ? 'Connection lost.' : e.message });
-        this.clearLiveOperator(4200);
+        if (mode === 'agent' && String(this.chatProjectId || '').trim() === workspaceId) this.setAgentStage('recover');
+        this.updateLiveOperator(
+          mode,
+          { type: 'error', message: e.message === 'Failed to fetch' || e.message.includes('NetworkError') ? 'Connection lost.' : e.message },
+          workspaceId,
+        );
+        this.clearLiveOperator(4200, workspaceId);
       }
 
-      this.chatLoading = false;
+      this.setWorkspaceRunLoading?.(workspaceId, false);
       this.scrollChat();
       this._processQueue();
     },
@@ -2719,6 +2671,7 @@ function axonChatMixin() {
     async retryChat(errorMsg) {
       const msg = errorMsg.retryMsg;
       if (!msg) return;
+      const workspaceId = String(this.chatProjectId || '').trim();
       const mode = this.effectiveChatMode(msg, errorMsg.mode || this.resolveChatMode(msg));
       const researchPack = this.currentResearchPack();
       const resourceIds = (errorMsg.retryResources && errorMsg.retryResources.length)
@@ -2736,8 +2689,8 @@ function axonChatMixin() {
       if (autoResumeSession?.session_id && this.currentBackendSupportsAgent()) {
         this.setConversationModeAuto({ persist: false });
       }
-      this.chatLoading = true;
-      this.beginLiveOperator(mode, msg);
+      this.setWorkspaceRunLoading?.(workspaceId, true);
+      this.beginLiveOperator(mode, msg, workspaceId);
       this.scrollChat();
       if (autoResumeSession?.session_id) {
         try {
@@ -2758,11 +2711,11 @@ function axonChatMixin() {
             retryResources: resourceIds,
             resources: [],
           });
-          this.setAgentStage('recover');
-          this.updateLiveOperator(mode, { type: 'error', message: e.message });
-          this.clearLiveOperator(4200);
+          if (String(this.chatProjectId || '').trim() === workspaceId) this.setAgentStage('recover');
+          this.updateLiveOperator(mode, { type: 'error', message: e.message }, workspaceId);
+          this.clearLiveOperator(4200, workspaceId);
         }
-        this.chatLoading = false;
+        this.setWorkspaceRunLoading?.(workspaceId, false);
         this.scrollChat();
         return;
       }
@@ -2787,11 +2740,11 @@ function axonChatMixin() {
             retryResources: resourceIds,
             resources: [],
           });
-          this.setAgentStage('recover');
-          this.updateLiveOperator(mode, { type: 'error', message: e.message });
-          this.clearLiveOperator(4200);
+          if (String(this.chatProjectId || '').trim() === workspaceId) this.setAgentStage('recover');
+          this.updateLiveOperator(mode, { type: 'error', message: e.message }, workspaceId);
+          this.clearLiveOperator(4200, workspaceId);
         }
-        this.chatLoading = false;
+        this.setWorkspaceRunLoading?.(workspaceId, false);
         this.scrollChat();
         return;
       }
@@ -2801,7 +2754,7 @@ function axonChatMixin() {
         await this.streamChatMessage(msg, mode, respId, resourceIds, resumePayload);
       } catch(e) {
         if (e.name === 'AbortError') {
-          this.chatLoading = false;
+          this.setWorkspaceRunLoading?.(workspaceId, false);
           this.scrollChat();
           return;
         }
@@ -2818,11 +2771,11 @@ function axonChatMixin() {
           this.chatMessages[idx].mode = mode;
           this.rememberOperatorOutcome(mode, this.chatMessages[idx]);
         }
-        if (mode === 'agent') this.setAgentStage('recover');
-        this.updateLiveOperator(mode, { type: 'error', message: isFetch ? 'Connection lost.' : e.message });
-        this.clearLiveOperator(4200);
+        if (mode === 'agent' && String(this.chatProjectId || '').trim() === workspaceId) this.setAgentStage('recover');
+        this.updateLiveOperator(mode, { type: 'error', message: isFetch ? 'Connection lost.' : e.message }, workspaceId);
+        this.clearLiveOperator(4200, workspaceId);
       }
-      this.chatLoading = false;
+      this.setWorkspaceRunLoading?.(workspaceId, false);
       this.scrollChat();
     },
 

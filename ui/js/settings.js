@@ -70,6 +70,9 @@ function axonSettingsMixin() {
           autonomy_profile: ['manual', 'workspace_auto'].includes(String(s.autonomy_profile || '').trim())
             ? s.autonomy_profile
             : 'workspace_auto',
+          runtime_permissions_mode: ['default', 'ask_first', 'full_access'].includes(String(s.runtime_permissions_mode || '').trim())
+            ? s.runtime_permissions_mode
+            : (String(s.autonomy_profile || '').trim() === 'manual' ? 'ask_first' : 'default'),
           memory_first_enabled: this.settingEnabled(s.memory_first_enabled ?? true),
           external_fetch_policy: (s.external_fetch_policy === 'live_first') ? 'live_first' : 'cache_first',
           quick_model: s.quick_model || '',
@@ -159,6 +162,9 @@ function axonSettingsMixin() {
       payload.max_agent_iterations = String(this.settingsForm.max_agent_iterations || '75');
       payload.context_compact_enabled = !!this.settingsForm.context_compact_enabled;
       payload.autonomy_profile = (this.settingsForm.autonomy_profile === 'manual') ? 'manual' : 'workspace_auto';
+      payload.runtime_permissions_mode = ['default', 'ask_first', 'full_access'].includes(String(this.settingsForm.runtime_permissions_mode || '').trim())
+        ? this.settingsForm.runtime_permissions_mode
+        : 'default';
       payload.memory_first_enabled = !!this.settingsForm.memory_first_enabled;
       payload.external_fetch_policy = this.settingsForm.external_fetch_policy === 'live_first' ? 'live_first' : 'cache_first';
       payload.quick_model = this.settingsForm.quick_model || '';
@@ -359,6 +365,91 @@ function axonSettingsMixin() {
     async pollUsage() {
       try { this.usage = await this.api('GET', '/api/usage'); } catch(e) {}
       setTimeout(() => this.pollUsage(), 15000);  // refresh every 15s
+    },
+
+    permissionPresetKey() {
+      const mode = String(this.settingsForm?.runtime_permissions_mode || '').trim().toLowerCase();
+      if (mode === 'ask_first' || mode === 'full_access') return mode;
+      return String(this.settingsForm?.autonomy_profile || '').trim() === 'manual' ? 'ask_first' : 'default';
+    },
+
+    permissionPresetLabel() {
+      const key = this.permissionPresetKey();
+      if (key === 'full_access') return 'Full access';
+      if (key === 'ask_first') return 'Ask first';
+      return 'Default permissions';
+    },
+
+    permissionPresetMeta() {
+      const key = this.permissionPresetKey();
+      if (key === 'full_access') return 'Unsandboxed runtime with automatic command execution';
+      if (key === 'ask_first') return 'Every protected action pauses for review';
+      return 'Workspace-safe autonomy with exact approvals';
+    },
+
+    permissionPresetOptions() {
+      return [
+        {
+          id: 'default',
+          label: 'Default permissions',
+          detail: 'Workspace-safe autonomy with exact approvals',
+          locked: false,
+        },
+        {
+          id: 'ask_first',
+          label: 'Ask first',
+          detail: 'Pause before protected work and keep Axon tightly gated',
+          locked: false,
+        },
+        {
+          id: 'full_access',
+          label: 'Full access',
+          detail: 'Codex has full access over your computer. Elevated risk.',
+          locked: false,
+        },
+      ];
+    },
+
+    permissionPresetOptionClass(option = {}) {
+      const active = this.permissionPresetKey() === option.id;
+      if (active) {
+        return option.id === 'full_access'
+          ? 'border-rose-500/30 bg-rose-500/10 text-rose-100'
+          : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100';
+      }
+      return option.id === 'full_access'
+        ? 'border-rose-500/15 bg-rose-950/30 text-rose-200 hover:border-rose-400/35 hover:text-rose-100'
+        : 'border-slate-800/80 bg-slate-900/55 text-slate-300 hover:border-slate-600 hover:text-white';
+    },
+
+    async setPermissionPreset(preset) {
+      const normalized = String(preset || '').trim().toLowerCase();
+      if (normalized === 'full_access') {
+        const confirmed = window.confirm(
+          'Enable Full access for Axon? This removes the normal exact-approval gate and lets the runtime operate without sandboxing. Only use this on a machine you trust.',
+        );
+        if (!confirmed) return;
+      }
+      const autonomyProfile = normalized === 'ask_first' ? 'manual' : 'workspace_auto';
+      try {
+        await this.api('POST', '/api/settings', {
+          autonomy_profile: autonomyProfile,
+          runtime_permissions_mode: normalized === 'full_access' ? 'full_access' : (normalized === 'ask_first' ? 'ask_first' : 'default'),
+        });
+        this.settingsForm.autonomy_profile = autonomyProfile;
+        this.settingsForm.runtime_permissions_mode = normalized === 'full_access' ? 'full_access' : (normalized === 'ask_first' ? 'ask_first' : 'default');
+        this.permissionPresetOpen = false;
+        await this.loadRuntimeStatus();
+        this.showToast(
+          normalized === 'full_access'
+            ? 'Axon full access enabled'
+            : normalized === 'ask_first'
+            ? 'Axon will ask before protected work'
+            : 'Axon is back on default permissions',
+        );
+      } catch (e) {
+        this.showToast(`Failed to change permissions: ${e.message || e}`);
+      }
     },
 
   };

@@ -41,7 +41,12 @@ from axon_api.services import sandbox_sessions
 from axon_api.services import task_sandboxes as task_sandbox_service
 from axon_core.chat_context import select_history_for_chat
 from axon_core import agent_output
+from axon_core import agent_runtime_state
 from axon_core.vision_runtime import auto_route_vision_runtime
+
+
+def _writable_tempdir():
+    return tempfile.TemporaryDirectory(dir=tempfile.gettempdir())
 
 
 class SettingsPayloadTests(unittest.TestCase):
@@ -73,6 +78,85 @@ class SettingsPayloadTests(unittest.TestCase):
         self.assertEqual(server._normalized_external_fetch_policy("memory_first"), "cache_first")
         self.assertEqual(server._normalized_external_fetch_policy("cache_first"), "cache_first")
 
+    def test_settings_update_accepts_runtime_permissions_mode(self):
+        payload = SettingsUpdate(runtime_permissions_mode="full_access", ai_backend="cli")
+
+        self.assertEqual(payload.runtime_permissions_mode, "full_access")
+        self.assertEqual(payload.ai_backend, "cli")
+
+    def test_normalized_runtime_permissions_mode_accepts_full_access(self):
+        self.assertEqual(server._normalized_runtime_permissions_mode("full_access"), "full_access")
+        self.assertEqual(server._normalized_runtime_permissions_mode("unknown", fallback="ask_first"), "ask_first")
+
+    def test_effective_agent_runtime_permissions_mode_allows_codex_full_access_override(self):
+        mode = server._effective_agent_runtime_permissions_mode(
+            {"runtime_permissions_mode": "default", "autonomy_profile": "workspace_auto"},
+            override="full_access",
+            backend="cli",
+            cli_path="/tmp/codex",
+            autonomy_profile="workspace_auto",
+        )
+
+        self.assertEqual(mode, "full_access")
+
+    def test_effective_agent_runtime_permissions_mode_ignores_full_access_override_for_claude(self):
+        mode = server._effective_agent_runtime_permissions_mode(
+            {"runtime_permissions_mode": "default", "autonomy_profile": "workspace_auto"},
+            override="full_access",
+            backend="cli",
+            cli_path="/tmp/claude",
+            autonomy_profile="workspace_auto",
+        )
+
+        self.assertEqual(mode, "default")
+
+
+class AgentRuntimeStateTests(unittest.TestCase):
+    def tearDown(self):
+        agent_runtime_state.drain_steer_messages()
+        agent_runtime_state.drain_steer_messages(workspace_id=7)
+        agent_runtime_state.drain_steer_messages(workspace_id=11)
+        agent_runtime_state.drain_steer_messages(workspace_id=12)
+
+    def test_active_workspace_root_is_context_scoped(self):
+        with tempfile.TemporaryDirectory() as tmp_dir, patch.object(brain, "_HOME", os.path.realpath(tmp_dir)):
+            token = agent_runtime_state.set_active_workspace_path(tmp_dir)
+            try:
+                self.assertEqual(brain._workspace_root(), os.path.realpath(tmp_dir))
+                self.assertEqual(brain._active_workspace_root(), os.path.realpath(tmp_dir))
+            finally:
+                agent_runtime_state.reset_active_workspace_path(token)
+
+        self.assertEqual(brain._active_workspace_root(), "")
+
+    def test_steer_messages_are_isolated_by_workspace(self):
+        agent_runtime_state.enqueue_steer_message("workspace 11", workspace_id=11)
+        agent_runtime_state.enqueue_steer_message("workspace 12", workspace_id=12)
+
+        self.assertEqual(agent_runtime_state.drain_steer_messages(workspace_id=11), ["workspace 11"])
+        self.assertEqual(agent_runtime_state.drain_steer_messages(workspace_id=12), ["workspace 12"])
+        self.assertEqual(agent_runtime_state.drain_steer_messages(workspace_id=11), [])
+
+
+class AgentRuntimeStateEndpointTests(unittest.IsolatedAsyncioTestCase):
+    async def test_steer_endpoint_queues_message_for_workspace(self):
+        payload = await server.steer_agent({"message": "keep going", "project_id": 7})
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["workspace_id"], 7)
+        self.assertEqual(agent_runtime_state.drain_steer_messages(workspace_id=7), ["keep going"])
+
+    def test_effective_agent_runtime_permissions_mode_ignores_full_access_override_for_api(self):
+        mode = server._effective_agent_runtime_permissions_mode(
+            {"runtime_permissions_mode": "default", "autonomy_profile": "workspace_auto"},
+            override="full_access",
+            backend="api",
+            cli_path="/tmp/codex",
+            autonomy_profile="workspace_auto",
+        )
+
+        self.assertEqual(mode, "default")
+
 
 class SettingsCleanupTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_settings_hides_legacy_extra_allowed_cmds(self):
@@ -94,6 +178,7 @@ class SettingsCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("extra_allowed_cmds", payload)
         self.assertEqual(payload["external_fetch_policy"], "cache_first")
         self.assertEqual(payload["max_history_turns"], "10")
+        self.assertEqual(payload["runtime_permissions_mode"], "default")
 
     async def test_init_db_migrates_legacy_hardening_settings(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -101,32 +186,49 @@ class SettingsCleanupTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(db_core, "DB_PATH", db_path):
                 await db_core.init_db()
 
-                conn = sqlite3.connect(db_path)
-                conn.execute(
-                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))",
-                    ("extra_allowed_cmds", "curl,rm"),
-                )
-                conn.execute(
-                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))",
-                    ("external_fetch_policy", "memory_first"),
-                )
-                conn.execute(
-                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))",
-                    ("max_history_turns", "12"),
-                )
-                conn.commit()
-                conn.close()
+                with sqlite3.connect(db_path) as conn:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))",
+                        ("extra_allowed_cmds", "curl,rm"),
+                    )
+                    conn.execute(
+                        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))",
+                        ("external_fetch_policy", "memory_first"),
+                    )
+                    conn.execute(
+                        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))",
+                        ("max_history_turns", "12"),
+                    )
 
                 await db_core.init_db()
 
-                conn = sqlite3.connect(db_path)
-                rows = dict(conn.execute("SELECT key, value FROM settings"))
-                conn.close()
+                with sqlite3.connect(db_path) as conn:
+                    rows = dict(conn.execute("SELECT key, value FROM settings"))
 
         self.assertNotIn("extra_allowed_cmds", rows)
         self.assertEqual(rows["external_fetch_policy"], "cache_first")
         self.assertEqual(rows["max_history_turns"], "10")
         self.assertEqual(rows["autonomy_profile"], "workspace_auto")
+        self.assertEqual(rows["runtime_permissions_mode"], "default")
+
+
+class ChatTokenAccountingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cli_chat_returns_streamed_token_count(self):
+        async def fake_stream_cli(messages, **kwargs):
+            kwargs["usage_sink"]["tokens"] = 321
+            yield "OK"
+
+        with patch.object(brain, "_stream_cli", side_effect=fake_stream_cli):
+            result = await brain.chat(
+                "Reply with the single word OK.",
+                [],
+                backend="cli",
+                cli_path="/tmp/codex",
+                cli_model="gpt-5.4",
+            )
+
+        self.assertEqual(result["content"], "OK")
+        self.assertEqual(result["tokens"], 321)
 
 
 class ProviderRegistryTests(unittest.TestCase):
@@ -607,6 +709,264 @@ class ServerAiParamsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params["budget_class"], "standard")
         self.assertEqual(params["api_model"], "standard-model")
 
+    async def test_effective_ai_params_falls_back_to_codex_quick_model_when_blank(self):
+        settings = {
+            "quick_model": "",
+            "standard_model": "",
+            "deep_model": "",
+            "cli_runtime_path": "/tmp/codex",
+        }
+
+        with patch.object(server, "_ai_params", return_value={
+            "backend": "cli",
+            "cli_path": "/tmp/codex",
+            "cli_model": "gpt-5.4",
+        }), patch.object(server, "_runtime_truth_for_settings", return_value=(
+            {"effective_runtime": "cli", "selected_runtime": "cli", "selected_runtime_label": "CLI", "self_heal_active": False},
+            {},
+        )):
+            params = await server._effective_ai_params(settings, {}, requested_model="")
+
+        self.assertEqual(params["budget_class"], "quick")
+        self.assertEqual(params["cli_model"], "gpt-5.1-codex-mini")
+
+
+class LocalFastPathTests(unittest.IsolatedAsyncioTestCase):
+    async def test_workspace_snapshot_fast_path_answers_without_model(self):
+        payload = await server._maybe_local_fast_chat_response(
+            object(),
+            user_message="What is the workspace path?",
+            project_id=7,
+            settings={"external_fetch_policy": "cache_first"},
+            snapshot_bundle={
+                "data": {
+                    "project": {"name": "dashpro", "path": "/tmp/dashpro", "git_branch": "main"},
+                    "tasks": [],
+                    "prompts": [],
+                    "memory": [],
+                }
+            },
+            memory_bundle={"items": []},
+        )
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["evidence_source"], "workspace_snapshot")
+        self.assertIn("/tmp/dashpro", payload["content"])
+        self.assertTrue(payload["fast_path"])
+
+    async def test_memory_fast_path_answers_without_model(self):
+        payload = await server._maybe_local_fast_chat_response(
+            object(),
+            user_message="What do you remember about this workspace?",
+            project_id=7,
+            settings={"external_fetch_policy": "cache_first"},
+            snapshot_bundle={"data": {}},
+            memory_bundle={
+                "items": [
+                    {"title": "Known fact", "summary": "The payment upload flow was already patched.", "content": "", "layer": "workspace"}
+                ]
+            },
+        )
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["evidence_source"], "memory")
+        self.assertIn("payment upload flow", payload["content"])
+        self.assertTrue(payload["fast_path"])
+
+    async def test_cached_web_fast_path_prefers_cache_when_available(self):
+        fake_row = {
+            "title": "Example Domain",
+            "summary": "This domain is for use in documentation examples.",
+            "content": "Example Domain",
+            "status_code": 200,
+        }
+        with patch.object(server.devdb, "get_external_fetch_cache", return_value=fake_row):
+            payload = await server._maybe_local_fast_chat_response(
+                object(),
+                user_message="What does this page say? https://example.com",
+                project_id=7,
+                settings={"external_fetch_policy": "cache_first"},
+                snapshot_bundle={"data": {}},
+                memory_bundle={"items": []},
+            )
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["evidence_source"], "cached_external")
+        self.assertIn("Example Domain", payload["content"])
+
+
+class ChatConsoleCommandTests(unittest.IsolatedAsyncioTestCase):
+    @asynccontextmanager
+    async def _fake_db(self):
+        yield object()
+
+    def test_login_console_command_starts_guided_codex_session(self):
+        with patch.object(
+            server.console_command_service.runtime_login_sessions,
+            "start_login_session",
+            return_value={
+                "session_id": "codex-login-1",
+                "family": "codex",
+                "status": "waiting",
+                "browser_url": "https://auth.openai.com/codex/device",
+                "user_code": "ABCD-1234",
+                "command_preview": "/home/edp/.devbrain/tools/npm/bin/codex login",
+                "binary": "/home/edp/.devbrain/tools/npm/bin/codex",
+                "message": "Continue sign-in in the browser.",
+            },
+        ) as start_login_session:
+            payload = server.console_command_service.maybe_handle_console_command("/login codex")
+
+        self.assertEqual(payload["command"], "login")
+        self.assertEqual(payload["data"]["family"], "codex")
+        self.assertEqual(payload["data"]["session_id"], "codex-login-1")
+        self.assertEqual(payload["data"]["user_code"], "ABCD-1234")
+        self.assertIn("https://auth.openai.com/codex/device", payload["response"])
+        self.assertIn("ABCD-1234", payload["response"])
+        start_login_session.assert_called_once_with("codex", override_path="")
+
+    def test_login_console_command_uses_supplied_codex_override_path(self):
+        with patch.object(
+            server.console_command_service.runtime_login_sessions,
+            "start_login_session",
+            return_value={
+                "session_id": "codex-login-2",
+                "family": "codex",
+                "status": "waiting",
+            },
+        ) as start_login_session:
+            payload = server.console_command_service.maybe_handle_console_command(
+                "/login codex",
+                login_overrides={"codex": "/home/edp/.devbrain/tools/npm/bin/codex"},
+            )
+
+        self.assertEqual(payload["command"], "login")
+        start_login_session.assert_called_once_with(
+            "codex",
+            override_path="/home/edp/.devbrain/tools/npm/bin/codex",
+        )
+
+    async def test_chat_handles_install_console_command_without_loading_model_settings(self):
+        persisted: dict[str, object] = {}
+
+        async def fake_persist(_conn, **kwargs):
+            persisted.update(kwargs)
+
+        with patch.object(server.devdb, "get_db", self._fake_db), \
+             patch.object(server.devdb, "get_setting", return_value=""), \
+             patch.object(
+                 server.console_command_service,
+                 "maybe_handle_console_command",
+                 return_value={
+                     "command": "install",
+                     "response": "Installed codex inside Axon.",
+                     "event_name": "chat_console_install",
+                     "event_summary": "install: @openai/codex",
+                     "data": {"status": "completed", "package_name": "@openai/codex"},
+                 },
+             ), \
+             patch.object(server, "_persist_chat_reply", side_effect=fake_persist), \
+             patch.object(server.devdb, "get_all_settings", side_effect=AssertionError("settings should not load")), \
+             patch.object(server, "_effective_ai_params", side_effect=AssertionError("AI runtime should not resolve")):
+            payload = await server.chat(server.ChatMessage(message="/install codex", project_id=7))
+
+        self.assertTrue(payload["console_command"])
+        self.assertEqual(payload["command"], "install")
+        self.assertEqual(payload["package_name"], "@openai/codex")
+        self.assertEqual(persisted["assistant_message"], "Installed codex inside Axon.")
+        self.assertEqual(persisted["project_id"], 7)
+
+    async def test_chat_handles_login_console_command_without_loading_model_settings(self):
+        persisted: dict[str, object] = {}
+
+        async def fake_persist(_conn, **kwargs):
+            persisted.update(kwargs)
+
+        with patch.object(server.devdb, "get_db", self._fake_db), \
+             patch.object(server.devdb, "get_setting", return_value=""), \
+             patch.object(
+                 server.console_command_service,
+                 "maybe_handle_console_command",
+                 return_value={
+                     "command": "login",
+                     "response": "Codex CLI sign-in is running inside Axon.",
+                     "event_name": "chat_console_login",
+                     "event_summary": "login: codex",
+                     "data": {"status": "waiting", "family": "codex", "session_id": "codex-login-1"},
+                 },
+             ), \
+             patch.object(server, "_persist_chat_reply", side_effect=fake_persist), \
+             patch.object(server.devdb, "get_all_settings", side_effect=AssertionError("settings should not load")), \
+             patch.object(server, "_effective_ai_params", side_effect=AssertionError("AI runtime should not resolve")):
+            payload = await server.chat(server.ChatMessage(message="/login codex", project_id=7))
+
+        self.assertTrue(payload["console_command"])
+        self.assertEqual(payload["command"], "login")
+        self.assertEqual(payload["family"], "codex")
+        self.assertEqual(payload["session_id"], "codex-login-1")
+        self.assertEqual(persisted["assistant_message"], "Codex CLI sign-in is running inside Axon.")
+        self.assertEqual(persisted["project_id"], 7)
+
+    async def test_chat_login_console_command_uses_selected_codex_override(self):
+        persisted: dict[str, object] = {}
+
+        async def fake_persist(_conn, **kwargs):
+            persisted.update(kwargs)
+
+        with patch.object(server.devdb, "get_db", self._fake_db), \
+             patch.object(server.devdb, "get_setting", side_effect=lambda _conn, key: "/tmp/codex" if key == "cli_runtime_path" else ""), \
+             patch.object(
+                 server.console_command_service.runtime_login_sessions,
+                 "start_login_session",
+                 return_value={
+                     "session_id": "codex-login-2",
+                     "family": "codex",
+                     "status": "waiting",
+                     "command_preview": "/tmp/codex login",
+                 },
+             ) as start_login_session, \
+             patch.object(server, "_persist_chat_reply", side_effect=fake_persist), \
+             patch.object(server.devdb, "get_all_settings", side_effect=AssertionError("settings should not load")), \
+             patch.object(server, "_effective_ai_params", side_effect=AssertionError("AI runtime should not resolve")):
+            payload = await server.chat(server.ChatMessage(message="/login codex", project_id=7))
+
+        self.assertTrue(payload["console_command"])
+        self.assertEqual(payload["command"], "login")
+        self.assertEqual(payload["family"], "codex")
+        start_login_session.assert_called_once_with("codex", override_path="/tmp/codex")
+        self.assertIn("codex-login-2", persisted["assistant_message"])
+
+
+class MemorySearchBehaviorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_search_memory_does_not_touch_rows_on_read(self):
+        settings = {"memory_query_cache_ttl_seconds": "45", "embeddings_model": ""}
+        row = {
+            "id": 1,
+            "title": "Dashpro",
+            "summary": "Dashboard project",
+            "content": "Dashboard project memory",
+            "layer": "workspace",
+            "trust_level": "high",
+            "last_accessed_at": "",
+            "updated_at": "",
+            "relevance_score": 0.8,
+            "workspace_id": 7,
+            "embedding_json": "",
+        }
+        with patch.object(memory_engine.devdb, "search_memory_items_fts", return_value=[row]), \
+             patch.object(memory_engine.devdb, "search_memory_items", return_value=[]), \
+             patch.object(memory_engine.devdb, "touch_memory_items") as touch_mock:
+            results = await memory_engine.search_memory(
+                object(),
+                query="dashpro",
+                settings=settings,
+                workspace_id=7,
+                limit=3,
+            )
+
+        self.assertEqual(len(results), 1)
+        touch_mock.assert_not_called()
+
 
 class RuntimeLoginEndpointTests(unittest.IsolatedAsyncioTestCase):
     @asynccontextmanager
@@ -713,15 +1073,91 @@ class RuntimeLoginEndpointTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RuntimeLoginSessionServiceTests(unittest.TestCase):
-    def test_codex_login_status_normalizes_browser_url_and_strips_ansi(self):
+    def test_codex_login_status_uses_device_auth_url_and_extracts_standalone_code(self):
         session = runtime_login_sessions._status_from_meta(
             {"family": "codex", "status": "pending"},
-            {"auth": {"logged_in": False}},
-            "Open https://auth.openai.com/codex/device\x1b[0m\nEnter code: ABCD-EFGH",
+            {"auth": {"logged_in": False, "message": "Not logged in"}},
+            (
+                "Follow these steps to sign in with ChatGPT using device code authorization:\n\n"
+                "1. Open this link in your browser and sign in to your account\n"
+                "   https://auth.openai.com/codex/device\x1b[0m\n\n"
+                "2. Enter this one-time code \x1b[90m(expires in 15 minutes)\x1b[0m\n"
+                "   XF1T-RC1AX\n"
+            ),
         )
 
-        self.assertEqual(session["browser_url"], "https://auth.openai.com/log-in")
-        self.assertEqual(session["user_code"], "ABCD-EFGH")
+        self.assertEqual(session["browser_url"], "https://auth.openai.com/codex/device")
+        self.assertEqual(session["user_code"], "XF1T-RC1AX")
+        self.assertEqual(session["status"], "waiting")
+        self.assertIn("XF1T-RC1AX", session["message"])
+
+    def test_codex_login_status_marks_device_auth_timeout_failed(self):
+        session = runtime_login_sessions._status_from_meta(
+            {"family": "codex", "status": "waiting", "returncode": 0, "started_at": "2026-04-03T16:00:05Z"},
+            {"auth": {"logged_in": False, "message": "Not logged in"}},
+            "Error logging in with device code: device auth timed out after 15 minutes\n",
+        )
+
+        self.assertEqual(session["status"], "failed")
+        self.assertIn("timed out", session["message"].lower())
+
+    def test_codex_login_status_prefers_oauth_url_over_local_callback_server(self):
+        session = runtime_login_sessions._status_from_meta(
+            {"family": "codex", "status": "pending"},
+            {"auth": {"logged_in": False, "message": "Not logged in"}},
+            (
+                "Starting local login server on http://localhost:1455.\n"
+                "If your browser did not open, navigate to this URL to authenticate:\n\n"
+                "https://auth.openai.com/oauth/authorize?response_type=code&state=test-state\n"
+            ),
+        )
+
+        self.assertEqual(
+            session["browser_url"],
+            "https://auth.openai.com/oauth/authorize?response_type=code&state=test-state",
+        )
+        self.assertEqual(session["status"], "waiting")
+
+    def test_codex_login_status_keeps_browser_url_empty_until_log_emits_one(self):
+        session = runtime_login_sessions._status_from_meta(
+            {"family": "codex", "status": "pending", "started_at": "2026-04-03T16:45:09Z"},
+            {"auth": {"logged_in": False, "message": "Not logged in"}},
+            "",
+        )
+
+        self.assertEqual(session["browser_url"], "")
+        self.assertEqual(session["status"], "waiting")
+
+    def test_find_active_login_session_ignores_waiting_session_from_different_binary(self):
+        waiting = {
+            "session_id": "sess-old",
+            "family": "codex",
+            "status": "waiting",
+            "binary": "/tmp/old-codex",
+        }
+        with patch.object(runtime_login_sessions, "list_login_sessions", return_value=[waiting]), \
+             patch.object(runtime_login_sessions, "refresh_login_session", return_value=waiting):
+            session = runtime_login_sessions.find_active_login_session("codex", binary="/tmp/new-codex")
+
+        self.assertIsNone(session)
+
+    def test_find_active_login_session_ignores_waiting_session_from_different_command_preview(self):
+        waiting = {
+            "session_id": "sess-old",
+            "family": "codex",
+            "status": "waiting",
+            "binary": "/tmp/codex",
+            "command_preview": "/tmp/codex login --device-auth",
+        }
+        with patch.object(runtime_login_sessions, "list_login_sessions", return_value=[waiting]), \
+             patch.object(runtime_login_sessions, "refresh_login_session", return_value=waiting):
+            session = runtime_login_sessions.find_active_login_session(
+                "codex",
+                binary="/tmp/codex",
+                command_preview="/tmp/codex login",
+            )
+
+        self.assertIsNone(session)
 
 
 class RuntimeTruthSelfHealTests(unittest.TestCase):
@@ -1133,6 +1569,17 @@ class ClaudeCliCommandTests(unittest.TestCase):
 
         self.assertEqual(resolved, "/tmp/claude")
 
+    def test_find_named_cli_prefers_axon_local_binary(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            axon_binary = Path(tmp_dir) / "codex"
+            axon_binary.write_text("shim")
+            axon_binary.chmod(0o755)
+
+            with patch.object(brain.local_tool_env, "axon_binary_path", return_value=axon_binary):
+                resolved = brain._find_named_cli("codex")
+
+        self.assertEqual(resolved, str(axon_binary))
+
     def test_available_cli_models_support_codex_selection(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             override = Path(tmp_dir) / "codex"
@@ -1189,6 +1636,19 @@ class ClaudeCliCommandTests(unittest.TestCase):
         self.assertNotIn("--full-auto", cmd)
         self.assertIn("gpt-5.1-codex-max", cmd)
 
+    def test_codex_exec_command_overrides_reasoning_effort_for_codex_mini(self):
+        cmd = brain.build_codex_exec_command(
+            "/tmp/codex",
+            prompt="Reply with OK",
+            model="gpt-5.1-codex-mini",
+            cwd="/tmp/work",
+        )
+
+        self.assertIn("--model", cmd)
+        self.assertIn("gpt-5.1-codex-mini", cmd)
+        self.assertIn("-c", cmd)
+        self.assertIn('model_reasoning_effort="medium"', cmd)
+
     def test_codex_exec_command_accepts_workspace_write_mode(self):
         cmd = brain.build_codex_exec_command(
             "/tmp/codex",
@@ -1199,8 +1659,21 @@ class ClaudeCliCommandTests(unittest.TestCase):
         )
 
         self.assertIn("--full-auto", cmd)
-        self.assertIn("--sandbox", cmd)
-        self.assertIn("workspace-write", cmd)
+        self.assertNotIn("--sandbox", cmd)
+
+    def test_codex_exec_command_supports_full_access_bypass(self):
+        cmd = brain.build_codex_exec_command(
+            "/tmp/codex",
+            prompt="Reply with OK",
+            model="gpt-5.4",
+            cwd="/tmp/work",
+            sandbox_mode="danger-full-access",
+            approval_mode="never",
+        )
+
+        self.assertIn("--dangerously-bypass-approvals-and-sandbox", cmd)
+        self.assertNotIn("--sandbox", cmd)
+        self.assertNotIn("--full-auto", cmd)
 
 
 class ClaudeCliCooldownGuardTests(unittest.IsolatedAsyncioTestCase):
@@ -1477,52 +1950,51 @@ class MemorySyncRegressionTests(unittest.TestCase):
 
 class RuntimeStateRegressionTests(unittest.IsolatedAsyncioTestCase):
     async def test_compute_workspace_revision_supports_sqlite_row_results(self):
-        conn = sqlite3.connect(":memory:", check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        self.addAsyncCleanup(asyncio.to_thread, conn.close)
+        with sqlite3.connect(":memory:", check_same_thread=False) as conn:
+            conn.row_factory = sqlite3.Row
 
-        await asyncio.to_thread(
-            conn.execute,
-            "CREATE TABLE projects (id INTEGER PRIMARY KEY, created_at TEXT, updated_at TEXT)",
-        )
-        await asyncio.to_thread(
-            conn.execute,
-            "CREATE TABLE prompts (project_id INTEGER, created_at TEXT, updated_at TEXT)",
-        )
-        await asyncio.to_thread(
-            conn.execute,
-            "CREATE TABLE tasks (project_id INTEGER, created_at TEXT, updated_at TEXT)",
-        )
-        await asyncio.to_thread(
-            conn.execute,
-            "CREATE TABLE resources (workspace_id INTEGER, created_at TEXT, updated_at TEXT)",
-        )
-        await asyncio.to_thread(
-            conn.execute,
-            "CREATE TABLE memory_items (workspace_id INTEGER, created_at TEXT, updated_at TEXT)",
-        )
-        await asyncio.to_thread(
-            conn.execute,
-            "INSERT INTO projects (id, created_at, updated_at) VALUES (1, '2026-04-03T08:00:00Z', '2026-04-03T09:00:00Z')",
-        )
-        await asyncio.to_thread(conn.commit)
+            await asyncio.to_thread(
+                conn.execute,
+                "CREATE TABLE projects (id INTEGER PRIMARY KEY, created_at TEXT, updated_at TEXT)",
+            )
+            await asyncio.to_thread(
+                conn.execute,
+                "CREATE TABLE prompts (project_id INTEGER, created_at TEXT, updated_at TEXT)",
+            )
+            await asyncio.to_thread(
+                conn.execute,
+                "CREATE TABLE tasks (project_id INTEGER, created_at TEXT, updated_at TEXT)",
+            )
+            await asyncio.to_thread(
+                conn.execute,
+                "CREATE TABLE resources (workspace_id INTEGER, created_at TEXT, updated_at TEXT)",
+            )
+            await asyncio.to_thread(
+                conn.execute,
+                "CREATE TABLE memory_items (workspace_id INTEGER, created_at TEXT, updated_at TEXT)",
+            )
+            await asyncio.to_thread(
+                conn.execute,
+                "INSERT INTO projects (id, created_at, updated_at) VALUES (1, '2026-04-03T08:00:00Z', '2026-04-03T09:00:00Z')",
+            )
+            await asyncio.to_thread(conn.commit)
 
-        class AsyncSqliteCompat:
-            def __init__(self, db_conn):
-                self._conn = db_conn
+            class AsyncSqliteCompat:
+                def __init__(self, db_conn):
+                    self._conn = db_conn
 
-            class _CursorCompat:
-                def __init__(self, cursor):
-                    self._cursor = cursor
+                class _CursorCompat:
+                    def __init__(self, cursor):
+                        self._cursor = cursor
 
-                async def fetchone(self):
-                    return await asyncio.to_thread(self._cursor.fetchone)
+                    async def fetchone(self):
+                        return await asyncio.to_thread(self._cursor.fetchone)
 
-            async def execute(self, sql, params=()):
-                cursor = await asyncio.to_thread(self._conn.execute, sql, params)
-                return self._CursorCompat(cursor)
+                async def execute(self, sql, params=()):
+                    cursor = await asyncio.to_thread(self._conn.execute, sql, params)
+                    return self._CursorCompat(cursor)
 
-        revision = await runtime_state.compute_workspace_revision(AsyncSqliteCompat(conn), 1)
+            revision = await runtime_state.compute_workspace_revision(AsyncSqliteCompat(conn), 1)
 
         self.assertEqual(len(revision), 40)
         self.assertTrue(all(ch in "0123456789abcdef" for ch in revision))
@@ -1530,15 +2002,19 @@ class RuntimeStateRegressionTests(unittest.IsolatedAsyncioTestCase):
 
 class TerminalRegressionTests(unittest.IsolatedAsyncioTestCase):
     async def test_resolve_terminal_cwd_accepts_sqlite_row(self):
-        conn = sqlite3.connect(":memory:")
-        conn.row_factory = sqlite3.Row
-        safe_cwd = str(Path.home() / ".devbrain")
-        row = conn.execute("SELECT ? AS cwd, 0 AS workspace_id", (safe_cwd,)).fetchone()
+        with sqlite3.connect(":memory:") as conn:
+            conn.row_factory = sqlite3.Row
+            safe_cwd = str(Path.home() / ".devbrain")
+            row = conn.execute("SELECT ? AS cwd, 0 AS workspace_id", (safe_cwd,)).fetchone()
 
-        resolved = await server._resolve_terminal_cwd(None, row)
+            resolved = await server._resolve_terminal_cwd(None, row)
 
         self.assertEqual(str(resolved), safe_cwd)
-        conn.close()
+
+    async def test_terminal_blocks_system_package_manager_installs(self):
+        self.assertTrue(server._command_is_blocked("apt install ripgrep"))
+        self.assertTrue(server._command_is_blocked("brew install fd"))
+        self.assertFalse(server._command_is_blocked("pip install rich"))
 
 
 class SessionStoreRegressionTests(unittest.TestCase):
@@ -2064,6 +2540,37 @@ class AgentCliIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["sandbox_mode"], "workspace-write")
         self.assertEqual(captured["approval_mode"], "on-request")
 
+    async def test_stream_codex_cli_uses_full_access_runtime_mode(self):
+        captured = {}
+
+        def fake_build(binary, *, prompt, model="", cwd="", sandbox_mode="read-only", approval_mode="on-request"):
+            captured["binary"] = binary
+            captured["model"] = model
+            captured["cwd"] = cwd
+            captured["sandbox_mode"] = sandbox_mode
+            captured["approval_mode"] = approval_mode
+            raise RuntimeError("sentinel")
+
+        token = brain._ACTIVE_AGENT_RUNTIME_CONTEXT.set({
+            "runtime_permissions_mode": "full_access",
+            "autonomy_profile": "workspace_auto",
+        })
+        try:
+            with patch.object(brain, "build_codex_exec_command", side_effect=fake_build):
+                with self.assertRaises(RuntimeError) as exc:
+                    async for _ in brain._stream_codex_cli(
+                        [{"role": "user", "content": "Reply with OK."}],
+                        binary="/tmp/codex",
+                        model="gpt-5.4",
+                    ):
+                        pass
+        finally:
+            brain._ACTIVE_AGENT_RUNTIME_CONTEXT.reset(token)
+
+        self.assertEqual(str(exc.exception), "sentinel")
+        self.assertEqual(captured["sandbox_mode"], "danger-full-access")
+        self.assertEqual(captured["approval_mode"], "never")
+
     async def test_stream_codex_cli_recovers_from_chunk_limit(self):
         captured = {}
 
@@ -2280,6 +2787,66 @@ class AgentAutonomyRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[0].get("name"), "write_file")
         self.assertEqual(events[1].get("result"), blocked_result)
         self.assertEqual(events[2].get("kind"), "edit")
+
+    def test_direct_action_captures_absolute_tmp_write_and_blocks_it(self):
+        async def fake_stream_cli(messages, **kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_api_chat(**kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_ollama_chat(**kwargs):
+            if False:
+                yield ""
+
+        deps = AgentRuntimeDeps(
+            tool_registry={"create_file": brain._tool_create_file, "write_file": brain._tool_write_file},
+            normalize_tool_args=lambda name, args: args,
+            stream_cli=fake_stream_cli,
+            stream_api_chat=fake_stream_api_chat,
+            stream_ollama_chat=fake_stream_ollama_chat,
+            ollama_execution_profile_sync=lambda *args, **kwargs: {"model": "dummy"},
+            ollama_message_with_images=lambda text, images: {"role": "user", "content": text},
+            api_message_with_images=lambda text, images: {"role": "user", "content": text},
+            cli_message_with_images=lambda text, images: {"role": "user", "content": text},
+            find_cli=lambda path: "/tmp/codex",
+            ollama_default_model="dummy",
+            ollama_agent_model="dummy",
+            db_path=Path(tempfile.gettempdir()) / "axon-agent-test.db",
+        )
+
+        snapshot = brain.agent_capture_permission_state()
+        previous_workspace = brain._ACTIVE_WORKSPACE_PATH
+        token = brain._ACTIVE_AGENT_RUNTIME_CONTEXT.set(
+            {
+                "runtime_permissions_mode": "default",
+                "autonomy_profile": "workspace_auto",
+                "agent_session_id": "session-direct-tmp",
+            }
+        )
+        try:
+            with _writable_tempdir() as tmpdir:
+                brain._ACTIVE_WORKSPACE_PATH = tmpdir
+                result = agent_file_actions._direct_agent_action(
+                    "Create the file /tmp/AXON_DIRECT_TMP_PROBE.txt containing exactly DEFAULT_GATE_PROBE, then reply with done.",
+                    history=[],
+                    project_name="Axon",
+                    workspace_path=tmpdir,
+                    deps=deps,
+                )
+        finally:
+            brain._ACTIVE_WORKSPACE_PATH = previous_workspace
+            brain._ACTIVE_AGENT_RUNTIME_CONTEXT.reset(token)
+            brain.agent_restore_permission_state(snapshot)
+
+        self.assertIsNotNone(result)
+        tool_name, tool_args, tool_result, _answer = result
+        self.assertEqual(tool_name, "create_file")
+        self.assertEqual(tool_args["path"], "/tmp/AXON_DIRECT_TMP_PROBE.txt")
+        self.assertEqual(tool_args["content"], "DEFAULT_GATE_PROBE")
+        self.assertTrue(tool_result.startswith("BLOCKED_EDIT:create:/tmp/AXON_DIRECT_TMP_PROBE.txt"))
 
     def test_direct_action_prefers_workspace_root_named_file(self):
         async def fake_stream_cli(messages, **kwargs):
@@ -2699,12 +3266,134 @@ class AgentAutonomyRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(tool_result.startswith("BLOCKED_CMD:git:git add -A"))
         self.assertEqual(answer, tool_result)
 
+    def test_direct_action_push_request_reports_runtime_network_block_cleanly(self):
+        async def fake_stream_cli(messages, **kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_api_chat(**kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_ollama_chat(**kwargs):
+            if False:
+                yield ""
+
+        deps = AgentRuntimeDeps(
+            tool_registry={
+                "shell_cmd": lambda cmd, cwd="", timeout=30: (
+                    "fatal: unable to access 'https://github.com/devworx8/axon.git/': "
+                    "Could not resolve host: github.com"
+                ),
+            },
+            normalize_tool_args=lambda name, args: args,
+            stream_cli=fake_stream_cli,
+            stream_api_chat=fake_stream_api_chat,
+            stream_ollama_chat=fake_stream_ollama_chat,
+            ollama_execution_profile_sync=lambda *args, **kwargs: {"model": "dummy"},
+            ollama_message_with_images=lambda text, images: {"role": "user", "content": text},
+            api_message_with_images=lambda text, images: {"role": "user", "content": text},
+            cli_message_with_images=lambda text, images: {"role": "user", "content": text},
+            find_cli=lambda path: path,
+            ollama_default_model="dummy",
+            ollama_agent_model="dummy",
+            db_path=Path(tempfile.gettempdir()) / "axon-agent-test.db",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = agent_file_actions._direct_agent_action(
+                "Please push this branch.",
+                history=[],
+                project_name="Axon",
+                workspace_path=tmpdir,
+                deps=deps,
+            )
+
+        self.assertIsNotNone(result)
+        _tool_name, _tool_args, tool_result, answer = result
+        self.assertTrue(tool_result.startswith("ERROR: External network access is unavailable from this Axon runtime right now."))
+        self.assertIn("github.com", tool_result)
+        self.assertIn("unsandboxed host shell", tool_result)
+        self.assertEqual(answer, tool_result)
+
+
+class AgentResumeRoutingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resume_task_override_uses_deterministic_direct_action(self):
+        async def fake_stream_cli(messages, **kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_api_chat(**kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_ollama_chat(**kwargs):
+            if False:
+                yield ""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "resume-agent.db"
+            store = SessionStore(db_path)
+            store.save(
+                session_id="resume-1",
+                task="Please commit everything and push this branch.",
+                messages=[{"role": "assistant", "content": "Approval is required for git add -A."}],
+                iteration=1,
+                tool_log=[{"name": "shell_cmd", "args": {"cmd": "git add -A"}, "result": "BLOCKED_CMD:git:git add -A"}],
+                status="approval_required",
+                project_name="Axon",
+                backend="cli",
+                metadata={
+                    "resume_task": "Push this branch.",
+                    "workspace_path": tmpdir,
+                    "workspace_id": 7,
+                },
+            )
+
+            deps = AgentRuntimeDeps(
+                tool_registry={"shell_cmd": lambda cmd, cwd="", timeout=30: f"BLOCKED_CMD:git:{cmd}"},
+                normalize_tool_args=lambda name, args: args,
+                stream_cli=fake_stream_cli,
+                stream_api_chat=fake_stream_api_chat,
+                stream_ollama_chat=fake_stream_ollama_chat,
+                ollama_execution_profile_sync=lambda *args, **kwargs: {"model": "dummy"},
+                ollama_message_with_images=lambda text, images: {"role": "user", "content": text},
+                api_message_with_images=lambda text, images: {"role": "user", "content": text},
+                cli_message_with_images=lambda text, images: {"role": "user", "content": text},
+                find_cli=lambda path: path,
+                ollama_default_model="dummy",
+                ollama_agent_model="dummy",
+                db_path=db_path,
+            )
+
+            events = [
+                event async for event in core_agent.run_agent(
+                    "please continue",
+                    [],
+                    deps=deps,
+                    backend="cli",
+                    cli_path="/tmp/codex",
+                    cli_model="gpt-5.4",
+                    workspace_path=tmpdir,
+                    workspace_id=7,
+                    project_name="Axon",
+                )
+            ]
+
+        self.assertEqual(events[0]["type"], "text")
+        self.assertEqual(events[1]["type"], "tool_call")
+        self.assertEqual(events[1]["args"]["cmd"], "git push -u origin HEAD")
+        self.assertEqual(events[2]["type"], "tool_result")
+        self.assertTrue(events[2]["result"].startswith("BLOCKED_CMD:git:git push -u origin HEAD"))
+        self.assertEqual(events[3]["type"], "approval_required")
+        self.assertEqual(events[3]["action_type"], "git_push")
+
 
 class GitCommandApprovalGateTests(unittest.TestCase):
     def test_tool_shell_cmd_blocks_mutating_git_but_allows_status(self):
         snapshot = brain.agent_capture_permission_state()
         try:
-            with tempfile.TemporaryDirectory(dir=str(Path.home())) as tmpdir:
+            with _writable_tempdir() as tmpdir:
                 subprocess.run(["git", "init"], cwd=tmpdir, check=True, capture_output=True, text=True)
 
                 status_result = brain._tool_shell_cmd("git status --short", cwd=tmpdir, timeout=15)
@@ -2767,6 +3456,121 @@ class GitCommandApprovalGateTests(unittest.TestCase):
         self.assertFalse(action["persist_allowed"])
         self.assertNotIn("persist", action["scope_options"])
 
+    def test_outside_workspace_file_action_cannot_be_persisted(self):
+        action = approval_actions.build_edit_approval_action(
+            "create",
+            "/tmp/axon-persist-probe.txt",
+            workspace_id=7,
+            session_id="session-7",
+            workspace_root="/home/edp/.devbrain",
+        )
+
+        self.assertFalse(action["persist_allowed"])
+        self.assertNotIn("persist", action["scope_options"])
+
+
+class FileApprovalGateTests(unittest.TestCase):
+    def test_workspace_auto_allows_file_action_inside_active_workspace(self):
+        snapshot = brain.agent_capture_permission_state()
+        previous_workspace = brain._ACTIVE_WORKSPACE_PATH
+        token = brain._ACTIVE_AGENT_RUNTIME_CONTEXT.set(
+            {
+                "runtime_permissions_mode": "default",
+                "autonomy_profile": "workspace_auto",
+                "agent_session_id": "session-1",
+            }
+        )
+        try:
+            with _writable_tempdir() as tmpdir:
+                brain._ACTIVE_WORKSPACE_PATH = tmpdir
+                action = approval_actions.build_edit_approval_action(
+                    "write",
+                    os.path.join(tmpdir, "notes.txt"),
+                    session_id="session-1",
+                )
+                self.assertTrue(brain._action_is_allowed(action))
+        finally:
+            brain._ACTIVE_WORKSPACE_PATH = previous_workspace
+            brain._ACTIVE_AGENT_RUNTIME_CONTEXT.reset(token)
+            brain.agent_restore_permission_state(snapshot)
+
+    def test_workspace_auto_blocks_file_action_outside_active_workspace(self):
+        snapshot = brain.agent_capture_permission_state()
+        previous_workspace = brain._ACTIVE_WORKSPACE_PATH
+        token = brain._ACTIVE_AGENT_RUNTIME_CONTEXT.set(
+            {
+                "runtime_permissions_mode": "default",
+                "autonomy_profile": "workspace_auto",
+                "agent_session_id": "session-2",
+            }
+        )
+        try:
+            with _writable_tempdir() as tmpdir:
+                brain._ACTIVE_WORKSPACE_PATH = tmpdir
+                action = approval_actions.build_edit_approval_action(
+                    "write",
+                    "/tmp/axon-default-block.txt",
+                    session_id="session-2",
+                )
+                self.assertFalse(brain._action_is_allowed(action))
+        finally:
+            brain._ACTIVE_WORKSPACE_PATH = previous_workspace
+            brain._ACTIVE_AGENT_RUNTIME_CONTEXT.reset(token)
+            brain.agent_restore_permission_state(snapshot)
+
+    def test_tool_write_file_blocks_outside_workspace_in_default_mode(self):
+        snapshot = brain.agent_capture_permission_state()
+        previous_workspace = brain._ACTIVE_WORKSPACE_PATH
+        token = brain._ACTIVE_AGENT_RUNTIME_CONTEXT.set(
+            {
+                "runtime_permissions_mode": "default",
+                "autonomy_profile": "workspace_auto",
+                "agent_session_id": "session-3",
+            }
+        )
+        target = Path(tempfile.gettempdir()) / f"axon-default-write-{os.getpid()}.txt"
+        try:
+            if target.exists():
+                target.unlink()
+            with _writable_tempdir() as tmpdir:
+                brain._ACTIVE_WORKSPACE_PATH = tmpdir
+                result = brain._tool_write_file(str(target), "DEFAULT_BLOCK")
+                self.assertTrue(result.startswith(f"BLOCKED_EDIT:write:{target}"))
+                self.assertFalse(target.exists())
+        finally:
+            if target.exists():
+                target.unlink()
+            brain._ACTIVE_WORKSPACE_PATH = previous_workspace
+            brain._ACTIVE_AGENT_RUNTIME_CONTEXT.reset(token)
+            brain.agent_restore_permission_state(snapshot)
+
+    def test_tool_write_file_allows_outside_workspace_in_full_access(self):
+        snapshot = brain.agent_capture_permission_state()
+        previous_workspace = brain._ACTIVE_WORKSPACE_PATH
+        token = brain._ACTIVE_AGENT_RUNTIME_CONTEXT.set(
+            {
+                "runtime_permissions_mode": "full_access",
+                "autonomy_profile": "workspace_auto",
+                "agent_session_id": "session-4",
+            }
+        )
+        target = Path(tempfile.gettempdir()) / f"axon-full-access-write-{os.getpid()}.txt"
+        try:
+            if target.exists():
+                target.unlink()
+            with _writable_tempdir() as tmpdir:
+                brain._ACTIVE_WORKSPACE_PATH = tmpdir
+                result = brain._tool_write_file(str(target), "FULL_ACCESS_OK")
+                self.assertIn("Written", result)
+                self.assertTrue(target.exists())
+                self.assertEqual(target.read_text(encoding="utf-8"), "FULL_ACCESS_OK")
+        finally:
+            if target.exists():
+                target.unlink()
+            brain._ACTIVE_WORKSPACE_PATH = previous_workspace
+            brain._ACTIVE_AGENT_RUNTIME_CONTEXT.reset(token)
+            brain.agent_restore_permission_state(snapshot)
+
 
 class LegacyApprovalEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_allow_command_endpoint_is_gone(self):
@@ -2780,6 +3584,44 @@ class LegacyApprovalEndpointTests(unittest.IsolatedAsyncioTestCase):
             await server.allow_agent_edit(server.AllowEditBody(path="~/demo.txt", scope="file"))
 
         self.assertEqual(exc.exception.status_code, 410)
+
+    async def test_approval_workspace_root_accepts_sqlite_row(self):
+        with sqlite3.connect(":memory:") as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT 17 AS id, '/tmp/demo' AS path").fetchone()
+
+        @asynccontextmanager
+        async def fake_db():
+            yield object()
+
+        async def fake_get_project(_conn, _workspace_id):
+            return row
+
+        with patch.object(server.devdb, "get_db", fake_db), \
+             patch.object(server.devdb, "get_project", side_effect=fake_get_project):
+            result = await server._approval_workspace_root(17)
+
+        self.assertEqual(result, "/tmp/demo")
+
+    async def test_approve_action_rejects_tampered_persist_for_outside_workspace_file(self):
+        action = approval_actions.build_edit_approval_action(
+            "create",
+            "/tmp/axon-persist-endpoint-probe.txt",
+            workspace_id=173,
+            session_id="session-173",
+        )
+        tampered = {**action, "persist_allowed": True, "scope_options": ["once", "task", "session", "persist"]}
+
+        async def fake_workspace_root(_workspace_id):
+            return "/home/edp/.devbrain"
+
+        with patch.object(server, "_approval_workspace_root", side_effect=fake_workspace_root):
+            with self.assertRaises(server.HTTPException) as exc:
+                await server.approve_agent_action(
+                    server.ApproveActionBody(action=tampered, scope="persist", session_id="session-173")
+                )
+
+        self.assertEqual(exc.exception.status_code, 400)
 
 
 class AgentOutputHardeningTests(unittest.TestCase):

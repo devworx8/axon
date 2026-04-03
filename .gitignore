@@ -17,5 +17,7 @@ auto_sessions/
 live_preview_sessions/
 runtime_login_sessions/
 task_sandboxes/
+.codex-home/
+tools/
 resources/*/paste-*.png
 AXON_LIVE_APPROVAL_SMOKE.txt

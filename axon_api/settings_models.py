@@ -81,6 +81,7 @@ class SettingsUpdate(BaseModel):
     max_agent_iterations: Optional[str] = None
     context_compact_enabled: Optional[bool] = None
     autonomy_profile: Optional[str] = None
+    runtime_permissions_mode: Optional[str] = None
     memory_first_enabled: Optional[bool] = None
     external_fetch_policy: Optional[str] = None
     quick_model: Optional[str] = None

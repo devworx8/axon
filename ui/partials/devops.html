@@ -1,0 +1,144 @@
+    <!-- ═══════════════════════════════════════════════════════════
+         TAB: DEVOPS MONITORING
+    ════════════════════════════════════════════════════════════ -->
+    <div x-show="activeTab === 'devops'" x-init="$watch('activeTab', v => { if (v === 'devops') devopsRefresh() })" class="flex flex-col h-full">
+      <div class="hidden md:flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/50 desktop-header-glass">
+        <div class="flex items-center gap-3">
+          <div class="font-semibold text-white">DevOps Monitor</div>
+          <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-xs text-slate-400 uppercase tracking-wider">Errors &amp; Usage</span>
+        </div>
+        <div class="flex items-center gap-2 text-xs">
+          <button @click="devopsPollSentry()" class="px-3 py-1.5 rounded-lg border border-slate-700 text-slate-400 hover:text-white transition">
+            ↻ Poll Sentry
+          </button>
+          <button @click="devopsRefresh()" class="px-3 py-1.5 rounded-lg border border-slate-700 text-slate-400 hover:text-white transition">
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <div class="flex-1 overflow-y-auto page-content">
+        <div class="w-full max-w-[1600px] mx-auto px-4 py-4 md:px-6 md:py-6 xl:px-8 2xl:px-10 space-y-5">
+
+          <!-- CLI installer -->
+          <div class="bg-slate-900 rounded-xl border border-slate-800 p-4 space-y-3">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <h3 class="text-sm font-medium text-slate-300">Local CLI installer</h3>
+                <p class="mt-1 text-xs text-slate-500">Install npm-based CLIs like Codex directly from Axon. This installs the package globally, then refreshes Axon's runtime view.</p>
+              </div>
+              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400">npm global</span>
+            </div>
+            <div class="grid gap-3 md:grid-cols-[1.6fr_1fr_auto]">
+              <label class="space-y-1">
+                <span class="text-[11px] uppercase tracking-[0.16em] text-slate-500">Package</span>
+                <input x-model="devopsCliInstaller.package_name"
+                       placeholder="@openai/codex"
+                       class="w-full rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-cyan-500 transition" />
+              </label>
+              <label class="space-y-1">
+                <span class="text-[11px] uppercase tracking-[0.16em] text-slate-500">Binary</span>
+                <input x-model="devopsCliInstaller.binary_name"
+                       placeholder="codex"
+                       class="w-full rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-cyan-500 transition" />
+              </label>
+              <div class="flex items-end">
+                <button @click="devopsInstallCliExtension()"
+                        :disabled="devopsCliInstallLoading"
+                        class="w-full rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-medium text-cyan-200 transition hover:bg-cyan-500/15 disabled:opacity-50">
+                  <span x-text="devopsCliInstallLoading ? 'Installing…' : 'Install CLI'"></span>
+                </button>
+              </div>
+            </div>
+            <div x-show="devopsCliInstallResult?.message"
+                 class="rounded-xl border px-3 py-2 text-[11px]"
+                 :class="devopsCliInstallResult?.status === 'completed' ? 'border-emerald-500/20 bg-emerald-500/8 text-emerald-200' : (devopsCliInstallResult?.status === 'error' ? 'border-rose-500/20 bg-rose-500/8 text-rose-200' : 'border-amber-500/20 bg-amber-500/8 text-amber-200')">
+              <div x-text="devopsCliInstallResult?.message"></div>
+              <div x-show="devopsCliInstallResult?.command_preview" class="mt-2 font-mono text-[10px] break-all text-slate-300" x-text="devopsCliInstallResult?.command_preview"></div>
+              <div x-show="devopsCliInstallResult?.extension?.binary" class="mt-2 text-[10px] text-slate-400">
+                Detected binary:
+                <code class="rounded bg-slate-950 px-1 py-0.5 text-slate-300" x-text="devopsCliInstallResult?.extension?.binary"></code>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quota banner -->
+          <div x-show="devopsQuota.cost_pct >= 80 || devopsQuota.token_pct >= 80"
+               class="bg-amber-900/30 border border-amber-700/50 rounded-xl px-4 py-3 flex items-center gap-3 text-sm">
+            <span class="text-amber-400 text-lg">⚠</span>
+            <span class="text-amber-200">
+              Usage alert: <strong x-text="Math.max(devopsQuota.cost_pct, devopsQuota.token_pct) + '%'"></strong> of monthly budget consumed.
+            </span>
+          </div>
+
+          <!-- Usage summary cards -->
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div class="bg-slate-900 rounded-xl border border-slate-800 p-4">
+              <div class="text-xs text-slate-500 uppercase tracking-wider mb-1">Tokens (30d)</div>
+              <div class="text-xl font-semibold text-white" x-text="devopsFormatNumber((devopsUsage.total_tokens_in || 0) + (devopsUsage.total_tokens_out || 0))"></div>
+            </div>
+            <div class="bg-slate-900 rounded-xl border border-slate-800 p-4">
+              <div class="text-xs text-slate-500 uppercase tracking-wider mb-1">Cost (30d)</div>
+              <div class="text-xl font-semibold text-white" x-text="'$' + (devopsUsage.total_cost_usd || 0).toFixed(2)"></div>
+            </div>
+            <div class="bg-slate-900 rounded-xl border border-slate-800 p-4">
+              <div class="text-xs text-slate-500 uppercase tracking-wider mb-1">API Calls (30d)</div>
+              <div class="text-xl font-semibold text-white" x-text="devopsFormatNumber(devopsUsage.total_calls || 0)"></div>
+            </div>
+            <div class="bg-slate-900 rounded-xl border border-slate-800 p-4">
+              <div class="text-xs text-slate-500 uppercase tracking-wider mb-1">Unresolved Errors</div>
+              <div class="text-xl font-semibold" :class="devopsErrors.length > 0 ? 'text-red-400' : 'text-emerald-400'" x-text="devopsErrors.length"></div>
+            </div>
+          </div>
+
+          <!-- Backend breakdown -->
+          <div class="bg-slate-900 rounded-xl border border-slate-800 p-4" x-show="devopsBackends.length > 0">
+            <h3 class="text-sm font-medium text-slate-300 mb-3">Usage by Backend</h3>
+            <div class="space-y-2">
+              <template x-for="b in devopsBackends" :key="b.backend">
+                <div class="flex items-center justify-between text-sm">
+                  <span class="text-slate-400" x-text="b.backend || 'unknown'"></span>
+                  <span class="text-slate-200">
+                    <span x-text="devopsFormatNumber(b.calls)"></span> calls ·
+                    <span x-text="'$' + (b.cost_usd || 0).toFixed(4)"></span>
+                  </span>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- Error list -->
+          <div class="bg-slate-900 rounded-xl border border-slate-800 p-4">
+            <h3 class="text-sm font-medium text-slate-300 mb-3">Unresolved Errors</h3>
+            <div x-show="devopsErrors.length === 0" class="text-slate-500 text-sm py-4 text-center">
+              No unresolved errors — all clear ✓
+            </div>
+            <div class="space-y-2">
+              <template x-for="err in devopsErrors" :key="err.id">
+                <div class="flex items-start gap-3 bg-slate-950/50 rounded-lg px-3 py-2.5 border border-slate-800">
+                  <span class="mt-0.5 text-xs rounded px-1.5 py-0.5 font-mono"
+                        :class="err.level === 'fatal' ? 'bg-red-900/40 text-red-300' : 'bg-amber-900/30 text-amber-300'"
+                        x-text="err.level"></span>
+                  <div class="flex-1 min-w-0">
+                    <div class="text-sm text-white truncate" x-text="err.title"></div>
+                    <div class="text-xs text-slate-500 mt-0.5">
+                      <span x-text="err.source"></span> ·
+                      <span x-text="err.project_name || '—'"></span> ·
+                      <span x-text="'×' + (err.occurrence_count || 1)"></span> ·
+                      <span x-text="err.status"></span>
+                    </div>
+                  </div>
+                  <div class="flex gap-1.5 shrink-0">
+                    <button @click="devopsSetStatus(err.id, 'ignored')"
+                            class="text-xs px-2 py-1 rounded border border-slate-700 text-slate-400 hover:text-white transition">Ignore</button>
+                    <button @click="devopsSetStatus(err.id, 'resolved')"
+                            class="text-xs px-2 py-1 rounded border border-emerald-700/50 text-emerald-400 hover:bg-emerald-900/30 transition">Resolve</button>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>

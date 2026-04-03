@@ -469,13 +469,6 @@ async def search_memory(
 
     ranked.sort(key=lambda item: item[0], reverse=True)
     top_rows = [item[1] for item in ranked[:limit]]
-    touch_ids = [row.get("id") for row in top_rows if row.get("id")]
-    if touch_ids:
-        try:
-            await devdb.touch_memory_items(conn, touch_ids, commit=False)
-            await conn.commit()
-        except Exception:
-            pass
     _SEARCH_CACHE[cache_key] = {"cached_at": time.time(), "results": [dict(row) for row in top_rows]}
     return top_rows
 

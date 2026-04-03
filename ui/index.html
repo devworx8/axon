@@ -110,6 +110,7 @@
 
         <!-- Centre: model picker pill (always visible) -->
         <div class="flex-1 flex justify-center">
+          <div class="flex items-center gap-2">
           <div class="relative" x-data>
             <button @click="chatModelOpen = !chatModelOpen; if(chatModelOpen){ if(ollamaModels.length===0) loadOllamaModels(); loadRuntimeStatus(); }"
                     class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 hover:border-slate-500/80 transition group select-none">
@@ -178,6 +179,69 @@
                 </div>
               </template>
             </div>
+          </div>
+          <div class="relative" x-data>
+            <button @click="permissionPresetOpen = !permissionPresetOpen"
+                    class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 hover:border-slate-500/80 transition group select-none"
+                    title="Axon runtime permissions">
+              <svg class="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-200 transition" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/>
+                <path d="M9.5 12.2 11.3 14l3.4-3.6"/>
+              </svg>
+              <div class="min-w-0 text-left">
+                <div class="text-sm font-medium text-slate-200 leading-none"
+                     x-text="permissionPresetLabel()"></div>
+                <div class="mt-1 text-[10px] text-slate-500 leading-none"
+                     x-text="permissionPresetMeta()"></div>
+              </div>
+              <svg class="w-3.5 h-3.5 text-slate-500 group-hover:text-slate-300 transition flex-none" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
+            </button>
+            <div x-show="permissionPresetOpen"
+                 @click.away="permissionPresetOpen=false"
+                 @keydown.escape.window="permissionPresetOpen=false"
+                 x-transition:enter="transition ease-out duration-100"
+                 x-transition:enter-start="opacity-0 -translate-y-1"
+                 x-transition:enter-end="opacity-100 translate-y-0"
+                 class="axon-floating-panel absolute top-full left-1/2 z-[220] mt-1.5 w-[320px] -translate-x-1/2 rounded-xl border border-slate-700/80 p-2 shadow-2xl">
+              <div class="space-y-1.5">
+                <template x-for="option in permissionPresetOptions()" :key="option.id">
+                  <button @click="setPermissionPreset(option.id)"
+                          :class="permissionPresetOptionClass(option)"
+                          class="w-full rounded-xl border px-3 py-2.5 text-left transition">
+                    <div class="flex items-start gap-2">
+                      <div class="pt-0.5">
+                        <template x-if="permissionPresetKey() === option.id">
+                          <svg class="w-4 h-4 text-emerald-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>
+                        </template>
+                        <template x-if="permissionPresetKey() !== option.id">
+                          <svg class="w-4 h-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+                        </template>
+                      </div>
+                      <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-2">
+                          <span class="text-sm font-medium" x-text="option.label"></span>
+                          <span x-show="option.id === 'full_access'"
+                                class="rounded-full border border-rose-500/20 bg-rose-500/10 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.16em] text-rose-200">High risk</span>
+                        </div>
+                        <div class="mt-1 text-[11px] leading-5 text-slate-400" x-text="option.detail"></div>
+                      </div>
+                    </div>
+                  </button>
+                </template>
+              </div>
+              <div class="mt-2 rounded-xl border px-3 py-2 text-[11px] leading-5"
+                   :class="permissionPresetKey() === 'full_access'
+                     ? 'border-rose-500/30 bg-rose-500/10 text-rose-100'
+                     : 'border-slate-800 bg-slate-950/65 text-slate-400'">
+                <span x-show="permissionPresetKey() === 'full_access'">
+                  Full access removes Axon’s normal exact-approval gate and launches Codex without sandboxing. Use it only on a machine and repository boundary you fully trust.
+                </span>
+                <span x-show="permissionPresetKey() !== 'full_access'">
+                  Default permissions keep Axon brokered and sandboxed. Switch to Full access only when you explicitly want unsandboxed execution.
+                </span>
+              </div>
+            </div>
+          </div>
           </div>
         </div>
 
@@ -299,7 +363,7 @@
       <div class="chat-shell__body flex-1 flex flex-col md:flex-row min-h-0">
 
       <!-- Canvas: messages + input bar -->
-      <div class="chat-shell__canvas flex-1 flex flex-col min-w-0 min-h-0 relative" :class="{ 'agent-canvas-glow': agentMode && chatLoading }">
+      <div class="chat-shell__canvas flex-1 flex flex-col min-w-0 min-h-0 relative" :class="{ 'agent-canvas-glow': agentMode && isChatLoadingHere() }">
       <!-- Jump-to-bottom button — visible when user scrolled up during streaming -->
       <button x-show="showScrollToBottom"
               x-transition:enter="transition ease-out duration-150"
@@ -318,9 +382,10 @@
           <div @click="openVoiceCommandCenter()" class="axon-orb mb-4 cursor-pointer" :class="orbState()" title="Open voice mode">
             <div class="axon-orb-inner">✦</div>
           </div>
-          <div class="text-white font-semibold text-lg mb-1">Axon Console</div>
+          <div class="text-white font-semibold text-lg mb-1" x-text="chatProject ? chatProject.name : 'Axon Console'"></div>
           <div x-show="voice.open" class="voice-mode-badge text-[10px] text-cyan-300 mb-1">Voice Mode Active</div>
-          <div class="text-slate-400 text-sm mb-6 max-w-xs">Local operator console for your workspaces, missions, files, and runtime. Give Axon a goal and let it observe, plan, execute, verify, and recover.</div>
+          <div x-show="chatProject" class="text-slate-500 text-xs mb-2 font-mono truncate max-w-xs" x-text="chatProject?.path || ''"></div>
+          <div class="text-slate-400 text-sm mb-6 max-w-xs" x-text="chatProject ? 'No messages in this workspace yet. Start a conversation below.' : 'Local operator console for your workspaces, missions, files, and runtime. Give Axon a goal and let it observe, plan, execute, verify, and recover.'"></div>
           <div class="grid grid-cols-1 gap-2 w-full max-w-xs">
             <template x-for="hint in chatHints" :key="hint">
               <button @click="chatInput = hint; sendChat()"
@@ -616,7 +681,7 @@
 
       <!-- Typing indicator — only show when loading AND no streaming placeholder exists yet -->
       <!-- ── Waiting indicator (Cowork "Working on it…" style) ── -->
-      <div x-show="chatLoading && !chatMessages.some(m => m.streaming)" class="flex justify-start items-center gap-2.5 px-1">
+      <div x-show="isChatLoadingHere() && !chatMessages.some(m => m.streaming)" class="flex justify-start items-center gap-2.5 px-1">
           <!-- Avatar -->
           <div :class="agentMode ? 'from-amber-400 via-orange-400 to-cyan-300 text-slate-950 next-gen-icon-glow' : 'from-blue-500 to-blue-700 text-white'"
                class="w-7 h-7 rounded-xl bg-gradient-to-br flex items-center justify-center text-xs shrink-0 overflow-hidden">
@@ -638,21 +703,7 @@
         </div>
       </div>
 
-      <!-- Follow-up suggestion chips -->
-      <div x-show="followUpSuggestions.length && !chatLoading" class="shrink-0 px-3 md:px-5 pt-2">
-        <div class="flex flex-wrap gap-2">
-          <template x-for="(suggestion, sIdx) in followUpSuggestions" :key="sIdx">
-            <button @click="useSuggestion(suggestion)"
-                    :class="suggestion === '→ Continue'
-                      ? 'border-amber-500/30 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25 hover:border-amber-400/50 font-medium'
-                      : 'border-blue-500/25 bg-blue-500/10 text-blue-200 hover:bg-blue-500/20 hover:border-blue-400/40'"
-                    class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-all duration-200 cursor-pointer">
-              <span :class="suggestion === '→ Continue' ? 'text-amber-400' : 'text-blue-400'" x-text="suggestion === '→ Continue' ? '▶' : '→'"></span>
-              <span x-text="suggestion"></span>
-            </button>
-          </template>
-        </div>
-      </div>
+      <!-- @include partials/chat_follow_up_chips.html -->
 
       <!-- Input bar (bottom of canvas) -->
       <div class="chat-shell__composer shrink-0 px-3 md:px-5 py-2.5 border-t border-slate-800 bg-slate-950/80 backdrop-blur">
@@ -734,6 +785,11 @@
                           class="axon-approval__btn axon-approval__btn--secondary">
                     <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow for session</span><span class="axon-approval__btn-meta">Approve this exact action while Axon stays open</span></span>
                   </button>
+                  <button x-show="String(activePendingAgentApproval()?.actionType || '').startsWith('git_') && permissionPresetKey() !== 'full_access'"
+                          @click="window.__axon?.approveAction(activePendingAgentApproval()?.approvalAction || activePendingAgentApproval(), 'once', { resume: true, runtimePermissionsMode: 'full_access' })"
+                          class="axon-approval__btn axon-approval__btn--secondary">
+                    <span class="axon-approval__btn-copy"><span class="axon-approval__btn-title">Allow with Full access</span><span class="axon-approval__btn-meta">Retry this exact git step unsandboxed once</span></span>
+                  </button>
                   <button x-show="activePendingAgentApproval()?.persistAllowed"
                           @click="window.__axon?.approveAction(activePendingAgentApproval()?.approvalAction || activePendingAgentApproval(), 'persist', { resume: true })"
                           class="axon-approval__btn axon-approval__btn--secondary">
@@ -772,10 +828,11 @@
 
         <!-- Generation status pill (visible above input when generating) -->
         <div x-show="chatLoading" x-transition class="flex justify-center mb-2">
-          <button @click="stopGeneration()"
-                  class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-red-500/15 border border-red-500/25 text-red-300 text-xs hover:bg-red-500/25 transition press-scale">
-            <span class="w-2 h-2 rounded-full bg-red-400 animate-pulse"></span>
-            <span x-text="liveOperator.active ? 'Agent working… Tap to stop' : 'Generating… Tap to stop'"></span>
+          <button @click="isChatLoadingHere() ? stopGeneration() : activateWorkspaceTab(_chatLoadingWorkspaceId)"
+                  class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border text-xs transition press-scale"
+                  :class="isChatLoadingHere() ? 'bg-red-500/15 border-red-500/25 text-red-300 hover:bg-red-500/25' : 'bg-blue-500/10 border-blue-500/25 text-blue-300 hover:bg-blue-500/20'">
+            <span class="w-2 h-2 rounded-full animate-pulse" :class="isChatLoadingHere() ? 'bg-red-400' : 'bg-blue-400'"></span>
+            <span x-text="isChatLoadingHere() ? (liveOperator.active ? 'Agent working… Tap to stop' : 'Generating… Tap to stop') : crossWorkspaceAgentLabel()"></span>
           </button>
         </div>
 
@@ -1032,128 +1089,130 @@
       </div>
 
       <!-- Runtime login modal -->
-      <div x-show="runtimeLoginModal.open" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
-           x-transition:leave="transition ease-in duration-100" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
-           @click.self="closeRuntimeLoginModal()" @keydown.escape.window="closeRuntimeLoginModal()"
-           class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm" style="display:none;">
-        <div class="w-[min(92vw,760px)] max-h-[88vh] overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-2xl">
-          <div class="flex items-center gap-3 border-b border-slate-800 px-4 py-3">
-            <div class="min-w-0 flex-1">
-              <div class="text-sm font-semibold text-slate-100" x-text="runtimeLoginFamilyLabel(runtimeLoginModal.family) + ' sign in'"></div>
-              <div class="truncate text-[11px] text-slate-500" x-text="runtimeLoginModal.session?.binary || runtimeLoginModal.session?.command_preview || 'Preparing local browser/device sign-in…'"></div>
-            </div>
-            <span class="rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.18em]"
-                  :class="runtimeLoginStatusClass(runtimeLoginModal.session?.status || (runtimeLoginModal.loading ? 'pending' : ''))"
-                  x-text="runtimeLoginModal.loading ? 'loading' : (runtimeLoginModal.session?.status || 'pending')"></span>
-            <button @click="closeRuntimeLoginModal()" class="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-[11px] text-slate-300 hover:text-white transition">Close</button>
-          </div>
-          <div class="max-h-[74vh] overflow-auto px-4 py-4 space-y-4">
-            <div x-show="runtimeLoginModal.loading" class="rounded-xl border border-amber-500/20 bg-amber-500/8 px-3 py-3 text-sm text-amber-200">
-              Starting the local sign-in flow…
-            </div>
-            <div x-show="runtimeLoginModal.error" class="rounded-xl border border-rose-500/20 bg-rose-500/8 px-3 py-3 text-sm text-rose-200" x-text="runtimeLoginModal.error"></div>
-
-            <div x-show="runtimeLoginModal.session" class="space-y-4">
-              <div class="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3">
-                <div class="text-xs font-semibold text-slate-200">Status</div>
-                <div class="mt-1 text-sm text-slate-300" x-text="runtimeLoginModal.session?.message || 'Waiting for the runtime login flow.'"></div>
+      <template x-teleport="body">
+        <div x-show="runtimeLoginModal.open" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+             x-transition:leave="transition ease-in duration-100" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
+             @click.self="closeRuntimeLoginModal()" @keydown.escape.window="closeRuntimeLoginModal()"
+             class="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950" style="display:none;">
+          <div class="relative isolate w-[min(92vw,760px)] max-h-[88vh] overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-2xl">
+            <div class="flex items-center gap-3 border-b border-slate-800 px-4 py-3">
+              <div class="min-w-0 flex-1">
+                <div class="text-sm font-semibold text-slate-100" x-text="runtimeLoginFamilyLabel(runtimeLoginModal.family) + ' sign in'"></div>
+                <div class="truncate text-[11px] text-slate-500" x-text="runtimeLoginModal.session?.binary || runtimeLoginModal.session?.command_preview || 'Preparing local browser/device sign-in…'"></div>
               </div>
-
-              <div class="rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3">
-                <div class="text-xs font-semibold text-slate-200">Auth state</div>
-                <div class="mt-1 text-sm text-slate-300" x-text="runtimeLoginAuthSummary(runtimeLoginModal.session)"></div>
-                <div class="mt-2 flex flex-wrap gap-2">
-                  <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-1 text-[10px] text-slate-300"
-                        x-text="formatRuntimeAuthMethod(runtimeLoginModal.session?.auth_snapshot?.auth_method || '')"></span>
-                  <span x-show="runtimeLoginModal.session?.auth_snapshot?.subscription_type"
-                        class="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-200"
-                        x-text="runtimeLoginModal.session?.auth_snapshot?.subscription_type"></span>
-                </div>
+              <span class="rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.18em]"
+                    :class="runtimeLoginStatusClass(runtimeLoginModal.session?.status || (runtimeLoginModal.loading ? 'pending' : ''))"
+                    x-text="runtimeLoginModal.loading ? 'loading' : (runtimeLoginModal.session?.status || 'pending')"></span>
+              <button @click="closeRuntimeLoginModal()" class="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-[11px] text-slate-300 hover:text-white transition">Close</button>
+            </div>
+            <div class="max-h-[74vh] overflow-auto px-4 py-4 space-y-4">
+              <div x-show="runtimeLoginModal.loading" class="rounded-xl border border-amber-500/20 bg-amber-500/8 px-3 py-3 text-sm text-amber-200">
+                Starting the local sign-in flow…
               </div>
+              <div x-show="runtimeLoginModal.error" class="rounded-xl border border-rose-500/20 bg-rose-500/8 px-3 py-3 text-sm text-rose-200" x-text="runtimeLoginModal.error"></div>
 
-              <div x-show="runtimeLoginModal.session?.browser_url" class="rounded-xl border border-blue-500/20 bg-blue-500/8 px-4 py-3 space-y-3">
-                <div>
-                  <div class="text-xs font-semibold text-blue-200">Browser link</div>
-                  <div class="mt-1 break-all text-xs text-slate-200" x-text="runtimeLoginModal.session?.browser_url"></div>
+              <div x-show="runtimeLoginModal.session" class="space-y-4">
+                <div class="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+                  <div class="text-xs font-semibold text-slate-200">Status</div>
+                  <div class="mt-1 text-sm text-slate-300" x-text="runtimeLoginModal.session?.message || 'Waiting for the runtime login flow.'"></div>
                 </div>
+
+                <div class="rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3">
+                  <div class="text-xs font-semibold text-slate-200">Auth state</div>
+                  <div class="mt-1 text-sm text-slate-300" x-text="runtimeLoginAuthSummary(runtimeLoginModal.session)"></div>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-1 text-[10px] text-slate-300"
+                          x-text="formatRuntimeAuthMethod(runtimeLoginModal.session?.auth_snapshot?.auth_method || '')"></span>
+                    <span x-show="runtimeLoginModal.session?.auth_snapshot?.subscription_type"
+                          class="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-200"
+                          x-text="runtimeLoginModal.session?.auth_snapshot?.subscription_type"></span>
+                  </div>
+                </div>
+
+                <div x-show="runtimeLoginModal.session?.browser_url" class="rounded-xl border border-blue-500/20 bg-blue-500/8 px-4 py-3 space-y-3">
+                  <div>
+                    <div class="text-xs font-semibold text-blue-200">Browser link</div>
+                    <div class="mt-1 break-all text-xs text-slate-200" x-text="runtimeLoginModal.session?.browser_url"></div>
+                  </div>
+                  <div class="flex flex-wrap gap-2">
+                    <button @click="window.open(runtimeLoginModal.session?.browser_url, '_blank', 'noopener,noreferrer')"
+                            class="rounded-xl border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs font-medium text-blue-200 transition hover:bg-blue-500/15">
+                      Open browser
+                    </button>
+                    <button @click="copyRuntimeLoginValue(runtimeLoginModal.session?.browser_url, 'Login URL')"
+                            class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500">
+                      Copy link
+                    </button>
+                  </div>
+                </div>
+
+                <div x-show="runtimeLoginModal.session?.user_code" class="rounded-xl border border-violet-500/20 bg-violet-500/8 px-4 py-3 space-y-3">
+                  <div>
+                    <div class="text-xs font-semibold text-violet-200">Device code</div>
+                    <div class="mt-1 text-lg font-semibold tracking-[0.22em] text-slate-100" x-text="runtimeLoginModal.session?.user_code"></div>
+                  </div>
+                  <button @click="copyRuntimeLoginValue(runtimeLoginModal.session?.user_code, 'Device code')"
+                          class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500">
+                    Copy code
+                  </button>
+                </div>
+
+                <div class="rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-xs font-semibold text-slate-200">Prepared command</div>
+                      <div class="text-[11px] text-slate-500">Axon runs this locally and keeps polling until the CLI reports that you are signed in.</div>
+                    </div>
+                    <button @click="copyRuntimeLoginValue(runtimeLoginModal.session?.command_preview, 'Command')"
+                            class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500">
+                      Copy
+                    </button>
+                  </div>
+                  <pre class="mt-3 whitespace-pre-wrap break-all rounded-lg bg-slate-950 px-3 py-2 text-[11px] leading-5 text-slate-300" x-text="runtimeLoginModal.session?.command_preview || 'No command available.'"></pre>
+                </div>
+
+                <div class="rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-xs font-semibold text-slate-200">Runtime output</div>
+                      <div class="text-[11px] text-slate-500">Live CLI output from the sign-in helper.</div>
+                    </div>
+                    <button @click="refreshRuntimeLoginSession()"
+                            class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500">
+                      Refresh
+                    </button>
+                  </div>
+                  <pre class="mt-3 max-h-[26vh] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-950 px-3 py-2 text-[11px] leading-5 text-slate-300" x-text="runtimeLoginModal.session?.log_tail || 'Waiting for runtime output…'"></pre>
+                </div>
+
                 <div class="flex flex-wrap gap-2">
-                  <button @click="window.open(runtimeLoginModal.session?.browser_url, '_blank', 'noopener,noreferrer')"
-                          class="rounded-xl border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs font-medium text-blue-200 transition hover:bg-blue-500/15">
-                    Open browser
-                  </button>
-                  <button @click="copyRuntimeLoginValue(runtimeLoginModal.session?.browser_url, 'Login URL')"
-                          class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500">
-                    Copy link
-                  </button>
-                </div>
-              </div>
-
-              <div x-show="runtimeLoginModal.session?.user_code" class="rounded-xl border border-violet-500/20 bg-violet-500/8 px-4 py-3 space-y-3">
-                <div>
-                  <div class="text-xs font-semibold text-violet-200">Device code</div>
-                  <div class="mt-1 text-lg font-semibold tracking-[0.22em] text-slate-100" x-text="runtimeLoginModal.session?.user_code"></div>
-                </div>
-                <button @click="copyRuntimeLoginValue(runtimeLoginModal.session?.user_code, 'Device code')"
-                        class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500">
-                  Copy code
-                </button>
-              </div>
-
-              <div class="rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3">
-                <div class="flex items-center justify-between gap-3">
-                  <div>
-                    <div class="text-xs font-semibold text-slate-200">Prepared command</div>
-                    <div class="text-[11px] text-slate-500">Axon runs this locally and keeps polling until the CLI reports that you are signed in.</div>
-                  </div>
-                  <button @click="copyRuntimeLoginValue(runtimeLoginModal.session?.command_preview, 'Command')"
-                          class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500">
-                    Copy
-                  </button>
-                </div>
-                <pre class="mt-3 whitespace-pre-wrap break-all rounded-lg bg-slate-950 px-3 py-2 text-[11px] leading-5 text-slate-300" x-text="runtimeLoginModal.session?.command_preview || 'No command available.'"></pre>
-              </div>
-
-              <div class="rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3">
-                <div class="flex items-center justify-between gap-3">
-                  <div>
-                    <div class="text-xs font-semibold text-slate-200">Runtime output</div>
-                    <div class="text-[11px] text-slate-500">Live CLI output from the sign-in helper.</div>
-                  </div>
                   <button @click="refreshRuntimeLoginSession()"
                           class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500">
-                    Refresh
+                    Refresh status
+                  </button>
+                  <button x-show="runtimeLoginModal.session?.status === 'authenticated'"
+                          @click="loadRuntimeStatus(); showToast(runtimeLoginFamilyLabel(runtimeLoginModal.family) + ' runtime status refreshed')"
+                          class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-200 transition hover:bg-emerald-500/15">
+                    Refresh runtime
+                  </button>
+                  <button x-show="['failed','cancelled'].includes(String(runtimeLoginModal.session?.status || '').toLowerCase())"
+                          @click="retryRuntimeLoginSession()"
+                          :disabled="runtimeLoginModal.loading"
+                          class="rounded-xl border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-xs font-medium text-sky-200 transition hover:bg-sky-500/15 disabled:opacity-50">
+                    Retry sign in
+                  </button>
+                  <button x-show="runtimeLoginPendingStatus(runtimeLoginModal.session?.status)"
+                          @click="cancelRuntimeLoginSession()"
+                          :disabled="runtimeLoginModal.loading"
+                          class="rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200 transition hover:bg-rose-500/15 disabled:opacity-50">
+                    Cancel sign in
                   </button>
                 </div>
-                <pre class="mt-3 max-h-[26vh] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-950 px-3 py-2 text-[11px] leading-5 text-slate-300" x-text="runtimeLoginModal.session?.log_tail || 'Waiting for runtime output…'"></pre>
-              </div>
-
-              <div class="flex flex-wrap gap-2">
-                <button @click="refreshRuntimeLoginSession()"
-                        class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500">
-                  Refresh status
-                </button>
-                <button x-show="runtimeLoginModal.session?.status === 'authenticated'"
-                        @click="loadRuntimeStatus(); showToast(runtimeLoginFamilyLabel(runtimeLoginModal.family) + ' runtime status refreshed')"
-                        class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-200 transition hover:bg-emerald-500/15">
-                  Refresh runtime
-                </button>
-                <button x-show="['failed','cancelled'].includes(String(runtimeLoginModal.session?.status || '').toLowerCase())"
-                        @click="retryRuntimeLoginSession()"
-                        :disabled="runtimeLoginModal.loading"
-                        class="rounded-xl border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-xs font-medium text-sky-200 transition hover:bg-sky-500/15 disabled:opacity-50">
-                  Retry sign in
-                </button>
-                <button x-show="runtimeLoginPendingStatus(runtimeLoginModal.session?.status)"
-                        @click="cancelRuntimeLoginSession()"
-                        :disabled="runtimeLoginModal.loading"
-                        class="rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200 transition hover:bg-rose-500/15 disabled:opacity-50">
-                  Cancel sign in
-                </button>
               </div>
             </div>
           </div>
         </div>
-      </div>
+      </template>
 
       </div><!-- /canvas -->
 
@@ -3729,6 +3788,8 @@
     </div>
 
     <!-- ════════════════════════════════════════════════════════════
+    <!-- @include partials/devops.html -->
+
     <!-- @include partials/settings.html -->
 
     <!-- ── Memory tab ────────────────────────────────────────────── -->
@@ -4488,9 +4549,14 @@
 <script src="/js/codeblocks.js?v=20260331a"></script>
 <script src="/js/auth.js?v=20260331b"></script>
 <script src="/js/dashboard.js?v=20260402d"></script>
-<script src="/js/chat.js?v=20260402c"></script>
+<script src="/js/attention.js?v=20260403a"></script>
+<script src="/js/companion.js?v=20260403a"></script>
+<script src="/js/workspace-runs.js?v=20260403a"></script>
+<script src="/js/chat-console-commands.js?v=20260403b"></script>
+<script src="/js/chat-followups.js?v=20260403a"></script>
+<script src="/js/chat.js?v=20260403d"></script>
 <script src="/js/voice.js?v=20260331a"></script>
-<script src="/js/settings.js?v=20260331b"></script>
+<script src="/js/settings.js?v=20260403a"></script>
 <script src="/js/resources.js?v=20260331a"></script>
 <script src="/js/projects.js?v=20260402b"></script>
 <script src="/js/tasks.js?v=20260331b"></script>
@@ -4498,7 +4564,8 @@
 <script src="/js/mobile.js?v=20260331a"></script>
 <script src="/js/vault.js?v=20260331b"></script>
 <script src="/js/files.js?v=20260331a"></script>
-<script src="/js/models.js?v=20260331a"></script>
+<script src="/js/models.js?v=20260403b"></script>
+<script src="/js/devops.js?v=20260402a"></script>
 
 <script>
 function devbrain() {
@@ -4531,6 +4598,7 @@ function devbrain() {
       { id: 'resources', icon: '🗃️', label: 'Resources' },
       { id: 'memory',   icon: '🧠', label: 'Memory' },
       { id: 'vault',    icon: '🔐', label: 'Secure Vault' },
+      { id: 'devops',   icon: '🔧', label: 'DevOps' },
     ],
     mobileNavItems: [
       { id: 'dashboard', icon: 'dashboard', label: 'Dashboard', badge: 0 },
@@ -4546,6 +4614,7 @@ function devbrain() {
       { id: 'resources', icon: '🗃️', label: 'Resources' },
       { id: 'memory', icon: '🧠', label: 'Memory' },
       { id: 'vault', icon: '🔐', label: 'Secure Vault' },
+      { id: 'devops', icon: '🔧', label: 'DevOps' },
       { id: 'settings', icon: '⚙️', label: 'Settings' },
     ],
     showMoreMenu: false,
@@ -4609,6 +4678,7 @@ function devbrain() {
     _workspacePreviewRequestSeq: 0,
     _workspacePreviewScopeKey: '',
     chatLoading: false,
+    _chatLoadingWorkspaceId: '',
     _chatAbortController: null,
     chatProjectId: '',
     chatProject: null,
@@ -4627,6 +4697,7 @@ function devbrain() {
     showComposerMenu: false,
     showMobileToolbar: false,
     visionWarningDismissed: false,
+    permissionPresetOpen: false,
     panelRuntimeOpen: true,
     panelStepsOpen: false,
     panelProgressOpen: true,
@@ -5179,6 +5250,9 @@ function devbrain() {
       this.pollConnection();
       this.loadCurrentUser();
       this.loadDashboard();
+      this.loadAttentionInbox?.();
+      this.loadCompanionStatus?.();
+      this.loadConnectorsOverview?.();
       this.loadBrowserActions();
       this.loadChatHistory();
       this.$watch('activeTab', tab => {
@@ -5250,7 +5324,10 @@ function devbrain() {
       this.showResourcePicker = false;
       this.showMobileToolbar = false;
       this.activeTab = id;
-      if (id === 'dashboard') this.loadDashboard();
+      if (id === 'dashboard') {
+        this.loadDashboard();
+        this.refreshJarvisSurfaces?.();
+      }
       else if (id === 'projects') this.loadProjects();
       else if (id === 'tasks') this.loadTasks();
       else if (id === 'prompts') this.loadPrompts();
@@ -5268,7 +5345,10 @@ function devbrain() {
         const prev = this._tabHistory.pop();
         this.activeTab = prev;
         // Trigger data load for the target tab
-        if (prev === 'dashboard') this.loadDashboard();
+        if (prev === 'dashboard') {
+          this.loadDashboard();
+          this.refreshJarvisSurfaces?.();
+        }
         else if (prev === 'tasks') this.loadTasks();
         else if (prev === 'prompts') this.loadPrompts();
       }
@@ -5473,6 +5553,7 @@ function devbrain() {
       if (Number.isFinite(savedZoom) && savedZoom > 0) {
         this.consoleZoom = Math.max(0.9, Math.min(1.45, savedZoom));
       }
+      try { document.documentElement.style.setProperty('--ui-scale', String(this.consoleZoom)); } catch (_) {}
       const savedPanelWidth = Number(this.readWindowPref('consolePanelWidth', '420') || 420);
       if (Number.isFinite(savedPanelWidth) && savedPanelWidth >= 340) {
         this.consolePanelWidth = this.normalizeConsolePanelWidth?.(savedPanelWidth) || savedPanelWidth;
@@ -5501,6 +5582,10 @@ function devbrain() {
     axonCodeblocksMixin(),
     axonAuthMixin(),
     axonDashboardMixin(),
+    axonAttentionMixin(),
+    axonCompanionMixin(),
+    axonWorkspaceRunsMixin(),
+    axonChatConsoleCommandsMixin(),
     axonChatMixin(),
     axonVoiceMixin(),
     axonSettingsMixin(),
@@ -5512,6 +5597,7 @@ function devbrain() {
     axonVaultMixin(),
     axonFilesMixin(),
     axonModelsMixin(),
+    axonDevopsMixin(),
   ];
   for (const mixin of mixins) {
     Object.defineProperties(state, Object.getOwnPropertyDescriptors(mixin));
@@ -5606,7 +5692,7 @@ window.__axon = {
     return app;
   },
 
-  async resumePausedTask(note) {
+  async resumePausedTask(note, resumeOptions = {}) {
     try {
       if (note) {
         await __axonPost('/api/agent/steer', { message: note });
@@ -5620,6 +5706,9 @@ window.__axon = {
       const resumePayload = interrupted?.session_id
         ? { resume_session_id: interrupted.session_id, resume_reason: 'approval_continue' }
         : { resume_reason: 'approval_continue' };
+      if (resumeOptions && typeof resumeOptions === 'object' && String(resumeOptions.runtime_permissions_mode_override || '').trim()) {
+        resumePayload.runtime_permissions_mode_override = String(resumeOptions.runtime_permissions_mode_override).trim();
+      }
       app.prepareInterruptedSessionResume?.();
       app.sendChatSilent('please continue', 'agent', resumePayload);
     }
@@ -5644,14 +5733,20 @@ window.__axon = {
       app?.markPendingAgentApprovalResolved?.('approved', detail);
       __axonToast(`✓ ${label}`);
       if (options.resume !== false) {
-        const note = scope === 'persist'
-          ? 'Permission granted: the exact blocked action is now saved for future Axon sessions. Retry it if it is still needed, then continue the same task.'
-          : scope === 'session'
-            ? 'Permission granted: the exact blocked action is approved for this Axon session. Retry it if it is still needed, then continue the same task.'
-            : scope === 'task'
-              ? 'Permission granted: the exact blocked action is approved for this task. Retry it if it is still needed, then continue the same task.'
-              : 'Permission granted: you may run the exact blocked action once. Retry it if it is still needed, then continue the same task.';
-        window.__axon.resumePausedTask(note);
+        const retryWithFullAccess = String(options.runtimePermissionsMode || '').trim().toLowerCase() === 'full_access';
+        const note = retryWithFullAccess
+          ? 'Permission granted: retry the exact blocked action once with Full access, then continue the same task.'
+          : scope === 'persist'
+            ? 'Permission granted: the exact blocked action is now saved for future Axon sessions. Retry it if it is still needed, then continue the same task.'
+            : scope === 'session'
+              ? 'Permission granted: the exact blocked action is approved for this Axon session. Retry it if it is still needed, then continue the same task.'
+              : scope === 'task'
+                ? 'Permission granted: the exact blocked action is approved for this task. Retry it if it is still needed, then continue the same task.'
+                : 'Permission granted: you may run the exact blocked action once. Retry it if it is still needed, then continue the same task.';
+        window.__axon.resumePausedTask(
+          note,
+          retryWithFullAccess ? { runtime_permissions_mode_override: 'full_access' } : {},
+        );
       }
     }).catch(e => {
       __axonToast(`Approve action failed: ${e.message || e}`, { error: true });

@@ -10,6 +10,7 @@ from glob import glob
 from typing import Any, cast
 
 import brain
+from axon_api.services import local_tool_env
 
 _CLAUDE_CODE_PACKAGE = "@anthropic-ai/claude-code"
 _INSTALL_TIMEOUT_SECONDS = 900
@@ -38,7 +39,7 @@ def _discover_cli_environments() -> list[EnvRecord]:
 
 
 def _clean_env() -> dict[str, str]:
-    env = {**os.environ, "NO_COLOR": "1"}
+    env = local_tool_env.build_tool_env({**os.environ, "NO_COLOR": "1"})
     env.pop("CLAUDECODE", None)
     env.pop("CLAUDE_CODE_ENTRYPOINT", None)
     return env
@@ -77,6 +78,10 @@ def _run_command(parts: list[str], timeout: int) -> subprocess.CompletedProcess[
 
 def _command_preview(parts: list[str]) -> str:
     return shlex.join(parts)
+
+
+def _npm_install_parts(npm_binary: str, package_name: str) -> list[str]:
+    return local_tool_env.npm_install_parts(npm_binary, package_name)
 
 
 def _selected_environment(binary: str, environments: list[EnvRecord]) -> EnvRecord:
@@ -211,7 +216,7 @@ def build_cli_runtime_snapshot(cli_path_override: str = "") -> StatusRecord:
     login_parts = [binary or "claude", "auth", "login", "--claudeai"]
     logout_parts = [binary or "claude", "auth", "logout"]
     status_parts = [binary or "claude", "auth", "status", "--json"]
-    install_parts = [npm_binary or "npm", "install", "-g", _CLAUDE_CODE_PACKAGE]
+    install_parts = _npm_install_parts(npm_binary or "npm", _CLAUDE_CODE_PACKAGE)
 
     return {
         "installed": bool(binary),
@@ -226,6 +231,8 @@ def build_cli_runtime_snapshot(cli_path_override: str = "") -> StatusRecord:
         "environments": environments,
         "manual_override_path": cli_path_override or "",
         "using_auto_discovery": bool(binary and not cli_path_override),
+        "install_scope": "axon_local",
+        "install_root": local_tool_env.install_scope_label(),
         "install_command": _command_preview(install_parts),
         "login_command": _command_preview(login_parts),
         "logout_command": _command_preview(logout_parts),
@@ -245,14 +252,15 @@ def install_claude_cli(cli_path_override: str = "") -> StatusRecord:
             "cli_runtime": snapshot,
         }
 
-    proc = _run_command([npm_binary, "install", "-g", _CLAUDE_CODE_PACKAGE], timeout=_INSTALL_TIMEOUT_SECONDS)
+    install_parts = _npm_install_parts(npm_binary, _CLAUDE_CODE_PACKAGE)
+    proc = _run_command(install_parts, timeout=_INSTALL_TIMEOUT_SECONDS)
     snapshot = build_cli_runtime_snapshot(cli_path_override)
     output = (proc.stdout or proc.stderr or "").strip()
     if proc.returncode != 0:
         raise RuntimeError(output or "Claude CLI install failed.")
     return {
         "status": "completed",
-        "message": "Claude CLI installed and ready for discovery.",
+        "message": f"Claude CLI installed into Axon's local toolchain at {snapshot['install_root']}.",
         "command_preview": snapshot["install_command"],
         "cli_runtime": snapshot,
         "output": output,

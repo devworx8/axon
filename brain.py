@@ -28,10 +28,12 @@ import anthropic
 import httpx
 import gpu_guard
 import resource_bank
+from axon_api.services import local_tool_env
 from axon_data.sqlite_utils import managed_connection
 from axon_core.cli_command import build_cli_command, build_codex_exec_command
 from axon_core.cli_pacing import cli_cooldown_remaining, current_cli_cooldown, note_cli_cooldown, wait_for_cli_slot
 from axon_core.chat_context import select_history_for_chat
+from axon_core import agent_runtime_state
 from axon_core.approval_actions import (
     AUTONOMY_PROFILES,
     autonomy_profile_allows,
@@ -83,7 +85,7 @@ def reset_session_usage():
     _session_usage.update({"tokens": 0, "cost_usd": 0.0, "calls": 0, "cli_calls": 0, "api_calls": 0, "ollama_calls": 0})
 
 
-def _track_usage(tokens: int, cost_usd: float = 0.0, backend: str = "api"):
+def _track_usage(tokens: int, cost_usd: float = 0.0, backend: str = "api", *, model: str = ""):
     _session_usage["tokens"] += tokens
     _session_usage["cost_usd"] += cost_usd
     _session_usage["calls"] += 1
@@ -93,6 +95,29 @@ def _track_usage(tokens: int, cost_usd: float = 0.0, backend: str = "api"):
         _session_usage["ollama_calls"] += 1
     else:
         _session_usage["api_calls"] += 1
+    # Persist to usage_log (fire-and-forget)
+    try:
+        threading.Thread(
+            target=_persist_usage_sync,
+            args=(tokens, cost_usd, backend, model),
+            daemon=True,
+        ).start()
+    except Exception:
+        pass
+
+
+def _persist_usage_sync(tokens: int, cost_usd: float, backend: str, model: str):
+    try:
+        with managed_connection(str(DEVBRAIN_DB_PATH), timeout=10, row_factory=None) as conn:
+            conn.execute(
+                """INSERT INTO usage_log
+                   (backend, model, tokens_in, tokens_out, cost_usd, session_id, workspace_id, tool_name)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (backend, model, int(tokens or 0), 0, float(cost_usd or 0.0), "", None, ""),
+            )
+            conn.commit()
+    except Exception:
+        pass
 
 # ─── Models ──────────────────────────────────────────────────────────────────
 
@@ -107,6 +132,7 @@ _CLI_RATE_LIMIT_COOLDOWN_SECONDS = 300
 
 # Default CLI-compatible paths (auto-detected)
 _DEFAULT_CLAUDE_CLI_PATHS = [
+    str(local_tool_env.axon_binary_path("claude")),
     "/home/edp/.config/Claude/claude-code/2.1.63/claude",
     "/home/edp/.vscode/extensions/anthropic.claude-code-2.1.81-linux-x64/resources/native-binary/claude",
     "/usr/local/bin/claude",
@@ -115,6 +141,7 @@ _DEFAULT_CLAUDE_CLI_PATHS = [
 ]
 
 _DEFAULT_CODEX_CLI_PATHS = [
+    str(local_tool_env.axon_binary_path("codex")),
     "/usr/local/bin/codex",
     "/usr/bin/codex",
     "codex",
@@ -931,6 +958,7 @@ async def stream_chat(
     cli_session_persistence: bool = False,
     ollama_url: str = "",
     ollama_model: str = "",
+    usage_sink: Optional[dict[str, Any]] = None,
 ) -> AsyncGenerator[str, None]:
     """Public async generator — yields chat response chunks across supported runtimes."""
     runtime = (backend or "ollama").strip().lower()
@@ -1007,12 +1035,13 @@ async def stream_chat(
                 max_tokens=1500,
                 model=cli_model,
                 allow_session_persistence=False,
+                usage_sink=usage_sink,
             ):
                 yield chunk
         except Exception as exc:
             if _is_cli_rate_limit_message(str(exc)):
                 if api_key and api_base_url:
-                    yield f"⚠️ Claude CLI hit a rate limit. Falling back to {_api_provider_label(api_provider)} (`{api_model or BALANCED_MODEL}`).\n\n"
+                    yield f"⚠️ CLI runtime hit a rate limit. Falling back to {_api_provider_label(api_provider)} (`{api_model or BALANCED_MODEL}`).\n\n"
                     api_messages = list(messages)
                     api_messages.append(_api_message_with_images(user_message, resource_image_paths))
                     if api_provider in {"openai_gpts", "generic_api", "deepseek"} and api_key:
@@ -1038,7 +1067,7 @@ async def stream_chat(
                         yield content
                     return
                 if ollama_model or ollama_url:
-                    yield "⚠️ Claude CLI hit a rate limit. Falling back to Local Ollama.\n\n"
+                    yield "⚠️ CLI runtime hit a rate limit. Falling back to Local Ollama.\n\n"
                     ollama_messages = list(messages)
                     ollama_messages.append(_ollama_message_with_images(user_message, resource_image_paths))
                     execution = await asyncio.to_thread(
@@ -1162,17 +1191,38 @@ _TASK_ALLOWED_ACTIONS: dict[str, set[str]] = {}
 _PERSISTENT_ALLOWED_ACTIONS: set[str] = set()
 _PERSISTENT_ALLOWED_ACTIONS_LOADED: bool = False
 
-# Active workspace root — set at the start of each agent run for cwd defaulting
-_ACTIVE_WORKSPACE_PATH: str = ""
-
-
 def _workspace_root() -> str:
     """Return the active workspace root for the current agent run, if available."""
-    if _ACTIVE_WORKSPACE_PATH:
-        resolved = os.path.realpath(os.path.expanduser(_ACTIVE_WORKSPACE_PATH))
-        if resolved.startswith(_HOME) and os.path.isdir(resolved):
-            return resolved
-    return _HOME
+    return agent_runtime_state.workspace_root(_HOME)
+
+
+def _active_workspace_root() -> str:
+    """Return the real active workspace root, or an empty string if none is set."""
+    return agent_runtime_state.active_workspace_root()
+
+
+def _path_within_root(path: str, root: str) -> bool:
+    target = os.path.realpath(os.path.expanduser(str(path or "").strip()))
+    base = os.path.realpath(os.path.expanduser(str(root or "").strip()))
+    if not target or not base:
+        return False
+    try:
+        return os.path.commonpath([target, base]) == base
+    except ValueError:
+        return False
+
+
+def _action_targets_active_workspace(action: dict[str, Any]) -> bool:
+    action_type = str((action or {}).get("action_type") or "").strip().lower()
+    if not action_type.startswith("file_"):
+        return False
+    root = _active_workspace_root()
+    if not root:
+        return False
+    target_path = str((action or {}).get("path") or "").strip()
+    if not target_path:
+        return False
+    return _path_within_root(target_path, root)
 
 
 def _current_autonomy_profile() -> str:
@@ -1180,6 +1230,22 @@ def _current_autonomy_profile() -> str:
     if profile == "manual":
         return "manual"
     return "workspace_auto"
+
+
+def _current_runtime_permissions_mode() -> str:
+    runtime_ctx = _current_agent_runtime_context()
+    mode = str(runtime_ctx.get("runtime_permissions_mode") or "").strip().lower()
+    if mode in {"ask_first", "full_access"}:
+        return mode
+    return "ask_first" if _current_autonomy_profile() == "manual" else "default"
+
+
+def _current_codex_sandbox_mode() -> str:
+    return "danger-full-access" if _current_runtime_permissions_mode() == "full_access" else "workspace-write"
+
+
+def _current_codex_approval_mode() -> str:
+    return "never" if _current_runtime_permissions_mode() == "full_access" else "on-request"
 
 
 def _current_agent_session_id() -> str:
@@ -1214,7 +1280,12 @@ def _load_persistent_action_grants() -> None:
 def _action_is_allowed(action: dict[str, Any]) -> bool:
     if not action:
         return False
+    if _current_runtime_permissions_mode() == "full_access":
+        return True
     if autonomy_profile_allows(action, _current_autonomy_profile()):
+        action_type = str(action.get("action_type") or "").strip().lower()
+        if action_type.startswith("file_"):
+            return _action_targets_active_workspace(action)
         return True
     fingerprint = str(action.get("action_fingerprint") or "").strip()
     if not fingerprint:
@@ -1294,6 +1365,7 @@ def agent_allow_action(action: dict[str, Any], scope: str = "once", *, session_i
 def agent_get_action_state() -> dict[str, object]:
     return {
         "autonomy_profile": _current_autonomy_profile(),
+        "runtime_permissions_mode": _current_runtime_permissions_mode(),
         "once": sorted(_ONCE_ALLOWED_ACTIONS),
         "session": sorted(_SESSION_ALLOWED_ACTIONS),
         "task_scopes": {key: sorted(values) for key, values in _TASK_ALLOWED_ACTIONS.items()},
@@ -1501,6 +1573,14 @@ def _edit_is_allowed(path: str, *, operation: str = "edit") -> bool:
     return _action_is_allowed(action)
 
 
+def _outside_home_requires_block(path: str) -> bool:
+    if _current_runtime_permissions_mode() == "full_access":
+        return False
+    if path.startswith(_HOME):
+        return False
+    return not _edit_is_allowed(path)
+
+
 def agent_allow_edit(path: str = "", scope: str = "session") -> None:
     """Whitelist file edits: scope='file' | 'repo' | 'session'."""
     global _ALLOW_ALL_EDITS
@@ -1641,6 +1721,46 @@ def _tool_list_dir(path: str = "") -> str:
         return f"ERROR: Permission denied: {p}"
 
 
+def _normalize_shell_runtime_error(output: str, *, cmd: str = "", cwd: str = "") -> str:
+    if not isinstance(output, str):
+        return output
+    text = output.strip()
+    if not text or text.startswith(("ERROR:", "BLOCKED_CMD:", "BLOCKED_EDIT:")):
+        return output
+    lower = text.lower()
+    if not any(token in lower for token in (
+        "could not resolve host",
+        "temporary failure in name resolution",
+        "name or service not known",
+        "could not resolve proxy",
+        "network is unreachable",
+        "failed to connect to",
+        "connection timed out",
+        "failed to connect",
+        "couldn't connect to server",
+    )):
+        return output
+    host = ""
+    host_match = re.search(r"could not resolve host:\s*([A-Za-z0-9._-]+)", text, flags=re.IGNORECASE)
+    if host_match:
+        host = host_match.group(1).strip()
+    elif "failed to connect to" in lower:
+        connect_match = re.search(r"failed to connect to\s+([A-Za-z0-9._-]+)", text, flags=re.IGNORECASE)
+        if connect_match:
+            host = connect_match.group(1).strip()
+    resolved_cwd = os.path.realpath(os.path.expanduser(str(cwd or ".").strip() or "."))
+    command_preview = " ".join(str(cmd or "").split()) or "shell command"
+    host_line = f"- Host: `{host}`\n" if host else ""
+    return (
+        "ERROR: External network access is unavailable from this Axon runtime right now.\n\n"
+        f"- Command: `{command_preview}`\n"
+        f"- Repo: `{resolved_cwd}`\n"
+        f"{host_line}"
+        "- Next step: retry from an unsandboxed host shell or run Axon with host-network access enabled.\n\n"
+        f"Original error:\n{text}"
+    )
+
+
 def _tool_shell_cmd(cmd: str, cwd: str = "", timeout: int = 30) -> str:
     """Run a shell command (allowlisted). Returns stdout+stderr, truncated at 4KB."""
     try:
@@ -1666,6 +1786,7 @@ def _tool_shell_cmd(cmd: str, cwd: str = "", timeout: int = 30) -> str:
             timeout=timeout, cwd=work_dir,
         )
         output = (result.stdout + result.stderr).strip()
+        output = _normalize_shell_runtime_error(output, cmd=cmd, cwd=work_dir)
         if len(output) > 4096:
             output = output[:4096] + f"\n... (truncated, total {len(output)} chars)"
         return output or "(no output)"
@@ -1784,8 +1905,8 @@ def _tool_search_code(pattern: str, path: str = "", glob: str = "*.py *.ts *.tsx
 def _tool_write_file(path: str, content: str) -> str:
     """Write content to a file (sandboxed to home)."""
     p = _resolve_agent_path(path)
-    if not p.startswith(_HOME):
-        return "ERROR: Access outside home directory."
+    if _outside_home_requires_block(p):
+        return f"BLOCKED_EDIT:write:{p}"
     if not _edit_is_allowed(p, operation="write"):
         return f"BLOCKED_EDIT:write:{p}"
     os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -1802,8 +1923,8 @@ def _tool_append_file(path: str, content: str = "") -> str:
     if not content:
         return "ERROR: append_file requires 'content'."
     p = _resolve_agent_path(path)
-    if not p.startswith(_HOME):
-        return "ERROR: Access outside home directory."
+    if _outside_home_requires_block(p):
+        return f"BLOCKED_EDIT:append:{p}"
     if not _edit_is_allowed(p, operation="append"):
         return f"BLOCKED_EDIT:append:{p}"
     os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -1818,8 +1939,8 @@ def _tool_append_file(path: str, content: str = "") -> str:
 def _tool_create_file(path: str, content: str = "") -> str:
     """Create a new file, failing if it already exists."""
     p = _resolve_agent_path(path)
-    if not p.startswith(_HOME):
-        return "ERROR: Access outside home directory."
+    if _outside_home_requires_block(p):
+        return f"BLOCKED_EDIT:create:{p}"
     if not _edit_is_allowed(p, operation="create"):
         return f"BLOCKED_EDIT:create:{p}"
     if os.path.exists(p):
@@ -1836,8 +1957,8 @@ def _tool_create_file(path: str, content: str = "") -> str:
 def _tool_delete_file(path: str) -> str:
     """Delete a file safely (sandboxed to home)."""
     p = _resolve_agent_path(path)
-    if not p.startswith(_HOME):
-        return "ERROR: Access outside home directory."
+    if _outside_home_requires_block(p):
+        return f"BLOCKED_EDIT:delete:{p}"
     if not _edit_is_allowed(p, operation="delete"):
         return f"BLOCKED_EDIT:delete:{p}"
     if not os.path.exists(p):
@@ -1856,8 +1977,8 @@ def _tool_edit_file(path: str, old_string: str, new_string: str, replace_all: bo
     old_string must be unique in the file (unless replace_all=True).
     This is the preferred way to make code changes — surgical, reviewable edits."""
     p = _resolve_agent_path(path)
-    if not p.startswith(_HOME):
-        return "ERROR: Access outside home directory."
+    if _outside_home_requires_block(p):
+        return f"BLOCKED_EDIT:edit:{p}"
     if not _edit_is_allowed(p, operation="edit"):
         return f"BLOCKED_EDIT:edit:{p}"
     if not os.path.exists(p):
@@ -3010,9 +3131,11 @@ def _find_named_cli(binary_name: str) -> str:
     import glob as _glob
 
     home = os.path.expanduser("~")
+    axon_path = str(local_tool_env.axon_binary_path(binary_name))
     if binary_name == "codex":
         default_paths = _DEFAULT_CODEX_CLI_PATHS
         local_patterns = [
+            axon_path,
             f"{home}/.nvm/versions/node/*/bin/codex",
             f"{home}/.volta/bin/codex",
             f"{home}/.npm-global/bin/codex",
@@ -3023,6 +3146,7 @@ def _find_named_cli(binary_name: str) -> str:
     else:
         default_paths = _DEFAULT_CLAUDE_CLI_PATHS
         local_patterns = [
+            axon_path,
             f"{home}/.nvm/versions/node/*/bin/claude",
             f"{home}/.volta/bin/claude",
             f"{home}/.npm-global/bin/claude",
@@ -3033,6 +3157,9 @@ def _find_named_cli(binary_name: str) -> str:
             f"{home}/.vscode/extensions/anthropic.claude-code-*/resources/native-binary/claude",
             f"{home}/.vscode-server/extensions/anthropic.claude-code-*/resources/native-binary/claude",
         ]
+
+    if os.path.isfile(axon_path) and os.access(axon_path, os.X_OK):
+        return axon_path
 
     if binary_name == "claude":
         for pattern in extension_patterns:
@@ -3104,6 +3231,8 @@ def discover_cli_environments() -> list[dict]:
                 label = f"{runtime_name} (VS Code)"
         elif source == "PATH":
             label = f"{binary_name} (PATH)"
+        elif source == "axon":
+            label = f"{runtime_name} (Axon)"
         elif source == "local":
             if ".nvm/" in path:
                 label = f"{binary_name} (nvm)"
@@ -3129,8 +3258,10 @@ def discover_cli_environments() -> list[dict]:
 
     def _discover_family(binary_name: str, family: str) -> None:
         home = os.path.expanduser("~")
+        axon_path = str(local_tool_env.axon_binary_path(binary_name))
         default_paths = _DEFAULT_CODEX_CLI_PATHS if family == "codex" else _DEFAULT_CLAUDE_CLI_PATHS
         local_patterns = [
+            axon_path,
             f"{home}/.nvm/versions/node/*/bin/{binary_name}",
             f"{home}/.volta/bin/{binary_name}",
             f"{home}/.npm-global/bin/{binary_name}",
@@ -3154,7 +3285,10 @@ def discover_cli_environments() -> list[dict]:
         if found:
             _add(found, "PATH", family)
 
-        for pattern in local_patterns:
+        if os.path.isfile(axon_path) and os.access(axon_path, os.X_OK):
+            _add(axon_path, "axon", family)
+
+        for pattern in local_patterns[1:]:
             for match in sorted(_glob.glob(pattern), reverse=True):
                 if os.path.isfile(match) and os.access(match, os.X_OK):
                     _add(match, "local", family)
@@ -3176,6 +3310,7 @@ async def _stream_cli(
     max_tokens: int = 4096,
     model: str = "",
     allow_session_persistence: bool = False,
+    usage_sink: Optional[dict[str, Any]] = None,
 ) -> AsyncGenerator[str, None]:
     """Async generator yielding text chunks from the selected local CLI runtime."""
     binary = _resolve_selected_cli_binary(cli_path)
@@ -3183,7 +3318,7 @@ async def _stream_cli(
         raise RuntimeError("CLI agent not found. Set the path in Settings or switch to a different runtime.")
     if _cli_runtime_family(binary) == "codex":
         _update_agent_runtime_context(cli_path=binary, backend="cli")
-        async for chunk in _stream_codex_cli(messages, binary=binary, model=model):
+        async for chunk in _stream_codex_cli(messages, binary=binary, model=model, usage_sink=usage_sink):
             yield chunk
         return
 
@@ -3194,7 +3329,7 @@ async def _stream_cli(
         if fallback_binary and os.path.realpath(fallback_binary) != os.path.realpath(binary):
             _update_agent_runtime_context(cli_path=fallback_binary, cli_model=_CODEX_SELF_HEAL_MODEL, backend="cli")
             yield f"⚠️ Claude CLI is cooling down after a rate limit. Falling back to Codex CLI (`{_CODEX_SELF_HEAL_MODEL}`).\n\n"
-            async for chunk in _stream_codex_cli(messages, binary=fallback_binary, model=_CODEX_SELF_HEAL_MODEL):
+            async for chunk in _stream_codex_cli(messages, binary=fallback_binary, model=_CODEX_SELF_HEAL_MODEL, usage_sink=usage_sink):
                 yield chunk
             return
         raise RuntimeError(str(cooldown.get("message") or "Claude CLI is cooling down after a rate limit."))
@@ -3283,7 +3418,7 @@ async def _stream_cli(
         text = (message or "").strip()
         lower = text.lower()
         if _is_rate_limited_message(text):
-            return text or "Claude CLI hit a rate limit."
+            return text or "CLI runtime hit a rate limit."
         if any(token in lower for token in ("login", "authentication", "authenticated", "api key", "sign in")):
             base = text or "Claude CLI is not authenticated."
             if "claude /login" not in base:
@@ -3301,7 +3436,7 @@ async def _stream_cli(
         if not normalized:
             return
         if not fatal_error or fatal_error in {
-            "Claude CLI hit a rate limit.",
+            "CLI runtime hit a rate limit.",
             "Claude CLI failed without returning a usable result.",
         }:
             fatal_error = normalized
@@ -3318,9 +3453,9 @@ async def _stream_cli(
 
             etype = event.get("type", "")
             if etype == "rate_limit_event":
-                _capture_fatal_error(_cli_error_text(event) or "Claude CLI hit a rate limit.")
+                _capture_fatal_error(_cli_error_text(event) or "CLI runtime hit a rate limit.")
                 await note_cli_cooldown(
-                    fatal_error or "Claude CLI hit a rate limit.",
+                    fatal_error or "CLI runtime hit a rate limit.",
                     _CLI_RATE_LIMIT_COOLDOWN_SECONDS,
                     key=runtime_key,
                 )
@@ -3428,6 +3563,9 @@ async def _stream_cli(
             proc.kill()
         if total_tokens or total_cost:
             _track_usage(total_tokens, total_cost, backend="cli")
+        if usage_sink is not None:
+            usage_sink["tokens"] = int(total_tokens or 0)
+            usage_sink["cost_usd"] = float(total_cost or 0.0)
 
     exit_code = proc.returncode or 0
     stderr_text = " | ".join(chunk for chunk in stderr_chunks if chunk).strip()
@@ -3439,7 +3577,7 @@ async def _stream_cli(
             if fallback_binary and os.path.realpath(fallback_binary) != os.path.realpath(binary):
                 _update_agent_runtime_context(cli_path=fallback_binary, cli_model=_CODEX_SELF_HEAL_MODEL, backend="cli")
                 yield f"⚠️ Claude CLI is temporarily unavailable. Falling back to Codex CLI (`{_CODEX_SELF_HEAL_MODEL}`).\n\n"
-                async for chunk in _stream_codex_cli(messages, binary=fallback_binary, model=_CODEX_SELF_HEAL_MODEL):
+                async for chunk in _stream_codex_cli(messages, binary=fallback_binary, model=_CODEX_SELF_HEAL_MODEL, usage_sink=usage_sink):
                     yield chunk
                 return
         if stderr_text and stderr_text not in fatal_error:
@@ -3470,6 +3608,7 @@ async def _stream_codex_cli(
     *,
     binary: str,
     model: str = "",
+    usage_sink: Optional[dict[str, Any]] = None,
 ) -> AsyncGenerator[str, None]:
     model = normalize_cli_model(binary, model)
     prompt = _cli_prompt_from_messages(messages, disallow_native_tools=True)
@@ -3478,10 +3617,8 @@ async def _stream_codex_cli(
         prompt=prompt,
         model=model,
         cwd=_workspace_root(),
-        # Agent-mode Codex runs should be able to operate inside the selected
-        # workspace/sandbox. Keeping this read-only makes Codex report that it
-        # cannot continue implementation, which breaks Axon's autonomous mode.
-        sandbox_mode="workspace-write",
+        sandbox_mode=_current_codex_sandbox_mode(),
+        approval_mode=_current_codex_approval_mode(),
     )
 
     await wait_for_cli_slot(_CODEX_CLI_MIN_INTERVAL_SECONDS, key=_cli_runtime_key(binary))
@@ -3559,14 +3696,21 @@ async def _stream_codex_cli(
 
     if total_tokens:
         _track_usage(total_tokens, 0.0, backend="cli")
+    if usage_sink is not None and total_tokens:
+        usage_sink["tokens"] = int(total_tokens)
+        usage_sink["cost_usd"] = 0.0
 
     if chunk_limit_error:
-        recovered_text, _ = await _call_codex_exec_prompt(
+        recovered_text, recovered_tokens = await _call_codex_exec_prompt(
             prompt,
             binary=binary,
             model=model,
-            sandbox_mode="workspace-write",
+            sandbox_mode=_current_codex_sandbox_mode(),
+            approval_mode=_current_codex_approval_mode(),
         )
+        if usage_sink is not None and recovered_tokens:
+            usage_sink["tokens"] = int(recovered_tokens)
+            usage_sink["cost_usd"] = 0.0
         if emitted_text and recovered_text.startswith(emitted_text):
             recovered_text = recovered_text[len(emitted_text):]
         if recovered_text:
@@ -3592,6 +3736,7 @@ async def _call_codex_exec_prompt(
     binary: str,
     model: str = "",
     sandbox_mode: str = "read-only",
+    approval_mode: str = "on-request",
 ) -> tuple[str, int]:
     model = normalize_cli_model(binary, model)
     cmd = build_codex_exec_command(
@@ -3600,6 +3745,7 @@ async def _call_codex_exec_prompt(
         model=model,
         cwd=_workspace_root(),
         sandbox_mode=sandbox_mode,
+        approval_mode=approval_mode,
     )
 
     await wait_for_cli_slot(_CODEX_CLI_MIN_INTERVAL_SECONDS, key=_cli_runtime_key(binary))
@@ -3879,6 +4025,7 @@ async def run_agent(
     backend: str = "",
     workspace_id: Optional[int] = None,
     autonomy_profile: str = "",
+    runtime_permissions_mode: str = "",
     external_fetch_policy: str = "",
     external_fetch_cache_ttl_seconds: int | str = "",
     resume_session_id: str = "",
@@ -3922,14 +4069,13 @@ async def run_agent(
         "ollama_url": ollama_url,
         "ollama_model": ollama_model,
         "autonomy_profile": autonomy_profile or "workspace_auto",
+        "runtime_permissions_mode": runtime_permissions_mode or ("ask_first" if (autonomy_profile or "workspace_auto") == "manual" else "default"),
         "workspace_id": workspace_id,
         "external_fetch_policy": (external_fetch_policy or "cache_first"),
         "external_fetch_cache_ttl_seconds": external_fetch_cache_ttl_seconds or "21600",
     }
     ctx_token = _ACTIVE_AGENT_RUNTIME_CONTEXT.set(runtime_ctx)
-    global _ACTIVE_WORKSPACE_PATH
-    previous_workspace = _ACTIVE_WORKSPACE_PATH
-    _ACTIVE_WORKSPACE_PATH = workspace_path or ""
+    workspace_token = agent_runtime_state.set_active_workspace_path(workspace_path or "")
     try:
         if runtime_notice:
             yield {"type": "text", "chunk": f"⚠️ {runtime_notice}\n\n"}
@@ -3964,7 +4110,7 @@ async def run_agent(
         ):
             yield event
     finally:
-        _ACTIVE_WORKSPACE_PATH = previous_workspace
+        agent_runtime_state.reset_active_workspace_path(workspace_token)
         _ACTIVE_AGENT_RUNTIME_CONTEXT.reset(ctx_token)
 
 
@@ -3983,6 +4129,7 @@ You live alongside the developer — you see what they're working on, you rememb
 - You know the developer's workspaces, active missions, saved playbooks, and vault secrets
 
 ## How to behave
+- Always speak in first person — say "I" and "my", never "Axon does" or "Axon will"
 - Warm but direct — no fluff, no corporate-speak, no unnecessary apologies
 - Be specific: mention actual project names, file paths, task titles, line numbers
 - If you can do something with a tool — do it. Never instruct the user to do what you can do yourself
@@ -3998,6 +4145,7 @@ You live alongside the developer — you see what they're working on, you rememb
 - Match response length to complexity — be brief for quick questions, thorough for deep ones"""
 
 SYSTEM_PROMPT_OLLAMA = """You are Axon — a local AI copilot for a software developer.
+Always speak in first person — say "I" and "my", never refer to yourself as "Axon" in third person.
 Be like a senior engineer partner: direct, warm, technically sharp, and always useful.
 
 You are NOT a limited chatbot. Your thinking blocks and tool calls stream live in the Axon UI.
@@ -4305,6 +4453,7 @@ async def chat(
         if runtime_notice:
             content = f"⚠️ {runtime_notice}\n\n{content}"
     elif runtime == "cli":
+        usage_sink: dict[str, Any] = {}
         messages = [{"role": "system", "content": system}]
         for h in selected_history:
             messages.append({"role": h["role"], "content": h["content"][:300]})
@@ -4317,10 +4466,11 @@ async def chat(
                 max_tokens=MAX_TOKENS_CHAT,
                 model=cli_model or "",
                 allow_session_persistence=False,
+                usage_sink=usage_sink,
             ):
                 parts.append(chunk)
             content = "".join(parts)
-            tokens = 0
+            tokens = int(usage_sink.get("tokens") or 0)
         except Exception as exc:
             if _is_cli_rate_limit_message(str(exc)):
                 if api_key and api_base_url:
@@ -4333,7 +4483,7 @@ async def chat(
                         api_model=api_model or BALANCED_MODEL,
                         max_tokens=MAX_TOKENS_CHAT,
                     )
-                    content = f"⚠️ Claude CLI hit a rate limit. Falling back to {_api_provider_label(api_provider)} (`{api_model or BALANCED_MODEL}`).\n\n{content}"
+                    content = f"⚠️ CLI runtime hit a rate limit. Falling back to {_api_provider_label(api_provider)} (`{api_model or BALANCED_MODEL}`).\n\n{content}"
                 elif ollama_model or ollama_url:
                     content, tokens = await _call_ollama(
                         user_message,
@@ -4342,7 +4492,7 @@ async def chat(
                         max_tokens=MAX_TOKENS_CHAT,
                         ollama_url=ollama_url,
                     )
-                    content = f"⚠️ Claude CLI hit a rate limit. Falling back to Local Ollama.\n\n{content}"
+                    content = f"⚠️ CLI runtime hit a rate limit. Falling back to Local Ollama.\n\n{content}"
                 else:
                     raise
             else:

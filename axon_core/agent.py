@@ -13,6 +13,7 @@ from typing import Any, AsyncGenerator, Optional
 from .approval_actions import build_command_approval_action, build_edit_approval_action
 from .agent_blocked_actions import blocked_tool_retry_prompt
 from .async_workers import run_sync_agent_call
+from . import agent_runtime_state
 from .agent_file_actions import (
     _direct_agent_action,
     _extract_append_content,
@@ -86,6 +87,7 @@ def _blocked_tool_event(
     *,
     workspace_id: int | None = None,
     session_id: str = "",
+    workspace_path: str = "",
 ) -> Optional[dict[str, Any]]:
     if not isinstance(result, str):
         return None
@@ -104,6 +106,7 @@ def _blocked_tool_event(
             target,
             workspace_id=workspace_id,
             session_id=session_id,
+            workspace_root=workspace_path,
         )
         payload = {
             "type": "approval_required",
@@ -302,6 +305,7 @@ async def run_agent(
     tool_log: list[dict] = []
     _resuming = False
     _resumed_messages: list[dict[str, Any]] = []
+    resume_task_override = ""
     explicit_resume_target = str(resume_session_id or "").strip()
     explicit_resume_reason = str(resume_reason or "").strip()
     explicit_continue_task = str(continue_task or "").strip()
@@ -466,7 +470,7 @@ async def run_agent(
             fallback_label = api_provider or "API"
             fallback_model = api_model or "configured model"
             yield (
-                f"⚠️ Claude CLI hit a rate limit. Switching this {purpose} turn to "
+                f"⚠️ CLI runtime hit a rate limit. Switching this {purpose} turn to "
                 f"{fallback_label} (`{fallback_model}`).\n\n"
             )
             api_messages = _rewrite_messages_for_backend(
@@ -490,7 +494,7 @@ async def run_agent(
         if ollama_url or ollama_model:
             fallback_model = vision_model or ollama_model or deps.ollama_default_model
             yield (
-                f"⚠️ Claude CLI hit a rate limit. Switching this {purpose} turn to "
+                f"⚠️ CLI runtime hit a rate limit. Switching this {purpose} turn to "
                 f"Local Ollama (`{fallback_model}`).\n\n"
             )
             execution = await run_sync_agent_call(
@@ -519,7 +523,7 @@ async def run_agent(
                 yield chunk
             return
 
-        raise RuntimeError("Claude CLI hit a rate limit.")
+        raise RuntimeError("CLI runtime hit a rate limit.")
 
     if not force_tool_mode and not _resuming and _is_casual_conversation(user_message):
         casual_system = (
@@ -615,7 +619,8 @@ async def run_agent(
     # Synthetic/internal callers (for example mission sandbox runs) should stay
     # on the full ReAct path instead of letting the user-message heuristics
     # reinterpret a generated prompt as a direct local file command.
-    if not force_tool_mode and not _resuming:
+    allow_resume_direct_action = bool(_resuming and resume_task_override)
+    if not force_tool_mode and (not _resuming or allow_resume_direct_action):
         direct_action = _direct_agent_action(
             user_message,
             history=history,
@@ -634,6 +639,7 @@ async def run_agent(
                 str(result),
                 workspace_id=workspace_id,
                 session_id=session_id,
+                workspace_path=workspace_path,
             )
             if blocked:
                 tool_log.append({"name": tool_name, "args": tool_args, "result": str(result)[:500]})
@@ -695,7 +701,7 @@ async def run_agent(
     tool_arg_repair_attempts = 0
     blocked_tool_repair_attempts = 0
     evidence_section_repair_attempts = 0
-    # Resolve brain module once for steer message injection
+    # Resolve brain module once for runtime-context updates
     _brain_mod = None
     try:
         import importlib
@@ -705,20 +711,13 @@ async def run_agent(
 
     for iteration in range(max_iterations):
         # ── Steer: inject any guidance messages from the UI ──
-        _steer_msgs = getattr(deps, "_agent_steer_messages", None) or []
-        if not _steer_msgs and hasattr(deps, "__wrapped__"):
-            _steer_msgs = getattr(deps.__wrapped__, "_agent_steer_messages", [])
-        # Also check brain module directly
-        if _brain_mod is not None:
-            _steer_msgs = getattr(_brain_mod, "_agent_steer_messages", []) or _steer_msgs
+        _steer_msgs = agent_runtime_state.drain_steer_messages(
+            session_id=session_id,
+            workspace_id=workspace_id,
+        )
         if _steer_msgs:
             steer_text = "\n".join(f"[User guidance]: {m}" for m in _steer_msgs)
             messages.append({"role": "user", "content": steer_text})
-            if _brain_mod is not None:
-                try:
-                    _brain_mod._agent_steer_messages = []
-                except Exception:
-                    pass
         full_text = ""
         streamed_up_to = 0
         found_action_live = False
@@ -793,7 +792,7 @@ async def run_agent(
                     yield {
                         "type": "thinking",
                         "chunk": (
-                            f"\n⏳ Claude CLI hit a rate limit — switching this task to "
+                            f"\n⏳ CLI runtime hit a rate limit — switching this task to "
                             f"{fallback_label} (`{fallback_model}`)…\n"
                         ),
                     }
@@ -817,7 +816,7 @@ async def run_agent(
                     yield {
                         "type": "thinking",
                         "chunk": (
-                            f"\n⏳ Claude CLI hit a rate limit — switching this task to "
+                            f"\n⏳ CLI runtime hit a rate limit — switching this task to "
                             f"Local Ollama (`{fallback_model}`)…\n"
                         ),
                     }
@@ -888,6 +887,7 @@ async def run_agent(
                 str(result),
                 workspace_id=workspace_id,
                 session_id=session_id,
+                workspace_path=workspace_path,
             )
             if tool_name in ("write_file", "edit_file") and not blocked and not str(result).startswith("ERROR:"):
                 wrote_files = True

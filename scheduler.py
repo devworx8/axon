@@ -173,6 +173,28 @@ async def job_task_reminders():
         print(f"[Axon] Mission reminder error: {e}")
 
 
+# ─── DevOps scheduled jobs ──────────────────────────────────────────────────
+
+async def _job_sentry_poll():
+    """Scheduled: poll Sentry for new unresolved issues."""
+    try:
+        from axon_api.services.sentry_bridge import poll_sentry_issues
+        await poll_sentry_issues()
+    except Exception as e:
+        print(f"[Axon] Sentry poll error: {e}")
+
+
+async def _job_auto_fix():
+    """Scheduled: run one auto-fix cycle if enabled."""
+    try:
+        from axon_core.auto_fix import run_auto_fix_cycle
+        result = await run_auto_fix_cycle()
+        if result.get("status") not in ("disabled", "no_errors"):
+            print(f"[Axon] Auto-fix cycle result: {result}")
+    except Exception as e:
+        print(f"[Axon] Auto-fix cycle error: {e}")
+
+
 # ─── Scheduler setup ─────────────────────────────────────────────────────────
 
 def setup_scheduler(
@@ -217,6 +239,24 @@ def setup_scheduler(
         id="webhook_queue",
         replace_existing=True,
         misfire_grace_time=30,
+    )
+
+    # ── DevOps: Sentry error poll ────────────────────────────────────────────
+    sched.add_job(
+        _job_sentry_poll,
+        trigger=IntervalTrigger(minutes=5),
+        id="sentry_poll",
+        replace_existing=True,
+        misfire_grace_time=120,
+    )
+
+    # ── DevOps: Auto-fix cycle ───────────────────────────────────────────────
+    sched.add_job(
+        _job_auto_fix,
+        trigger=IntervalTrigger(minutes=10),
+        id="auto_fix_cycle",
+        replace_existing=True,
+        misfire_grace_time=120,
     )
 
     return sched

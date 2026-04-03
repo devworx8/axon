@@ -1,0 +1,16 @@
+      <!-- Follow-up suggestion chips -->
+      <div x-show="followUpSuggestions.length && !chatLoading" class="shrink-0 px-3 md:px-5 pt-2">
+        <div class="flex flex-wrap gap-2">
+          <template x-for="(suggestion, sIdx) in followUpSuggestions" :key="sIdx">
+            <button type="button"
+                    @click="useSuggestion(suggestion)"
+                    :class="suggestion === '→ Continue'
+                      ? 'border-amber-500/30 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25 hover:border-amber-400/50 font-medium'
+                      : 'border-blue-500/25 bg-blue-500/10 text-blue-200 hover:bg-blue-500/20 hover:border-blue-400/40'"
+                    class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-all duration-200 cursor-pointer">
+              <span :class="suggestion === '→ Continue' ? 'text-amber-400' : 'text-blue-400'" x-text="suggestion === '→ Continue' ? '▶' : '→'"></span>
+              <span x-text="suggestion"></span>
+            </button>
+          </template>
+        </div>
+      </div>

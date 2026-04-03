@@ -368,6 +368,175 @@ async def init_db():
                 updated_at          TEXT DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS error_events (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                source          TEXT NOT NULL DEFAULT 'sentry',
+                event_id        TEXT NOT NULL DEFAULT '',
+                title           TEXT NOT NULL DEFAULT '',
+                level           TEXT NOT NULL DEFAULT 'error',
+                fingerprint     TEXT DEFAULT '',
+                occurrence_count INTEGER DEFAULT 1,
+                first_seen_at   TEXT DEFAULT (datetime('now')),
+                last_seen_at    TEXT DEFAULT (datetime('now')),
+                status          TEXT DEFAULT 'new',
+                fix_session_id  TEXT DEFAULT '',
+                project_name    TEXT DEFAULT '',
+                workspace_id    INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+                meta_json       TEXT DEFAULT '{}',
+                created_at      TEXT DEFAULT (datetime('now')),
+                updated_at      TEXT DEFAULT (datetime('now')),
+                UNIQUE(source, event_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS usage_log (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                backend         TEXT NOT NULL DEFAULT '',
+                model           TEXT DEFAULT '',
+                tokens_in       INTEGER DEFAULT 0,
+                tokens_out      INTEGER DEFAULT 0,
+                cost_usd        REAL DEFAULT 0.0,
+                session_id      TEXT DEFAULT '',
+                workspace_id    INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+                tool_name       TEXT DEFAULT '',
+                created_at      TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS attention_items (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                attention_key       TEXT NOT NULL UNIQUE,
+                source              TEXT NOT NULL DEFAULT '',
+                source_event_id     TEXT DEFAULT '',
+                item_type           TEXT DEFAULT '',
+                title               TEXT NOT NULL DEFAULT '',
+                summary             TEXT DEFAULT '',
+                detail              TEXT DEFAULT '',
+                workspace_id        INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+                project_name        TEXT DEFAULT '',
+                severity            TEXT DEFAULT 'medium',
+                status              TEXT DEFAULT 'new',
+                owner_kind          TEXT DEFAULT '',
+                owner_id            INTEGER DEFAULT NULL,
+                link_url            TEXT DEFAULT '',
+                meta_json           TEXT DEFAULT '{}',
+                occurrence_count    INTEGER DEFAULT 1,
+                first_seen_at       TEXT DEFAULT (datetime('now')),
+                last_seen_at        TEXT DEFAULT (datetime('now')),
+                acknowledged_at     TEXT,
+                resolved_at         TEXT,
+                snoozed_until       TEXT,
+                created_at          TEXT DEFAULT (datetime('now')),
+                updated_at          TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS companion_devices (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_key      TEXT NOT NULL UNIQUE,
+                user_id         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                name            TEXT NOT NULL,
+                kind            TEXT DEFAULT 'mobile',
+                platform        TEXT DEFAULT '',
+                model           TEXT DEFAULT '',
+                os_version      TEXT DEFAULT '',
+                status          TEXT DEFAULT 'active',
+                meta_json       TEXT DEFAULT '{}',
+                last_seen_at    TEXT,
+                created_at      TEXT DEFAULT (datetime('now')),
+                updated_at      TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS companion_auth_sessions (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id           INTEGER NOT NULL REFERENCES companion_devices(id) ON DELETE CASCADE,
+                access_token_hash    TEXT NOT NULL UNIQUE,
+                refresh_token_hash   TEXT DEFAULT '',
+                expires_at          TEXT NOT NULL,
+                revoked_at          TEXT,
+                last_refreshed_at   TEXT,
+                meta_json           TEXT DEFAULT '{}',
+                created_at          TEXT DEFAULT (datetime('now')),
+                updated_at          TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS companion_sessions (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_key     TEXT NOT NULL UNIQUE,
+                device_id       INTEGER REFERENCES companion_devices(id) ON DELETE CASCADE,
+                workspace_id    INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+                agent_session_id TEXT DEFAULT '',
+                status          TEXT DEFAULT 'active',
+                mode            TEXT DEFAULT 'companion',
+                current_route   TEXT DEFAULT '',
+                current_view    TEXT DEFAULT '',
+                active_task     TEXT DEFAULT '',
+                summary         TEXT DEFAULT '',
+                last_seen_at    TEXT,
+                started_at      TEXT DEFAULT (datetime('now')),
+                updated_at      TEXT DEFAULT (datetime('now')),
+                meta_json       TEXT DEFAULT '{}'
+            );
+
+            CREATE TABLE IF NOT EXISTS companion_presence (
+                device_id       INTEGER PRIMARY KEY REFERENCES companion_devices(id) ON DELETE CASCADE,
+                session_id      INTEGER REFERENCES companion_sessions(id) ON DELETE SET NULL,
+                workspace_id    INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+                presence_state  TEXT DEFAULT 'online',
+                voice_state     TEXT DEFAULT 'idle',
+                app_state       TEXT DEFAULT 'foreground',
+                active_route    TEXT DEFAULT '',
+                last_seen_at    TEXT,
+                meta_json       TEXT DEFAULT '{}',
+                updated_at      TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS companion_voice_turns (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id      INTEGER NOT NULL REFERENCES companion_sessions(id) ON DELETE CASCADE,
+                workspace_id    INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+                role            TEXT NOT NULL,
+                content         TEXT NOT NULL,
+                transcript      TEXT DEFAULT '',
+                response_text   TEXT DEFAULT '',
+                provider        TEXT DEFAULT '',
+                voice_mode      TEXT DEFAULT '',
+                language        TEXT DEFAULT '',
+                audio_format    TEXT DEFAULT '',
+                duration_ms     INTEGER DEFAULT 0,
+                tokens_used     INTEGER DEFAULT 0,
+                status          TEXT DEFAULT 'recorded',
+                meta_json       TEXT DEFAULT '{}',
+                created_at      TEXT DEFAULT (datetime('now')),
+                updated_at      TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS companion_push_subscriptions (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id       INTEGER NOT NULL REFERENCES companion_devices(id) ON DELETE CASCADE,
+                provider        TEXT NOT NULL DEFAULT 'webpush',
+                endpoint        TEXT NOT NULL UNIQUE,
+                auth_json       TEXT DEFAULT '{}',
+                p256dh          TEXT DEFAULT '',
+                expiration_at   TEXT,
+                status          TEXT DEFAULT 'active',
+                meta_json       TEXT DEFAULT '{}',
+                created_at      TEXT DEFAULT (datetime('now')),
+                updated_at      TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS workspace_relationships (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id        INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                external_system     TEXT NOT NULL,
+                relationship_type   TEXT DEFAULT 'primary',
+                external_id         TEXT DEFAULT '',
+                external_name       TEXT DEFAULT '',
+                external_url        TEXT DEFAULT '',
+                status              TEXT DEFAULT 'active',
+                meta_json           TEXT DEFAULT '{}',
+                created_at          TEXT DEFAULT (datetime('now')),
+                updated_at          TEXT DEFAULT (datetime('now')),
+                UNIQUE(workspace_id, external_system, external_id)
+            );
+
             CREATE VIRTUAL TABLE IF NOT EXISTS memory_items_fts
             USING fts5(title, summary, content, source, content='memory_items', content_rowid='id');
 
@@ -408,6 +577,19 @@ async def init_db():
                 VALUES (new.id, COALESCE(new.content, new.text));
             END;
 
+            CREATE INDEX IF NOT EXISTS idx_attention_items_workspace_status
+                ON attention_items(workspace_id, status, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_attention_items_source
+                ON attention_items(source, source_event_id);
+            CREATE INDEX IF NOT EXISTS idx_companion_devices_user
+                ON companion_devices(user_id, status);
+            CREATE INDEX IF NOT EXISTS idx_companion_sessions_workspace
+                ON companion_sessions(workspace_id, status, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_companion_voice_turns_session
+                ON companion_voice_turns(session_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_workspace_relationships_workspace
+                ON workspace_relationships(workspace_id, external_system);
+
             INSERT OR IGNORE INTO settings (key, value) VALUES
                 ('anthropic_api_key', ''),
                 ('scan_interval_hours', '6'),
@@ -434,6 +616,7 @@ async def init_db():
                 ('terminal_default_mode', 'read_only'),
                 ('terminal_command_timeout_seconds', '25'),
                 ('autonomy_profile', 'workspace_auto'),
+                ('runtime_permissions_mode', 'default'),
                 ('memory_first_enabled', '1'),
                 ('external_fetch_policy', 'cache_first'),
                 ('quick_model', ''),
@@ -442,7 +625,16 @@ async def init_db():
                 ('workspace_snapshot_ttl_seconds', '60'),
                 ('memory_query_cache_ttl_seconds', '45'),
                 ('external_fetch_cache_ttl_seconds', '21600'),
-                ('max_history_turns', '10');
+                ('max_history_turns', '10'),
+                ('sentry_api_token', ''),
+                ('sentry_org_slug', ''),
+                ('sentry_project_slugs', ''),
+                ('monthly_token_budget', '0'),
+                ('monthly_cost_budget_usd', '0'),
+                ('usage_alert_threshold_pct', '80'),
+                ('error_check_interval_minutes', '5'),
+                ('ci_check_interval_minutes', '10'),
+                ('auto_fix_enabled', '0');
             """
         )
 
@@ -473,6 +665,12 @@ async def init_db():
         def normalize_autonomy_profile(value: str | None) -> str:
             normalized = str(value or "").strip().lower()
             return normalized if normalized == "manual" else "workspace_auto"
+
+        def normalize_runtime_permissions_mode(value: str | None, *, autonomy_profile: str | None = None) -> str:
+            normalized = str(value or "").strip().lower()
+            if normalized in {"default", "ask_first", "full_access"}:
+                return normalized
+            return "ask_first" if normalize_autonomy_profile(autonomy_profile) == "manual" else "default"
 
         def normalize_external_fetch_policy(value: str | None) -> str:
             normalized = str(value or "").strip().lower()
@@ -552,6 +750,14 @@ async def init_db():
         normalized_autonomy = normalize_autonomy_profile(current_autonomy)
         if current_autonomy != normalized_autonomy:
             await put_setting_value("autonomy_profile", normalized_autonomy)
+
+        current_runtime_permissions = await get_setting_value("runtime_permissions_mode")
+        normalized_runtime_permissions = normalize_runtime_permissions_mode(
+            current_runtime_permissions,
+            autonomy_profile=normalized_autonomy,
+        )
+        if current_runtime_permissions != normalized_runtime_permissions:
+            await put_setting_value("runtime_permissions_mode", normalized_runtime_permissions)
 
         current_fetch_policy = await get_setting_value("external_fetch_policy")
         normalized_fetch_policy = normalize_external_fetch_policy(current_fetch_policy)

@@ -120,6 +120,7 @@ function axonModelsMixin() {
     updateChatProject() {
       if (typeof this.ensureWorkspaceTab === 'function') this.ensureWorkspaceTab(this.chatProjectId || '');
       this.chatProject = this.projects.find(p => p.id == this.chatProjectId) || null;
+      if (typeof this.refreshWorkspaceRunBindings === 'function') this.refreshWorkspaceRunBindings();
       this._userScrolled = false;
       this.showScrollToBottom = false;
       if (typeof this._refreshWorkspaceEnv === 'function') this._refreshWorkspaceEnv();

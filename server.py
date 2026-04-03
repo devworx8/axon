@@ -10,6 +10,7 @@ import io
 import sys
 import os
 import platform as _platform
+import re as _re
 import shlex as _shlex
 import shutil
 import sqlite3 as _sqlite3
@@ -19,7 +20,7 @@ import time as _time
 import wave
 import textwrap
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from urllib import error as _urlerror, request as _urlrequest
@@ -50,14 +51,20 @@ import resource_bank
 import memory_engine
 from axon_api.settings_models import SettingsUpdate
 from axon_api.services import auto_sessions as auto_session_service
+from axon_api.services import companion_auth as companion_auth_service
 from axon_api.services import claude_cli_runtime, codex_cli_runtime
+from axon_api.services import console_commands as console_command_service
 from axon_api.services import live_preview_sessions as live_preview_service
+from axon_api.services import local_tool_env
 from axon_api.services import runtime_login_sessions as runtime_login_service
 from axon_api.services import runtime_truth as runtime_truth_service
 from axon_core.cli_pacing import current_cli_cooldown
 from axon_core.cli_command import cli_session_persistence_enabled
 from axon_core.chat_context import select_history_for_chat
+from axon_core import agent_runtime_state
+from axon_core.approval_actions import build_command_approval_action, build_edit_approval_action
 from axon_api.services import task_sandboxes as task_sandbox_service
+from axon_data.sqlite_utils import managed_connection
 from axon_core.vision_runtime import auto_route_vision_runtime
 from axon_api import ui_renderer
 from model_router import resolve_model_for_role
@@ -111,6 +118,15 @@ BLOCKED_TERMINAL_PATTERNS = (
     "halt",
     ":(){",
     "chmod -r 777 /",
+    " apt install ",
+    " apt-get install ",
+    " apk add ",
+    " brew install ",
+    " dnf install ",
+    " pacman -s ",
+    " snap install ",
+    " yum install ",
+    " zypper install ",
 )
 
 _live_operator_snapshot = {
@@ -229,8 +245,12 @@ _whisper_model_cache: dict[str, object] = {}
 _piper_voice_cache: dict[str, object] = {}
 
 
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 def _now_iso() -> str:
-    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return _utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _probe_public_origin(public_base_url: str, enabled: bool) -> dict:
@@ -667,11 +687,9 @@ def _speak_local_text(text: str, *, model_path: str, config_path: str = "") -> t
 
 def _read_settings_sync() -> dict:
     try:
-        conn = _sqlite3.connect(devdb.DB_PATH)
-        conn.row_factory = _sqlite3.Row
-        rows = conn.execute("SELECT key, value FROM settings").fetchall()
-        conn.close()
-        return {str(row["key"]): row["value"] for row in rows}
+        with managed_connection(devdb.DB_PATH, row_factory=_sqlite3.Row) as conn:
+            rows = conn.execute("SELECT key, value FROM settings").fetchall()
+            return {str(row["key"]): row["value"] for row in rows}
     except Exception:
         return {}
 
@@ -795,6 +813,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Extracted routers ────────────────────────────────────────────────────────
+from axon_api.routes.attention import router as _attention_router
+from axon_api.routes.devops import router as _devops_router
+from axon_api.routes.companion import router as _companion_router
+from axon_api.routes.connectors import router as _connectors_router
+app.include_router(_devops_router)
+app.include_router(_attention_router)
+app.include_router(_companion_router)
+app.include_router(_connectors_router)
+
 
 # ─── Auth — PIN-based session authentication ─────────────────────────────────
 
@@ -860,9 +888,9 @@ def _dev_local_vault_bypass_active(request: Request | None = None) -> bool:
 def _create_session() -> str:
     """Create a new session token, store it, and return it."""
     token = _secrets.token_hex(32)
-    _auth_sessions[token] = datetime.utcnow() + timedelta(hours=_AUTH_SESSION_HOURS)
+    _auth_sessions[token] = _utc_now() + timedelta(hours=_AUTH_SESSION_HOURS)
     # Prune expired sessions
-    now = datetime.utcnow()
+    now = _utc_now()
     expired = [k for k, v in _auth_sessions.items() if v < now]
     for k in expired:
         del _auth_sessions[k]
@@ -873,15 +901,40 @@ def _valid_session(token: str) -> bool:
     exp = _auth_sessions.get(token)
     if not exp:
         return False
-    if datetime.utcnow() > exp:
+    if _utc_now() > exp:
         del _auth_sessions[token]
         return False
     return True
 
+
+async def _valid_session_async(token: str) -> bool:
+    if _valid_session(token):
+        return True
+    if not token:
+        return False
+    try:
+        async with devdb.get_db() as conn:
+            companion_session = await companion_auth_service.resolve_companion_auth_session(
+                conn,
+                access_token=token,
+            )
+        if not companion_session:
+            return False
+        if str(companion_session.get("revoked_at") or "").strip():
+            return False
+        expires_at = str(companion_session.get("expires_at") or "").strip()
+        if expires_at:
+            expires = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if _utc_now() > expires:
+                return False
+        return True
+    except Exception:
+        return False
+
 # Paths that don't require auth
 _AUTH_EXEMPT = {"/", "/sw.js", "/manifest.json", "/manual", "/manual.html",
                 "/api/health", "/api/tunnel/status"}
-_AUTH_EXEMPT_PREFIXES = ("/api/auth/", "/icons/", "/js/", "/styles.css", "/ws/")
+_AUTH_EXEMPT_PREFIXES = ("/api/auth/", "/api/companion/auth/", "/icons/", "/js/", "/styles.css", "/ws/")
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -905,7 +958,7 @@ async def auth_middleware(request: Request, call_next):
 
     # PIN is set — require valid session token
     token = _extract_session_token(request)
-    if not token or not _valid_session(token):
+    if not token or not await _valid_session_async(token):
         return JSONResponse({"detail": "Authentication required"}, status_code=401)
 
     return await call_next(request)
@@ -931,7 +984,7 @@ async def auth_status(request: Request):
     token = _extract_session_token(request)
     return {
         "auth_enabled": bool(pin_hash),
-        "session_valid": (not pin_hash) or bool(token and _valid_session(token)),
+        "session_valid": (not pin_hash) or bool(token and await _valid_session_async(token)),
         "dev_bypass": False,
     }
 
@@ -971,6 +1024,9 @@ async def auth_logout(request: Request):
     token = _extract_session_token(request)
     if token and token in _auth_sessions:
         del _auth_sessions[token]
+    elif token:
+        async with devdb.get_db() as conn:
+            await companion_auth_service.revoke_companion_device_auth(conn, access_token=token)
     return {"status": "ok"}
 
 @app.post("/api/auth/remove")
@@ -984,6 +1040,10 @@ async def auth_remove(body: PinLogin):
         raise HTTPException(401, "Wrong PIN")
     async with devdb.get_db() as conn:
         await devdb.set_setting(conn, "auth_pin_hash", "")
+        rows = await conn.execute("SELECT id FROM companion_devices")
+        device_rows = await rows.fetchall()
+        for row in device_rows:
+            await companion_auth_service.revoke_companion_device_auth(conn, device_id=int(row["id"]))
     # Clear all sessions
     _auth_sessions.clear()
     return {"status": "ok"}
@@ -1109,7 +1169,7 @@ async def workspace_env(
             project_path = project["path"] if "path" in project.keys() else ""
             resolved_path = str(project_path or "").strip()
     if project_id and auto_session_id:
-        auto_meta = await asyncio.to_thread(auto_session_service.read_auto_session, auto_session_id)
+        auto_meta = auto_session_service.read_auto_session(auto_session_id)
         if auto_meta and int(auto_meta.get("workspace_id") or 0) == int(project_id):
             resolved_path = str(auto_meta.get("sandbox_path") or resolved_path).strip()
 
@@ -1175,7 +1235,7 @@ async def start_workspace_preview(project_id: int, body: WorkspacePreviewRequest
         auto_meta["preview_url"] = str(preview.get("url") or "")
         auto_meta["dev_url"] = str(preview.get("url") or "")
         auto_meta["preview_status"] = str(preview.get("status") or "")
-        await asyncio.to_thread(auto_session_service.write_auto_session, auto_meta)
+        auto_session_service.write_auto_session(auto_meta)
     return {
         "workspace_id": workspace.get("id"),
         "workspace_name": workspace.get("name") or "",
@@ -1262,7 +1322,7 @@ async def analyse_project(project_id: int):
         tasks = [dict(r) for r in await devdb.get_tasks(conn, project_id=project_id)]
         prompts = [dict(r) for r in await devdb.get_prompts(conn, project_id=project_id)]
 
-        analysis = await brain.analyse_project(project, tasks, prompts, **ai)
+        analysis = await brain.analyse_project(project, tasks, prompts, **_model_call_kwargs(ai))
         await devdb.log_event(conn, "analysis", f"Analysed {project['name']}", project_id=project_id)
         return {"analysis": analysis}
 
@@ -1278,7 +1338,7 @@ async def suggest_project_tasks(project_id: int):
         ai = await _ai_params(settings, conn)
         open_tasks = [dict(r) for r in await devdb.get_tasks(conn, project_id=project_id, status="open")]
         try:
-            suggestions = await brain.suggest_tasks_for_project(dict(project), open_tasks, **ai)
+            suggestions = await brain.suggest_tasks_for_project(dict(project), open_tasks, **_model_call_kwargs(ai))
         except Exception as e:
             raise HTTPException(500, f"Suggestion failed: {e}")
         return {"suggestions": suggestions, "project_name": project["name"]}
@@ -1432,7 +1492,7 @@ async def enhance_prompt(body: EnhanceRequest):
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
         ai = await _ai_params(settings, conn)
-        enhanced = await brain.enhance_prompt(body.content, body.project_context, **ai)
+        enhanced = await brain.enhance_prompt(body.content, body.project_context, **_model_call_kwargs(ai))
         return {"enhanced": enhanced}
 
 
@@ -1532,7 +1592,7 @@ async def suggest_tasks():
         projects = [dict(r) for r in await devdb.get_projects(conn)]
         tasks = [dict(r) for r in await devdb.get_tasks(conn, status="open")]
         suggestions = await brain.suggest_tasks(
-            projects, tasks, **ai
+            projects, tasks, **_model_call_kwargs(ai)
         )
         return {"suggestions": suggestions}
 
@@ -1627,7 +1687,7 @@ async def _workspace_preview_target(project_id: int, auto_session_id: str = "") 
     target_path = str(workspace_dict.get("path") or "")
     auto_session_id = str(auto_session_id or "").strip()
     if auto_session_id:
-        auto_meta = await asyncio.to_thread(auto_session_service.read_auto_session, auto_session_id)
+        auto_meta = auto_session_service.read_auto_session(auto_session_id)
         if not auto_meta:
             raise HTTPException(404, "Auto session not found.")
         if int(auto_meta.get("workspace_id") or 0) != int(project_id):
@@ -2176,7 +2236,7 @@ async def _run_task_sandbox_background(
                 "autonomous": True,
                 "status": "running",
                 "last_error": "",
-                "last_run_started_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+                "last_run_started_at": _now_iso(),
                 "run_prompt": prompt,
             }
         )
@@ -2216,6 +2276,10 @@ async def _run_task_sandbox_background(
             backend=ai.get("backend", ""),
             force_tool_mode=True,
             autonomy_profile=_normalized_autonomy_profile(settings.get("autonomy_profile") or "workspace_auto"),
+            runtime_permissions_mode=_normalized_runtime_permissions_mode(
+                settings.get("runtime_permissions_mode") or "",
+                fallback="ask_first" if _normalized_autonomy_profile(settings.get("autonomy_profile") or "workspace_auto") == "manual" else "default",
+            ),
             external_fetch_policy=_normalized_external_fetch_policy(settings.get("external_fetch_policy") or "cache_first"),
             external_fetch_cache_ttl_seconds=str(settings.get("external_fetch_cache_ttl_seconds") or "21600"),
         ):
@@ -2238,7 +2302,7 @@ async def _run_task_sandbox_background(
                 "project_id": task.get("project_id"),
                 "project_name": project.get("name") or "",
                 "final_output": "".join(final_output_parts).strip(),
-                "last_run_completed_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+                "last_run_completed_at": _now_iso(),
             }
         )
         if approval_message:
@@ -2328,14 +2392,14 @@ async def _run_task_sandbox_background(
             "sandbox_path": sandbox_meta.get("sandbox_path") or "",
             "branch_name": sandbox_meta.get("branch_name") or "",
             "base_branch": sandbox_meta.get("base_branch") or "",
-            "created_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "created_at": _now_iso(),
         }
         meta.update(
             {
                 "status": "error",
                 "final_output": "".join(final_output_parts).strip(),
                 "last_error": str(exc),
-                "last_run_completed_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+                "last_run_completed_at": _now_iso(),
             }
         )
         await asyncio.to_thread(task_sandbox_service.write_task_sandbox, meta)
@@ -2567,8 +2631,7 @@ async def _run_auto_session_background(
             context_compact = str(settings.get("context_compact_enabled", "1")).strip().lower() in {"1", "true", "yes", "on"}
             session_meta["resolved_runtime"] = _auto_runtime_summary(ai)
 
-        session_meta = await asyncio.to_thread(
-            auto_session_service.ensure_auto_session,
+        session_meta = auto_session_service.ensure_auto_session(
             session_id,
             workspace,
             title=str(session_meta.get("title") or workspace_name or "Auto session"),
@@ -2579,7 +2642,7 @@ async def _run_auto_session_background(
             metadata={
                 "status": "running",
                 "last_error": "",
-                "last_run_started_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+                "last_run_started_at": _now_iso(),
                 "runtime_override": runtime_override,
                 "resolved_runtime": session_meta.get("resolved_runtime") or {},
                 "resource_ids": list(session_meta.get("resource_ids") or []),
@@ -2633,6 +2696,10 @@ async def _run_auto_session_background(
             backend=ai.get("backend", ""),
             workspace_id=workspace_id,
             autonomy_profile=_normalized_autonomy_profile(settings.get("autonomy_profile") or "workspace_auto"),
+            runtime_permissions_mode=_normalized_runtime_permissions_mode(
+                settings.get("runtime_permissions_mode") or "",
+                fallback="ask_first" if _normalized_autonomy_profile(settings.get("autonomy_profile") or "workspace_auto") == "manual" else "default",
+            ),
             external_fetch_policy=_normalized_external_fetch_policy(settings.get("external_fetch_policy") or "cache_first"),
             external_fetch_cache_ttl_seconds=str(settings.get("external_fetch_cache_ttl_seconds") or "21600"),
         ):
@@ -2677,8 +2744,7 @@ async def _run_auto_session_background(
                 break
             _auto_session_live_operator(session_meta, event)
 
-        session_meta = await asyncio.to_thread(auto_session_service.read_auto_session, session_id)
-        session_meta = session_meta or {}
+        session_meta = dict(session_meta or {})
         session_meta.update(
             {
                 "workspace_id": workspace_id,
@@ -2691,7 +2757,7 @@ async def _run_auto_session_background(
                 "command_receipts": command_receipts,
                 "verification_receipts": verification_receipts,
                 "final_output": "".join(final_output_parts).strip(),
-                "last_run_completed_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+                "last_run_completed_at": _now_iso(),
             }
         )
         if approval_message:
@@ -2703,8 +2769,8 @@ async def _run_auto_session_background(
         else:
             session_meta["status"] = "completed"
             session_meta["last_error"] = ""
-        await asyncio.to_thread(auto_session_service.write_auto_session, session_meta)
-        refreshed = await asyncio.to_thread(auto_session_service.refresh_auto_session, session_id) or session_meta
+        auto_session_service.write_auto_session(session_meta)
+        refreshed = auto_session_service.refresh_auto_session(session_id) or session_meta
 
         if not approval_message and not run_error:
             start_snapshot = dict(refreshed.get("start_snapshot") or {})
@@ -2719,8 +2785,8 @@ async def _run_auto_session_background(
                     "Auto session finished without repository changes, verification receipts, "
                     "or a concrete blocker. Axon did not produce a reviewable handoff."
                 )
-                await asyncio.to_thread(auto_session_service.write_auto_session, refreshed)
-                refreshed = await asyncio.to_thread(auto_session_service.refresh_auto_session, session_id) or refreshed
+                auto_session_service.write_auto_session(refreshed)
+                refreshed = auto_session_service.refresh_auto_session(session_id) or refreshed
 
         current_status = str(refreshed.get("status") or "")
         changed_files_count = len(refreshed.get("changed_files") or [])
@@ -2762,20 +2828,19 @@ async def _run_auto_session_background(
                 changed_files_count=changed_files_count,
             )
     except Exception as exc:
-        meta = await asyncio.to_thread(auto_session_service.read_auto_session, session_id)
-        meta = meta or session_meta or {}
+        meta = dict(session_meta or {})
         meta.update(
             {
                 "status": "error",
                 "last_error": str(exc),
                 "final_output": "".join(final_output_parts).strip(),
-                "last_run_completed_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+                "last_run_completed_at": _now_iso(),
                 "command_receipts": command_receipts,
                 "verification_receipts": verification_receipts,
             }
         )
-        await asyncio.to_thread(auto_session_service.write_auto_session, meta)
-        await asyncio.to_thread(auto_session_service.refresh_auto_session, session_id)
+        auto_session_service.write_auto_session(meta)
+        auto_session_service.refresh_auto_session(session_id)
         _set_live_operator(
             active=False,
             mode="auto",
@@ -2800,7 +2865,7 @@ async def _queue_auto_session_run(
     existing_session = None
     project_id = body.project_id
     if resume and session_id:
-        existing_session = await asyncio.to_thread(auto_session_service.refresh_auto_session, session_id)
+        existing_session = auto_session_service.refresh_auto_session(session_id)
         project_id = project_id or int(existing_session.get("workspace_id") or 0) if existing_session else project_id
 
     if not project_id:
@@ -2819,14 +2884,12 @@ async def _queue_auto_session_run(
     normalized_options["external_mode"] = normalized_options.get("external_mode") or "local_first"
     runtime_override = _task_sandbox_runtime_override(body)
 
-    existing = await asyncio.to_thread(
-        auto_session_service.find_workspace_auto_session,
+    existing = auto_session_service.find_workspace_auto_session(
         int(project_id),
         active_only=True,
     )
     if existing:
-        existing = await asyncio.to_thread(
-            auto_session_service.refresh_auto_session,
+        existing = auto_session_service.refresh_auto_session(
             str(existing.get("session_id") or ""),
         ) or existing
 
@@ -2837,7 +2900,7 @@ async def _queue_auto_session_run(
         session_meta = (
             existing_session
             if existing_session and str(existing_session.get("session_id") or "") == target_id
-            else await asyncio.to_thread(auto_session_service.refresh_auto_session, target_id)
+            else auto_session_service.refresh_auto_session(target_id)
         )
         if not session_meta:
             raise HTTPException(404, "Auto session not found.")
@@ -2856,8 +2919,7 @@ async def _queue_auto_session_run(
                 "session": _serialize_auto_session(existing, include_report=True),
             }
         target_id = f"{int(_time.time() * 1000)}-{workspace_dict['id']}"
-        session_meta = await asyncio.to_thread(
-            auto_session_service.ensure_auto_session,
+        session_meta = auto_session_service.ensure_auto_session(
             target_id,
             workspace_dict,
             title=_auto_session_title(body.message, str(workspace_dict.get("name") or "")),
@@ -2892,7 +2954,7 @@ async def _queue_auto_session_run(
 
 @app.get("/api/auto/sessions")
 async def list_auto_sessions():
-    rows = await asyncio.to_thread(auto_session_service.list_auto_sessions)
+    rows = auto_session_service.list_auto_sessions()
     refreshed_rows: list[dict] = []
     for row in rows:
         session_id = str(row.get("session_id") or "").strip()
@@ -2901,7 +2963,7 @@ async def list_auto_sessions():
         status = str(row.get("status") or "").strip().lower()
         if status in {"running", "completed", "ready", "error", "approval_required"} or row.get("last_run_completed_at"):
             try:
-                refreshed = await asyncio.to_thread(auto_session_service.refresh_auto_session, session_id)
+                refreshed = auto_session_service.refresh_auto_session(session_id)
             except Exception as exc:
                 degraded = dict(row)
                 degraded["status"] = "error"
@@ -2921,7 +2983,7 @@ async def start_auto_session(body: AutoSessionStartRequest):
 
 @app.get("/api/auto/{session_id}")
 async def get_auto_session(session_id: str):
-    session = await asyncio.to_thread(auto_session_service.refresh_auto_session, session_id)
+    session = auto_session_service.refresh_auto_session(session_id)
     if not session:
         raise HTTPException(404, "Auto session not found.")
     return {"session": _serialize_auto_session(session, include_report=True)}
@@ -2936,12 +2998,12 @@ async def continue_auto_session(session_id: str, body: AutoSessionStartRequest |
 @app.post("/api/auto/{session_id}/apply")
 async def apply_auto_session(session_id: str):
     try:
-        result = await asyncio.to_thread(auto_session_service.apply_auto_session, session_id)
+        result = auto_session_service.apply_auto_session(session_id)
     except RuntimeError as exc:
         raise HTTPException(409, str(exc))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    session = await asyncio.to_thread(auto_session_service.refresh_auto_session, session_id)
+    session = auto_session_service.refresh_auto_session(session_id)
     return {
         "applied": True,
         "summary": result.get("summary", ""),
@@ -2952,7 +3014,7 @@ async def apply_auto_session(session_id: str):
 @app.delete("/api/auto/{session_id}")
 async def discard_auto_session(session_id: str):
     try:
-        result = await asyncio.to_thread(auto_session_service.discard_auto_session, session_id)
+        result = auto_session_service.discard_auto_session(session_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return result
@@ -3240,6 +3302,37 @@ def _normalized_autonomy_profile(value: str, *, reject_elevated: bool = False) -
     return "workspace_auto"
 
 
+def _normalized_runtime_permissions_mode(value: str, *, fallback: str = "default") -> str:
+    mode = str(value or "").strip().lower()
+    if mode in {"default", "ask_first", "full_access"}:
+        return mode
+    return fallback
+
+
+def _effective_agent_runtime_permissions_mode(
+    settings: dict,
+    *,
+    override: str = "",
+    backend: str = "",
+    cli_path: str = "",
+    autonomy_profile: str = "",
+) -> str:
+    normalized_autonomy = _normalized_autonomy_profile(autonomy_profile or settings.get("autonomy_profile") or "workspace_auto")
+    default_fallback = "ask_first" if normalized_autonomy == "manual" else "default"
+    current_mode = _normalized_runtime_permissions_mode(
+        settings.get("runtime_permissions_mode") or "",
+        fallback=default_fallback,
+    )
+    requested_mode = _normalized_runtime_permissions_mode(override or "", fallback=current_mode)
+    if requested_mode != "full_access":
+        return requested_mode
+    if str(backend or "").strip().lower() != "cli":
+        return current_mode
+    if brain._cli_runtime_family(str(cli_path or "")) != "codex":
+        return current_mode
+    return "full_access"
+
+
 def _normalized_external_fetch_policy(value: str) -> str:
     policy = str(value or "cache_first").strip().lower()
     if policy in {"", "memory_first", "cache_first"}:
@@ -3277,6 +3370,43 @@ def _configured_budget_model(settings: dict, budget: str) -> str:
     if budget == "quick":
         return quick or standard or deep
     return standard or quick or deep
+
+
+def _default_budget_model_for_ai(ai: dict, settings: dict, budget: str) -> str:
+    backend = str(ai.get("backend") or settings.get("ai_backend") or "api").strip().lower()
+    if backend == "cli":
+        cli_path = str(ai.get("cli_path") or _selected_cli_path(settings) or "").strip()
+        family = brain._cli_runtime_family(cli_path)
+        if family == "codex":
+            if budget == "quick":
+                return "gpt-5.1-codex-mini"
+            return "gpt-5.4"
+        if budget == "quick":
+            return "haiku"
+        if budget == "deep":
+            return "opus"
+        return "sonnet"
+    if backend == "ollama":
+        if budget == "quick":
+            return brain.OLLAMA_FAST_MODEL
+        return str(settings.get("ollama_model") or brain.OLLAMA_DEFAULT_MODEL).strip()
+    return ""
+
+
+def _model_call_kwargs(ai: dict) -> dict:
+    allowed_keys = {
+        "backend",
+        "api_key",
+        "api_provider",
+        "api_base_url",
+        "api_model",
+        "cli_path",
+        "cli_model",
+        "cli_session_persistence",
+        "ollama_url",
+        "ollama_model",
+    }
+    return {key: value for key, value in dict(ai or {}).items() if key in allowed_keys}
 
 
 async def _effective_ai_params(settings: dict, composer_options: dict, *, conn=None, agent_request: bool = False, requested_model: str = "") -> dict:
@@ -3328,7 +3458,7 @@ async def _effective_ai_params(settings: dict, composer_options: dict, *, conn=N
             )
 
     budget = _model_budget_for_request(composer_options, agent_request=agent_request)
-    budget_model = _configured_budget_model(settings, budget)
+    budget_model = _configured_budget_model(settings, budget) or _default_budget_model_for_ai(ai, settings, budget)
 
     if ai.get("backend") == "ollama":
         if requested_model:
@@ -3691,6 +3821,323 @@ async def _chat_history_bundle(
         "history_budget": history_budget,
         "row_count": len(rows),
     }
+
+
+def _extract_first_url(message: str) -> str:
+    match = _re.search(r"https?://[^\s<>'\"`]+", str(message or ""))
+    if not match:
+        return ""
+    return match.group(0).rstrip(").,;!?]}")
+
+
+def _requires_fresh_external_fetch(message: str) -> bool:
+    lowered = str(message or "").strip().lower()
+    if not lowered:
+        return False
+    if _extract_first_url(lowered):
+        return bool(_re.search(r"\b(latest|today|current|recent|right now|as of|up[- ]to[- ]date)\b", lowered))
+    return False
+
+
+def _looks_like_mutating_or_generation_request(message: str) -> bool:
+    lowered = str(message or "").strip().lower()
+    if not lowered:
+        return False
+    return bool(
+        _re.search(
+            r"\b(create|generate|build|write|draft|fix|change|edit|update|modify|implement|refactor|commit|push|deploy|rollback|delete|remove)\b",
+            lowered,
+        )
+    )
+
+
+def _looks_like_local_fast_path_candidate(message: str) -> bool:
+    lowered = str(message or "").strip().lower()
+    if not lowered:
+        return False
+    if _looks_like_mutating_or_generation_request(lowered):
+        return False
+    if _extract_first_url(lowered):
+        return True
+    if len(lowered.split()) > 40:
+        return False
+    starters = (
+        "what ",
+        "what's ",
+        "what is ",
+        "which ",
+        "where ",
+        "show ",
+        "list ",
+        "summarize ",
+        "summarise ",
+        "recall ",
+        "remember ",
+        "tell me ",
+        "do you know ",
+    )
+    if lowered.startswith(starters) or lowered.endswith("?"):
+        return True
+    return bool(
+        _re.search(
+            r"\b(path|branch|status|health|stack|workspace|project|tasks?|missions?|playbooks?|prompts?|memory|cached)\b",
+            lowered,
+        )
+    )
+
+
+def _format_cached_web_fast_answer(row, *, url: str) -> str:
+    title = str(row["title"] or "").strip()
+    summary = _compact_text(str(row["summary"] or ""), limit=320)
+    content = _compact_text(str(row["content"] or ""), limit=520)
+    status_code = int(row["status_code"] or 200)
+    lines = ["Using Axon's cached web copy (no model call)."]
+    if title:
+        lines.append(f"Title: {title}")
+    lines.append(f"URL: {url}")
+    lines.append(f"HTTP status: {status_code}")
+    if summary:
+        lines.append(f"Summary: {summary}")
+    elif content:
+        lines.append(f"Content: {content}")
+    return "\n".join(lines)
+
+
+def _workspace_snapshot_fast_answer(message: str, snapshot_bundle: dict) -> str:
+    lowered = str(message or "").strip().lower()
+    data = dict(snapshot_bundle.get("data") or {})
+    project = dict(data.get("project") or {})
+    tasks = [dict(item) for item in (data.get("tasks") or []) if isinstance(item, dict)]
+    prompts = [dict(item) for item in (data.get("prompts") or []) if isinstance(item, dict)]
+    memories = [dict(item) for item in (data.get("memory") or []) if isinstance(item, dict)]
+    if not project and not tasks and not prompts and not memories:
+        return ""
+
+    lines: list[str] = ["Using Axon's workspace snapshot (no model call)."]
+    answered = False
+
+    if project and any(token in lowered for token in ("path", "where is", "workspace path", "repo path", "root")):
+        answered = True
+        lines.append(f"Workspace: {project.get('name') or 'Current workspace'}")
+        lines.append(f"Path: {project.get('path') or 'unknown'}")
+        if project.get("git_branch"):
+            lines.append(f"Branch: {project['git_branch']}")
+    elif project and any(token in lowered for token in ("branch", "git branch")):
+        answered = True
+        lines.append(f"Workspace: {project.get('name') or 'Current workspace'}")
+        lines.append(f"Branch: {project.get('git_branch') or 'unknown'}")
+        if project.get("path"):
+            lines.append(f"Path: {project['path']}")
+    elif project and any(token in lowered for token in ("stack", "framework", "tech stack")):
+        answered = True
+        lines.append(f"Workspace: {project.get('name') or 'Current workspace'}")
+        lines.append(f"Stack: {project.get('stack') or 'unknown'}")
+        if project.get("description"):
+            lines.append(f"Description: {_compact_text(project['description'], limit=220)}")
+    elif tasks and any(token in lowered for token in ("task", "tasks", "mission", "missions", "todo", "open work")):
+        answered = True
+        lines.append(f"Open tasks: {len(tasks)}")
+        for task in tasks[:4]:
+            detail = _compact_text(str(task.get("detail") or ""), limit=120)
+            line = f"- {task.get('title') or 'Untitled'}"
+            if task.get("priority"):
+                line += f" [{task['priority']}]"
+            if detail:
+                line += f": {detail}"
+            lines.append(line)
+    elif prompts and any(token in lowered for token in ("prompt", "prompts", "playbook", "playbooks", "template", "templates")):
+        answered = True
+        lines.append(f"Saved playbooks: {len(prompts)}")
+        for prompt in prompts[:4]:
+            lines.append(f"- {prompt.get('title') or 'Untitled'}")
+    elif any(token in lowered for token in ("workspace", "project", "status", "health", "what do you know", "known facts")):
+        answered = True
+        if project:
+            lines.append(f"Workspace: {project.get('name') or 'Current workspace'}")
+            if project.get("path"):
+                lines.append(f"Path: {project['path']}")
+            if project.get("git_branch"):
+                lines.append(f"Branch: {project['git_branch']}")
+            if project.get("stack"):
+                lines.append(f"Stack: {project['stack']}")
+            if project.get("health") not in (None, ""):
+                lines.append(f"Health: {project['health']}")
+        if tasks:
+            lines.append(f"Open tasks tracked here: {len(tasks)}")
+        if prompts:
+            lines.append(f"Saved playbooks/prompts: {len(prompts)}")
+        for memory in memories[:2]:
+            snippet = _compact_text(str(memory.get("summary") or memory.get("content") or ""), limit=160)
+            if snippet:
+                lines.append(f"- {memory.get('title') or 'Known fact'}: {snippet}")
+
+    return "\n".join(lines) if answered else ""
+
+
+def _memory_fast_answer(message: str, memory_bundle: dict) -> str:
+    lowered = str(message or "").strip().lower()
+    items = [dict(item) for item in (memory_bundle.get("items") or []) if isinstance(item, dict)]
+    if not items:
+        return ""
+    if not (
+        "memory" in lowered
+        or "remember" in lowered
+        or "recall" in lowered
+        or "what do you know" in lowered
+        or "known facts" in lowered
+        or "summar" in lowered
+        or lowered.endswith("?")
+    ):
+        return ""
+    lines = ["Using Axon's memory bank (no model call)."]
+    for item in items[:3]:
+        snippet = _compact_text(str(item.get("summary") or item.get("content") or ""), limit=200)
+        if not snippet:
+            continue
+        lines.append(f"- {item.get('title') or 'Memory'}: {snippet}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+async def _maybe_local_fast_chat_response(
+    conn,
+    *,
+    user_message: str,
+    project_id: Optional[int],
+    settings: dict,
+    snapshot_bundle: dict,
+    memory_bundle: dict,
+) -> dict | None:
+    text = str(user_message or "").strip()
+    if not _looks_like_local_fast_path_candidate(text):
+        return None
+
+    fetch_policy = _normalized_external_fetch_policy(settings.get("external_fetch_policy") or "cache_first")
+    url = _extract_first_url(text)
+    if url and fetch_policy != "live_first" and not _requires_fresh_external_fetch(text):
+        try:
+            cached_row = await devdb.get_external_fetch_cache(conn, url)
+        except Exception:
+            cached_row = None
+        if cached_row:
+            return {
+                "content": _format_cached_web_fast_answer(cached_row, url=url),
+                "tokens": 0,
+                "evidence_source": "cached_external",
+                "model_label": "Cached web",
+                "fast_path": True,
+            }
+
+    workspace_answer = _workspace_snapshot_fast_answer(text, snapshot_bundle)
+    if workspace_answer:
+        return {
+            "content": workspace_answer,
+            "tokens": 0,
+            "evidence_source": "workspace_snapshot",
+            "model_label": "Workspace snapshot",
+            "fast_path": True,
+        }
+
+    memory_answer = _memory_fast_answer(text, memory_bundle)
+    if memory_answer:
+        return {
+            "content": memory_answer,
+            "tokens": 0,
+            "evidence_source": "memory",
+            "model_label": "Memory fast path",
+            "fast_path": True,
+        }
+    return None
+
+
+async def _persist_chat_reply(
+    conn,
+    *,
+    project_id: Optional[int],
+    user_message: str,
+    assistant_message: str,
+    resources: list[dict],
+    thread_mode: str,
+    tokens: int = 0,
+    model_label: str = "",
+    event_name: str = "chat",
+    event_summary: str = "",
+):
+    stored_user_message = _stored_chat_message(
+        user_message,
+        resources=resources,
+        mode="chat",
+        thread_mode=thread_mode,
+    )
+    await devdb.save_message(conn, "user", stored_user_message, project_id=project_id)
+    await devdb.save_message(
+        conn,
+        "assistant",
+        _stored_chat_message(
+            assistant_message,
+            mode="chat",
+            thread_mode=thread_mode,
+            model_label=model_label,
+        ),
+        project_id=project_id,
+        tokens=tokens,
+    )
+    await devdb.log_event(conn, event_name, event_summary or user_message[:100], project_id=project_id)
+
+
+async def _maybe_handle_chat_console_command(
+    conn,
+    *,
+    project_id: Optional[int],
+    user_message: str,
+    thread_mode: str,
+):
+    text = str(user_message or "").strip().lower()
+    login_overrides = None
+    if text.startswith("/login") or text.startswith("/login-cli"):
+        login_overrides = {
+            "claude": str(await devdb.get_setting(conn, "claude_cli_path") or "").strip(),
+            "codex": str(await devdb.get_setting(conn, "cli_runtime_path") or "").strip(),
+        }
+
+    command_result = console_command_service.maybe_handle_console_command(
+        user_message,
+        login_overrides=login_overrides,
+    )
+    if not command_result:
+        return None
+
+    assistant_message = str(command_result.get("response") or "")
+    _set_live_operator(
+        active=False,
+        mode="chat",
+        phase="execute",
+        title="Handled console command",
+        detail=str(command_result.get("command") or "command"),
+        summary=assistant_message[:180],
+        workspace_id=project_id,
+    )
+    await _persist_chat_reply(
+        conn,
+        project_id=project_id,
+        user_message=user_message,
+        assistant_message=assistant_message,
+        resources=[],
+        thread_mode=thread_mode,
+        tokens=0,
+        model_label="Axon console",
+        event_name=str(command_result.get("event_name") or "chat_console_command"),
+        event_summary=str(command_result.get("event_summary") or user_message[:100]),
+    )
+    payload = dict(command_result.get("data") or {})
+    payload.update(
+        {
+            "response": assistant_message,
+            "tokens": 0,
+            "console_command": True,
+            "command": str(command_result.get("command") or ""),
+        }
+    )
+    return payload
 
 
 # ─── Resource bank helpers ───────────────────────────────────────────────────
@@ -4300,9 +4747,18 @@ class ChatMessage(BaseModel):
 @app.post("/api/chat")
 async def chat(body: ChatMessage):
     async with devdb.get_db() as conn:
-        settings = await devdb.get_all_settings(conn)
         composer_options = _composer_options_dict(body.composer_options)
         chat_thread_mode = _thread_mode_from_composer_options(composer_options)
+        console_command = await _maybe_handle_chat_console_command(
+            conn,
+            project_id=body.project_id,
+            user_message=body.message,
+            thread_mode=chat_thread_mode,
+        )
+        if console_command:
+            return console_command
+
+        settings = await devdb.get_all_settings(conn)
         ai = await _effective_ai_params(settings, composer_options, conn=conn, requested_model=body.model or "")
         backend = ai.get("backend", settings.get("ai_backend", "api"))
 
@@ -4379,6 +4835,43 @@ async def chat(body: ChatMessage):
                 composer_block,
             ) if block
         )
+
+        fast_path = await _maybe_local_fast_chat_response(
+            conn,
+            user_message=body.message,
+            project_id=body.project_id,
+            settings=settings,
+            snapshot_bundle=snapshot_bundle,
+            memory_bundle=memory_bundle,
+        )
+        if fast_path:
+            _set_live_operator(
+                active=False,
+                mode="chat",
+                phase="verify",
+                title="Answered from local context",
+                detail=str(fast_path.get("evidence_source") or "workspace"),
+                summary=str(fast_path.get("content") or "")[:180],
+                workspace_id=body.project_id,
+            )
+            await _persist_chat_reply(
+                conn,
+                project_id=body.project_id,
+                user_message=body.message,
+                assistant_message=str(fast_path.get("content") or ""),
+                resources=resource_bundle["resources"],
+                thread_mode=chat_thread_mode,
+                tokens=0,
+                model_label=str(fast_path.get("model_label") or ""),
+                event_name="chat_fast_path",
+                event_summary=f"{fast_path.get('evidence_source', 'local')}: {body.message[:100]}",
+            )
+            return {
+                "response": str(fast_path.get("content") or ""),
+                "tokens": 0,
+                "evidence_source": str(fast_path.get("evidence_source") or ""),
+                "fast_path": True,
+            }
 
         # ── PPTX intent interception ──────────────────────────────────────────
         import re as _re
@@ -4833,7 +5326,7 @@ async def chat(body: ChatMessage):
                     resource_context=resource_bundle["context_block"],
                     resource_image_paths=resource_bundle["image_paths"],
                     vision_model=resource_bundle["vision_model"],
-                    **ai,
+                    **_model_call_kwargs(ai),
                 ),
                 timeout=90.0,
             )
@@ -4859,20 +5352,17 @@ async def chat(body: ChatMessage):
             raise HTTPException(504, f"AI backend timed out — try a shorter message or check Ollama. ({exc})")
 
         # Persist messages
-        stored_user_message = _stored_chat_message(
-            body.message,
-            resources=resource_bundle["resources"],
-            mode="chat",
-            thread_mode=chat_thread_mode,
-        )
-        await devdb.save_message(conn, "user", stored_user_message, project_id=body.project_id)
-        await devdb.save_message(
+        await _persist_chat_reply(
             conn,
-            "assistant",
-            _stored_chat_message(result["content"], mode="chat", thread_mode=chat_thread_mode),
-            project_id=body.project_id, tokens=result["tokens"]
+            project_id=body.project_id,
+            user_message=body.message,
+            assistant_message=result["content"],
+            resources=resource_bundle["resources"],
+            thread_mode=chat_thread_mode,
+            tokens=result["tokens"],
+            event_name="chat",
+            event_summary=body.message[:100],
         )
-        await devdb.log_event(conn, "chat", body.message[:100], project_id=body.project_id)
 
         return {"response": result["content"], "tokens": result["tokens"]}
 
@@ -4897,9 +5387,24 @@ async def clear_history(project_id: Optional[int] = None):
 async def chat_stream(body: ChatMessage, request: Request):
     """SSE streaming chat — Ollama only; falls back to buffered for API/CLI."""
     async with devdb.get_db() as conn:
-        settings = await devdb.get_all_settings(conn)
         composer_options = _composer_options_dict(body.composer_options)
         chat_thread_mode = _thread_mode_from_composer_options(composer_options)
+        console_command = await _maybe_handle_chat_console_command(
+            conn,
+            project_id=body.project_id,
+            user_message=body.message,
+            thread_mode=chat_thread_mode,
+        )
+        if console_command:
+            reply = str(console_command.get("response") or "")
+
+            async def _console_command_stream():
+                yield {"data": _json.dumps({"chunk": reply})}
+                yield {"data": _json.dumps({**console_command, "done": True})}
+
+            return EventSourceResponse(_console_command_stream())
+
+        settings = await devdb.get_all_settings(conn)
         ai = await _effective_ai_params(settings, composer_options, conn=conn, requested_model=body.model or "")
         settings = {**settings, "ai_backend": ai.get("backend", settings.get("ai_backend", "api"))}
         if ai.get("ollama_model"):
@@ -4980,6 +5485,45 @@ async def chat_stream(body: ChatMessage, request: Request):
                 composer_block,
             ) if block
         )
+
+        fast_path = await _maybe_local_fast_chat_response(
+            conn,
+            user_message=body.message,
+            project_id=body.project_id,
+            settings=settings,
+            snapshot_bundle=snapshot_bundle,
+            memory_bundle=memory_bundle,
+        )
+        if fast_path:
+            reply = str(fast_path.get("content") or "")
+            _set_live_operator(
+                active=False,
+                mode="chat",
+                phase="verify",
+                title="Answered from local context",
+                detail=str(fast_path.get("evidence_source") or "workspace"),
+                summary=reply[:180],
+                workspace_id=body.project_id,
+            )
+
+            async def _fast_path_stream():
+                yield {"data": _json.dumps({"chunk": reply})}
+                yield {"data": _json.dumps({"done": True, "tokens": 0, "fast_path": True, "evidence_source": fast_path.get("evidence_source", "")})}
+                async with devdb.get_db() as _fast_conn:
+                    await _persist_chat_reply(
+                        _fast_conn,
+                        project_id=body.project_id,
+                        user_message=body.message,
+                        assistant_message=reply,
+                        resources=resource_bundle["resources"],
+                        thread_mode=chat_thread_mode,
+                        tokens=0,
+                        model_label=str(fast_path.get("model_label") or ""),
+                        event_name="chat_fast_path",
+                        event_summary=f"{fast_path.get('evidence_source', 'local')}: {body.message[:100]}",
+                    )
+
+            return EventSourceResponse(_fast_path_stream())
 
     _set_live_operator(
         active=True,
@@ -5447,6 +5991,7 @@ async def chat_stream(body: ChatMessage, request: Request):
     async def generate():
         try:
             started_stream = False
+            usage_sink: dict[str, object] = {}
             for warning in resource_bundle["warnings"]:
                 full_content.append(f"⚠️ {warning}\n\n")
                 yield {"data": _json.dumps({"chunk": f"⚠️ {warning}\n\n"})}
@@ -5468,6 +6013,7 @@ async def chat_stream(body: ChatMessage, request: Request):
                 cli_model=ai.get("cli_model", ""),
                 cli_session_persistence=bool(ai.get("cli_session_persistence", False)),
                 ollama_url=ollama_url, ollama_model=ollama_model,
+                usage_sink=usage_sink,
             ):
                 if not started_stream:
                     _set_live_operator(
@@ -5503,7 +6049,7 @@ async def chat_stream(body: ChatMessage, request: Request):
                     "assistant",
                     _stored_chat_message("".join(full_content), mode="chat", thread_mode=chat_thread_mode),
                     project_id=body.project_id,
-                    tokens=0,
+                    tokens=int(usage_sink.get("tokens") or 0),
                 )
                 await devdb.log_event(conn, "chat", body.message[:100],
                                        project_id=body.project_id)
@@ -5516,7 +6062,7 @@ async def chat_stream(body: ChatMessage, request: Request):
                 summary="".join(full_content)[:180],
                 workspace_id=body.project_id,
             )
-            yield {"data": _json.dumps({"done": True, "tokens": 0})}
+            yield {"data": _json.dumps({"done": True, "tokens": int(usage_sink.get("tokens") or 0)})}
         except Exception as exc:
             _err_msg = str(exc)
             _set_live_operator(
@@ -5545,6 +6091,7 @@ class AgentRequest(BaseModel):
     resume_session_id: Optional[str] = None
     resume_reason: Optional[str] = None
     continue_task: Optional[str] = None
+    runtime_permissions_mode_override: Optional[str] = None
 
 
 @app.post("/api/agent")
@@ -5556,6 +6103,13 @@ async def agent_endpoint(body: AgentRequest, request: Request):
         agent_thread_mode = _thread_mode_from_composer_options(composer_options, agent_request=True)
         ai = await _effective_ai_params(settings, composer_options, conn=conn, agent_request=True, requested_model=body.model or "")
         settings = {**settings, "ai_backend": ai.get("backend", settings.get("ai_backend", "api"))}
+        agent_runtime_permissions_mode = _effective_agent_runtime_permissions_mode(
+            settings,
+            override=body.runtime_permissions_mode_override or "",
+            backend=ai.get("backend", settings.get("ai_backend", "api")),
+            cli_path=ai.get("cli_path", ""),
+            autonomy_profile=settings.get("autonomy_profile") or "workspace_auto",
+        )
 
         _max_agent_iterations = max(10, min(200, int(settings.get("max_agent_iterations") or "75")))
         _context_compact = str(settings.get("context_compact_enabled", "1")).strip().lower() in {"1", "true", "yes", "on"}
@@ -5695,6 +6249,7 @@ async def agent_endpoint(body: AgentRequest, request: Request):
                 backend=backend,
                 workspace_id=body.project_id,
                 autonomy_profile=_normalized_autonomy_profile(settings.get("autonomy_profile") or "workspace_auto"),
+                runtime_permissions_mode=agent_runtime_permissions_mode,
                 external_fetch_policy=_normalized_external_fetch_policy(settings.get("external_fetch_policy") or "cache_first"),
                 external_fetch_cache_ttl_seconds=str(settings.get("external_fetch_cache_ttl_seconds") or "21600"),
                 resume_session_id=body.resume_session_id or "",
@@ -5852,6 +6407,10 @@ async def get_settings():
         s = await devdb.get_all_settings(conn)
         s.pop("extra_allowed_cmds", None)
         s["autonomy_profile"] = _normalized_autonomy_profile(s.get("autonomy_profile") or "workspace_auto")
+        s["runtime_permissions_mode"] = _normalized_runtime_permissions_mode(
+            s.get("runtime_permissions_mode") or "",
+            fallback="ask_first" if s["autonomy_profile"] == "manual" else "default",
+        )
         s["external_fetch_policy"] = _normalized_external_fetch_policy(s.get("external_fetch_policy") or "cache_first")
         s["max_history_turns"] = _normalized_max_history_turns(s)
         s["ai_backend"] = s.get("ai_backend") or "api"
@@ -5908,8 +6467,21 @@ async def update_settings(body: SettingsUpdate):
     async with devdb.get_db() as conn:
         data = body.model_dump(exclude_none=True)
         current_settings = await devdb.get_all_settings(conn)
+        current_runtime_permissions_mode = _normalized_runtime_permissions_mode(
+            current_settings.get("runtime_permissions_mode") or "",
+            fallback="ask_first" if _normalized_autonomy_profile(current_settings.get("autonomy_profile") or "workspace_auto") == "manual" else "default",
+        )
+        if "runtime_permissions_mode" in data:
+            data["runtime_permissions_mode"] = _normalized_runtime_permissions_mode(
+                data.get("runtime_permissions_mode") or "",
+                fallback=current_runtime_permissions_mode,
+            )
+            if "autonomy_profile" not in data:
+                data["autonomy_profile"] = "manual" if data["runtime_permissions_mode"] == "ask_first" else "workspace_auto"
         if "autonomy_profile" in data:
             data["autonomy_profile"] = _normalized_autonomy_profile(data.get("autonomy_profile") or "workspace_auto", reject_elevated=True)
+            if "runtime_permissions_mode" not in data:
+                data["runtime_permissions_mode"] = "ask_first" if data["autonomy_profile"] == "manual" else "default"
         if "external_fetch_policy" in data:
             data["external_fetch_policy"] = _normalized_external_fetch_policy(data.get("external_fetch_policy") or "cache_first")
         if "max_history_turns" in data:
@@ -6356,8 +6928,7 @@ async def _runtime_login_start(family: str, body: RuntimeLoginStartRequest | Non
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
         override_path = _family_cli_override_path(settings, family_name)
-        result = await asyncio.to_thread(
-            runtime_login_service.start_login_session,
+        result = runtime_login_service.start_login_session(
             family_name,
             override_path=override_path,
             mode=payload.mode or "claudeai",
@@ -6369,7 +6940,7 @@ async def _runtime_login_start(family: str, body: RuntimeLoginStartRequest | Non
 
 async def _runtime_login_refresh(family: str, session_id: str):
     family_name = _normalize_runtime_login_family(family)
-    session = await asyncio.to_thread(runtime_login_service.refresh_login_session, family_name, session_id)
+    session = runtime_login_service.refresh_login_session(family_name, session_id)
     if not session:
         raise HTTPException(404, "Runtime login session not found.")
     return {"session": session}
@@ -6379,7 +6950,7 @@ async def _runtime_login_cancel(family: str, session_id: str):
     family_name = _normalize_runtime_login_family(family)
     async with devdb.get_db() as conn:
         try:
-            session = await asyncio.to_thread(runtime_login_service.cancel_login_session, family_name, session_id)
+            session = runtime_login_service.cancel_login_session(family_name, session_id)
         except ValueError as exc:
             raise HTTPException(404, str(exc))
         await devdb.log_event(conn, "maintenance", f"{family_name.title()} CLI login cancelled")
@@ -6515,10 +7086,9 @@ async def _build_live_snapshot() -> dict:
         settings = await devdb.get_all_settings(conn)
         terminal_rows = await devdb.list_terminal_sessions(conn, limit=6)
         activity_rows = await devdb.get_activity(conn, limit=6)
-    auto_rows = await asyncio.to_thread(auto_session_service.list_auto_sessions)
+    auto_rows = auto_session_service.list_auto_sessions()
     running_session_id = next((row["id"] for row in terminal_rows if row["id"] in _terminal_processes), None)
-    # Run the blocking domain probe in a thread to avoid stalling the event loop
-    connection = await asyncio.get_event_loop().run_in_executor(None, _connection_snapshot)
+    connection = _connection_snapshot()
     return {
         "type": "snapshot",
         "at": _now_iso(),
@@ -7558,7 +8128,7 @@ async def _start_terminal_command(
         cwd=str(cwd),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
-        env=os.environ.copy(),
+        env=local_tool_env.build_tool_env(os.environ.copy()),
     )
     _terminal_processes[session_id] = {
         "process": process,
@@ -7730,7 +8300,10 @@ async def create_terminal_session(body: TerminalSessionCreate):
             conn,
             session_id=session_id,
             event_type="status",
-            content=f"Session ready in {cwd}",
+            content=(
+                f"Session ready in {cwd}. "
+                f"Installs stay inside Axon at {local_tool_env.install_scope_label()}."
+            ),
         )
     return _serialize_terminal_session(session, running=False)
 
@@ -8570,7 +9143,7 @@ async def backup_export():
 
     snapshot = {
         "version": 1,
-        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "exported_at": _now_iso(),
         "projects": projects,
         "tasks": tasks,
         "prompts": prompts,
@@ -8663,6 +9236,53 @@ class ApproveActionBody(BaseModel):
     session_id: str = ""
 
 
+def _normalize_exact_approval_action(action: dict, *, workspace_root: str = "") -> dict:
+    raw = dict(action or {})
+    action_type = str(raw.get("action_type") or "").strip().lower()
+    workspace_id = raw.get("workspace_id")
+    session_id = str(raw.get("session_id") or "").strip()
+    if action_type.startswith("file_"):
+        operation = str(raw.get("operation") or action_type.removeprefix("file_") or "edit").strip().lower()
+        path = str(raw.get("path") or "").strip()
+        if not path:
+            return {}
+        return build_edit_approval_action(
+            operation,
+            path,
+            workspace_id=workspace_id,
+            session_id=session_id,
+            workspace_root=workspace_root,
+        )
+    command_preview = str(raw.get("command_preview") or raw.get("full_command") or raw.get("command") or "").strip()
+    if command_preview:
+        return build_command_approval_action(
+            command_preview,
+            cwd=str(raw.get("repo_root") or ""),
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
+    return {}
+
+
+async def _approval_workspace_root(workspace_id: object) -> str:
+    try:
+        workspace_int = int(workspace_id)
+    except Exception:
+        return ""
+    if workspace_int <= 0:
+        return ""
+    async with devdb.get_db() as conn:
+        project = await devdb.get_project(conn, workspace_int)
+    if not project:
+        return ""
+    if isinstance(project, dict):
+        return str(project.get("path") or "").strip()
+    try:
+        return str(project["path"] or "").strip()
+    except Exception:
+        return str(getattr(project, "path", "") or "").strip()
+
+
 @app.post("/api/agent/approve-action")
 async def approve_agent_action(body: ApproveActionBody):
     action = dict(body.action or {})
@@ -8671,6 +9291,13 @@ async def approve_agent_action(body: ApproveActionBody):
         raise HTTPException(400, "Invalid approval scope")
     if not action.get("action_fingerprint"):
         raise HTTPException(400, "approval action fingerprint is required")
+    workspace_root = await _approval_workspace_root(action.get("workspace_id"))
+    canonical_action = _normalize_exact_approval_action(action, workspace_root=workspace_root)
+    if not canonical_action:
+        raise HTTPException(400, "approval action could not be validated")
+    if canonical_action.get("action_fingerprint") != action.get("action_fingerprint"):
+        raise HTTPException(400, "approval action fingerprint mismatch")
+    action = canonical_action
     if scope == "persist" and (bool(action.get("destructive")) or not bool(action.get("persist_allowed", False))):
         raise HTTPException(400, "This action cannot be persisted")
     brain.agent_allow_action(action, scope=scope, session_id=body.session_id or str(action.get("session_id") or ""))
@@ -8756,15 +9383,20 @@ async def allow_agent_edit(body: AllowEditBody):
 
 @app.post("/api/agent/steer")
 async def steer_agent(body: dict):
-    """Send a guidance message to the running agent (stored for next iteration)."""
+    """Send guidance to the matching running agent session/workspace."""
     message = (body.get("message") or "").strip()
     if not message:
         return {"ok": False, "detail": "Empty steer message"}
-    if hasattr(brain, "_agent_steer_messages"):
-        brain._agent_steer_messages.append(message)
-    else:
-        brain._agent_steer_messages = [message]
-    return {"ok": True, "queued": len(brain._agent_steer_messages)}
+    session_id = str(body.get("session_id") or "").strip()
+    workspace_id = body.get("project_id")
+    if workspace_id in ("", None):
+        workspace_id = body.get("workspace_id")
+    queued = agent_runtime_state.enqueue_steer_message(
+        message,
+        session_id=session_id,
+        workspace_id=workspace_id,
+    )
+    return {"ok": True, "queued": queued, "session_id": session_id, "workspace_id": workspace_id}
 
 
 @app.get("/api/agent/allowed-commands")
@@ -8808,12 +9440,9 @@ async def generate_pptx_ai(body: _PptxFromPromptRequest):
         def model_fn(system: str, user: str) -> str:
             settings = {}
             try:
-                import sqlite3
-                conn = sqlite3.connect(str(DB_PATH))
-                conn.row_factory = sqlite3.Row
-                rows = conn.execute("SELECT key, value FROM settings").fetchall()
-                settings = {r["key"]: r["value"] for r in rows}
-                conn.close()
+                with managed_connection(devdb.DB_PATH, row_factory=_sqlite3.Row) as conn:
+                    rows = conn.execute("SELECT key, value FROM settings").fetchall()
+                    settings = {r["key"]: r["value"] for r in rows}
             except Exception:
                 pass
 

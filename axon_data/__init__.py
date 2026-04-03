@@ -72,6 +72,64 @@ from .runtime_state import (
     upsert_thread_summary,
     upsert_workspace_snapshot,
 )
+from .attention import (
+    acknowledge_attention_item,
+    assign_attention_item,
+    build_attention_key,
+    get_attention_item,
+    get_attention_item_by_key,
+    get_attention_item_id_by_key,
+    list_attention_items,
+    resolve_attention_item,
+    search_attention_items,
+    snooze_attention_item,
+    update_attention_item_state,
+    upsert_attention_item,
+)
+from .companion_auth_sessions import (
+    get_active_companion_auth_sessions_for_device,
+    get_companion_auth_session,
+    get_companion_auth_session_by_access_hash,
+    get_companion_auth_session_by_refresh_hash,
+    list_companion_auth_sessions,
+    revoke_companion_auth_session,
+    revoke_companion_auth_sessions_for_device,
+    upsert_companion_auth_session,
+)
+from .companion_devices import (
+    get_companion_device,
+    get_companion_device_by_key,
+    list_companion_devices,
+    revoke_companion_device,
+    touch_companion_device,
+    update_companion_device_status,
+    upsert_companion_device,
+)
+from .companion_presence import (
+    clear_companion_presence,
+    get_companion_presence,
+    list_companion_presence,
+    upsert_companion_presence,
+)
+from .companion_push import (
+    disable_companion_push_subscription,
+    get_companion_push_subscription,
+    list_companion_push_subscriptions,
+    upsert_companion_push_subscription,
+)
+from .companion_sessions import (
+    close_companion_session,
+    get_companion_session,
+    get_companion_session_by_key,
+    list_companion_sessions,
+    update_companion_session_state,
+    upsert_companion_session,
+)
+from .companion_voice import (
+    get_companion_voice_turn,
+    list_companion_voice_turns,
+    log_companion_voice_turn,
+)
 from .settings import get_all_settings, get_setting, set_setting
 from .tasks import add_task, delete_task, get_tasks, update_task, update_task_status
 from .terminal import (
@@ -88,6 +146,28 @@ from .webhooks import (
     get_pending_webhooks,
     mark_webhook_failed,
     mark_webhook_sent,
+)
+from .error_events import (
+    get_error_by_fingerprint,
+    get_error_event,
+    get_unresolved_errors,
+    ingest_error_event,
+    list_error_events,
+    mark_error_resolved,
+    update_error_status,
+)
+from .usage import (
+    get_daily_usage,
+    get_quota_status,
+    get_usage_by_backend,
+    get_usage_summary,
+    log_usage,
+)
+from .workspace_relationships import (
+    get_workspace_relationship,
+    list_workspace_relationships,
+    resolve_workspace_relationship,
+    upsert_workspace_relationship,
 )
 
 __all__ = [
@@ -174,4 +254,64 @@ __all__ = [
     "get_approval_grant",
     "list_approval_grants",
     "delete_approval_grant",
+    "ingest_error_event",
+    "get_unresolved_errors",
+    "get_error_by_fingerprint",
+    "get_error_event",
+    "update_error_status",
+    "mark_error_resolved",
+    "list_error_events",
+    "log_usage",
+    "get_usage_summary",
+    "get_daily_usage",
+    "get_usage_by_backend",
+    "get_quota_status",
+    "build_attention_key",
+    "upsert_attention_item",
+    "get_attention_item",
+    "get_attention_item_id_by_key",
+    "get_attention_item_by_key",
+    "list_attention_items",
+    "search_attention_items",
+    "update_attention_item_state",
+    "acknowledge_attention_item",
+    "snooze_attention_item",
+    "assign_attention_item",
+    "resolve_attention_item",
+    "get_companion_device",
+    "get_companion_device_by_key",
+    "list_companion_devices",
+    "upsert_companion_device",
+    "touch_companion_device",
+    "update_companion_device_status",
+    "revoke_companion_device",
+    "get_companion_auth_session",
+    "get_companion_auth_session_by_access_hash",
+    "get_companion_auth_session_by_refresh_hash",
+    "get_active_companion_auth_sessions_for_device",
+    "list_companion_auth_sessions",
+    "upsert_companion_auth_session",
+    "revoke_companion_auth_session",
+    "revoke_companion_auth_sessions_for_device",
+    "get_companion_presence",
+    "list_companion_presence",
+    "upsert_companion_presence",
+    "clear_companion_presence",
+    "get_companion_session",
+    "get_companion_session_by_key",
+    "list_companion_sessions",
+    "upsert_companion_session",
+    "update_companion_session_state",
+    "close_companion_session",
+    "get_companion_voice_turn",
+    "list_companion_voice_turns",
+    "log_companion_voice_turn",
+    "disable_companion_push_subscription",
+    "get_companion_push_subscription",
+    "list_companion_push_subscriptions",
+    "upsert_companion_push_subscription",
+    "get_workspace_relationship",
+    "list_workspace_relationships",
+    "resolve_workspace_relationship",
+    "upsert_workspace_relationship",
 ]

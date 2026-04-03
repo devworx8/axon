@@ -9,9 +9,15 @@ import asyncio
 import json
 import os
 import subprocess
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Optional
 import aiohttp
+
+
+# ─── Shared helpers ──────────────────────────────────────────────────────────
+
+def _now_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 # ─── GitHub ──────────────────────────────────────────────────────────────────
@@ -216,7 +222,7 @@ async def fire_webhook(url: str, event: str, payload: dict, secret: str = "") ->
         return False
     body = {
         "event": event,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": _now_iso(),
         "data": payload,
     }
     headers = {"Content-Type": "application/json", "X-DevBrain-Event": event}
@@ -246,7 +252,7 @@ async def fire_all_webhooks(webhook_urls_csv: str, event: str,
         return
     payload_json = json.dumps({
         "event": event,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": _now_iso(),
         "data": payload,
     })
     try:
