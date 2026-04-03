@@ -12,6 +12,7 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+import aiosqlite
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import resource_bank        # noqa: E402
@@ -135,8 +136,15 @@ def _fetch(url: str) -> Optional[bytes]:
         return None
 
 
-async def _ingest(conn, title: str, filename: str, content: bytes, mime: str,
-                  source_url: str, settings: dict) -> Optional[int]:
+async def _ingest(
+    conn: aiosqlite.Connection,
+    title: str,
+    filename: str,
+    content: bytes,
+    mime: str,
+    source_url: str,
+    settings: dict[str, str],
+) -> Optional[int]:
     """Insert resource row + chunks into DB, return resource_id."""
     sha = resource_bank.sha256_bytes(content)
     kind = resource_bank.classify_kind(filename, mime)

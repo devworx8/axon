@@ -2639,6 +2639,66 @@ class AgentAutonomyRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool_args["cmd"], "git add -A")
         self.assertTrue(tool_result.startswith("BLOCKED_CMD:git:git add -A"))
 
+    def test_direct_action_commit_and_push_request_carries_push_follow_up(self):
+        async def fake_stream_cli(messages, **kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_api_chat(**kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_ollama_chat(**kwargs):
+            if False:
+                yield ""
+
+        def normalize_args(name, args):
+            cleaned = dict(args)
+            if name == "shell_cmd":
+                return {k: v for k, v in cleaned.items() if not str(k).startswith("_")}
+            return cleaned
+
+        deps = AgentRuntimeDeps(
+            tool_registry={
+                "git_status": lambda path: (
+                    "Branch: main\n\n"
+                    "Status:\n"
+                    "M app.py\n"
+                    "?? tests/test_app.py\n"
+                ),
+                "shell_cmd": lambda cmd, cwd="", timeout=30: f"BLOCKED_CMD:git:{cmd}",
+            },
+            normalize_tool_args=normalize_args,
+            stream_cli=fake_stream_cli,
+            stream_api_chat=fake_stream_api_chat,
+            stream_ollama_chat=fake_stream_ollama_chat,
+            ollama_execution_profile_sync=lambda *args, **kwargs: {"model": "dummy"},
+            ollama_message_with_images=lambda text, images: {"role": "user", "content": text},
+            api_message_with_images=lambda text, images: {"role": "user", "content": text},
+            cli_message_with_images=lambda text, images: {"role": "user", "content": text},
+            find_cli=lambda path: path,
+            ollama_default_model="dummy",
+            ollama_agent_model="dummy",
+            db_path=Path(tempfile.gettempdir()) / "axon-agent-test.db",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = agent_file_actions._direct_agent_action(
+                "Please commit everything and push this branch.",
+                history=[],
+                project_name="Axon",
+                workspace_path=tmpdir,
+                deps=deps,
+            )
+
+        self.assertIsNotNone(result)
+        tool_name, tool_args, tool_result, answer = result
+        self.assertEqual(tool_name, "shell_cmd")
+        self.assertEqual(tool_args["cmd"], "git add -A")
+        self.assertIn('Commit everything with commit message "feat: update tests". Then push this branch.', tool_args["_resume_task"])
+        self.assertTrue(tool_result.startswith("BLOCKED_CMD:git:git add -A"))
+        self.assertEqual(answer, tool_result)
+
 
 class GitCommandApprovalGateTests(unittest.TestCase):
     def test_tool_shell_cmd_blocks_mutating_git_but_allows_status(self):

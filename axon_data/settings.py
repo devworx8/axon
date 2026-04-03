@@ -20,7 +20,7 @@ async def set_setting(db: aiosqlite.Connection, key: str, value: str):
     await db.commit()
 
 
-async def get_all_settings(db: aiosqlite.Connection) -> dict:
+async def get_all_settings(db: aiosqlite.Connection) -> dict[str, str]:
     cur = await db.execute("SELECT key, value FROM settings")
     rows = await cur.fetchall()
     return {row["key"]: row["value"] for row in rows}

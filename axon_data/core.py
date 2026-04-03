@@ -30,7 +30,7 @@ class _DevBrainDB:
         await self._conn.close()
 
 
-def get_db():
+def get_db() -> _DevBrainDB:
     """Return an aiosqlite context manager. Use as: async with get_db() as conn."""
     return _DevBrainDB()
 

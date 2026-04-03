@@ -144,7 +144,7 @@ async def delete_resource(db: aiosqlite.Connection, resource_id: int):
 async def replace_resource_chunks(
     db: aiosqlite.Connection,
     resource_id: int,
-    chunks: list[dict],
+    chunks: list[dict[str, object]],
     *,
     embedding_model: str = "",
 ):

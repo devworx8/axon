@@ -192,6 +192,7 @@ def _looks_like_commit_request(user_message: str) -> bool:
     lower = (user_message or "").lower()
     commit_phrases = (
         "git commit",
+        "commit and push",
         "git add and commit",
         "add and commit",
         "stage and commit",
@@ -216,6 +217,7 @@ def _looks_like_push_request(user_message: str) -> bool:
     lower = (user_message or "").lower()
     return any(phrase in lower for phrase in (
         "git push",
+        "commit and push",
         "push this branch",
         "push the branch",
         "push branch",
@@ -223,6 +225,17 @@ def _looks_like_push_request(user_message: str) -> bool:
         "push the changes",
         "publish the branch",
     ))
+
+
+def _extract_push_remote(user_message: str) -> str:
+    remote = "origin"
+    remote_match = _re.search(r"\bto\s+([A-Za-z0-9._/-]+)\b", user_message or "", flags=_re.IGNORECASE)
+    if not remote_match:
+        return remote
+    candidate_remote = remote_match.group(1).strip()
+    if candidate_remote and candidate_remote.lower() not in {"branch", "pr", "pull", "request"}:
+        return candidate_remote
+    return remote
 
 
 def _looks_like_pr_request(user_message: str) -> bool:
@@ -630,6 +643,11 @@ def _direct_agent_action(
 
     if _looks_like_commit_request(user_message):
         repo_target = repo_path or path
+        wants_push_after_commit = _looks_like_push_request(user_message)
+        push_follow_up = ""
+        if wants_push_after_commit:
+            push_remote = _extract_push_remote(user_message)
+            push_follow_up = f" Then push this branch to {push_remote}." if push_remote != "origin" else " Then push this branch."
         commit_message = _extract_commit_message(user_message)
         auto_generated_message = False
         if not commit_message:
@@ -651,7 +669,7 @@ def _direct_agent_action(
             tool_name = "shell_cmd"
             tool_args = {"cmd": staged_cmd, "cwd": repo_target, "timeout": 30}
             if auto_generated_message and commit_message:
-                tool_args["_resume_task"] = f'Commit everything with commit message "{commit_message}".'
+                tool_args["_resume_task"] = f'Commit everything with commit message "{commit_message}".{push_follow_up}'
                 tool_args["_draft_commit_message"] = commit_message
             tool_result = _execute_tool(tool_name, tool_args, deps)
             if _tool_result_needs_attention(tool_result):
@@ -664,8 +682,13 @@ def _direct_agent_action(
         commit_cmd = f"git commit -m {shlex.quote(commit_message)}"
         tool_name = "shell_cmd"
         tool_args = {"cmd": commit_cmd, "cwd": repo_target, "timeout": 30}
+        if commit_message:
+            if wants_push_after_commit:
+                push_remote = _extract_push_remote(user_message)
+                tool_args["_resume_task"] = f"Push this branch to {push_remote}." if push_remote != "origin" else "Push this branch."
+            elif auto_generated_message:
+                tool_args["_resume_task"] = f'Run {commit_cmd}.'
         if auto_generated_message and commit_message:
-            tool_args["_resume_task"] = f'Run {commit_cmd}.'
             tool_args["_draft_commit_message"] = commit_message
         tool_result = _execute_tool(tool_name, tool_args, deps)
         if _tool_result_needs_attention(tool_result):
@@ -677,12 +700,7 @@ def _direct_agent_action(
 
     if _looks_like_push_request(user_message):
         repo_target = repo_path or path
-        remote = "origin"
-        remote_match = _re.search(r"\bto\s+([A-Za-z0-9._/-]+)\b", user_message, flags=_re.IGNORECASE)
-        if remote_match:
-            candidate_remote = remote_match.group(1).strip()
-            if candidate_remote and candidate_remote.lower() not in {"branch", "pr", "pull", "request"}:
-                remote = candidate_remote
+        remote = _extract_push_remote(user_message)
         shell_cwd, push_cmd = push_branch(repo_path=repo_target, remote=remote)
         tool_name = "shell_cmd"
         tool_args = {"cmd": push_cmd, "cwd": shell_cwd, "timeout": 45}
