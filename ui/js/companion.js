@@ -35,6 +35,8 @@ function axonCompanionMixin() {
     connectorsOverview: { workspaces: [] },
     connectorsLoading: false,
     connectorsError: '',
+    missionActionBusy: '',
+    missionLastAction: null,
 
     async loadCompanionStatus() {
       if (this.companionLoading) return;
@@ -237,6 +239,215 @@ function axonCompanionMixin() {
       this.chatProjectId = workspaceId;
       this.updateChatProject?.();
       this.switchTab?.('chat');
+    },
+
+    missionWorkspaceId() {
+      const direct = String(this.chatProjectId || this.chatProject?.id || '').trim();
+      if (direct) {
+        const parsed = parseInt(direct, 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+      }
+      const fallback = this.dashboardWeakestWorkspace?.();
+      const fallbackId = Number(fallback?.id || 0);
+      return fallbackId > 0 ? fallbackId : null;
+    },
+
+    missionWorkspaceLabel() {
+      return this.chatProject?.name
+        || this.dashboardWeakestWorkspace?.()?.name
+        || 'Global';
+    },
+
+    missionPosture() {
+      const now = Number(this.attentionBucketCount?.('now') || 0);
+      const waiting = Number(this.attentionBucketCount?.('waiting_on_me') || 0);
+      const runtimeState = String(this.runtimeStatus?.runtime_state || '').toLowerCase();
+      const pendingChallenges = Array.isArray(this.deliveryActivity?.vercel_pending_actions)
+        ? this.deliveryActivity.vercel_pending_actions.length
+        : 0;
+      if (now > 0 || pendingChallenges > 0) return 'urgent';
+      if (waiting > 0 || runtimeState === 'degraded' || runtimeState === 'warning') return 'degraded';
+      return 'healthy';
+    },
+
+    missionPostureLabel() {
+      const posture = this.missionPosture();
+      return String(posture || 'healthy').toUpperCase();
+    },
+
+    missionPostureDetail() {
+      const posture = this.missionPosture();
+      if (posture === 'urgent') return 'Immediate attention required';
+      if (posture === 'degraded') return 'Waiting on approvals or active runs';
+      return 'All systems are stable';
+    },
+
+    missionPostureChipClass() {
+      const posture = this.missionPosture();
+      if (posture === 'urgent') return 'border-rose-500/30 bg-rose-500/10 text-rose-200';
+      if (posture === 'degraded') return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
+      return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
+    },
+
+    runtimeStatusTone() {
+      const state = String(this.runtimeStatus?.runtime_state || '').toLowerCase();
+      if (state === 'active' || state === 'healthy' || state === 'ready') {
+        return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
+      }
+      if (state === 'degraded' || state === 'warning') {
+        return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
+      }
+      if (state === 'error' || state === 'unavailable') {
+        return 'border-rose-500/30 bg-rose-500/10 text-rose-200';
+      }
+      return 'border-slate-700 bg-slate-950/70 text-slate-300';
+    },
+
+    missionRingStyle() {
+      const now = Number(this.attentionBucketCount?.('now') || 0);
+      const waiting = Number(this.attentionBucketCount?.('waiting_on_me') || 0);
+      const watch = Number(this.attentionBucketCount?.('watch') || 0);
+      const total = Math.max(1, now + waiting + watch);
+      const nowPct = Math.round((now / total) * 100);
+      const waitingPct = Math.round((waiting / total) * 100);
+      const watchPct = Math.max(0, 100 - nowPct - waitingPct);
+      const health = Math.max(0, Math.min(100, Number(this.dashStats?.health_avg || 0)));
+      return `--mc-now:${nowPct}%; --mc-wait:${waitingPct}%; --mc-watch:${watchPct}%; --mc-health:${health}%;`;
+    },
+
+    missionSystemTone(tone = '') {
+      const key = String(tone || '').toLowerCase();
+      if (key === 'ok' || key === 'success') return 'ok';
+      if (key === 'warn' || key === 'warning') return 'warn';
+      return 'neutral';
+    },
+
+    canQuickResume() {
+      if (this.interruptedSession) return true;
+      const auto = this.preferredResumeAutoSession?.('please continue', 'quick_resume');
+      return !!auto;
+    },
+
+    missionQuickOps() {
+      const hasWorkspace = !!this.missionWorkspaceId();
+      const previewReady = this.previewReadyForCurrentWorkspace?.();
+      const waitingCount = Number(this.attentionBucketCount?.('waiting_on_me') || 0);
+      return [
+        {
+          id: 'mission-resume',
+          label: 'Resume last run',
+          action: 'resume',
+          icon: 'R',
+          disabled: !this.canQuickResume(),
+          meta: this.canQuickResume() ? this.missionWorkspaceLabel() : 'No paused run',
+          tone: 'primary',
+        },
+        {
+          id: 'mission-approvals',
+          label: 'Check approvals',
+          action: 'check_approvals',
+          icon: 'OK',
+          disabled: false,
+          meta: waitingCount ? `${waitingCount} waiting` : 'Review queue',
+          tone: 'warn',
+        },
+        {
+          id: 'mission-preview',
+          label: previewReady ? 'Open preview' : 'Start preview',
+          action: 'preview',
+          icon: 'PV',
+          disabled: !hasWorkspace,
+          meta: hasWorkspace ? this.missionWorkspaceLabel() : 'Select workspace',
+        },
+        {
+          id: 'mission-deploy',
+          label: 'Deploy',
+          action: 'vercel.deploy.promote',
+          icon: 'DEP',
+          disabled: !hasWorkspace,
+          meta: 'Challenge required',
+          tone: 'danger',
+        },
+        {
+          id: 'mission-rollback',
+          label: 'Rollback',
+          action: 'vercel.deploy.rollback',
+          icon: 'RB',
+          disabled: !hasWorkspace,
+          meta: 'Challenge required',
+          tone: 'danger',
+        },
+        {
+          id: 'mission-runtime-restart',
+          label: 'Restart runtime',
+          action: 'runtime.restart',
+          icon: 'RST',
+          disabled: false,
+          meta: 'Challenge required',
+          tone: 'danger',
+        },
+      ];
+    },
+
+    async executeMobileAction(actionType, payload = {}) {
+      if (!actionType) return null;
+      const workspaceId = Number(payload?.workspace_id || this.missionWorkspaceId() || 0) || null;
+      const sessionId = Number(
+        this.companionIdentity?.auth_session?.id
+        || this.companionStatus?.auth_session?.id
+        || 0,
+      ) || null;
+      this.missionActionBusy = actionType;
+      try {
+        const body = {
+          action_type: actionType,
+          workspace_id: workspaceId || undefined,
+          session_id: sessionId || undefined,
+          payload: payload || {},
+        };
+        const result = await this.api('POST', '/api/mobile/actions/execute', body);
+        this.missionLastAction = result || null;
+        if (result?.status === 'challenge_required') {
+          this.showToast('Challenge required. Confirm on the trusted device.');
+        } else if (result?.status === 'completed') {
+          this.showToast(result?.receipt?.summary || 'Action completed');
+        } else if (result?.status === 'unsupported') {
+          this.showToast(result?.result?.message || 'Action unavailable');
+        }
+        if (this.loadDeliveryActivity) await this.loadDeliveryActivity(true);
+        if (this.loadExpoOverview) await this.loadExpoOverview(true);
+        return result;
+      } catch (e) {
+        this.showToast(`Action failed: ${e.message || e}`);
+        throw e;
+      } finally {
+        this.missionActionBusy = '';
+      }
+    },
+
+    async runMissionQuickOp(op = {}) {
+      const action = String(op?.action || '').trim();
+      if (!action) return null;
+      if (action === 'resume') return this.quickResume?.();
+      if (action === 'check_approvals') {
+        return this.runChatQuickAction?.({
+          action: 'check_approvals',
+          prompt: 'Check pending approvals and tell me what is blocked.',
+        });
+      }
+      if (action === 'preview') {
+        return this.ensureWorkspacePreview?.({ openExternal: true, attachBrowser: false });
+      }
+      if (action === 'vercel.deploy.promote') {
+        return this.executeMobileAction('vercel.deploy.promote', { workspace_id: this.missionWorkspaceId() });
+      }
+      if (action === 'vercel.deploy.rollback') {
+        return this.executeMobileAction('vercel.deploy.rollback', { workspace_id: this.missionWorkspaceId() });
+      }
+      if (action === 'runtime.restart') {
+        return this.executeMobileAction('runtime.restart', {});
+      }
+      return null;
     },
   };
 }

@@ -9,6 +9,12 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
+from axon_data.memory import search_memory_items as _search_memory_items
+from axon_data.memory import touch_memory_items as _touch_memory_items
+from axon_data.projects import delete_project as _delete_project
+from axon_data.runtime_state import get_external_fetch_cache as _get_external_fetch_cache
+from axon_data.runtime_state import search_memory_items_fts as _search_memory_items_fts
+
 DB_PATH = Path.home() / ".devbrain" / "devbrain.db"
 
 
@@ -397,6 +403,37 @@ async def get_projects(db: aiosqlite.Connection, status: Optional[str] = None):
 async def get_project(db: aiosqlite.Connection, project_id: int):
     cur = await db.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
     return await cur.fetchone()
+
+
+async def delete_project(db: aiosqlite.Connection, project_id: int):
+    await _delete_project(db, project_id)
+
+
+async def get_external_fetch_cache(db: aiosqlite.Connection, url: str):
+    return await _get_external_fetch_cache(db, url)
+
+
+async def search_memory_items(db: aiosqlite.Connection, query: str, limit: int = 8):
+    return await _search_memory_items(db, query=query, limit=limit)
+
+
+async def search_memory_items_fts(
+    db: aiosqlite.Connection,
+    query: str,
+    *,
+    limit: int = 8,
+    workspace_id: Optional[int] = None,
+):
+    return await _search_memory_items_fts(
+        db,
+        query,
+        limit=limit,
+        workspace_id=workspace_id,
+    )
+
+
+async def touch_memory_items(db: aiosqlite.Connection, memory_ids: list[int], *, commit: bool = True):
+    return await _touch_memory_items(db, memory_ids, commit=commit)
 
 
 async def update_project_note(db: aiosqlite.Connection, project_id: int, note: str):

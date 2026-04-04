@@ -51,10 +51,15 @@ async def poll_sentry_issues() -> list[dict]:
     ingested: list[dict] = []
     headers = {"Authorization": f"Bearer {cfg['token']}"}
     base = "https://sentry.io/api/0"
+    project_slugs = list(cfg["projects"])
+    issue_targets = (
+        [("organization", f"{base}/organizations/{cfg['org']}/issues/")]
+        if not project_slugs
+        else [("project", f"{base}/projects/{cfg['org']}/{project_slug}/issues/") for project_slug in project_slugs]
+    )
 
     async with aiohttp.ClientSession(headers=headers) as session:
-        for project_slug in cfg["projects"]:
-            url = f"{base}/projects/{cfg['org']}/{project_slug}/issues/"
+        for scope, url in issue_targets:
             params = {"query": "is:unresolved", "limit": "25"}
             try:
                 async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
@@ -63,11 +68,18 @@ async def poll_sentry_issues() -> list[dict]:
                         continue
                     issues = await resp.json()
             except Exception as exc:
-                log.warning("Sentry poll failed for %s: %s", project_slug, exc)
+                log.warning("Sentry poll failed for %s: %s", scope, exc)
                 continue
 
             async with get_db() as db:
                 for issue in issues:
+                    project_slug = str(
+                        issue.get("project", {}).get("slug")
+                        or issue.get("projectSlug")
+                        or ""
+                    ).strip()
+                    if not project_slug and scope == "project":
+                        project_slug = url.rstrip("/").split("/")[-2]
                     workspace_id = await resolve_workspace_for_connector_signal(
                         db,
                         external_system="sentry",

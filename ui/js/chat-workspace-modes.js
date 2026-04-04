@@ -5,6 +5,8 @@
 function axonChatWorkspaceModesMixin() {
   const VALID_CONVERSATION_MODES = new Set(['ask', 'auto', 'agent', 'code', 'research', 'business']);
   const AUTO_RESTORABLE_STATUSES = new Set(['ready', 'running', 'approval_required', 'review_ready']);
+  const AUTO_CONTINUABLE_STATUSES = new Set(['ready', 'running', 'approval_required', 'review_ready', 'error']);
+  const AUTO_CLEARABLE_STATUSES = new Set(['ready', 'running', 'approval_required', 'review_ready', 'error']);
 
   const sortSessions = (rows = []) => [...(rows || [])]
     .map(item => ({ ...item, changed_files_count: Number(item?.changed_files_count || 0) }))
@@ -98,6 +100,76 @@ function axonChatWorkspaceModesMixin() {
       if (!session) return false;
       if (typeof this.autoSessionCanDriveMode === 'function') return !!this.autoSessionCanDriveMode(session);
       return AUTO_RESTORABLE_STATUSES.has(String(session?.status || '').trim().toLowerCase());
+    },
+
+    sortAutoSessions(rows = []) {
+      return sortSessions(rows);
+    },
+
+    currentWorkspaceAutoSession() {
+      return this.workspaceAutoSessionFor(this.chatProjectId || '');
+    },
+
+    autoSessionCanDriveMode(session = null) {
+      return AUTO_RESTORABLE_STATUSES.has(String(session?.status || '').trim().toLowerCase());
+    },
+
+    activeAutoSession() {
+      const current = this.currentWorkspaceAutoSession?.() || null;
+      if (this.autoSessionCanDriveMode(current)) return current;
+      return this.sortAutoSessions(this.autoSessions || []).find(item => this.autoSessionCanDriveMode(item)) || null;
+    },
+
+    preferredResumeAutoSession(message = '', source = 'resume') {
+      const explicit = !!this.isExplicitResumeText?.(message)
+        || ['retry_button', 'resume_banner', 'approval_continue', 'typed_continue', 'quick_resume'].includes(String(source || '').trim().toLowerCase());
+      if (!explicit) return null;
+      const workspaceId = String(this.chatProjectId || '').trim();
+      if (workspaceId) return this.currentWorkspaceAutoSession?.() || null;
+      return this.activeAutoSession?.() || null;
+    },
+
+    autoSessionForMessage(message = {}) {
+      const sessionId = String(message?.autoSessionId || message?.auto_session_id || message?.session_id || '').trim();
+      if (!sessionId) return null;
+      return (this.autoSessions || []).find(item => String(item?.session_id || '') === sessionId) || null;
+    },
+
+    autoSessionCanContinue(session = null) {
+      return AUTO_CONTINUABLE_STATUSES.has(String(session?.status || '').trim().toLowerCase());
+    },
+
+    autoSessionCanClear(session = null) {
+      return AUTO_CLEARABLE_STATUSES.has(String(session?.status || '').trim().toLowerCase());
+    },
+
+    autoSessionDiscardLabel(session = null) {
+      const status = String(session?.status || '').trim().toLowerCase();
+      if (['error', 'running', 'approval_required', 'ready'].includes(status)) return 'Clear stale run';
+      return 'Discard run';
+    },
+
+    autoSessionRuntimePayload() {
+      if (typeof this.currentSandboxRuntimePayload === 'function') {
+        return this.currentSandboxRuntimePayload();
+      }
+      const backend = String(this.settingsForm?.ai_backend || this.runtimeStatus?.backend || 'api').toLowerCase();
+      const payload = { backend };
+      if (backend === 'api') {
+        payload.api_provider = this.settingsForm?.api_provider
+          || this.runtimeStatus?.selected_api_provider?.provider_id
+          || 'deepseek';
+        payload.api_model = this.selectedApiProviderModel?.()
+          || this.runtimeStatus?.selected_api_provider?.api_model
+          || '';
+      } else if (backend === 'cli') {
+        payload.cli_path = this.settingsForm?.cli_runtime_path || this.runtimeStatus?.cli_binary || '';
+        payload.cli_model = this.settingsForm?.cli_runtime_model || this.runtimeStatus?.cli_model || '';
+        payload.cli_session_persistence_enabled = !!this.settingsForm?.claude_cli_session_persistence_enabled;
+      } else if (backend === 'ollama') {
+        payload.ollama_model = this.activeChatModel?.() || this.settingsForm?.ollama_model || this.runtimeStatus?.active_model || '';
+      }
+      return payload;
     },
 
     async fetchAutoSessionsSnapshot() {
@@ -245,7 +317,8 @@ function axonChatWorkspaceModesMixin() {
         return this.activePrimaryConversationMode();
       }
       if (mode === 'auto') {
-        if (this.currentBackendSupportsAgent?.()) {
+        const canRestoreAuto = !saved?.legacy || this.workspaceCanRestoreAutoMode(workspaceId);
+        if (this.currentBackendSupportsAgent?.() && canRestoreAuto) {
           this.setConversationModeAuto({ persist: false });
           return mode;
         }
@@ -289,6 +362,125 @@ function axonChatWorkspaceModesMixin() {
       if (options.loadPreview !== false) this.loadWorkspacePreview?.();
       if (options.maybeStartPreview !== false) this.maybeStartAutoWorkspacePreview?.();
       return this.autoSessions;
+    },
+
+    chatQuickActions() {
+      const actions = [];
+      const workspaceId = String(this.chatProjectId || '').trim();
+      const currentAuto = this.currentWorkspaceAutoSession?.() || null;
+      const currentInterrupted = this.interruptedSession || null;
+      const currentWorkspaceName = String(
+        this.chatProject?.name
+        || this.workspaceTabLabel?.(workspaceId)
+        || ''
+      ).trim();
+
+      let resumeWorkspaceId = workspaceId;
+      let resumeLabel = currentWorkspaceName;
+      let resumeSessionId = String(currentAuto?.session_id || '').trim();
+
+      if (!resumeWorkspaceId) {
+        const candidate = this.chooseInitialWorkspaceRestoreCandidate?.({
+          autoSessions: this.autoSessions || [],
+          interruptedSession: currentInterrupted,
+          savedProjectId: '',
+        }) || null;
+        resumeWorkspaceId = String(candidate?.workspaceId || '').trim();
+        resumeLabel = String(candidate?.label || candidate?.workspaceLabel || '').trim();
+        resumeSessionId = String(
+          this.workspaceAutoSessionFor?.(resumeWorkspaceId)?.session_id
+          || this.newestRestorableAutoSession?.(this.autoSessions || [])?.session_id
+          || ''
+        ).trim();
+      }
+
+      if (resumeWorkspaceId || currentInterrupted || currentAuto) {
+        actions.push({
+          id: 'resume-last-run',
+          type: 'action',
+          action: 'resume_active_workspace',
+          label: resumeLabel ? `Resume ${resumeLabel}` : 'Resume last run',
+          workspaceId: resumeWorkspaceId,
+          sessionId: resumeSessionId,
+        });
+      }
+
+      const clearable = currentAuto || (resumeSessionId ? this.workspaceAutoSessionFor?.(resumeWorkspaceId) : null);
+      if (this.autoSessionCanClear?.(clearable)) {
+        actions.push({
+          id: 'clear-stale-run',
+          type: 'action',
+          action: 'clear_stale_resumable_session',
+          label: this.autoSessionDiscardLabel?.(clearable) || 'Clear stale run',
+          sessionId: String(clearable?.session_id || '').trim(),
+          workspaceId: String(clearable?.workspace_id || resumeWorkspaceId || '').trim(),
+        });
+      }
+
+      if (!workspaceId) return actions;
+
+      actions.push({
+        id: 'inspect-workspace',
+        type: 'action',
+        action: 'inspect_workspace',
+        label: 'Inspect this workspace',
+        prompt: `Inspect workspace ${currentWorkspaceName || workspaceId} and summarize the current state.`,
+      });
+      actions.push({
+        id: 'scan-blockers',
+        type: 'action',
+        action: 'scan_repo_blockers',
+        label: 'Scan repo and surface blockers',
+        prompt: `Scan workspace ${currentWorkspaceName || workspaceId} and surface blockers, failing areas, and risky changes.`,
+      });
+      actions.push({
+        id: 'workspace-preview',
+        type: 'action',
+        action: 'start_live_page',
+        label: this.previewReadyForCurrentWorkspace?.() ? 'Open live page' : 'Start live page',
+        workspaceId,
+      });
+
+      const approvalWorkspaceId = String(this.pendingAgentApproval?.workspaceId || '').trim();
+      if (!approvalWorkspaceId || approvalWorkspaceId === workspaceId) {
+        actions.push({
+          id: 'check-approvals',
+          type: 'action',
+          action: 'check_approvals',
+          label: 'Check approvals',
+          prompt: 'Check pending approvals and tell me what is blocked.',
+        });
+      }
+
+      return actions;
+    },
+
+    async runChatQuickAction(action = {}) {
+      const nextAction = String(action?.action || '').trim();
+      if (!nextAction) return null;
+      if (nextAction === 'clear_stale_resumable_session') {
+        return this.discardAutoSession?.(action.sessionId || '');
+      }
+      if (nextAction === 'resume_active_workspace') {
+        const workspaceId = String(action?.workspaceId || '').trim();
+        if (workspaceId && workspaceId !== String(this.chatProjectId || '').trim()) {
+          this.activateWorkspaceTab?.(workspaceId);
+          await this.$nextTick?.();
+        }
+        if (action?.sessionId) {
+          return this.continueAutoSession?.(action.sessionId, {
+            message: 'please continue',
+            workspaceId,
+          });
+        }
+        return this.quickResume?.();
+      }
+      if (nextAction === 'start_live_page') {
+        return this.ensureWorkspacePreview?.({ openExternal: false, attachBrowser: false });
+      }
+      const prompt = String(action?.prompt || '').trim();
+      if (!prompt) return null;
+      return this.sendChatSilent?.(prompt, 'agent', {});
     },
   };
 }

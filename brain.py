@@ -14,15 +14,22 @@ import subprocess
 import shlex
 import json
 import sqlite3
+import tempfile
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Optional, AsyncGenerator
+from typing import Any, Optional, AsyncGenerator
 import re as _re
 import anthropic
 import httpx
 import gpu_guard
 import resource_bank
 from axon_api.services import local_tool_env
+from axon_core.agent_toolspecs import AgentRuntimeDeps
+from axon_core.cli_command import build_cli_command, build_codex_exec_command
+from axon_core import agent as core_agent
+from axon_core import agent_runtime_state, approval_actions
 from axon_core import cli_runtime_catalog
+from axon_core.cli_pacing import current_cli_cooldown, wait_for_cli_slot
 
 # ─── Session usage tracker ───────────────────────────────────────────────────
 
@@ -83,12 +90,223 @@ discover_cli_environments = cli_runtime_catalog.discover_cli_environments
 available_cli_models = cli_runtime_catalog.available_cli_models
 normalize_cli_model = cli_runtime_catalog.normalize_cli_model
 
+_ACTIVE_AGENT_RUNTIME_CONTEXT: ContextVar[dict[str, Any]] = ContextVar(
+    "axon_active_agent_runtime_context",
+    default={},
+)
+_CODEX_SELF_HEAL_MODEL = "gpt-5.4"
+_CLI_SUBPROCESS_STREAM_LIMIT_BYTES = 1024 * 1024
+
 
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_DEFAULT_MODEL = "qwen2.5-coder:7b"
 OLLAMA_FAST_MODEL = "qwen2.5-coder:1.5b"    # quick tasks
 OLLAMA_AGENT_MODEL = "qwen2.5-coder:7b"     # tool-calling / agent loops
 DEVBRAIN_DB_PATH = Path.home() / ".devbrain" / "devbrain.db"
+
+
+def _workspace_root() -> str:
+    return agent_runtime_state.workspace_root(_HOME)
+
+
+def _active_workspace_root() -> str:
+    return agent_runtime_state.active_workspace_root()
+
+
+def _current_agent_runtime_context() -> dict[str, Any]:
+    return dict(_ACTIVE_AGENT_RUNTIME_CONTEXT.get() or {})
+
+
+def _update_agent_runtime_context(**updates: Any) -> None:
+    current = _current_agent_runtime_context()
+    current.update({key: value for key, value in updates.items() if value is not None})
+    _ACTIVE_AGENT_RUNTIME_CONTEXT.set(current)
+
+
+def _current_runtime_permissions_mode() -> str:
+    mode = str(_current_agent_runtime_context().get("runtime_permissions_mode") or "").strip().lower()
+    return mode if mode in {"default", "ask_first", "full_access"} else "default"
+
+
+def _current_codex_sandbox_mode() -> str:
+    return "danger-full-access" if _current_runtime_permissions_mode() == "full_access" else "workspace-write"
+
+
+def _current_codex_approval_mode() -> str:
+    return "never" if _current_runtime_permissions_mode() == "full_access" else "on-request"
+
+
+_ALLOWED_ACTIONS_ONCE: set[str] = set()
+_ALLOWED_ACTIONS_TASK: set[str] = set()
+_ALLOWED_ACTIONS_SESSION: set[str] = set()
+_ALLOWED_ACTIONS_PERSIST: set[str] = set()
+_ALLOWED_EDIT_ROOTS: set[str] = set()
+_ALLOWED_COMMAND_NAMES: set[str] = set()
+
+
+def _path_within_root(path: str, root: str) -> bool:
+    target = os.path.realpath(os.path.expanduser(str(path or "").strip()))
+    base = os.path.realpath(os.path.expanduser(str(root or "").strip()))
+    if not target or not base:
+        return False
+    try:
+        return os.path.commonpath([target, base]) == base
+    except ValueError:
+        return False
+
+
+def _tool_path_allowed(path: str) -> bool:
+    resolved = os.path.realpath(os.path.expanduser(str(path or "").strip()))
+    if not resolved:
+        return False
+    roots = {
+        os.path.realpath(_HOME),
+        os.path.realpath(tempfile.gettempdir()),
+    }
+    workspace_root = _active_workspace_root()
+    if workspace_root:
+        roots.add(os.path.realpath(workspace_root))
+    return any(_path_within_root(resolved, root) for root in roots if root)
+
+
+def _current_autonomy_profile() -> str:
+    return str(_current_agent_runtime_context().get("autonomy_profile") or "manual").strip().lower() or "manual"
+
+
+def agent_capture_permission_state() -> dict[str, Any]:
+    return {
+        "once": set(_ALLOWED_ACTIONS_ONCE),
+        "task": set(_ALLOWED_ACTIONS_TASK),
+        "session": set(_ALLOWED_ACTIONS_SESSION),
+        "persist": set(_ALLOWED_ACTIONS_PERSIST),
+        "edit_roots": set(_ALLOWED_EDIT_ROOTS),
+        "commands": set(_ALLOWED_COMMAND_NAMES),
+    }
+
+
+def agent_restore_permission_state(snapshot: dict[str, Any] | None) -> None:
+    snapshot = dict(snapshot or {})
+    _ALLOWED_ACTIONS_ONCE.clear()
+    _ALLOWED_ACTIONS_ONCE.update(set(snapshot.get("once") or set()))
+    _ALLOWED_ACTIONS_TASK.clear()
+    _ALLOWED_ACTIONS_TASK.update(set(snapshot.get("task") or set()))
+    _ALLOWED_ACTIONS_SESSION.clear()
+    _ALLOWED_ACTIONS_SESSION.update(set(snapshot.get("session") or set()))
+    _ALLOWED_ACTIONS_PERSIST.clear()
+    _ALLOWED_ACTIONS_PERSIST.update(set(snapshot.get("persist") or set()))
+    _ALLOWED_EDIT_ROOTS.clear()
+    _ALLOWED_EDIT_ROOTS.update(set(snapshot.get("edit_roots") or set()))
+    _ALLOWED_COMMAND_NAMES.clear()
+    _ALLOWED_COMMAND_NAMES.update(set(snapshot.get("commands") or set()))
+
+
+def agent_allow_action(action: dict[str, Any], *, scope: str = "once", session_id: str = "") -> None:
+    fingerprint = str((action or {}).get("action_fingerprint") or "").strip()
+    if not fingerprint:
+        return
+    normalized_scope = str(scope or "once").strip().lower()
+    if normalized_scope == "once":
+        _ALLOWED_ACTIONS_ONCE.add(fingerprint)
+    elif normalized_scope == "task":
+        _ALLOWED_ACTIONS_TASK.add(fingerprint)
+    elif normalized_scope == "session":
+        _ALLOWED_ACTIONS_SESSION.add(fingerprint)
+    elif normalized_scope == "persist":
+        _ALLOWED_ACTIONS_PERSIST.add(fingerprint)
+
+
+def agent_allow_edit(path: str, *, scope: str = "file") -> None:
+    resolved = os.path.realpath(os.path.expanduser(str(path or "").strip()))
+    if not resolved:
+        return
+    _ALLOWED_EDIT_ROOTS.add(resolved)
+
+
+def agent_allow_command(command: str) -> None:
+    text = str(command or "").strip().lower()
+    if not text:
+        return
+    try:
+        parts = shlex.split(text)
+    except ValueError:
+        parts = text.split()
+    if not parts:
+        return
+    _ALLOWED_COMMAND_NAMES.add(os.path.basename(parts[0]))
+
+
+def agent_get_action_state() -> dict[str, Any]:
+    return {
+        "once": sorted(_ALLOWED_ACTIONS_ONCE),
+        "task": sorted(_ALLOWED_ACTIONS_TASK),
+        "session": sorted(_ALLOWED_ACTIONS_SESSION),
+        "persist": sorted(_ALLOWED_ACTIONS_PERSIST),
+        "edit_roots": sorted(_ALLOWED_EDIT_ROOTS),
+    }
+
+
+def agent_get_session_allowed() -> list[str]:
+    return sorted(_ALLOWED_COMMAND_NAMES)
+
+
+def _action_is_allowed(action: dict[str, Any]) -> bool:
+    current = dict(action or {})
+    fingerprint = str(current.get("action_fingerprint") or "").strip()
+    if fingerprint:
+        if fingerprint in _ALLOWED_ACTIONS_ONCE:
+            _ALLOWED_ACTIONS_ONCE.remove(fingerprint)
+            return True
+        if fingerprint in _ALLOWED_ACTIONS_TASK or fingerprint in _ALLOWED_ACTIONS_SESSION or fingerprint in _ALLOWED_ACTIONS_PERSIST:
+            return True
+
+    if _current_runtime_permissions_mode() == "full_access":
+        return True
+
+    action_type = str(current.get("action_type") or "").strip().lower()
+    if action_type.startswith("file_"):
+        path = os.path.realpath(os.path.expanduser(str(current.get("path") or "").strip()))
+        if any(_path_within_root(path, root) for root in _ALLOWED_EDIT_ROOTS):
+            return True
+        if _current_runtime_permissions_mode() == "ask_first":
+            return False
+        workspace_root = _active_workspace_root()
+        if workspace_root and _path_within_root(path, workspace_root):
+            return approval_actions.autonomy_profile_allows(current, _current_autonomy_profile())
+        return False
+
+    command_preview = str(current.get("command_preview") or "").strip()
+    if command_preview:
+        try:
+            parts = shlex.split(command_preview)
+        except ValueError:
+            parts = command_preview.split()
+        if parts and os.path.basename(parts[0]).lower() in _ALLOWED_COMMAND_NAMES:
+            return True
+    return False
+
+
+def _is_rate_limited_message(message: str) -> bool:
+    lower = str(message or "").lower()
+    return any(token in lower for token in (
+        "rate limit", "rate_limit", "hit your limit", "usage limit",
+        "hit your usage limit", "try again at", "get more access",
+    ))
+
+
+def _cli_prompt_from_messages(messages: list[dict]) -> str:
+    parts: list[str] = []
+    for message in messages or []:
+        role = str(message.get("role") or "user").strip()
+        content = _coerce_text_content(message.get("content", "")).strip()
+        if not content:
+            continue
+        if role == "system":
+            parts.append(f"System:\n{content}")
+        elif role == "assistant":
+            parts.append(f"Assistant:\n{content}")
+        else:
+            parts.append(f"User:\n{content}")
+    return "\n\n".join(parts).strip()
 
 
 def _ollama_execution_profile_sync(
@@ -130,7 +348,10 @@ def _ollama_execution_profile_sync(
 def _get_client(api_key: str, api_base_url: str = "") -> anthropic.Anthropic:
     kwargs = {"api_key": api_key}
     if api_base_url:
-        kwargs["base_url"] = api_base_url
+        normalized_base = str(api_base_url).rstrip("/")
+        if normalized_base.endswith("/v1"):
+            normalized_base = normalized_base[:-3]
+        kwargs["base_url"] = normalized_base
     return anthropic.Anthropic(**kwargs)
 
 
@@ -382,6 +603,20 @@ def _ollama_message_with_images(content: str, image_paths: list[str] | None = No
     return message
 
 
+def _api_message_with_images(content: str, image_paths: list[str] | None = None) -> dict:
+    del image_paths
+    return {"role": "user", "content": content}
+
+
+_cli_message_with_images = _api_message_with_images
+
+
+async def _stream_api_chat(*args, **kwargs) -> AsyncGenerator[str, None]:
+    del args, kwargs
+    if False:
+        yield ""
+
+
 async def stream_chat(
     user_message: str,
     history: list[dict],
@@ -390,11 +625,22 @@ async def stream_chat(
     resource_image_paths: Optional[list[str]] = None,
     vision_model: str = "",
     project_name: Optional[str] = None,
+    workspace_path: Optional[str] = None,
+    backend: str = "ollama",
+    api_key: str = "",
+    api_provider: str = "anthropic",
+    api_base_url: str = "",
+    api_model: str = "",
+    cli_path: str = "",
+    cli_model: str = "",
+    cli_session_persistence: bool = False,
     ollama_url: str = "",
     ollama_model: str = "",
+    usage_sink: Optional[dict[str, Any]] = None,
 ) -> AsyncGenerator[str, None]:
-    """Public async generator — yields chat response chunks (Ollama only, for SSE streaming)."""
-    system = SYSTEM_PROMPT_OLLAMA
+    """Public async generator — yields chat response chunks for Ollama, CLI, or API backends."""
+    del workspace_path
+    system = SYSTEM_PROMPT_OLLAMA if backend == "ollama" else SYSTEM_PROMPT
     if _is_general_planning_request(user_message):
         history = _filtered_general_history(history)
         system += (
@@ -409,7 +655,37 @@ async def stream_chat(
     if project_name:
         system += f"\n\nCurrently focused on workspace: **{project_name}**"
 
-    messages: list[dict] = [{"role": "system", "content": system}]
+    if backend == "cli":
+        messages: list[dict] = [{"role": "system", "content": system}]
+        for h in history[-6:]:
+            messages.append({"role": h["role"], "content": h["content"][:600]})
+        messages.append(_cli_message_with_images(user_message, resource_image_paths))
+        async for chunk in _stream_cli(
+            messages,
+            cli_path=cli_path,
+            model=cli_model,
+            allow_session_persistence=cli_session_persistence,
+            usage_sink=usage_sink,
+        ):
+            yield chunk
+        return
+
+    if backend == "api":
+        messages: list[dict] = [{"role": "system", "content": system}]
+        for h in history[-6:]:
+            messages.append({"role": h["role"], "content": h["content"][:600]})
+        messages.append(_api_message_with_images(user_message, resource_image_paths))
+        async for chunk in _stream_api_chat(
+            messages=messages,
+            api_key=api_key,
+            api_provider=api_provider,
+            api_base_url=api_base_url,
+            api_model=api_model,
+        ):
+            yield chunk
+        return
+
+    messages = [{"role": "system", "content": system}]
     for h in history[-6:]:
         messages.append({"role": h["role"], "content": h["content"][:600]})
     messages.append(_ollama_message_with_images(user_message, resource_image_paths))
@@ -440,21 +716,26 @@ _HOME = os.path.expanduser("~")
 
 # Shell commands that agents are allowed to execute
 _ALLOWED_CMDS = frozenset([
+    "bash", "sh", "zsh",
     "git", "ls", "cat", "head", "tail", "grep", "find", "wc", "echo",
     "pwd", "env", "python3", "python", "node", "npm", "npx", "yarn",
     "cargo", "go", "rustc", "make", "cmake", "pip", "pip3",
     "docker", "kubectl", "terraform", "supabase",
     "eas", "expo", "expo-cli",
-    "which", "type", "file", "stat", "du", "df", "ps",
+    "which", "type", "file", "stat", "du", "df", "ps", "rg",
     "jq", "yq", "awk", "sed", "sort", "uniq", "cut", "tr",
 ])
+
+
+def _effective_allowed_cmds() -> set[str]:
+    return set(_ALLOWED_CMDS) | set(_ALLOWED_COMMAND_NAMES)
 
 
 def _tool_read_file(path: str, max_kb: int = 32) -> str:
     """Read a file, sandboxed to home directory."""
     p = os.path.realpath(os.path.expanduser(path))
-    if not p.startswith(_HOME):
-        return "ERROR: Access outside home directory is not allowed."
+    if not _tool_path_allowed(p):
+        return "ERROR: Access outside the allowed directories is not allowed."
     if not os.path.exists(p):
         return f"ERROR: File not found: {p}"
     if os.path.isdir(p):
@@ -473,8 +754,8 @@ def _tool_read_file(path: str, max_kb: int = 32) -> str:
 def _tool_list_dir(path: str = "~") -> str:
     """List directory contents, sandboxed to home."""
     p = os.path.realpath(os.path.expanduser(path))
-    if not p.startswith(_HOME):
-        return "ERROR: Access outside home directory is not allowed."
+    if not _tool_path_allowed(p):
+        return "ERROR: Access outside the allowed directories is not allowed."
     if not os.path.exists(p):
         return f"ERROR: Path not found: {p}"
     if not os.path.isdir(p):
@@ -496,11 +777,37 @@ def _tool_shell_cmd(cmd: str, cwd: str = "", timeout: int = 15) -> str:
     if not parts:
         return "ERROR: Empty command."
     base_cmd = os.path.basename(parts[0])
-    if base_cmd not in _ALLOWED_CMDS:
-        return f"ERROR: Command '{base_cmd}' is not in the allowed list. Allowed: {', '.join(sorted(_ALLOWED_CMDS))}"
-    work_dir = os.path.realpath(os.path.expanduser(cwd)) if cwd else _HOME
-    if not work_dir.startswith(_HOME):
-        return "ERROR: cwd must be within home directory."
+    allowed_cmds = _effective_allowed_cmds()
+    if base_cmd not in allowed_cmds:
+        return f"ERROR: Command '{base_cmd}' is not in the allowed list. Allowed: {', '.join(sorted(allowed_cmds))}"
+    work_dir = os.path.realpath(os.path.expanduser(cwd)) if cwd else _workspace_root()
+    if not _tool_path_allowed(work_dir):
+        return "ERROR: cwd must be within the allowed directories."
+    normalized = approval_actions.normalize_command_preview(cmd)
+    lowered = normalized.lower()
+    read_only_git_prefixes = (
+        "git status",
+        "git diff",
+        "git log",
+        "git show",
+        "git branch",
+        "git rev-parse",
+        "git remote",
+        "git ls-files",
+    )
+    requires_approval = (
+        (lowered.startswith("git ") and not any(lowered == prefix or lowered.startswith(prefix + " ") for prefix in read_only_git_prefixes))
+        or lowered.startswith("gh ")
+        or base_cmd in {"rm", "chmod", "ln"}
+    )
+    if requires_approval:
+        approval_action = approval_actions.build_command_approval_action(
+            normalized,
+            cwd=work_dir,
+            session_id=str(_current_agent_runtime_context().get("agent_session_id") or ""),
+        )
+        if not _action_is_allowed(approval_action):
+            return f"BLOCKED_CMD:{base_cmd}:{normalized}"
     try:
         result = subprocess.run(
             parts, capture_output=True, text=True,
@@ -521,8 +828,8 @@ def _tool_shell_cmd(cmd: str, cwd: str = "", timeout: int = 15) -> str:
 def _tool_git_status(path: str = "~") -> str:
     """Get git status + recent log for a directory."""
     p = os.path.realpath(os.path.expanduser(path))
-    if not p.startswith(_HOME):
-        return "ERROR: Access outside home directory."
+    if not _tool_path_allowed(p):
+        return "ERROR: Access outside the allowed directories."
     if not os.path.exists(p):
         return f"ERROR: Path not found: {p}"
     status = _tool_shell_cmd(f"git status --short", cwd=p)
@@ -534,8 +841,8 @@ def _tool_git_status(path: str = "~") -> str:
 def _tool_search_code(pattern: str, path: str = "~", glob: str = "*.py *.ts *.tsx *.js *.jsx") -> str:
     """Grep for a pattern in source files. Returns matching lines with context."""
     p = os.path.realpath(os.path.expanduser(path))
-    if not p.startswith(_HOME):
-        return "ERROR: Access outside home directory."
+    if not _tool_path_allowed(p):
+        return "ERROR: Access outside the allowed directories."
     includes = " ".join(f"--include={g}" for g in glob.split())
     cmd = f"grep -rn --max-count=3 {includes} -l {shlex.quote(pattern)} {shlex.quote(p)}"
     result = _tool_shell_cmd(cmd)
@@ -545,13 +852,44 @@ def _tool_search_code(pattern: str, path: str = "~", glob: str = "*.py *.ts *.ts
 def _tool_write_file(path: str, content: str) -> str:
     """Write content to a file (sandboxed to home)."""
     p = os.path.realpath(os.path.expanduser(path))
-    if not p.startswith(_HOME):
-        return "ERROR: Access outside home directory."
+    if not _tool_path_allowed(p):
+        return "ERROR: Access outside the allowed directories."
+    approval_action = approval_actions.build_edit_approval_action(
+        "write",
+        p,
+        session_id=str(_current_agent_runtime_context().get("agent_session_id") or ""),
+        workspace_root=_active_workspace_root(),
+    )
+    if not _action_is_allowed(approval_action):
+        return f"BLOCKED_EDIT:write:{p}"
     os.makedirs(os.path.dirname(p), exist_ok=True)
     try:
         with open(p, "w", encoding="utf-8") as f:
             f.write(content)
         return f"Written {len(content)} bytes to {p}"
+    except PermissionError:
+        return f"ERROR: Permission denied: {p}"
+
+
+def _tool_create_file(path: str, content: str = "") -> str:
+    p = os.path.realpath(os.path.expanduser(path))
+    if not _tool_path_allowed(p):
+        return "ERROR: Access outside the allowed directories."
+    approval_action = approval_actions.build_edit_approval_action(
+        "create",
+        p,
+        session_id=str(_current_agent_runtime_context().get("agent_session_id") or ""),
+        workspace_root=_active_workspace_root(),
+    )
+    if not _action_is_allowed(approval_action):
+        return f"BLOCKED_EDIT:create:{p}"
+    if os.path.exists(p):
+        return f"ERROR: File already exists: {p}"
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    try:
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"Created {p}"
     except PermissionError:
         return f"ERROR: Permission denied: {p}"
 
@@ -604,7 +942,7 @@ def _normalize_tool_args(name: str, args: dict) -> dict:
             normalized.pop(alias, None)
         return {k: v for k, v in normalized.items() if k in {"pattern", "path", "glob"}}
 
-    if name == "write_file":
+    if name in {"write_file", "create_file"}:
         if not normalized.get("path"):
             for alias in ("file", "target", "destination"):
                 if normalized.get(alias):
@@ -628,8 +966,32 @@ _TOOL_REGISTRY = {
     "shell_cmd": _tool_shell_cmd,
     "git_status": _tool_git_status,
     "search_code": _tool_search_code,
+    "create_file": _tool_create_file,
     "write_file": _tool_write_file,
 }
+
+
+def _agent_runtime_deps(exclude_tools: set[str] | None = None) -> AgentRuntimeDeps:
+    tool_registry = {
+        name: tool
+        for name, tool in _TOOL_REGISTRY.items()
+        if name not in (exclude_tools or set())
+    }
+    return AgentRuntimeDeps(
+        tool_registry=tool_registry,
+        normalize_tool_args=_normalize_tool_args,
+        stream_cli=_stream_cli,
+        stream_api_chat=_stream_api_chat,
+        stream_ollama_chat=_stream_ollama_chat,
+        ollama_execution_profile_sync=_ollama_execution_profile_sync,
+        ollama_message_with_images=_ollama_message_with_images,
+        api_message_with_images=_api_message_with_images,
+        cli_message_with_images=_cli_message_with_images,
+        find_cli=_resolve_selected_cli_binary,
+        ollama_default_model=OLLAMA_DEFAULT_MODEL,
+        ollama_agent_model=OLLAMA_AGENT_MODEL,
+        db_path=DEVBRAIN_DB_PATH,
+    )
 
 AGENT_TOOL_DEFS = [
     {
@@ -1087,6 +1449,23 @@ def _parse_react_action(text: str) -> tuple[str, dict] | None:
     return tool_name, args
 
 
+async def _run_agent_core(
+    user_message: str,
+    history: list[dict],
+    **kwargs,
+) -> AsyncGenerator[dict, None]:
+    kwargs.pop("autonomy_profile", None)
+    kwargs.pop("runtime_permissions_mode", None)
+    kwargs.pop("external_fetch_cache_ttl_seconds", None)
+    async for event in core_agent.run_agent(
+        user_message,
+        history,
+        deps=_agent_runtime_deps(),
+        **kwargs,
+    ):
+        yield event
+
+
 async def run_agent(
     user_message: str,
     history: list[dict],
@@ -1095,142 +1474,114 @@ async def run_agent(
     resource_image_paths: Optional[list[str]] = None,
     vision_model: str = "",
     project_name: Optional[str] = None,
+    workspace_path: str = "",
     tools: list[str] | None = None,
+    backend: str = "ollama",
+    api_key: str = "",
+    api_provider: str = "anthropic",
+    api_base_url: str = "",
+    api_model: str = "",
+    cli_path: str = "",
+    cli_model: str = "",
+    cli_session_persistence: bool = False,
+    workspace_id: int | None = None,
+    autonomy_profile: str = "",
+    runtime_permissions_mode: str = "",
+    external_fetch_policy: str = "",
+    external_fetch_cache_ttl_seconds: str = "",
+    resume_session_id: str = "",
+    resume_reason: str = "",
+    continue_task: str = "",
     ollama_url: str = "",
     ollama_model: str = "",
     max_iterations: int = 6,
+    context_compact: bool = False,
     force_tool_mode: bool = False,
+    **extra_kwargs,
 ) -> AsyncGenerator[dict, None]:
-    """
-    Async generator yielding agent events (ReAct-style, streaming-compatible):
-      {"type": "text",        "chunk": str}
-      {"type": "tool_call",   "name": str, "args": dict}
-      {"type": "tool_result", "name": str, "result": str}
-      {"type": "done",        "iterations": int}
+    resolved_cli_path = cli_path
+    resolved_cli_model = cli_model
 
-    Uses ReAct text-based tool calling (reliable across all Ollama models).
-    """
-    active_tool_names = list(_TOOL_REGISTRY.keys()) if tools is None else [
-        t for t in tools if t in _TOOL_REGISTRY
-    ]
+    if backend == "cli":
+        selected_binary = _resolve_selected_cli_binary(cli_path)
+        if selected_binary:
+            resolved_cli_path = selected_binary
+            if _cli_runtime_family(selected_binary) != "codex":
+                cooldown = current_cli_cooldown(key=_cli_runtime_key(selected_binary))
+                if cooldown.get("active"):
+                    fallback_binary = _find_codex_cli()
+                    if fallback_binary and os.path.realpath(fallback_binary) != os.path.realpath(selected_binary):
+                        resolved_cli_path = fallback_binary
+                        resolved_cli_model = _CODEX_SELF_HEAL_MODEL
+                        yield {
+                            "type": "text",
+                            "chunk": "Claude CLI is cooling down after a rate limit. Falling back to Codex CLI.\n\n",
+                        }
+                    else:
+                        yield {
+                            "type": "text",
+                            "chunk": str(cooldown.get("message") or "Claude CLI is cooling down after a rate limit."),
+                        }
+                        yield {"type": "done", "iterations": 0}
+                        return
 
-    if not force_tool_mode and _is_general_planning_request(user_message):
-        system = (
-            "You are Axon, a calm and practical AI operator.\n"
-            "This request is a general planning or writing task, not a local tool task.\n"
-            "Do not use tools. Do not inspect files or directories unless the user explicitly asks for local data.\n"
-            "Answer directly with a clear structure, a concise draft, and 2-4 helpful next-step options."
-        )
-        if resource_context:
-            system += f"\n\nUse these attached resources when they are relevant:\n{resource_context[:5000]}"
-        execution = await asyncio.to_thread(
-            _ollama_execution_profile_sync,
-            vision_model or ollama_model or OLLAMA_DEFAULT_MODEL,
-            ollama_url,
-            streaming=True,
-            purpose="chat",
-        )
-        messages: list[dict] = [{"role": "system", "content": system}]
-        messages.extend(_filtered_general_history(history))
-        messages.append(_ollama_message_with_images(user_message, resource_image_paths))
-
-        if execution.get("note"):
-            yield {"type": "text", "chunk": f"⚠️ {execution['note']}\n\n"}
-        async for chunk in _stream_ollama_chat(
-            messages=messages,
-            model=execution["model"],
-            max_tokens=1200,
+    runtime_context = {
+        **_current_agent_runtime_context(),
+        "backend": backend,
+        "workspace_path": workspace_path,
+        "project_name": project_name,
+        "workspace_id": workspace_id,
+        "cli_path": resolved_cli_path,
+        "cli_model": resolved_cli_model,
+        "api_key": api_key,
+        "api_provider": api_provider,
+        "api_base_url": api_base_url,
+        "api_model": api_model,
+        "autonomy_profile": autonomy_profile or _current_autonomy_profile(),
+        "runtime_permissions_mode": runtime_permissions_mode or _current_runtime_permissions_mode(),
+        "agent_session_id": str(extra_kwargs.get("agent_session_id") or _current_agent_runtime_context().get("agent_session_id") or ""),
+    }
+    context_token = _ACTIVE_AGENT_RUNTIME_CONTEXT.set(runtime_context)
+    workspace_token = agent_runtime_state.set_active_workspace_path(workspace_path) if workspace_path else None
+    try:
+        async for event in _run_agent_core(
+            user_message,
+            history,
+            context_block=context_block,
+            resource_context=resource_context,
+            resource_image_paths=resource_image_paths,
+            vision_model=vision_model,
+            project_name=project_name,
+            workspace_path=workspace_path,
+            tools=tools,
             ollama_url=ollama_url,
-            purpose="chat",
+            ollama_model=ollama_model,
+            max_iterations=max_iterations,
+            context_compact=context_compact,
+            force_tool_mode=force_tool_mode,
+            api_key=api_key,
+            api_base_url=api_base_url,
+            api_model=api_model,
+            api_provider=api_provider,
+            cli_path=resolved_cli_path,
+            cli_model=resolved_cli_model,
+            cli_session_persistence=cli_session_persistence,
+            backend=backend,
+            workspace_id=workspace_id,
+            resume_session_id=resume_session_id,
+            resume_reason=resume_reason,
+            continue_task=continue_task,
+            external_fetch_policy=external_fetch_policy,
+            external_fetch_cache_ttl_seconds=external_fetch_cache_ttl_seconds,
+            runtime_permissions_mode=runtime_permissions_mode,
+            autonomy_profile=autonomy_profile,
+            **extra_kwargs,
         ):
-            yield {"type": "text", "chunk": chunk}
-        yield {"type": "done", "iterations": 1}
-        return
-
-    direct_action = _direct_agent_action(user_message, history=history, project_name=project_name)
-    if direct_action:
-        tool_name, tool_args, result, answer = direct_action
-        yield {"type": "tool_call", "name": tool_name, "args": tool_args}
-        yield {"type": "tool_result", "name": tool_name, "result": result[:2000]}
-        yield {"type": "text", "chunk": answer}
-        yield {"type": "done", "iterations": 1}
-        return
-
-    system_context = context_block
-    if resource_context:
-        system_context = f"{system_context}\n\n{resource_context}" if system_context else resource_context
-    system = _build_react_system(system_context, project_name, active_tool_names)
-    execution = await asyncio.to_thread(
-        _ollama_execution_profile_sync,
-        vision_model or ollama_model or OLLAMA_AGENT_MODEL,
-        ollama_url,
-        streaming=True,
-        purpose="agent",
-    )
-
-    messages: list[dict] = [{"role": "system", "content": system}]
-    for h in history[-4:]:
-        messages.append({"role": h["role"], "content": h["content"][:400]})
-    messages.append(_ollama_message_with_images(user_message, resource_image_paths))
-
-    for iteration in range(max_iterations):
-        # Collect streamed response
-        full_text = ""
-        try:
-            if iteration == 0 and execution.get("note"):
-                yield {"type": "text", "chunk": f"⚠️ {execution['note']}\n\n"}
-            async for chunk in _stream_ollama_chat(
-                messages=messages,
-                model=execution["model"],
-                max_tokens=800,
-                ollama_url=ollama_url,
-                purpose="agent",
-            ):
-                full_text += chunk
-        except Exception as exc:
-            yield {"type": "text", "chunk": f"\n⚠️ Ollama error: {exc}"}
-            break
-
-        if not full_text.strip():
-            yield {"type": "text", "chunk": "\n⚠️ Empty response from model."}
-            break
-
-        # Parse for ReAct patterns
-        action = _parse_react_action(full_text)
-        answer_match = _re.search(r'ANSWER:\s*([\s\S]+)', full_text)
-        clean_text = _sanitize_agent_text(full_text)
-
-        if action:
-            tool_name, tool_args = action
-            # Emit the thinking text (everything before ACTION:)
-            think_text = full_text[:full_text.find("ACTION:")].strip()
-            think_text = _sanitize_agent_text(think_text)
-            if think_text:
-                yield {"type": "thinking", "chunk": think_text}
-
-            yield {"type": "tool_call", "name": tool_name, "args": tool_args}
-            result = await asyncio.to_thread(_execute_tool, tool_name, tool_args)
-            yield {"type": "tool_result", "name": tool_name, "result": result[:2000]}
-
-            messages.append({"role": "assistant", "content": full_text})
-            messages.append({"role": "user", "content": f"Tool result for {tool_name}:\n{result[:2000]}\n\nContinue."})
-
-        elif answer_match:
-            answer = _sanitize_agent_text(answer_match.group(1).strip())
-            if not answer or answer == "your response here":
-                yield {"type": "text", "chunk": "\n⚠️ Axon could not form a clean answer. Please retry the task."}
-                break
-            yield {"type": "text", "chunk": answer}
-            break
-        else:
-            # No pattern found — emit as-is (final answer without ANSWER: prefix)
-            if clean_text:
-                yield {"type": "text", "chunk": clean_text}
-            else:
-                yield {"type": "text", "chunk": "\n⚠️ Axon produced an invalid tool response. Please retry the task."}
-            break
-
-    yield {"type": "done", "iterations": iteration + 1}
+            yield event
+    finally:
+        if workspace_token is not None:
+            agent_runtime_state.reset_active_workspace_path(workspace_token)
+        _ACTIVE_AGENT_RUNTIME_CONTEXT.reset(context_token)
 
 
 def _ollama_list_models_sync(ollama_url: str = "") -> list[str]:
@@ -1267,23 +1618,172 @@ async def ollama_status(ollama_url: str = "") -> dict:
 
 def _find_cli(override_path: str = "") -> str:
     """Find the selected Claude CLI binary used by Axon's active CLI bridge."""
-    return _find_named_cli("claude") if not override_path else cli_runtime_catalog.find_cli(override_path)
+    if override_path and _cli_runtime_family(override_path) == "claude":
+        return cli_runtime_catalog.find_cli(override_path)
+    return _find_named_cli("claude")
 
 
-async def _call_cli(prompt: str, system: str = "", cli_path: str = "") -> str:
+def _requires_local_operator_execution(user_message: str) -> bool:
+    del user_message
+    return False
+
+
+def _run_async_from_sync(coro):
+    return asyncio.run(coro)
+
+
+def _tool_spawn_subagent(task: str, context: str = "") -> str:
+    prompt = str(task or "").strip()
+    if not prompt:
+        return "ERROR: No subagent task provided."
+
+    runtime_context = _current_agent_runtime_context()
+    prompt_with_context = prompt if not context else f"{prompt}\n\nContext:\n{context}"
+
+    async def _run() -> str:
+        chunks: list[str] = []
+        async for event in run_agent(
+            prompt_with_context,
+            [],
+            tools=[name for name in _TOOL_REGISTRY.keys() if name != "spawn_subagent"],
+            backend=str(runtime_context.get("backend") or ""),
+            workspace_path=str(runtime_context.get("workspace_path") or ""),
+            cli_path=str(runtime_context.get("cli_path") or ""),
+            cli_model=str(runtime_context.get("cli_model") or ""),
+            project_name=str(runtime_context.get("project_name") or ""),
+            api_key=str(runtime_context.get("api_key") or ""),
+            api_provider=str(runtime_context.get("api_provider") or ""),
+            api_base_url=str(runtime_context.get("api_base_url") or ""),
+            api_model=str(runtime_context.get("api_model") or ""),
+            workspace_id=runtime_context.get("workspace_id"),
+            autonomy_profile=str(runtime_context.get("autonomy_profile") or ""),
+            runtime_permissions_mode=str(runtime_context.get("runtime_permissions_mode") or ""),
+        ):
+            if str(event.get("type") or "") == "text":
+                chunks.append(str(event.get("chunk") or ""))
+        return "".join(chunks)
+
+    return _run_async_from_sync(_run())
+
+
+async def _call_codex_exec_prompt(
+    prompt: str,
+    *,
+    binary: str,
+    model: str = "",
+    sandbox_mode: str = "read-only",
+    approval_mode: str = "on-request",
+) -> tuple[str, int]:
+    cmd = build_codex_exec_command(
+        binary,
+        prompt=prompt,
+        model=normalize_cli_model(binary, model),
+        cwd=_workspace_root(),
+        sandbox_mode=sandbox_mode,
+        approval_mode=approval_mode,
+    )
+    await wait_for_cli_slot(key=_cli_runtime_key(binary))
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env={**os.environ, "NO_COLOR": "1"},
+        limit=_CLI_SUBPROCESS_STREAM_LIMIT_BYTES,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+    raw_output = stdout.decode("utf-8", errors="replace")
+    stderr_text = stderr.decode("utf-8", errors="replace").strip()
+    text = ""
+    tokens = 0
+    for raw_line in raw_output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        etype = str(event.get("type") or "")
+        if etype == "item.completed":
+            item = event.get("item") or {}
+            if isinstance(item, dict) and item.get("type") == "agent_message":
+                text = str(item.get("text") or "").strip() or text
+        elif etype == "turn.completed":
+            usage = event.get("usage") or {}
+            if isinstance(usage, dict):
+                tokens = int(usage.get("input_tokens", 0) or 0) + int(usage.get("output_tokens", 0) or 0)
+    if tokens:
+        _track_usage(tokens, 0.0, backend="cli")
+    if proc.returncode != 0:
+        raise RuntimeError(stderr_text or text or "Codex CLI request failed.")
+    if not text:
+        raise RuntimeError(stderr_text or "Codex CLI returned no usable output.")
+    return text, tokens
+
+
+async def _call_codex_cli(
+    prompt: str,
+    *,
+    system: str = "",
+    binary: str,
+    model: str = "",
+) -> tuple[str, int]:
+    full_prompt = _cli_prompt_from_messages([
+        {"role": "system", "content": system or SYSTEM_PROMPT},
+        {"role": "user", "content": prompt},
+    ])
+    return await _call_codex_exec_prompt(
+        full_prompt,
+        binary=binary,
+        model=model,
+        sandbox_mode="read-only",
+        approval_mode="on-request",
+    )
+
+
+async def _call_cli(
+    prompt: str,
+    system: str = "",
+    cli_path: str = "",
+    model: str = "",
+    allow_session_persistence: bool = False,
+) -> tuple[str, int]:
     """
     Call the CLI agent bridge in non-interactive (-p) mode.
     Uses your locally installed CLI agent — no API key needed.
     """
-    binary = _find_cli(cli_path)
+    binary = _resolve_selected_cli_binary(cli_path)
     if not binary:
         raise RuntimeError("CLI agent not found. Set the path in Settings or switch to a different runtime.")
+    if _cli_runtime_family(binary) == "codex":
+        _update_agent_runtime_context(cli_path=binary, backend="cli")
+        return await _call_codex_cli(prompt, system=system, binary=binary, model=model)
+
+    cooldown = current_cli_cooldown(key=_cli_runtime_key(binary))
+    if cooldown.get("active"):
+        fallback_binary = _find_codex_cli()
+        if fallback_binary and os.path.realpath(fallback_binary) != os.path.realpath(binary):
+            _update_agent_runtime_context(cli_path=fallback_binary, cli_model=_CODEX_SELF_HEAL_MODEL, backend="cli")
+            content, tokens = await _call_codex_cli(
+                prompt,
+                system=system,
+                binary=fallback_binary,
+                model=_CODEX_SELF_HEAL_MODEL,
+            )
+            return f"⚠️ Claude CLI is cooling down after a rate limit. Fell back to Codex CLI (`{_CODEX_SELF_HEAL_MODEL}`).\n\n{content}", tokens
+        raise RuntimeError(str(cooldown.get("message") or "Claude CLI is cooling down after a rate limit."))
 
     full_prompt = prompt
     if system:
         full_prompt = f"<system>\n{system}\n</system>\n\n{prompt}"
 
-    cmd = [binary, "-p", "--output-format", "json", full_prompt]
+    cmd = build_cli_command(
+        binary,
+        model=model,
+        stream_json=False,
+        allow_session_persistence=allow_session_persistence,
+    )
+    cmd.append(full_prompt)
 
     # Strip CLAUDECODE so the CLI doesn't refuse to run inside another Claude session
     clean_env = {**os.environ, "NO_COLOR": "1"}
@@ -1295,6 +1795,7 @@ async def _call_cli(prompt: str, system: str = "", cli_path: str = "") -> str:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=clean_env,
+        limit=_CLI_SUBPROCESS_STREAM_LIMIT_BYTES,
     )
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
     if proc.returncode != 0:
@@ -1329,6 +1830,133 @@ async def _call_cli(prompt: str, system: str = "", cli_path: str = "") -> str:
     text = "\n".join(clean_lines).strip()
 
     return text, tokens
+
+
+async def _stream_codex_cli(
+    messages: list[dict],
+    *,
+    binary: str,
+    model: str = "",
+    usage_sink: Optional[dict[str, Any]] = None,
+) -> AsyncGenerator[str, None]:
+    prompt = _cli_prompt_from_messages(messages)
+    sandbox_mode = _current_codex_sandbox_mode()
+    approval_mode = _current_codex_approval_mode()
+    cmd = build_codex_exec_command(
+        binary,
+        prompt=prompt,
+        model=normalize_cli_model(binary, model),
+        cwd=_workspace_root(),
+        sandbox_mode=sandbox_mode,
+        approval_mode=approval_mode,
+    )
+    await wait_for_cli_slot(key=_cli_runtime_key(binary))
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env={**os.environ, "NO_COLOR": "1"},
+        limit=_CLI_SUBPROCESS_STREAM_LIMIT_BYTES,
+    )
+    text = ""
+    tokens = 0
+    try:
+        async for raw_line in proc.stdout:
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            etype = str(event.get("type") or "")
+            if etype == "item.completed":
+                item = event.get("item") or {}
+                if isinstance(item, dict) and item.get("type") == "agent_message":
+                    text = str(item.get("text") or "").strip() or text
+            elif etype == "turn.completed":
+                usage = event.get("usage") or {}
+                if isinstance(usage, dict):
+                    tokens = int(usage.get("input_tokens", 0) or 0) + int(usage.get("output_tokens", 0) or 0)
+    except asyncio.LimitOverrunError:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        text, tokens = await _call_codex_exec_prompt(
+            prompt,
+            binary=binary,
+            model=model,
+            sandbox_mode=sandbox_mode,
+            approval_mode=approval_mode,
+        )
+        if usage_sink is not None:
+            usage_sink["tokens"] = int(tokens or 0)
+        if text:
+            yield text
+        return
+
+    returncode = await proc.wait()
+    stderr_text = (await proc.stderr.read()).decode("utf-8", errors="replace").strip()
+    if tokens:
+        _track_usage(tokens, 0.0, backend="cli")
+    if returncode != 0:
+        raise RuntimeError(stderr_text or text or "Codex CLI request failed.")
+    if usage_sink is not None:
+        usage_sink["tokens"] = int(tokens or 0)
+    if text:
+        yield text
+
+
+async def _stream_cli(
+    messages: list[dict],
+    cli_path: str = "",
+    max_tokens: int = 4096,
+    model: str = "",
+    allow_session_persistence: bool = False,
+    usage_sink: Optional[dict[str, Any]] = None,
+) -> AsyncGenerator[str, None]:
+    del max_tokens
+    binary = _resolve_selected_cli_binary(cli_path)
+    if not binary:
+        raise RuntimeError("CLI agent not found. Set the path in Settings or switch to a different runtime.")
+    if _cli_runtime_family(binary) == "codex":
+        _update_agent_runtime_context(cli_path=binary, backend="cli")
+        async for chunk in _stream_codex_cli(messages, binary=binary, model=model, usage_sink=usage_sink):
+            yield chunk
+        return
+
+    cooldown = current_cli_cooldown(key=_cli_runtime_key(binary))
+    if cooldown.get("active"):
+        fallback_binary = _find_codex_cli()
+        if fallback_binary and os.path.realpath(fallback_binary) != os.path.realpath(binary):
+            _update_agent_runtime_context(cli_path=fallback_binary, cli_model=_CODEX_SELF_HEAL_MODEL, backend="cli")
+            yield f"⚠️ Claude CLI is cooling down after a rate limit. Falling back to Codex CLI (`{_CODEX_SELF_HEAL_MODEL}`).\n\n"
+            async for chunk in _stream_codex_cli(messages, binary=fallback_binary, model=_CODEX_SELF_HEAL_MODEL, usage_sink=usage_sink):
+                yield chunk
+            return
+        raise RuntimeError(str(cooldown.get("message") or "Claude CLI is cooling down after a rate limit."))
+
+    prompt = ""
+    system = ""
+    for message in messages or []:
+        role = str(message.get("role") or "").strip()
+        content = _coerce_text_content(message.get("content", "")).strip()
+        if role == "system" and content:
+            system = content
+        elif role == "user" and content:
+            prompt = content
+    text, tokens = await _call_cli(
+        prompt,
+        system=system,
+        cli_path=binary,
+        model=model,
+        allow_session_persistence=allow_session_persistence,
+    )
+    if usage_sink is not None:
+        usage_sink["tokens"] = int(tokens or 0)
+    if text:
+        yield text
 
 
 # ─── System Prompts ──────────────────────────────────────────────────────────
@@ -1448,6 +2076,7 @@ async def chat(
     api_model: str = "",
     backend: str = "api",
     cli_path: str = "",
+    cli_model: str = "",
     ollama_url: str = "",
     ollama_model: str = "",
 ) -> dict:
@@ -1507,20 +2136,21 @@ async def chat(
         if ollama_note:
             content = f"⚠️ {ollama_note}\n\n{content}"
     elif backend == "cli":
-        hist_limit = 10
-        history_text = ""
-        for h in history[-hist_limit:]:
-            role = "User" if h["role"] == "user" else "Assistant"
-            history_text += f"\n{role}: {h['content'][:300]}"
-        if history_text:
-            history_text += "\n"
-        full_prompt = f"{history_text}User: {user_message}\nAssistant:"
-        content, tokens = await _call(
-            full_prompt, system=system, backend=backend,
-            cli_path=cli_path, ollama_url=ollama_url, ollama_model=ollama_model,
-            api_key=api_key, api_provider=api_provider, api_base_url=api_base_url, api_model=api_model,
-            max_tokens=MAX_TOKENS_CHAT,
-        )
+        messages = [{"role": "system", "content": system}]
+        for h in history[-10:]:
+            messages.append({"role": h["role"], "content": h["content"][:300]})
+        messages.append({"role": "user", "content": user_message})
+        usage_sink: dict[str, Any] = {}
+        parts: list[str] = []
+        async for chunk in _stream_cli(
+            messages,
+            cli_path=cli_path,
+            model=cli_model,
+            usage_sink=usage_sink,
+        ):
+            parts.append(chunk)
+        content = "".join(parts)
+        tokens = int(usage_sink.get("tokens") or 0)
     else:
         messages = []
         for h in history[-20:]:

@@ -1,0 +1,103 @@
+<section class="mission-control-panel">
+  <div class="mission-control-header">
+    <div class="min-w-0">
+      <div class="mission-eyebrow">Mission Control</div>
+      <h2 class="mission-title">A.X.O.N Command Center</h2>
+      <p class="mission-subtitle">A live posture ring, attention sectors, and high-trust actions synced to the operator state.</p>
+    </div>
+    <div class="mission-pill-row">
+      <span class="mission-pill" :class="missionPostureChipClass()" x-text="missionPostureLabel()"></span>
+      <span class="mission-pill" :class="companionStatusTone()" x-text="companionConnectionLabel()"></span>
+      <span class="mission-pill" :class="runtimeStatusTone()" x-text="runtimeStatus.runtime_label || backendBadge()"></span>
+    </div>
+  </div>
+
+  <div class="mission-hud-grid">
+    <div class="mission-ring-shell">
+      <div class="mission-ring" :style="missionRingStyle()">
+        <div class="mission-ring-health"></div>
+        <div class="mission-ring-inner">
+          <div class="mission-ring-kicker">Posture</div>
+          <div class="mission-ring-value" x-text="missionPostureLabel()"></div>
+          <div class="mission-ring-meta" x-text="missionPostureDetail()"></div>
+          <div class="mission-ring-health-label">
+            <span class="mission-ring-health-value" x-text="dashStats.health_avg || 0"></span>
+            <span class="mission-ring-health-unit">%</span>
+            <div class="mission-ring-health-caption">System health</div>
+          </div>
+        </div>
+      </div>
+      <div class="mission-sector-grid">
+        <div class="mission-sector mission-sector-now">
+          <div class="mission-sector-label">Now</div>
+          <div class="mission-sector-value" x-text="attentionBucketCount('now')"></div>
+          <div class="mission-sector-meta">Immediate action</div>
+        </div>
+        <div class="mission-sector mission-sector-waiting">
+          <div class="mission-sector-label">Waiting</div>
+          <div class="mission-sector-value" x-text="attentionBucketCount('waiting_on_me')"></div>
+          <div class="mission-sector-meta">Approvals needed</div>
+        </div>
+        <div class="mission-sector mission-sector-watch">
+          <div class="mission-sector-label">Watch</div>
+          <div class="mission-sector-value" x-text="attentionBucketCount('watch')"></div>
+          <div class="mission-sector-meta">Signals tracking</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mission-intel-stack">
+      <div class="mission-focus-card">
+        <div class="mission-focus-header">
+          <span class="mission-focus-label">Live Operator</span>
+          <span class="mission-focus-dot" :class="liveOperator.active ? 'active' : ''"></span>
+        </div>
+        <div class="mission-focus-title" x-text="liveOperator.title || lastOperatorOutcome.title || 'Standing by'"></div>
+        <div class="mission-focus-detail" x-text="liveOperator.detail || lastOperatorOutcome.summary || 'Axon is holding position until the next command.'"></div>
+        <div class="mission-focus-meta">
+          <span x-text="missionWorkspaceLabel()"></span>
+          <span class="mission-focus-divider">-</span>
+          <span x-text="liveOperator.startedAt ? 'Started ' + timeAgo(liveOperator.startedAt) : 'Ready now'"></span>
+        </div>
+      </div>
+
+      <div class="mission-ops-card">
+        <div class="mission-ops-header">
+          <div>
+            <div class="mission-ops-label">Quick Ops</div>
+            <div class="mission-ops-subtitle">One tap execution from the control ring.</div>
+          </div>
+          <div class="mission-ops-status" x-show="missionActionBusy" x-text="missionActionBusy ? 'Executing...' : ''"></div>
+        </div>
+        <div class="mission-ops-grid">
+          <template x-for="op in missionQuickOps()" :key="op.id">
+            <button
+              class="mission-op"
+              :class="op.tone || ''"
+              :disabled="op.disabled || missionActionBusy === op.action"
+              @click="runMissionQuickOp(op)"
+            >
+              <div class="mission-op-icon" x-text="op.icon || '*'"></div>
+              <div class="mission-op-label" x-text="op.label"></div>
+              <div class="mission-op-meta" x-text="op.meta || ''"></div>
+            </button>
+          </template>
+        </div>
+        <div class="mission-ops-receipt" x-show="missionLastAction?.receipt">
+          <div class="mission-ops-receipt-label">Latest action</div>
+          <div class="mission-ops-receipt-title" x-text="missionLastAction?.receipt?.summary || missionLastAction?.receipt?.title || ''"></div>
+          <div class="mission-ops-receipt-meta" x-text="missionLastAction?.status || ''"></div>
+        </div>
+      </div>
+
+      <div class="mission-system-strip">
+        <template x-for="card in runtimeStatusCards()" :key="card.label">
+          <div class="mission-system-card" :class="missionSystemTone(card.tone)">
+            <div class="mission-system-label" x-text="card.label"></div>
+            <div class="mission-system-value" x-text="card.value"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</section>

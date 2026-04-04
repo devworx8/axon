@@ -37,7 +37,8 @@ class ConnectorStatusRouteTests(unittest.IsolatedAsyncioTestCase):
              patch.object(connectors, "get_project", AsyncMock(return_value=project)), \
              patch.object(connectors, "list_workspace_relationships", AsyncMock(return_value=[])) as list_workspace_relationships, \
              patch.object(connectors, "list_workspace_relationships_for_workspace", AsyncMock(side_effect=fake_relationships_for_workspace)), \
-             patch.object(connectors, "attention_summary", AsyncMock(return_value=inbox)):
+             patch.object(connectors, "attention_summary", AsyncMock(return_value=inbox)), \
+             patch.object(connectors, "vercel_auth_state", AsyncMock(return_value={"configured": False, "present": False, "locked": False})):
             payload = await connectors.vercel_status()
 
         get_projects.assert_awaited_once()
@@ -75,7 +76,8 @@ class ConnectorStatusRouteTests(unittest.IsolatedAsyncioTestCase):
              patch.object(connectors, "list_workspace_relationships", AsyncMock(return_value=[])) as list_workspace_relationships, \
              patch.object(connectors, "list_workspace_relationships_for_workspace", AsyncMock(side_effect=fake_relationships_for_workspace)), \
              patch.object(connectors, "attention_summary", AsyncMock(return_value=inbox)), \
-             patch.object(connectors, "list_error_events", AsyncMock(return_value=unresolved)) as list_error_events:
+             patch.object(connectors, "list_error_events", AsyncMock(return_value=unresolved)) as list_error_events, \
+             patch.object(connectors, "sentry_auth_state", AsyncMock(return_value={"configured": False, "present": False, "org": "", "projects": []})):
             payload = await connectors.sentry_status(limit=10)
 
         get_projects.assert_awaited_once()

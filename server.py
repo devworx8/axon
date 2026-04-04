@@ -47,9 +47,12 @@ import provider_registry
 import resource_bank
 import memory_engine
 from model_router import resolve_model_for_role
+from axon_api import route_registry, ui_renderer
 from axon_api.services import auth_runtime_state as auth_runtime_state_service
+from axon_api.services import ai_runtime_helpers as ai_runtime_helpers_service
 from axon_api.services import auto_session_runtime as auto_session_runtime_service
 from axon_api.services import auto_sessions as auto_session_service
+from axon_api.services import browser_runtime_state
 from axon_api.services import chat_history_runtime as chat_history_runtime_service
 from axon_api.services import chat_message_state
 from axon_api.services import chat_runtime_facade as chat_runtime_facade_service
@@ -61,17 +64,24 @@ from axon_api.services import connection_config_state as connection_config_state
 from axon_api.services import console_commands as console_command_service
 from axon_api.services import local_voice_dependencies as local_voice_dependencies_service
 from axon_api.services import local_voice_execution as local_voice_execution_service
+from axon_api.services import live_preview_sessions as live_preview_service
 from axon_api.services import ops_runtime_facade as ops_runtime_facade_service
 from axon_api.services import resource_route_state as resource_route_state_service
+from axon_api.services import runtime_login_sessions
 from axon_api.services import runtime_truth as runtime_truth_service
 from axon_api.services import settings_runtime_state as settings_runtime_state_service
 from axon_api.services import task_sandboxes as task_sandbox_service
 from axon_api.services import workspace_sandbox_state as workspace_sandbox_service
-from axon_api.routes import task_sandbox_routes
+from axon_api.routes import agent_control, agent_routes, auto_session_routes, chat_routes, runtime_cli as runtime_cli_routes, settings_memory, task_sandbox_routes, workspace_projects
+from axon_core import agent_fast_path, agent_runtime_state, approval_actions
 from axon_core.chat_context import select_history_for_chat
 from axon_core.cli_command import cli_session_persistence_enabled
 from axon_core.cli_pacing import current_cli_cooldown
+from axon_core import vision_runtime as vision_runtime_service
 from axon_data.sqlite_utils import managed_connection
+
+if not hasattr(brain, "API_MODEL_BY_ROLE"):
+    brain.API_MODEL_BY_ROLE = {}
 
 PORT = 7734
 DEVBRAIN_DIR = Path.home() / ".devbrain"
@@ -156,6 +166,7 @@ _browser_action_state = {
     "history": [],
     "next_id": 1,
 }
+_default_browser_session = browser_runtime_state.default_browser_session
 
 
 def _now_iso() -> str:
@@ -407,6 +418,16 @@ def _terminal_mode_value(raw: str | None, fallback: str = "read_only") -> str:
 
 def _command_is_blocked(command: str) -> bool:
     lowered = f" {str(command or '').strip().lower()} "
+    package_manager_installs = (
+        " apt install ",
+        " apt-get install ",
+        " brew install ",
+        " yum install ",
+        " dnf install ",
+        " pacman -s ",
+    )
+    if any(pattern in lowered for pattern in package_manager_installs):
+        return True
     return any(pattern in lowered for pattern in BLOCKED_TERMINAL_PATTERNS)
 
 
@@ -615,26 +636,13 @@ async def auth_remove(body: PinLogin):
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
-    ui_file = UI_DIR / "index.html"
-    if not ui_file.exists():
-        return HTMLResponse("<h1>Axon UI not found</h1><p>Run install.sh again.</p>", status_code=404)
-    html = ui_file.read_text().replace("__AXON_BUILD_VERSION__", _SW_CACHE_VERSION)
-    return HTMLResponse(
-        html,
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
-    )
+    return ui_renderer.render_index(UI_DIR, _SW_CACHE_VERSION)
 
 
 @app.get("/manual", response_class=HTMLResponse)
 @app.get("/manual.html", response_class=HTMLResponse)
 async def serve_manual():
-    manual_file = UI_DIR / "manual.html"
-    if not manual_file.exists():
-        return HTMLResponse("<h1>Manual not found</h1>", status_code=404)
-    return HTMLResponse(
-        manual_file.read_text().replace("__AXON_BUILD_VERSION__", _SW_CACHE_VERSION),
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
-    )
+    return ui_renderer.render_manual(UI_DIR, _SW_CACHE_VERSION)
 
 
 # ─── Projects ────────────────────────────────────────────────────────────────
@@ -726,78 +734,42 @@ async def list_teams():
 
 @app.get("/api/projects")
 async def list_projects(status: Optional[str] = None):
-    async with devdb.get_db() as conn:
-        rows = await devdb.get_projects(conn, status=status)
-        return [dict(r) for r in rows]
+    return await _workspace_project_handlers.list_projects(status=status)
 
 
 @app.get("/api/projects/{project_id}")
 async def get_project(project_id: int):
-    async with devdb.get_db() as conn:
-        row = await devdb.get_project(conn, project_id)
-        if not row:
-            raise HTTPException(404, "Project not found")
-        return dict(row)
+    return await _workspace_project_handlers.get_project(project_id)
 
 
-class ProjectUpdate(BaseModel):
-    note: Optional[str] = None
-    status: Optional[str] = None
+ProjectUpdate = workspace_projects.ProjectUpdate
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: int):
+    return await _workspace_project_handlers.delete_project(project_id)
 
 
 @app.patch("/api/projects/{project_id}")
 async def update_project(project_id: int, body: ProjectUpdate):
-    async with devdb.get_db() as conn:
-        if body.note is not None:
-            await devdb.update_project_note(conn, project_id, body.note)
-        if body.status is not None:
-            await devdb.update_project_status(conn, project_id, body.status)
-        row = await devdb.get_project(conn, project_id)
-        return dict(row)
+    return await _workspace_project_handlers.update_project(project_id, body)
 
 
 @app.post("/api/projects/{project_id}/analyse")
 async def analyse_project(project_id: int):
-    async with devdb.get_db() as conn:
-        settings = await devdb.get_all_settings(conn)
-        ai = _ai_params(settings)
-
-        project = dict(await devdb.get_project(conn, project_id))
-        if not project:
-            raise HTTPException(404, "Project not found")
-
-        tasks = [dict(r) for r in await devdb.get_tasks(conn, project_id=project_id)]
-        prompts = [dict(r) for r in await devdb.get_prompts(conn, project_id=project_id)]
-
-        analysis = await brain.analyse_project(project, tasks, prompts, **ai)
-        await devdb.log_event(conn, "analysis", f"Analysed {project['name']}", project_id=project_id)
-        return {"analysis": analysis}
+    return await _workspace_project_handlers.analyse_project(project_id)
 
 
 @app.post("/api/projects/{project_id}/suggest-tasks")
 async def suggest_project_tasks(project_id: int):
-    """Generate SMART task suggestions for a specific project."""
-    async with devdb.get_db() as conn:
-        project = await devdb.get_project(conn, project_id)
-        if not project:
-            raise HTTPException(404, "Project not found")
-        settings = await devdb.get_all_settings(conn)
-        ai = _ai_params(settings)
-        open_tasks = [dict(r) for r in await devdb.get_tasks(conn, project_id=project_id, status="open")]
-        try:
-            suggestions = await brain.suggest_tasks_for_project(dict(project), open_tasks, **ai)
-        except Exception as e:
-            raise HTTPException(500, f"Suggestion failed: {e}")
-        return {"suggestions": suggestions, "project_name": project["name"]}
+    return await _workspace_project_handlers.suggest_project_tasks(project_id)
 
 
 # ─── Scan ────────────────────────────────────────────────────────────────────
 
 @app.post("/api/scan")
 async def run_scan():
-    """Trigger an immediate project scan."""
-    asyncio.create_task(sched_module.trigger_scan_now(trigger_type="manual"))
-    return {"status": "scan started"}
+    return await _workspace_project_handlers.run_scan()
 
 
 # ─── Prompts ─────────────────────────────────────────────────────────────────
@@ -889,8 +861,12 @@ class EnhanceRequest(BaseModel):
 async def enhance_prompt(body: EnhanceRequest):
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
-        ai = _ai_params(settings)
-        enhanced = await brain.enhance_prompt(body.content, body.project_context, **ai)
+        ai = await _ai_params(settings)
+        enhanced = await brain.enhance_prompt(
+            body.content,
+            body.project_context,
+            **_brain_model_call_kwargs(ai),
+        )
         return {"enhanced": enhanced}
 
 
@@ -977,38 +953,44 @@ async def delete_task(task_id: int):
 async def suggest_tasks():
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
-        ai = _ai_params(settings)
+        ai = await _ai_params(settings)
         projects = [dict(r) for r in await devdb.get_projects(conn)]
         tasks = [dict(r) for r in await devdb.get_tasks(conn, status="open")]
         suggestions = await brain.suggest_tasks(
-            projects, tasks, **ai
+            projects, tasks, **_brain_model_call_kwargs(ai)
         )
         return {"suggestions": suggestions}
 
 
 # ─── AI backend helper ────────────────────────────────────────────────────────
 
-def _ai_params(settings: dict) -> dict:
-    """Extract AI backend params from settings dict."""
-    backend = settings.get("ai_backend", "ollama")
-    api_runtime = provider_registry.runtime_api_config(settings)
-    api_key = api_runtime.get("api_key", "")
-    cli_path = settings.get("claude_cli_path", "")
-    ollama_url = settings.get("ollama_url", "")
-    ollama_model = settings.get("ollama_model", "")
-    if backend == "api" and not api_key:
-        provider_label = api_runtime.get("provider_label", "External API")
-        raise HTTPException(400, f"{provider_label} key not set. Go to Settings → Runtime.")
-    if backend == "cli" and not cli_path and not brain._find_cli():
-        raise HTTPException(400, "CLI agent not found. Set the path in Settings.")
-    return {
-        "api_key": api_key,
-        "api_provider": api_runtime.get("provider_id", "anthropic"),
-        "api_base_url": api_runtime.get("api_base_url", ""),
-        "api_model": api_runtime.get("api_model", ""),
-        "backend": backend, "cli_path": cli_path,
-        "ollama_url": ollama_url, "ollama_model": ollama_model,
+async def _ai_params(settings: dict, conn=None, *, allow_degraded_api: bool = False) -> dict:
+    """Compatibility facade for AI runtime selection."""
+    return await ai_runtime_helpers_service.ai_params(
+        settings,
+        conn=conn,
+        allow_degraded_api=allow_degraded_api,
+        provider_registry_module=provider_registry,
+        resolved_api_runtime=_resolved_api_runtime,
+        selected_cli_path=composer_runtime.selected_cli_path,
+        selected_cli_model=composer_runtime.selected_cli_model,
+        cli_session_persistence_enabled=cli_session_persistence_enabled,
+        brain_module=brain,
+    )
+
+
+def _brain_model_call_kwargs(ai: dict) -> dict:
+    allowed_keys = {
+        "api_key",
+        "api_provider",
+        "api_base_url",
+        "api_model",
+        "backend",
+        "cli_path",
+        "ollama_url",
+        "ollama_model",
     }
+    return {key: value for key, value in dict(ai or {}).items() if key in allowed_keys}
 
 
 def _composer_options_dict(composer_options) -> dict:
@@ -1162,39 +1144,25 @@ def _local_role_for_composer(options: dict, agent_request: bool = False) -> str:
     return "general"
 
 
-async def _effective_ai_params(settings: dict, composer_options: dict, *, agent_request: bool = False, requested_model: str = "") -> dict:
-    ai = dict(_ai_params(settings))
-    external_mode = str(composer_options.get("external_mode") or "local_first").lower()
-
-    if not agent_request:
-        if external_mode == "disable_external_calls" and ai.get("backend") != "ollama":
-            ai["backend"] = "ollama"
-        elif external_mode in {"cloud_assist", "external_agent"} and ai.get("backend") == "ollama":
-            api_runtime = provider_registry.runtime_api_config(settings)
-            if api_runtime.get("api_key"):
-                ai.update(
-                    {
-                        "backend": "api",
-                        "api_key": api_runtime.get("api_key", ""),
-                        "api_provider": api_runtime.get("provider_id", "anthropic"),
-                        "api_base_url": api_runtime.get("api_base_url", ""),
-                        "api_model": api_runtime.get("api_model", ""),
-                    }
-                )
-
-    if ai.get("backend") == "ollama":
-        if requested_model:
-            ai["ollama_model"] = requested_model
-            return ai
-        available_models = await brain.ollama_list_models(settings.get("ollama_url", ""))
-        route = resolve_model_for_role(
-            _local_role_for_composer(composer_options, agent_request=agent_request),
-            available_models,
-            runtime_manager.build_router_config(settings),
-        )
-        if route.get("selected_model"):
-            ai["ollama_model"] = route["selected_model"]
-    return ai
+async def _effective_ai_params_base(settings: dict, composer_options: dict, *, agent_request: bool = False, requested_model: str = "") -> dict:
+    return await ai_runtime_helpers_service.effective_ai_params(
+        settings,
+        composer_options,
+        agent_request=agent_request,
+        requested_model=requested_model,
+        provider_registry_module=provider_registry,
+        devvault_module=devvault,
+        db_module=devdb,
+        brain_module=brain,
+        runtime_manager_module=runtime_manager,
+        runtime_truth_service_module=runtime_truth_service,
+        resolve_model_for_role=resolve_model_for_role,
+        runtime_truth_for_settings=_runtime_truth_for_settings,
+        family_cli_override_path=composer_runtime.family_cli_override_path,
+        resolved_api_runtime=_resolved_api_runtime,
+        cli_session_persistence_enabled=cli_session_persistence_enabled,
+        ai_params_fn=_ai_params,
+    )
 
 
 async def _memory_bundle(
@@ -1698,230 +1666,26 @@ async def delete_research_pack(pack_id: int):
 
 # ─── Chat ─────────────────────────────────────────────────────────────────────
 
-class ChatMessage(BaseModel):
-    message: str
-    project_id: Optional[int] = None
-    model: Optional[str] = None
-    resource_ids: Optional[list[int]] = None
-    composer_options: Optional[dict] = None
+ChatMessage = chat_routes.ChatMessage
 
 
 @app.post("/api/chat")
 async def chat(body: ChatMessage):
-    async with devdb.get_db() as conn:
-        settings = await devdb.get_all_settings(conn)
-        composer_options = _composer_options_dict(body.composer_options)
-        ai = await _effective_ai_params(settings, composer_options, requested_model=body.model or "")
-
-        # Build rich context
-        projects = [dict(r) for r in await devdb.get_projects(conn, status="active")]
-        tasks = [dict(r) for r in await devdb.get_tasks(conn, status="open")]
-        prompts_list = [dict(r) for r in await devdb.get_prompts(conn)]
-        context_block = brain._build_context_block(projects, tasks, prompts_list)
-
-        # Load history
-        history_rows = await devdb.get_chat_history(conn, project_id=body.project_id)
-        history = [{"role": r["role"], "content": r["content"]} for r in history_rows]
-
-        # Get project name if scoped
-        project_name = None
-        if body.project_id:
-            proj = await devdb.get_project(conn, body.project_id)
-            if proj:
-                project_name = proj["name"]
-
-        resource_bundle = await _resource_bundle(
-            conn,
-            resource_ids=body.resource_ids or [],
-            user_message=body.message,
-            settings=settings,
-        )
-        memory_bundle = await _memory_bundle(
-            conn,
-            user_message=body.message,
-            project_id=body.project_id,
-            resource_ids=body.resource_ids or [],
-            settings=settings,
-            composer_options=composer_options,
-        )
-        composer_block = _composer_instruction_block(composer_options)
-        merged_context_block = "\n\n".join(
-            block for block in (context_block, memory_bundle["context_block"], composer_block) if block
-        )
-
-        # ── PPTX intent interception ──────────────────────────────────────────
-        import re as _re
-        _pptx_triggers = _re.compile(
-            r'\b(create|make|generate|build|produce|prepare)\b.{0,40}'
-            r'\b(slides?|presentation|pptx|powerpoint|deck)\b',
-            _re.IGNORECASE,
-        )
-        if _pptx_triggers.search(body.message):
-            try:
-                from pptx_engine import prompt_to_deck_json, deck_from_dict, build_deck
-                import httpx as _httpx
-
-                # Pick the best model for structured JSON output
-                _pptx_model_ns = (
-                    settings.get("reasoning_model")
-                    or settings.get("general_model")
-                    or settings.get("code_model")
-                    or settings.get("ollama_model")
-                    or "qwen2.5-coder:1.5b"
-                )
-
-                def _model_fn(system: str, user: str) -> str:
-                    payload = {
-                        "model": _pptx_model_ns,
-                        "messages": [
-                            {"role": "system", "content": system},
-                            {"role": "user", "content": user},
-                        ],
-                        "stream": False,
-                        "options": {"temperature": 0.3},
-                    }
-                    r = _httpx.post(
-                        f"{settings.get('ollama_url', 'http://localhost:11434')}/api/chat",
-                        json=payload, timeout=120,
-                    )
-                    r.raise_for_status()
-                    return r.json()["message"]["content"]
-
-                _set_live_operator(active=True, mode="chat", phase="execute",
-                                   title="Generating slides…", detail=body.message[:120],
-                                   workspace_id=body.project_id)
-
-                context_for_deck = f"{merged_context_block}\n\nUser request: {body.message}"
-                deck_json = prompt_to_deck_json(body.message, context_for_deck, _model_fn)
-                spec = deck_from_dict(deck_json)
-                out_path = build_deck(spec)
-
-                slide_titles = [s.title for s in spec.slides if s.title]
-                reply = (
-                    f"✅ **Slides ready** — {len(spec.slides)} slides generated.\n\n"
-                    f"**Title:** {spec.title}\n"
-                    f"**Theme:** {spec.theme}\n"
-                    f"**Saved to:** `{out_path}`\n\n"
-                    f"**Slide outline:**\n" +
-                    "\n".join(f"  {i+1}. {t}" for i, t in enumerate(slide_titles)) +
-                    f"\n\n[Download slides](/api/generate/pptx/download?path={str(out_path)})\n\n"
-                    f"Open with LibreOffice Impress or upload to Google Slides."
-                )
-
-                _set_live_operator(active=False, mode="chat", phase="verify",
-                                   title="Slides ready", detail=f"{len(spec.slides)} slides · {out_path.name}",
-                                   summary=reply[:180], workspace_id=body.project_id)
-
-                await devdb.save_message(conn, "user", body.message, project_id=body.project_id)
-                await devdb.save_message(conn, "assistant", reply, project_id=body.project_id, tokens=0)
-                await devdb.log_event(conn, "pptx_generate", body.message[:100], project_id=body.project_id)
-
-                # Save to memory for future context
-                _mem_content_ns = (
-                    f"Generated presentation: {spec.title}\n"
-                    f"Slides: {len(spec.slides)}\n"
-                    f"Outline: {', '.join(slide_titles)}\n"
-                    f"Theme: {spec.theme}\n"
-                    f"File: {out_path.name}\n"
-                    f"User request: {body.message[:300]}"
-                )
-                await devdb.upsert_memory_item(
-                    conn,
-                    memory_key=f"mission:pptx:{out_path.stem}",
-                    layer="mission",
-                    title=f"Presentation: {spec.title}",
-                    content=_mem_content_ns,
-                    summary=f"Generated {len(spec.slides)}-slide deck: {spec.title}",
-                    source="pptx_generate",
-                    source_id=str(out_path),
-                    workspace_id=body.project_id,
-                    trust_level="high",
-                    relevance_score=0.8,
-                    meta_json=_json.dumps({
-                        "slide_count": len(spec.slides),
-                        "theme": spec.theme,
-                        "file_path": str(out_path),
-                        "slide_titles": slide_titles,
-                    }),
-                )
-
-                return {"response": reply, "tokens": 0}
-            except Exception as _pptx_err:
-                import traceback as _tb_ns
-                _tb_ns.print_exc()
-                # Fall through to normal chat if PPTX generation fails
-                pass
-        # ── end PPTX intent interception ─────────────────────────────────────
-
-        # Call AI with timeout handling
-        try:
-            import asyncio as _aio
-            _set_live_operator(
-                active=True,
-                mode="chat",
-                phase="plan",
-                title="Preparing the reply",
-                detail=body.message[:180],
-                workspace_id=body.project_id,
-            )
-            result = await _aio.wait_for(
-                brain.chat(
-                    body.message,
-                    history,
-                    merged_context_block,
-                    project_name=project_name,
-                    resource_context=resource_bundle["context_block"],
-                    resource_image_paths=resource_bundle["image_paths"],
-                    vision_model=resource_bundle["vision_model"],
-                    **ai,
-                ),
-                timeout=90.0,
-            )
-            _set_live_operator(
-                active=False,
-                mode="chat",
-                phase="verify",
-                title="Reply complete",
-                detail="Axon finished the response.",
-                summary=result["content"][:180],
-                workspace_id=body.project_id,
-            )
-        except (_aio.TimeoutError, TimeoutError, RuntimeError) as exc:
-            _set_live_operator(
-                active=False,
-                mode="chat",
-                phase="recover",
-                title="Reply interrupted",
-                detail=str(exc),
-                summary=body.message[:120],
-                workspace_id=body.project_id,
-            )
-            raise HTTPException(504, f"AI backend timed out — try a shorter message or check Ollama. ({exc})")
-
-        # Persist messages
-        stored_user_message = _stored_message_with_resources(body.message, resource_bundle["resources"])
-        await devdb.save_message(conn, "user", stored_user_message, project_id=body.project_id)
-        await devdb.save_message(
-            conn, "assistant", result["content"],
-            project_id=body.project_id, tokens=result["tokens"]
-        )
-        await devdb.log_event(conn, "chat", body.message[:100], project_id=body.project_id)
-
-        return {"response": result["content"], "tokens": result["tokens"]}
+    return await _chat_route_handlers.chat(body)
 
 
 @app.get("/api/chat/history")
 async def get_chat_history(project_id: Optional[int] = None, limit: int = 30):
     async with devdb.get_db() as conn:
         rows = await _load_chat_history_rows(conn, project_id=project_id, limit=limit)
-        return [_serialize_chat_history_row(row) for row in rows]
+    return [_serialize_chat_history_row(row) for row in rows]
 
 
 @app.delete("/api/chat/history")
 async def clear_history(project_id: Optional[int] = None):
     async with devdb.get_db() as conn:
         await devdb.clear_chat_history(conn, project_id=project_id)
-        return {"cleared": True}
+    return {"cleared": True}
 
 
 # ─── Streaming chat (Ollama SSE) ──────────────────────────────────────────────
@@ -2430,54 +2194,7 @@ async def get_activity(limit: int = 30):
 
 @app.get("/api/settings")
 async def get_settings():
-    async with devdb.get_db() as conn:
-        s = await devdb.get_all_settings(conn)
-        s["ai_backend"] = s.get("ai_backend") or "ollama"
-        s["api_provider"] = provider_registry.selected_api_provider_id(s)
-        s["ollama_runtime_mode"] = _stored_ollama_runtime_mode(s)
-        for key in (
-            "cloud_agents_enabled",
-            "openai_gpts_enabled",
-            "gemini_gems_enabled",
-            "generic_api_enabled",
-            "resource_url_import_enabled",
-            "live_feed_enabled",
-            "stable_domain_enabled",
-            "alerts_enabled",
-            "alerts_desktop",
-            "alerts_mobile",
-            "alerts_missions",
-            "alerts_runtime",
-            "alerts_morning_brief",
-            "alerts_tunnel",
-            "dash_bridge_enabled",
-        ):
-            s[key] = str(s.get(key, "")).strip().lower() in {"1", "true", "yes", "on"}
-        for key_name in (
-            "anthropic_api_key",
-            "openai_api_key",
-            "gemini_api_key",
-            "generic_api_key",
-            "azure_speech_key",
-            "cloudflare_tunnel_token",
-        ):
-            raw = s.get(key_name, "")
-            s[f"{key_name}_set"] = bool(raw)
-            s[key_name] = provider_registry.mask_secret(raw) if raw else ""
-        s["api_key_set"] = s.get("anthropic_api_key_set", False)
-        if s.get("github_token"):
-            token = s["github_token"]
-            s["github_token"] = token[:4] + "..." + token[-4:] if len(token) > 10 else "set"
-            s["github_token_set"] = True
-        else:
-            s["github_token_set"] = False
-        if s.get("dash_bridge_token"):
-            token = s["dash_bridge_token"]
-            s["dash_bridge_token"] = provider_registry.mask_secret(token)
-            s["dash_bridge_token_set"] = True
-        else:
-            s["dash_bridge_token_set"] = False
-        return s
+    return await _settings_memory_handlers.get_settings()
 
 
 class SettingsUpdate(BaseModel):
@@ -2885,6 +2602,7 @@ async def _build_live_snapshot() -> dict:
         terminal_rows = await devdb.list_terminal_sessions(conn, limit=6)
         activity_rows = await devdb.get_activity(conn, limit=6)
     running_session_id = next((row["id"] for row in terminal_rows if row["id"] in _terminal_processes), None)
+    auto_sessions_payload = await list_auto_sessions()
     return {
         "type": "snapshot",
         "at": _now_iso(),
@@ -2908,6 +2626,7 @@ async def _build_live_snapshot() -> dict:
         },
         "browser_actions": _serialize_browser_action_state(),
         "activity": [dict(row) for row in activity_rows],
+        "auto_sessions": list(auto_sessions_payload.get("sessions") or []),
     }
 
 
@@ -3525,16 +3244,27 @@ class TerminalCommandBody(BaseModel):
 
 
 async def _resolve_terminal_cwd(conn, session_row, requested_cwd: Optional[str] = None) -> Path:
+    def _row_value(row, key, default=None):
+        if row is None:
+            return default
+        if isinstance(row, dict):
+            return row.get(key, default)
+        try:
+            return row[key]
+        except Exception:
+            return getattr(row, key, default)
+
     if requested_cwd:
         return _safe_path(requested_cwd)
-    session_cwd = (session_row.get("cwd") or "").strip()
+    session_cwd = str(_row_value(session_row, "cwd", "") or "").strip()
     if session_cwd:
         return _safe_path(session_cwd)
-    workspace_id = session_row.get("workspace_id")
+    workspace_id = _row_value(session_row, "workspace_id")
     if workspace_id:
         proj = await devdb.get_project(conn, int(workspace_id))
-        if proj and proj.get("path"):
-            return _safe_path(proj["path"])
+        project_path = str(_row_value(proj, "path", "") or "").strip()
+        if project_path:
+            return _safe_path(project_path)
     return _HOME
 
 
@@ -4717,6 +4447,7 @@ self.addEventListener('fetch', e => {{
 _memory_sync_cache: dict[str, object] = {}
 _memory_sync_cache_ttl_seconds = 30.0
 _piper_voice_cache: dict[str, object] = {}
+_auto_session_runs: dict[str, asyncio.Task] = {}
 _task_sandbox_runs: dict[int, asyncio.Task] = {}
 
 
@@ -4890,7 +4621,7 @@ _chat_runtime_facade = chat_runtime_facade_service.ChatRuntimeFacade(
     runtime_truth_for_settings_fn=_runtime_truth_for_settings,
     family_cli_override_path_fn=composer_runtime.family_cli_override_path,
     resolved_api_runtime_fn=_resolved_api_runtime,
-    ai_params_fn=None,
+    ai_params_fn=_ai_params,
     composer_options_dict_fn=composer_runtime.composer_options_dict,
     composer_memory_layers_fn=composer_runtime.composer_memory_layers,
     load_chat_history_rows_fn=_load_chat_history_rows,
@@ -4910,6 +4641,289 @@ _serialize_chat_history_row = _chat_runtime_facade.serialize_chat_history_row
 _resource_bundle = _chat_runtime_facade.resource_bundle
 _clean_resource_ids = _chat_runtime_facade.clean_resource_ids
 _thread_mode_from_composer_options = _chat_runtime_facade.thread_mode_from_composer_options
+_normalized_autonomy_profile = _chat_runtime_facade.normalized_autonomy_profile
+_normalized_runtime_permissions_mode = _chat_runtime_facade.normalized_runtime_permissions_mode
+_effective_agent_runtime_permissions_mode = _chat_runtime_facade.effective_agent_runtime_permissions_mode
+_normalized_external_fetch_policy = _chat_runtime_facade.normalized_external_fetch_policy
+
+
+async def _maybe_local_fast_chat_response(
+    conn,
+    *,
+    user_message: str,
+    project_id: Optional[int],
+    settings: dict,
+    snapshot_bundle: dict,
+    memory_bundle: dict,
+) -> dict | None:
+    return await _chat_runtime_facade.maybe_local_fast_chat_response(
+        conn,
+        user_message=user_message,
+        project_id=project_id,
+        settings=settings,
+        snapshot_bundle=snapshot_bundle,
+        memory_bundle=memory_bundle,
+    )
+
+
+async def _maybe_handle_chat_console_command_dynamic(
+    conn,
+    *,
+    project_id: Optional[int],
+    user_message: str,
+    thread_mode: str,
+):
+    return await chat_message_state.maybe_handle_chat_console_command(
+        devdb,
+        console_command_service,
+        _set_live_operator,
+        _persist_chat_reply,
+        conn,
+        project_id=project_id,
+        user_message=user_message,
+        thread_mode=thread_mode,
+    )
+
+
+async def _auto_route_vision_runtime(
+    *,
+    settings: dict,
+    ai: dict,
+    resource_bundle: dict,
+    requested_model: str = "",
+    resolve_provider_key=None,
+    vault_unlocked: bool = False,
+) -> tuple[dict, list[str]]:
+    return await vision_runtime_service.auto_route_vision_runtime(
+        settings=settings,
+        ai=ai,
+        resource_bundle=resource_bundle,
+        requested_model=requested_model,
+        resolve_provider_key=resolve_provider_key,
+        vault_unlocked=vault_unlocked,
+    )
+
+
+auto_route_vision_runtime = _auto_route_vision_runtime
+
+
+async def _auto_route_image_generation_runtime(*args, **kwargs):
+    return await _chat_runtime_facade.auto_route_image_generation_runtime(*args, **kwargs)
+
+
+_chat_route_handlers = chat_routes.ChatRouteHandlers(
+    db_module=devdb,
+    brain_module=brain,
+    devvault_module=devvault,
+    provider_registry_module=provider_registry,
+    load_chat_history_rows=_load_chat_history_rows,
+    serialize_chat_history_row=_serialize_chat_history_row,
+    composer_options_dict=_composer_options_dict,
+    thread_mode_from_composer_options=_thread_mode_from_composer_options,
+    maybe_handle_chat_console_command=_maybe_handle_chat_console_command_dynamic,
+    effective_ai_params=_effective_ai_params,
+    workspace_snapshot_bundle=_chat_runtime_facade.workspace_snapshot_bundle,
+    chat_history_bundle=_chat_runtime_facade.chat_history_bundle,
+    resource_bundle=_resource_bundle,
+    auto_route_vision_runtime=_auto_route_vision_runtime,
+    auto_route_image_generation_runtime=_auto_route_image_generation_runtime,
+    memory_bundle=_chat_runtime_facade.memory_bundle,
+    composer_instruction_block=_composer_instruction_block,
+    maybe_local_fast_chat_response=_maybe_local_fast_chat_response,
+    persist_chat_reply=_persist_chat_reply,
+    set_live_operator=_set_live_operator,
+    model_call_kwargs=_chat_runtime_facade.model_call_kwargs,
+    setting_int=_chat_runtime_facade.setting_int,
+    stored_chat_message=_stored_chat_message,
+)
+
+_agent_route_handlers = agent_routes.AgentRouteHandlers(
+    db_module=devdb,
+    brain_module=brain,
+    agent_fast_path_module=agent_fast_path,
+    devvault_module=devvault,
+    set_live_operator=_set_live_operator,
+    composer_options_dict=_composer_options_dict,
+    thread_mode_from_composer_options=_thread_mode_from_composer_options,
+    effective_ai_params=_effective_ai_params,
+    effective_agent_runtime_permissions_mode=_effective_agent_runtime_permissions_mode,
+    setting_int=_chat_runtime_facade.setting_int,
+    workspace_snapshot_bundle=_chat_runtime_facade.workspace_snapshot_bundle,
+    load_chat_history_rows=_load_chat_history_rows,
+    chat_history_bundle=_chat_runtime_facade.chat_history_bundle,
+    resource_bundle=_resource_bundle,
+    auto_route_vision_runtime=_auto_route_vision_runtime,
+    auto_route_image_generation_runtime=_auto_route_image_generation_runtime,
+    memory_bundle=_chat_runtime_facade.memory_bundle,
+    composer_instruction_block=_composer_instruction_block,
+    normalized_autonomy_profile=_normalized_autonomy_profile,
+    normalized_external_fetch_policy=_normalized_external_fetch_policy,
+    stored_chat_message=_stored_chat_message,
+)
+
+ChatMessage = chat_routes.ChatMessage
+AgentRequest = agent_routes.AgentRequest
+chat_stream = _chat_route_handlers.chat_stream
+agent_endpoint = _agent_route_handlers.agent_endpoint
+
+_runtime_cli_handlers = runtime_cli_routes.RuntimeCliRouteHandlers(
+    db_module=devdb,
+    devbrain_log=DEVBRAIN_LOG,
+    provider_registry_module=provider_registry,
+    build_runtime_status=runtime_manager.build_runtime_status,
+    runtime_truth_builder=lambda status, *, settings, ollama_running: runtime_truth_service.build_runtime_truth(
+        status,
+        settings=settings,
+        ollama_running=ollama_running,
+    ),
+    vault_resolve_all_provider_keys=devvault.vault_resolve_all_provider_keys,
+    vault_unlocked=devvault.VaultSession.is_unlocked,
+    ensure_memory_layers_synced=memory_engine.sync_memory_layers,
+    ollama_list_models=brain.ollama_list_models,
+    ollama_service_status=_ollama_service_status,
+    stored_ollama_runtime_mode=_stored_ollama_runtime_mode,
+    connection_snapshot=_connection_snapshot,
+    serialize_browser_action_state=_serialize_browser_action_state,
+    selected_cli_model=composer_runtime.selected_cli_model,
+    family_cli_override_path=composer_runtime.family_cli_override_path,
+    runtime_login_start_session=runtime_login_sessions.start_login_session,
+    runtime_login_refresh_session=runtime_login_sessions.refresh_login_session,
+    runtime_login_cancel_session=runtime_login_sessions.cancel_login_session,
+    claude_cli_build_snapshot=claude_cli_runtime.build_cli_runtime_snapshot,
+    claude_cli_install=claude_cli_runtime.install_claude_cli,
+    claude_cli_logout=claude_cli_runtime.logout_claude_cli,
+    codex_cli_build_snapshot=codex_cli_runtime.build_codex_runtime_snapshot,
+    codex_cli_install=codex_cli_runtime.install_codex_cli,
+    codex_cli_logout=codex_cli_runtime.logout_codex_cli,
+    get_session_usage=brain.get_session_usage,
+    live_operator_snapshot=_live_operator_snapshot,
+    terminal_processes=_terminal_processes,
+)
+
+RuntimeLoginStartRequest = runtime_cli_routes.RuntimeLoginStartRequest
+
+
+def _build_runtime_cli_handlers():
+    return runtime_cli_routes.RuntimeCliRouteHandlers(
+        db_module=devdb,
+        devbrain_log=DEVBRAIN_LOG,
+        provider_registry_module=provider_registry,
+        build_runtime_status=runtime_manager.build_runtime_status,
+        runtime_truth_builder=lambda status, *, settings, ollama_running: runtime_truth_service.build_runtime_truth(
+            status,
+            settings=settings,
+            ollama_running=ollama_running,
+        ),
+        vault_resolve_all_provider_keys=devvault.vault_resolve_all_provider_keys,
+        vault_unlocked=devvault.VaultSession.is_unlocked,
+        ensure_memory_layers_synced=memory_engine.sync_memory_layers,
+        ollama_list_models=brain.ollama_list_models,
+        ollama_service_status=_ollama_service_status,
+        stored_ollama_runtime_mode=_stored_ollama_runtime_mode,
+        connection_snapshot=_connection_snapshot,
+        serialize_browser_action_state=_serialize_browser_action_state,
+        selected_cli_model=composer_runtime.selected_cli_model,
+        family_cli_override_path=composer_runtime.family_cli_override_path,
+        runtime_login_start_session=runtime_login_sessions.start_login_session,
+        runtime_login_refresh_session=runtime_login_sessions.refresh_login_session,
+        runtime_login_cancel_session=runtime_login_sessions.cancel_login_session,
+        claude_cli_build_snapshot=claude_cli_runtime.build_cli_runtime_snapshot,
+        claude_cli_install=claude_cli_runtime.install_claude_cli,
+        claude_cli_logout=claude_cli_runtime.logout_claude_cli,
+        codex_cli_build_snapshot=codex_cli_runtime.build_codex_runtime_snapshot,
+        codex_cli_install=codex_cli_runtime.install_codex_cli,
+        codex_cli_logout=codex_cli_runtime.logout_codex_cli,
+        get_session_usage=brain.get_session_usage,
+        live_operator_snapshot=_live_operator_snapshot,
+        terminal_processes=_terminal_processes,
+    )
+
+
+async def runtime_status():
+    return await _build_runtime_cli_handlers().runtime_status()
+
+
+async def runtime_cli_status():
+    return await _build_runtime_cli_handlers().runtime_cli_status()
+
+
+async def runtime_codex_status():
+    return await _build_runtime_cli_handlers().runtime_codex_status()
+
+
+async def runtime_claude_login_start(body: RuntimeLoginStartRequest | None = None):
+    return await _build_runtime_cli_handlers().runtime_claude_login_start(body)
+
+
+async def runtime_codex_login_start(body: RuntimeLoginStartRequest | None = None):
+    return await _build_runtime_cli_handlers().runtime_codex_login_start(body)
+
+
+async def runtime_codex_login_status(session_id: str):
+    return await _build_runtime_cli_handlers().runtime_codex_login_status(session_id)
+
+
+async def runtime_codex_login_cancel(session_id: str):
+    return await _build_runtime_cli_handlers().runtime_codex_login_cancel(session_id)
+
+
+async def runtime_cli_status():
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+    return claude_cli_runtime.build_cli_runtime_snapshot(
+        composer_runtime.family_cli_override_path(settings, "claude")
+    )
+
+
+async def runtime_codex_status():
+    async with devdb.get_db() as conn:
+        settings = await devdb.get_all_settings(conn)
+    return codex_cli_runtime.build_codex_runtime_snapshot(
+        composer_runtime.family_cli_override_path(settings, "codex")
+    )
+
+
+async def runtime_codex_login_status(session_id: str):
+    session = runtime_login_sessions.refresh_login_session("codex", session_id)
+    if not session:
+        raise HTTPException(404, "Runtime login session not found.")
+    return {"session": session}
+
+
+async def runtime_codex_login_cancel(session_id: str):
+    async with devdb.get_db() as conn:
+        try:
+            session = runtime_login_sessions.cancel_login_session("codex", session_id)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc))
+        await devdb.log_event(conn, "maintenance", "Codex CLI login cancelled")
+    return {"session": session}
+
+_settings_memory_handlers = settings_memory.SettingsMemoryRouteHandlers(
+    db_module=devdb,
+    memory_engine_module=memory_engine,
+    provider_registry_module=provider_registry,
+    devvault_module=devvault,
+    normalized_autonomy_profile=_normalized_autonomy_profile,
+    normalized_runtime_permissions_mode=_normalized_runtime_permissions_mode,
+    normalized_external_fetch_policy=_normalized_external_fetch_policy,
+    normalized_max_history_turns=_chat_runtime_facade.normalized_max_history_turns,
+    selected_cli_path=composer_runtime.selected_cli_path,
+    selected_cli_model=composer_runtime.selected_cli_model,
+    stored_ollama_runtime_mode=_stored_ollama_runtime_mode,
+    apply_cli_runtime_settings=composer_runtime.apply_cli_runtime_settings,
+    setting_int=_chat_runtime_facade.setting_int,
+    ensure_memory_layers_synced=_chat_runtime_facade.ensure_memory_layers_synced,
+    serialize_memory_item=_serialize_memory_item,
+)
+
+
+async def _workspace_project_ai_params(settings: dict, *, conn=None) -> dict:
+    return await _ai_params(settings, conn=conn)
+
+
+def _workspace_project_model_call_kwargs(ai: dict) -> dict:
+    return _brain_model_call_kwargs(ai)
 
 
 async def _ingest_resource_bytes(
@@ -4999,6 +5013,31 @@ async def _workspace_preview_target(project_id: int, auto_session_id: str = ""):
     )
 
 
+_workspace_project_handlers = workspace_projects.WorkspaceProjectRouteHandlers(
+    db_module=devdb,
+    workspace_preview_target=_workspace_preview_target,
+    serialize_preview_session=workspace_sandbox_service.serialize_preview_session,
+    attach_preview_browser=_attach_preview_browser,
+    serialize_browser_action_state=_serialize_browser_action_state,
+    release_browser_preview_attachment=_ops_runtime_facade.release_browser_preview_attachment,
+    ai_params=_workspace_project_ai_params,
+    model_call_kwargs=_workspace_project_model_call_kwargs,
+)
+
+
+@app.get("/api/workspace/env")
+async def workspace_env(
+    path: str = Query(default=""),
+    project_id: int | None = Query(default=None),
+    auto_session_id: str = Query(default=""),
+):
+    return await _workspace_project_handlers.workspace_env(
+        path=path,
+        project_id=project_id,
+        auto_session_id=auto_session_id,
+    )
+
+
 def _auto_runtime_summary(ai: dict) -> dict[str, str]:
     return auto_session_runtime_service.auto_runtime_summary(
         ai,
@@ -5026,6 +5065,192 @@ def _task_sandbox_runtime_override(payload) -> dict[str, str]:
         payload,
         provider_registry_module=provider_registry,
     )
+
+
+def _serialize_auto_session(meta: dict | None, *, include_report: bool = False) -> dict | None:
+    return workspace_sandbox_service.serialize_auto_session(
+        meta,
+        include_report=include_report,
+        get_preview_session_fn=live_preview_service.get_preview_session,
+    )
+
+
+_auto_session_prompt = auto_session_runtime_service.auto_session_prompt
+_auto_tool_command = auto_session_runtime_service.auto_tool_command
+_auto_receipt_summary = auto_session_runtime_service.auto_receipt_summary
+
+
+def _is_verification_command(tool_name: str, tool_args: dict) -> bool:
+    return auto_session_runtime_service.is_verification_command(
+        tool_name,
+        tool_args,
+        auto_tool_command_fn=_auto_tool_command,
+    )
+
+
+_auto_session_router, _auto_session_handlers = auto_session_routes.build_auto_session_router(
+    db_module=devdb,
+    brain_module=brain,
+    devvault_module=devvault,
+    auto_session_service=auto_session_service,
+    auto_session_runs=_auto_session_runs,
+    now_iso=_now_iso,
+    set_live_operator=_set_live_operator,
+    serialize_auto_session=_serialize_auto_session,
+    task_sandbox_ai_params=_task_sandbox_ai_params,
+    load_chat_history_rows=_load_chat_history_rows,
+    history_messages_from_rows=_history_messages_from_rows,
+    resource_bundle=_resource_bundle,
+    auto_route_vision_runtime=auto_route_vision_runtime,
+    auto_route_image_generation_runtime=_auto_route_image_generation_runtime,
+    memory_bundle=_memory_bundle,
+    composer_instruction_block=_composer_instruction_block,
+    auto_session_prompt=_auto_session_prompt,
+    auto_runtime_summary=_auto_runtime_summary,
+    normalized_autonomy_profile=composer_runtime.normalized_autonomy_profile,
+    normalized_runtime_permissions_mode=composer_runtime.normalized_runtime_permissions_mode,
+    normalized_external_fetch_policy=composer_runtime.normalized_external_fetch_policy,
+    auto_tool_command=_auto_tool_command,
+    auto_receipt_summary=_auto_receipt_summary,
+    is_verification_command=_is_verification_command,
+    auto_session_live_operator=_auto_session_live_operator,
+    composer_options_dict=_composer_options_dict,
+    task_sandbox_runtime_override=_task_sandbox_runtime_override,
+)
+AutoSessionStartRequest = auto_session_routes.AutoSessionStartRequest
+
+
+def _sync_auto_session_handler_dependencies() -> None:
+    _auto_session_handlers._brain = brain
+    _auto_session_handlers._db = devdb
+    _auto_session_handlers._devvault = devvault
+    _auto_session_handlers._auto_session_service = auto_session_service
+    _auto_session_handlers._auto_session_runs = _auto_session_runs
+    _auto_session_handlers._now_iso = _now_iso
+    _auto_session_handlers._set_live_operator = _set_live_operator
+    _auto_session_handlers._serialize_auto_session = _serialize_auto_session
+    _auto_session_handlers._task_sandbox_ai_params = _task_sandbox_ai_params
+    _auto_session_handlers._load_chat_history_rows = _load_chat_history_rows
+    _auto_session_handlers._history_messages_from_rows = _history_messages_from_rows
+    _auto_session_handlers._resource_bundle = _resource_bundle
+    _auto_session_handlers._auto_route_vision_runtime = auto_route_vision_runtime
+    _auto_session_handlers._auto_route_image_generation_runtime = _auto_route_image_generation_runtime
+    _auto_session_handlers._memory_bundle = _memory_bundle
+    _auto_session_handlers._composer_instruction_block = _composer_instruction_block
+    _auto_session_handlers._auto_session_prompt = _auto_session_prompt
+    _auto_session_handlers._auto_runtime_summary = _auto_runtime_summary
+    _auto_session_handlers._normalized_autonomy_profile = composer_runtime.normalized_autonomy_profile
+    _auto_session_handlers._normalized_runtime_permissions_mode = composer_runtime.normalized_runtime_permissions_mode
+    _auto_session_handlers._normalized_external_fetch_policy = composer_runtime.normalized_external_fetch_policy
+    _auto_session_handlers._auto_tool_command = _auto_tool_command
+    _auto_session_handlers._auto_receipt_summary = _auto_receipt_summary
+    _auto_session_handlers._is_verification_command = _is_verification_command
+    _auto_session_handlers._auto_session_live_operator = _auto_session_live_operator
+    _auto_session_handlers._composer_options_dict = _composer_options_dict
+    _auto_session_handlers._task_sandbox_runtime_override = _task_sandbox_runtime_override
+
+
+async def _run_auto_session_background(
+    workspace: dict,
+    session_meta: dict,
+    *,
+    resume: bool = False,
+    resume_message: str = "",
+    runtime_override: dict[str, str] | None = None,
+    composer_options: dict | None = None,
+):
+    _sync_auto_session_handler_dependencies()
+    return await _auto_session_handlers.run_auto_session_background(
+        workspace,
+        session_meta,
+        resume=resume,
+        resume_message=resume_message,
+        runtime_override=runtime_override,
+        composer_options=composer_options,
+    )
+
+
+async def _queue_auto_session_run(
+    body: AutoSessionStartRequest,
+    *,
+    resume: bool = False,
+    session_id: str = "",
+):
+    _sync_auto_session_handler_dependencies()
+    return await _auto_session_handlers.queue_auto_session_run(
+        body,
+        resume=resume,
+        session_id=session_id,
+        run_auto_session_background=_run_auto_session_background,
+    )
+
+
+async def start_auto_session(body: AutoSessionStartRequest):
+    return await _queue_auto_session_run(body, resume=False)
+
+
+async def list_auto_sessions():
+    _sync_auto_session_handler_dependencies()
+    return await _auto_session_handlers.list_auto_sessions()
+
+
+async def get_auto_session(session_id: str):
+    _sync_auto_session_handler_dependencies()
+    return await _auto_session_handlers.get_auto_session(session_id)
+
+
+async def continue_auto_session(session_id: str, body: AutoSessionStartRequest | None = None):
+    payload = body or AutoSessionStartRequest(message="please continue")
+    return await _queue_auto_session_run(payload, resume=True, session_id=session_id)
+
+
+async def apply_auto_session(session_id: str):
+    _sync_auto_session_handler_dependencies()
+    return await _auto_session_handlers.apply_auto_session(session_id)
+
+
+async def discard_auto_session(session_id: str):
+    _sync_auto_session_handler_dependencies()
+    return await _auto_session_handlers.discard_auto_session(session_id)
+
+
+_agent_control_router, _agent_control_handlers = agent_control.build_agent_control_router(
+    db_module=devdb,
+    build_edit_approval_action=approval_actions.build_edit_approval_action,
+    build_command_approval_action=approval_actions.build_command_approval_action,
+    agent_allow_action=getattr(brain, "agent_allow_action", lambda *args, **kwargs: None),
+    agent_get_action_state=getattr(brain, "agent_get_action_state", lambda: {}),
+    agent_get_session_allowed=getattr(brain, "agent_get_session_allowed", lambda: []),
+    allowed_cmds=set(getattr(brain, "_ALLOWED_CMDS", set())),
+    enqueue_steer_message=agent_runtime_state.enqueue_steer_message,
+)
+route_registry.register_core_routers(
+    app,
+    auto_session_router=_auto_session_router,
+    agent_control_router=_agent_control_router,
+)
+
+ApproveActionBody = agent_control.ApproveActionBody
+AllowCommandBody = agent_control.AllowCommandBody
+AllowEditBody = agent_control.AllowEditBody
+
+_approval_workspace_root = _agent_control_handlers.approval_workspace_root
+_normalize_exact_approval_action = _agent_control_handlers.normalize_exact_approval_action
+
+
+async def approve_agent_action(body: ApproveActionBody):
+    return await _agent_control_handlers.approve_agent_action(
+        body,
+        approval_workspace_root=_approval_workspace_root,
+        normalize_exact_approval_action=_normalize_exact_approval_action,
+    )
+
+
+allow_agent_command = _agent_control_handlers.allow_agent_command
+get_interrupted_session = _agent_control_handlers.get_interrupted_session
+allow_agent_edit = _agent_control_handlers.allow_agent_edit
+steer_agent = _agent_control_handlers.steer_agent
+get_allowed_commands = _agent_control_handlers.get_allowed_commands
 
 
 _task_sandbox_handlers = task_sandbox_routes.TaskSandboxHandlers(

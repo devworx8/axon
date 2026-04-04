@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import re
 from typing import Optional
@@ -35,6 +36,24 @@ def _row_value(row, key: str, default: str = "") -> str:
             return default
 
 
+async def _fetchone_compat(cursor):
+    if cursor is None:
+        return None
+    raw_cursor = getattr(cursor, "_cursor", None)
+    if raw_cursor is not None:
+        try:
+            return raw_cursor.fetchone()
+        except Exception:
+            pass
+    fetchone = getattr(cursor, "fetchone", None)
+    if fetchone is None:
+        return None
+    result = fetchone()
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
 async def compute_workspace_revision(db: aiosqlite.Connection, workspace_id: int | None) -> str:
     if workspace_id is None:
         return "global"
@@ -42,27 +61,27 @@ async def compute_workspace_revision(db: aiosqlite.Connection, workspace_id: int
         "SELECT COALESCE(updated_at, created_at, '') AS stamp FROM projects WHERE id = ?",
         (workspace_id,),
     )
-    project_row = await project_cur.fetchone()
+    project_row = await _fetchone_compat(project_cur)
     prompt_cur = await db.execute(
         "SELECT COALESCE(MAX(updated_at), MAX(created_at), '') AS stamp FROM prompts WHERE project_id = ?",
         (workspace_id,),
     )
-    prompt_row = await prompt_cur.fetchone()
+    prompt_row = await _fetchone_compat(prompt_cur)
     task_cur = await db.execute(
         "SELECT COALESCE(MAX(updated_at), MAX(created_at), '') AS stamp FROM tasks WHERE project_id = ?",
         (workspace_id,),
     )
-    task_row = await task_cur.fetchone()
+    task_row = await _fetchone_compat(task_cur)
     resource_cur = await db.execute(
         "SELECT COALESCE(MAX(updated_at), MAX(created_at), '') AS stamp FROM resources WHERE workspace_id = ?",
         (workspace_id,),
     )
-    resource_row = await resource_cur.fetchone()
+    resource_row = await _fetchone_compat(resource_cur)
     memory_cur = await db.execute(
         "SELECT COALESCE(MAX(updated_at), MAX(created_at), '') AS stamp FROM memory_items WHERE workspace_id = ? OR workspace_id IS NULL",
         (workspace_id,),
     )
-    memory_row = await memory_cur.fetchone()
+    memory_row = await _fetchone_compat(memory_cur)
     payload = "|".join(
         _row_value(item, "stamp")
         for item in (

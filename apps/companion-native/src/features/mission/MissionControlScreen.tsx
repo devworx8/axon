@@ -87,54 +87,60 @@ export function MissionControlScreen({
 
   return (
     <View style={styles.stack}>
-      <MissionHeroCard snapshot={snapshot} digest={digest} loading={loading} onRefresh={onRefresh} />
-      <AxonModeCard
-        axon={snapshot?.axon}
-        wakePhrase={axonWakePhrase}
-        onChangeWakePhrase={onChangeAxonWakePhrase}
-        busy={axonBusy}
-        error={axonError}
-        onArm={onArmAxon}
-        onDisarm={onDisarmAxon}
-      />
-      <QuickActionsCard
-        quickActions={snapshot?.quick_actions}
-        capabilities={capabilities}
-        busyActionType={controlBusyActionType}
-        onExecuteAction={onExecuteAction}
-        onApprovePending={onApprovePending}
-        onOpenVoice={onOpenVoice}
-        onOpenProjects={onOpenProjects}
-        onOpenAttention={onOpenAttention}
-        onOpenSessions={onOpenSessions}
-      />
-      <SurfaceCard>
-        <SurfaceHeader title="Command bus" subtitle="Type or tap once. Axon routes the request to the right workspace, approval, or typed action flow." />
-        <VoiceCommandComposer
-          onSubmit={onSubmitCommand}
-          sending={sending}
-          voiceMode={voiceMode}
-          workspaceLabel={currentWorkspaceLabel}
-          placeholder="Tell Axon what needs to happen across the platform."
-          prompts={[
-            'What needs attention right now?',
-            'Inspect the focused workspace.',
-            'Sync all connector signals.',
-          ]}
-        />
-      </SurfaceCard>
-      <VoiceOutcomeCard
-        transcript={transcript}
-        response={responseText || latestOutcomeSummary}
-        backend={backend || (lastAction?.result ? 'action' : undefined)}
-        tokensUsed={tokensUsed}
-        approval={approval}
-        error={voiceError || controlError}
-        onOpenSession={onOpenSessions}
-        speaking={speakingReply}
-        onSpeak={onSpeakLatestReply}
-        onStopSpeaking={onStopSpeaking}
-      />
+      <View style={styles.splitGroup}>
+        <View style={styles.splitColumn}>
+          <MissionHeroCard snapshot={snapshot} digest={digest} loading={loading} onRefresh={onRefresh} />
+          <QuickActionsCard
+            quickActions={snapshot?.quick_actions}
+            capabilities={capabilities}
+            busyActionType={controlBusyActionType}
+            onExecuteAction={onExecuteAction}
+            onApprovePending={onApprovePending}
+            onOpenVoice={onOpenVoice}
+            onOpenProjects={onOpenProjects}
+            onOpenAttention={onOpenAttention}
+            onOpenSessions={onOpenSessions}
+          />
+        </View>
+        <View style={styles.splitColumn}>
+          <SurfaceCard>
+            <SurfaceHeader title="Voice control" subtitle="Push-to-talk or live listening stays ready in the cockpit." />
+            <VoiceCommandComposer
+              onSubmit={onSubmitCommand}
+              sending={sending}
+              voiceMode={voiceMode}
+              workspaceLabel={currentWorkspaceLabel}
+              placeholder="Tell Axon what needs to happen across the platform."
+              prompts={[
+                'What needs attention right now?',
+                'Inspect the focused workspace.',
+                'Sync all connector signals.',
+              ]}
+            />
+          </SurfaceCard>
+          <VoiceOutcomeCard
+            transcript={transcript}
+            response={responseText || latestOutcomeSummary}
+            backend={backend || (lastAction?.result ? 'action' : undefined)}
+            tokensUsed={tokensUsed}
+            approval={approval}
+            error={voiceError || controlError}
+            onOpenSession={onOpenSessions}
+            speaking={speakingReply}
+            onSpeak={onSpeakLatestReply}
+            onStopSpeaking={onStopSpeaking}
+          />
+          <AxonModeCard
+            axon={snapshot?.axon}
+            wakePhrase={axonWakePhrase}
+            onChangeWakePhrase={onChangeAxonWakePhrase}
+            busy={axonBusy}
+            error={axonError}
+            onArm={onArmAxon}
+            onDisarm={onDisarmAxon}
+          />
+        </View>
+      </View>
       <ExpoControlCard
         expo={expoProject}
         workspaceId={snapshot?.focus?.workspace_id ?? snapshot?.focus?.workspace?.id ?? null}
@@ -189,6 +195,12 @@ export function MissionControlScreen({
 
 const styles = StyleSheet.create({
   stack: {
+    gap: 14,
+  },
+  splitGroup: {
+    gap: 16,
+  },
+  splitColumn: {
     gap: 14,
   },
   projectStack: {

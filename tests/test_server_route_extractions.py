@@ -133,6 +133,16 @@ class AuthRuntimeExtractionTests(unittest.IsolatedAsyncioTestCase):
         resolve_companion_auth_session.assert_not_called()
 
 
+class RouterRegistrationTests(unittest.TestCase):
+    def test_server_app_registers_connectors_router(self):
+        paths = {route.path for route in server.app.routes}
+        self.assertIn("/api/connectors/overview", paths)
+
+    def test_server_app_registers_mobile_vault_router(self):
+        paths = {route.path for route in server.app.routes}
+        self.assertIn("/api/mobile/vault/status", paths)
+
+
 class TerminalRouteExtractionTests(unittest.IsolatedAsyncioTestCase):
     @asynccontextmanager
     async def _fake_db(self):

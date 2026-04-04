@@ -40,6 +40,28 @@ function axonChatResumeMixin() {
       return Number.isFinite(parsed) ? parsed : 0;
     },
 
+    isExplicitResumeText(text = '') {
+      const lower = String(text || '').trim().toLowerCase();
+      if (!lower) return false;
+      if (['continue', 'please continue', 'go', 'go ahead', 'yes', 'yes continue', 'ok', 'ok continue'].includes(lower)) {
+        return true;
+      }
+      return [
+        'continue from',
+        'continue the task',
+        'continue working',
+        'resume the task',
+        'resume where',
+        'pick up where',
+        'keep going',
+      ].some(phrase => lower.includes(phrase));
+    },
+
+    hasExplicitResumeTarget(payload = {}) {
+      if (!payload || typeof payload !== 'object') return false;
+      return !!String(payload.resume_session_id || payload.continue_task || '').trim();
+    },
+
     async fetchInterruptedSessionSnapshot(projectId = null) {
       const scopedProjectId = String(projectId == null ? '' : projectId).trim();
       const params = scopedProjectId ? `?project_id=${encodeURIComponent(scopedProjectId)}` : '';

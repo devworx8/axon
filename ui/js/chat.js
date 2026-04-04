@@ -3,7 +3,7 @@
    ══════════════════════════════════════════════════════════════ */
 
 function axonChatMixin() {
-  return {
+  const baseMixin = {
 
     /* ── Composer helpers ─────────────────────────────────────── */
 
@@ -453,22 +453,25 @@ function axonChatMixin() {
       this.showToast('Generation stopped');
     },
 
-    async streamChatMessage(msg, mode, respId, resourceIds = []) {
+    async streamChatMessage(msg, mode, respId, resourceIds = [], extraPayload = {}) {
       const endpoint = mode === 'agent' ? '/api/agent' : '/api/chat/stream';
       const payload = {
         message: msg,
         project_id: this.chatProjectId ? parseInt(this.chatProjectId) : null,
         resource_ids: resourceIds,
         composer_options: this.normalizedComposerOptions(),
+        ...extraPayload,
       };
       if (this.usesOllamaBackend()) payload.model = this.activeChatModel() || '';
 
-      this._chatAbortController = new AbortController();
+      const controller = new AbortController();
+      this._chatAbortController = controller;
+      this.setWorkspaceAbortController?.(String(payload.project_id || '').trim(), controller);
       const resp = await fetch(endpoint, {
         method: 'POST',
         headers: this.authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
-        signal: this._chatAbortController.signal,
+        signal: controller.signal,
       });
 
       if (resp.status === 401) {
@@ -773,6 +776,24 @@ function axonChatMixin() {
     },
 
   };
+
+  const composed = [baseMixin];
+  const optionalMixins = [
+    typeof axonChatWorkspaceModesMixin === 'function' ? axonChatWorkspaceModesMixin : null,
+    typeof axonChatWorkspaceStatusMixin === 'function' ? axonChatWorkspaceStatusMixin : null,
+    typeof axonChatAutoStreamMixin === 'function' ? axonChatAutoStreamMixin : null,
+    typeof axonChatConsoleCommandsMixin === 'function' ? axonChatConsoleCommandsMixin : null,
+    typeof axonChatBrowserSurfaceMixin === 'function' ? axonChatBrowserSurfaceMixin : null,
+    typeof axonChatResumeMixin === 'function' ? axonChatResumeMixin : null,
+  ];
+
+  optionalMixins.forEach(buildMixin => {
+    if (typeof buildMixin !== 'function') return;
+    const mixin = buildMixin();
+    if (mixin && typeof mixin === 'object') composed.push(mixin);
+  });
+
+  return Object.assign({}, ...composed);
 }
 
 window.axonChatMixin = axonChatMixin;

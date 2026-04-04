@@ -27,6 +27,11 @@ from axon_api.services.connector_attention import (
     sync_vercel_attention,
     sync_workspace_connector_attention,
 )
+from axon_api.services.connector_auth_state import (
+    github_auth_state,
+    sentry_auth_state,
+    vercel_auth_state,
+)
 from axon_api.services.workspace_relationships import (
     infer_workspace_relationships,
     link_workspace_relationship,
@@ -72,7 +77,12 @@ async def connectors_overview(limit: int = 25):
                         attention_summary_fn=attention_summary,
                     )
                 )
-    return {"workspaces": summary}
+        auth = {
+            "github": await github_auth_state(db),
+            "vercel": await vercel_auth_state(db),
+            "sentry": await sentry_auth_state(db),
+        }
+    return {"workspaces": summary, "auth": auth}
 
 
 @router.get("/overview")
@@ -185,7 +195,9 @@ async def github_status(
             raise HTTPException(400, "Provide workspace_id or repo_path")
         if workspace_id is not None:
             try:
-                return await github_status_for_workspace(db, workspace_id, branch=branch)
+                payload = await github_status_for_workspace(db, workspace_id, branch=branch)
+                payload["auth"] = await github_auth_state(db)
+                return payload
             except ValueError as exc:
                 raise HTTPException(404, str(exc))
         settings = await devdb.get_all_settings(db)
@@ -202,6 +214,7 @@ async def github_status(
             "relationships": [],
             "github": status,
             "workflow_preview": workflow_preview,
+            "auth": await github_auth_state(db),
         }
 
 
@@ -236,6 +249,7 @@ async def github_workflow_preview(workspace_id: int, branch: str = ""):
 @router.get("/vercel/status")
 async def vercel_status(workspace_id: int | None = None):
     async with get_db() as db:
+        auth = await vercel_auth_state(db)
         if workspace_id is None:
             workspaces = await connector_workspaces_for_system(
                 db,
@@ -247,7 +261,7 @@ async def vercel_status(workspace_id: int | None = None):
                 list_workspace_relationships_for_workspace_fn=list_workspace_relationships_for_workspace,
                 attention_summary_fn=attention_summary,
             )
-            return {"workspaces": workspaces}
+            return {"workspaces": workspaces, "auth": auth}
         project = await get_project(db, workspace_id)
         relationships = await list_workspace_relationships_for_workspace(
             db,
@@ -261,6 +275,7 @@ async def vercel_status(workspace_id: int | None = None):
         "relationships": relationships,
         "attention": inbox,
         "status": "linked" if relationships else "unlinked",
+        "auth": auth,
     }
 
 
@@ -279,6 +294,7 @@ async def vercel_workspace_attention_sync(workspace_id: int):
 @router.get("/sentry/status")
 async def sentry_status(workspace_id: int | None = None, limit: int = 25):
     async with get_db() as db:
+        auth = await sentry_auth_state(db)
         if workspace_id is None:
             workspaces = await connector_workspaces_for_system(
                 db,
@@ -291,7 +307,7 @@ async def sentry_status(workspace_id: int | None = None, limit: int = 25):
                 attention_summary_fn=attention_summary,
             )
             unresolved = await list_error_events(db, source="sentry", status="", limit=limit)
-            return {"workspaces": workspaces, "unresolved": unresolved}
+            return {"workspaces": workspaces, "unresolved": unresolved, "auth": auth}
         project = await get_project(db, workspace_id)
         relationships = await list_workspace_relationships_for_workspace(
             db,
@@ -307,6 +323,7 @@ async def sentry_status(workspace_id: int | None = None, limit: int = 25):
         "attention": inbox,
         "unresolved": unresolved,
         "status": "linked" if relationships else "unlinked",
+        "auth": auth,
     }
 
 
