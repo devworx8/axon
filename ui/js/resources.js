@@ -5,80 +5,6 @@
 function axonResourcesMixin() {
   return {
 
-    // ── Resource categorisation ────────────────────────────
-    _resourceCategoryRules: [
-      { id: 'python',       label: 'Python',             icon: '🐍', color: 'blue',    keywords: ['python', 'pep 8', 'pep 20', 'mypy', 'type hint', 'pytest'] },
-      { id: 'js-ts',        label: 'JavaScript / TypeScript', icon: '🟨', color: 'amber',  keywords: ['javascript', 'typescript', 'airbnb', 'clean code typescript', 'ts deep dive'] },
-      { id: 'react',        label: 'React',              icon: '⚛️', color: 'cyan',    keywords: ['react', 'hooks', 'managing state', 'thinking in react'] },
-      { id: 'nextjs',       label: 'Next.js',            icon: '▲',  color: 'slate',   keywords: ['next.js', 'nextjs', 'app router'] },
-      { id: 'fastapi',      label: 'FastAPI',            icon: '⚡', color: 'emerald', keywords: ['fastapi'] },
-      { id: 'supabase',     label: 'Supabase',           icon: '🟩', color: 'green',   keywords: ['supabase'] },
-      { id: 'security',     label: 'Security (OWASP)',   icon: '🛡️', color: 'rose',    keywords: ['owasp', 'csrf', 'sql injection', 'authentication cheat', 'input validation'] },
-      { id: 'git',          label: 'Git & Commits',      icon: '🔀', color: 'violet',  keywords: ['git', 'conventional commit'] },
-      { id: 'testing',      label: 'Testing',            icon: '🧪', color: 'sky',     keywords: ['testing library', 'pytest', 'test'] },
-      { id: 'architecture', label: 'Architecture',       icon: '🏗️', color: 'indigo',  keywords: ['clean architecture', 'architecture'] },
-      { id: 'api-design',   label: 'API Design',         icon: '📡', color: 'orange',  keywords: ['rest api', 'json:api', 'api guideline'] },
-      { id: 'nodejs',       label: 'Node.js',            icon: '🟢', color: 'lime',    keywords: ['node.js', 'nodejs'] },
-      { id: 'shell',        label: 'Shell / Bash',       icon: '💻', color: 'zinc',    keywords: ['bash', 'shell'] },
-    ],
-
-    resourceCategory(resource) {
-      const title = (resource?.title || '').toLowerCase();
-      for (const cat of this._resourceCategoryRules) {
-        if (cat.keywords.some(kw => title.includes(kw))) return cat;
-      }
-      return { id: 'other', label: 'Other', icon: '📦', color: 'slate', keywords: [] };
-    },
-
-    get categorizedResources() {
-      const cats = {};
-      for (const r of this.filteredResources) {
-        const cat = this.resourceCategory(r);
-        if (!cats[cat.id]) cats[cat.id] = { ...cat, resources: [] };
-        cats[cat.id].resources.push(r);
-      }
-      // Sort: categories with most items first
-      return Object.values(cats).sort((a, b) => b.resources.length - a.resources.length);
-    },
-
-    resourceCategoryColorClasses(color) {
-      const map = {
-        blue:    'border-blue-500/25 bg-blue-500/5 text-blue-300',
-        amber:   'border-amber-500/25 bg-amber-500/5 text-amber-300',
-        cyan:    'border-cyan-500/25 bg-cyan-500/5 text-cyan-300',
-        slate:   'border-slate-600/30 bg-slate-700/10 text-slate-300',
-        emerald: 'border-emerald-500/25 bg-emerald-500/5 text-emerald-300',
-        green:   'border-green-500/25 bg-green-500/5 text-green-300',
-        rose:    'border-rose-500/25 bg-rose-500/5 text-rose-300',
-        violet:  'border-violet-500/25 bg-violet-500/5 text-violet-300',
-        sky:     'border-sky-500/25 bg-sky-500/5 text-sky-300',
-        indigo:  'border-indigo-500/25 bg-indigo-500/5 text-indigo-300',
-        orange:  'border-orange-500/25 bg-orange-500/5 text-orange-300',
-        lime:    'border-lime-500/25 bg-lime-500/5 text-lime-300',
-        zinc:    'border-zinc-500/25 bg-zinc-500/5 text-zinc-300',
-      };
-      return map[color] || map.slate;
-    },
-
-    resourceCategoryBadge(color) {
-      const map = {
-        blue:    'bg-blue-500/15 text-blue-300 border-blue-500/20',
-        amber:   'bg-amber-500/15 text-amber-300 border-amber-500/20',
-        cyan:    'bg-cyan-500/15 text-cyan-300 border-cyan-500/20',
-        slate:   'bg-slate-600/15 text-slate-300 border-slate-600/20',
-        emerald: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/20',
-        green:   'bg-green-500/15 text-green-300 border-green-500/20',
-        rose:    'bg-rose-500/15 text-rose-300 border-rose-500/20',
-        violet:  'bg-violet-500/15 text-violet-300 border-violet-500/20',
-        sky:     'bg-sky-500/15 text-sky-300 border-sky-500/20',
-        indigo:  'bg-indigo-500/15 text-indigo-300 border-indigo-500/20',
-        orange:  'bg-orange-500/15 text-orange-300 border-orange-500/20',
-        lime:    'bg-lime-500/15 text-lime-300 border-lime-500/20',
-        zinc:    'bg-zinc-500/15 text-zinc-300 border-zinc-500/20',
-      };
-      return map[color] || map.slate;
-    },
-
     get filteredResources() {
       const search = (this.resourceSearch || '').toLowerCase().trim();
       const kind = (this.resourceKindFilter || '').toLowerCase();
@@ -191,12 +117,8 @@ function axonResourcesMixin() {
 
     async loadPrompts() {
       try {
-        const result = await this.api('GET', '/api/prompts');
-        this.prompts = result;
-      } catch(e) {
-        console.error('[Axon] loadPrompts() error:', e);
-        this.showToast('Failed to load playbooks');
-      }
+        this.prompts = await this.api('GET', '/api/prompts');
+      } catch(e) { this.showToast('Failed to load playbooks'); }
     },
 
     async savePrompt() {
@@ -238,8 +160,7 @@ function axonResourcesMixin() {
 
     async copyPrompt(pr) {
       await navigator.clipboard.writeText(pr.content);
-      this.api('POST', `/api/prompts/${pr.id}/use`);
-      pr.used_count = (pr.used_count || 0) + 1;
+      this.api('GET', `/api/prompts`); // increment usage via side effect
       this.showToast('Copied to clipboard');
     },
 
@@ -249,8 +170,6 @@ function axonResourcesMixin() {
       }
       this.chatInput = pr.content;
       this.activeTab = 'chat';
-      this.api('POST', `/api/prompts/${pr.id}/use`);
-      pr.used_count = (pr.used_count || 0) + 1;
       this.showToast(this.promptIsComposerPreset(pr) ? 'Preset loaded into Console' : 'Playbook sent to Console');
     },
 

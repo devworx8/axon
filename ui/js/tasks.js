@@ -8,34 +8,10 @@ function axonTasksMixin() {
     async loadTasks() {
       this.tasksLoading = true;
       try {
-        const [tasks, sandboxState] = await Promise.all([
-          this.api('GET', '/api/tasks?status='),
-          this.api('GET', '/api/tasks/sandboxes').catch(() => ({ sandboxes: [] })),
-        ]);
-        this.tasks = this.mergeTaskSandboxes(tasks, sandboxState?.sandboxes || []);
+        this.tasks = await this.api('GET', '/api/tasks?status=');
         this.urgentCount = this.tasks.filter(t => t.priority === 'urgent' || t.priority === 'high').length;
       } catch(e) { this.showToast('Failed to load missions'); }
       this.tasksLoading = false;
-    },
-
-    mergeTaskSandboxes(tasks = [], sandboxes = []) {
-      const byTaskId = new Map((sandboxes || []).map(item => [Number(item.task_id), item]));
-      return (tasks || []).map(task => ({
-        ...task,
-        sandbox: byTaskId.get(Number(task.id)) || null,
-      }));
-    },
-
-    updateTaskSandboxRecord(taskId, sandbox) {
-      const id = Number(taskId);
-      this.tasks = (this.tasks || []).map(task => (
-        Number(task.id) === id
-          ? { ...task, sandbox: sandbox ? { ...sandbox } : null }
-          : task
-      ));
-      if (this.taskSandboxReview?.open && Number(this.taskSandboxReview?.task?.id) === id) {
-        this.taskSandboxReview.sandbox = sandbox ? { ...sandbox } : null;
-      }
     },
 
     async addTask() {
@@ -55,18 +31,9 @@ function axonTasksMixin() {
     async completeTask(t) {
       try {
         await this.api('PATCH', `/api/tasks/${t.id}`, { status: 'done' });
-        t.status = 'done';
+        this.tasks = this.tasks.filter(x => x.id !== t.id);
         this.urgentCount = this.tasks.filter(t => t.priority === 'urgent' || t.priority === 'high').length;
-        this.showToast('Mission completed ✓');
-      } catch(e) { this.showToast('Failed'); }
-    },
-
-    async setTaskStatus(t, status) {
-      try {
-        await this.api('PATCH', `/api/tasks/${t.id}`, { status });
-        t.status = status;
-        this.urgentCount = this.tasks.filter(t => t.priority === 'urgent' || t.priority === 'high').length;
-        this.showToast(`Mission → ${this.taskStatusLabel(status)}`);
+        this.showToast('Mission completed');
       } catch(e) { this.showToast('Failed'); }
     },
 
@@ -102,163 +69,6 @@ function axonTasksMixin() {
         this.chatInput = prompt;
         this.$nextTick(() => this.sendChat());
       });
-    },
-
-    async runMissionInSandbox(t, resume = false) {
-      if (!t?.project_id) {
-        this.showToast('Attach this mission to a workspace before using a sandbox');
-        return;
-      }
-      try {
-        const endpoint = resume
-          ? `/api/tasks/${t.id}/sandbox/continue`
-          : `/api/tasks/${t.id}/sandbox/run`;
-        const res = await this.api('POST', endpoint, this.currentSandboxRuntimePayload());
-        if (res?.sandbox) {
-          this.updateTaskSandboxRecord(
-            t.id,
-            res.already_running
-              ? res.sandbox
-              : { ...res.sandbox, status: 'running', last_error: '' },
-          );
-        }
-        if (!resume && t.status === 'open') t.status = 'in_progress';
-        if (res?.already_running) {
-          this.showToast('Sandbox run already in progress');
-        } else {
-          this.showToast(resume ? 'Sandbox run resumed' : 'Sandbox run started');
-        }
-      } catch (e) {
-        this.showToast(`Sandbox error: ${e.message}`);
-      }
-    },
-
-    currentSandboxRuntimePayload() {
-      const backend = String(this.settingsForm?.ai_backend || this.runtimeStatus?.backend || 'api').toLowerCase();
-      const payload = { backend };
-      if (backend === 'api') {
-        payload.api_provider = this.settingsForm?.api_provider
-          || this.runtimeStatus?.selected_api_provider?.provider_id
-          || 'deepseek';
-        payload.api_model = (typeof this.selectedApiProviderModel === 'function'
-          ? this.selectedApiProviderModel()
-          : '') || this.runtimeStatus?.selected_api_provider?.api_model || '';
-      } else if (backend === 'cli') {
-        payload.cli_path = this.settingsForm?.cli_runtime_path || this.runtimeStatus?.cli_binary || '';
-        payload.cli_model = this.settingsForm?.cli_runtime_model || this.runtimeStatus?.cli_model || '';
-      } else if (backend === 'ollama') {
-        payload.ollama_model = (typeof this.activeChatModel === 'function'
-          ? this.activeChatModel()
-          : '') || this.settingsForm?.ollama_model || this.runtimeStatus?.active_model || '';
-      }
-      return payload;
-    },
-
-    async refreshMissionSandbox(t) {
-      try {
-        const res = await this.api('GET', `/api/tasks/${t.id}/sandbox`);
-        this.updateTaskSandboxRecord(t.id, res?.sandbox || null);
-        if (res?.sandbox && this.taskSandboxReview?.open && Number(this.taskSandboxReview?.task?.id) === Number(t.id)) {
-          this.taskSandboxReview = {
-            open: true,
-            task: { ...t },
-            sandbox: res.sandbox,
-          };
-        }
-      } catch (e) {
-        this.showToast(e.message || 'Sandbox not ready yet');
-      }
-    },
-
-    async viewMissionSandboxReport(t) {
-      try {
-        const res = await this.api('GET', `/api/tasks/${t.id}/sandbox`);
-        this.updateTaskSandboxRecord(t.id, res?.sandbox || null);
-        this.taskSandboxReview = {
-          open: true,
-          task: { ...t },
-          sandbox: res?.sandbox || null,
-        };
-      } catch (e) {
-        this.showToast(e.message || 'Sandbox report not ready yet');
-      }
-    },
-
-    async applyMissionSandbox(t) {
-      if (!t?.id) return;
-      if (!confirm(`Apply sandbox changes for "${t.title}" to the source workspace?`)) return;
-      try {
-        const res = await this.api('POST', `/api/tasks/${t.id}/sandbox/apply`);
-        this.updateTaskSandboxRecord(t.id, res?.sandbox || null);
-        if (this.taskSandboxReview?.open && Number(this.taskSandboxReview?.task?.id) === Number(t.id)) {
-          this.taskSandboxReview = {
-            open: true,
-            task: { ...t },
-            sandbox: res?.sandbox || null,
-          };
-        }
-        this.showToast(res?.summary || 'Sandbox changes applied');
-      } catch (e) {
-        this.showToast(e.message || 'Failed to apply sandbox changes');
-      }
-    },
-
-    async discardMissionSandbox(t) {
-      if (!t?.id) return;
-      if (!confirm(`Discard the sandbox for "${t.title}"? This removes the isolated worktree.`)) return;
-      try {
-        await this.api('DELETE', `/api/tasks/${t.id}/sandbox`);
-        this.updateTaskSandboxRecord(t.id, null);
-        if (this.taskSandboxReview?.open && Number(this.taskSandboxReview?.task?.id) === Number(t.id)) {
-          this.closeMissionSandboxReport();
-        }
-        this.showToast('Sandbox discarded');
-      } catch (e) {
-        this.showToast(e.message || 'Failed to discard sandbox');
-      }
-    },
-
-    closeMissionSandboxReport() {
-      this.taskSandboxReview = { open: false, task: null, sandbox: null };
-    },
-
-    taskSandboxStatusLabel(status) {
-      const key = String(status || 'not_started');
-      const map = {
-        not_started: 'Not started',
-        ready: 'Ready',
-        running: 'Running',
-        completed: 'Completed',
-        review_ready: 'Review ready',
-        applied: 'Applied',
-        approval_required: 'Awaiting approval',
-        error: 'Needs attention',
-        missing: 'Missing',
-      };
-      return map[key] || 'Sandbox';
-    },
-
-    taskSandboxStatusClass(status) {
-      const key = String(status || 'not_started');
-      if (key === 'running') return 'border-blue-500/30 bg-blue-500/10 text-blue-200';
-      if (key === 'review_ready' || key === 'completed') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
-      if (key === 'applied') return 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200';
-      if (key === 'approval_required') return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
-      if (key === 'error' || key === 'missing') return 'border-rose-500/30 bg-rose-500/10 text-rose-200';
-      return 'border-slate-700 bg-slate-900/70 text-slate-300';
-    },
-
-    taskSandboxSummary(t) {
-      const sandbox = t?.sandbox;
-      if (!sandbox) return 'No isolated sandbox created yet.';
-      const parts = [
-        sandbox.project_name || t.project_name || 'Workspace mission',
-        sandbox.branch_name ? `branch ${sandbox.branch_name}` : '',
-        sandbox.status === 'applied' ? 'applied to source' : '',
-        sandbox.changed_files_count ? `${sandbox.changed_files_count} changed file${sandbox.changed_files_count === 1 ? '' : 's'}` : '',
-        sandbox.last_error ? 'needs review' : '',
-      ].filter(Boolean);
-      return parts.join(' · ') || 'Sandbox ready';
     },
 
     async getSuggestions() {
@@ -341,7 +151,7 @@ function axonTasksMixin() {
       return this.researchPacks || [];
     },
 
-    get filteredMemoryItems() {
+    filteredMemoryItems() {
       const q = (this.memorySearch || '').toLowerCase().trim();
       const layer = (this.memoryLayerFilter || '').toLowerCase();
       const trust = (this.memoryTrustFilter || '').toLowerCase();

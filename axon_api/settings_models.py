@@ -57,6 +57,10 @@ class SettingsUpdate(BaseModel):
     generic_api_url: Optional[str] = None
     generic_api_model: Optional[str] = None
     github_token: Optional[str] = None
+    vercel_api_token: Optional[str] = None
+    sentry_api_token: Optional[str] = None
+    sentry_org_slug: Optional[str] = None
+    sentry_project_slugs: Optional[str] = None
     slack_webhook_url: Optional[str] = None
     webhook_urls: Optional[str] = None
     webhook_secret: Optional[str] = None

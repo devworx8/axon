@@ -25,6 +25,7 @@ from axon_data import runtime_state
 from axon_core import agent as core_agent
 from axon_core import approval_actions
 from axon_core import agent_file_actions
+from axon_core import agent_fast_path
 from axon_core import agent_prompts
 from axon_core import cli_pacing
 from axon_core import session_store as session_store_module
@@ -83,6 +84,17 @@ class SettingsPayloadTests(unittest.TestCase):
 
         self.assertEqual(payload.runtime_permissions_mode, "full_access")
         self.assertEqual(payload.ai_backend, "cli")
+
+    def test_settings_update_accepts_sentry_connector_fields(self):
+        payload = SettingsUpdate(
+            sentry_api_token="sntrys_test_token",
+            sentry_org_slug="axon",
+            sentry_project_slugs="web,api",
+        )
+
+        self.assertEqual(payload.sentry_api_token, "sntrys_test_token")
+        self.assertEqual(payload.sentry_org_slug, "axon")
+        self.assertEqual(payload.sentry_project_slugs, "web,api")
 
     def test_normalized_runtime_permissions_mode_accepts_full_access(self):
         self.assertEqual(server._normalized_runtime_permissions_mode("full_access"), "full_access")
@@ -210,6 +222,21 @@ class SettingsCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows["max_history_turns"], "10")
         self.assertEqual(rows["autonomy_profile"], "workspace_auto")
         self.assertEqual(rows["runtime_permissions_mode"], "default")
+
+    async def test_get_db_supports_basic_query_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = Path(tmp_dir) / "devbrain.db"
+            with patch.object(db_core, "DB_PATH", db_path):
+                await db_core.init_db()
+                async with db_core.get_db() as conn:
+                    cur = await conn.execute(
+                        "SELECT value FROM settings WHERE key = ?",
+                        ("runtime_permissions_mode",),
+                    )
+                    row = await cur.fetchone()
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row["value"], "default")
 
 
 class ChatTokenAccountingTests(unittest.IsolatedAsyncioTestCase):
@@ -906,6 +933,176 @@ class ChatConsoleCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["session_id"], "codex-login-1")
         self.assertEqual(persisted["assistant_message"], "Codex CLI sign-in is running inside Axon.")
         self.assertEqual(persisted["project_id"], 7)
+
+
+class AgentFastPathTests(unittest.IsolatedAsyncioTestCase):
+    @asynccontextmanager
+    async def _fake_db(self):
+        yield object()
+
+    def test_fast_path_commit_eligibility_requires_plain_workspace_commit(self):
+        self.assertTrue(
+            agent_fast_path.fast_path_commit_eligible(
+                "Commit the repo",
+                workspace_path="/tmp/demo",
+                composer_options={},
+            )
+        )
+        self.assertFalse(
+            agent_fast_path.fast_path_commit_eligible(
+                "Commit the repo",
+                workspace_path="",
+                composer_options={},
+            )
+        )
+        self.assertFalse(
+            agent_fast_path.fast_path_commit_eligible(
+                "Commit the repo",
+                workspace_path="/tmp/demo",
+                resource_ids=[1],
+                composer_options={},
+            )
+        )
+        self.assertFalse(
+            agent_fast_path.fast_path_commit_eligible(
+                "Commit the repo",
+                workspace_path="/tmp/demo",
+                composer_options={"agent_role": "auto"},
+            )
+        )
+
+    def test_fast_path_commit_eligibility_rejects_explanatory_question(self):
+        self.assertFalse(
+            agent_fast_path.fast_path_commit_eligible(
+                "How do I commit the repo?",
+                workspace_path="/tmp/demo",
+                composer_options={},
+            )
+        )
+
+    def test_fast_path_converts_blocked_commit_into_approval_events(self):
+        deps = AgentRuntimeDeps(
+            tool_registry={},
+            normalize_tool_args=lambda name, args: args,
+            stream_cli=lambda *args, **kwargs: None,
+            stream_api_chat=lambda *args, **kwargs: None,
+            stream_ollama_chat=lambda *args, **kwargs: None,
+            ollama_execution_profile_sync=lambda *args, **kwargs: {"model": "dummy"},
+            ollama_message_with_images=lambda text, images: {"role": "user", "content": text},
+            api_message_with_images=lambda text, images: {"role": "user", "content": text},
+            cli_message_with_images=lambda text, images: {"role": "user", "content": text},
+            find_cli=lambda path: path,
+            ollama_default_model="dummy",
+            ollama_agent_model="dummy",
+            db_path=Path(tempfile.gettempdir()) / "axon-fast-path.db",
+        )
+
+        with patch.object(
+            agent_fast_path,
+            "_direct_agent_action",
+            return_value=(
+                "shell_cmd",
+                {"cmd": "git add -A", "cwd": "/tmp/demo", "_resume_task": 'Commit everything with commit message "feat: update tests".'},
+                "BLOCKED_CMD:git:git add -A",
+                "BLOCKED_CMD:git:git add -A",
+            ),
+        ):
+            result = agent_fast_path.maybe_run_fast_commit_path(
+                "Commit the repo",
+                deps=deps,
+                workspace_path="/tmp/demo",
+                project_name="Demo",
+                workspace_id=7,
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual([event["type"] for event in result.events], ["tool_call", "tool_result", "approval_required"])
+        self.assertEqual(result.events[2]["action_type"], "git_add")
+        self.assertEqual(result.final_text, "")
+
+    def test_fast_path_returns_text_for_successful_commit_step(self):
+        deps = AgentRuntimeDeps(
+            tool_registry={},
+            normalize_tool_args=lambda name, args: args,
+            stream_cli=lambda *args, **kwargs: None,
+            stream_api_chat=lambda *args, **kwargs: None,
+            stream_ollama_chat=lambda *args, **kwargs: None,
+            ollama_execution_profile_sync=lambda *args, **kwargs: {"model": "dummy"},
+            ollama_message_with_images=lambda text, images: {"role": "user", "content": text},
+            api_message_with_images=lambda text, images: {"role": "user", "content": text},
+            cli_message_with_images=lambda text, images: {"role": "user", "content": text},
+            find_cli=lambda path: path,
+            ollama_default_model="dummy",
+            ollama_agent_model="dummy",
+            db_path=Path(tempfile.gettempdir()) / "axon-fast-path.db",
+        )
+
+        with patch.object(
+            agent_fast_path,
+            "_direct_agent_action",
+            return_value=(
+                "shell_cmd",
+                {"cmd": 'git commit -m "feat: update tests"', "cwd": "/tmp/demo"},
+                "[axon] committed",
+                'ran `git commit -m "feat: update tests"` in `/tmp/demo`.',
+            ),
+        ):
+            result = agent_fast_path.maybe_run_fast_commit_path(
+                "Commit the repo",
+                deps=deps,
+                workspace_path="/tmp/demo",
+                project_name="Demo",
+                workspace_id=7,
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual([event["type"] for event in result.events], ["tool_call", "tool_result", "text", "done"])
+        self.assertIn("git commit", result.final_text)
+
+    async def test_agent_endpoint_uses_fast_commit_path_before_ai_resolution(self):
+        class FakeRequest:
+            async def is_disconnected(self):
+                return False
+
+        persisted = {"count": 0}
+
+        async def fake_save_message(*args, **kwargs):
+            persisted["count"] += 1
+
+        async def fake_log_event(*args, **kwargs):
+            persisted["logged"] = True
+
+        with patch.object(server.devdb, "get_db", self._fake_db), \
+             patch.object(server.devdb, "get_all_settings", return_value={}), \
+             patch.object(server.devdb, "get_project", return_value={"id": 7, "name": "Demo", "path": "/tmp/demo"}), \
+             patch.object(server.devdb, "save_message", side_effect=fake_save_message), \
+             patch.object(server.devdb, "log_event", side_effect=fake_log_event), \
+             patch.object(
+                 server.agent_fast_path,
+                 "maybe_run_fast_commit_path",
+                 return_value=agent_fast_path.FastPathResult(
+                     events=[
+                         {"type": "tool_call", "name": "shell_cmd", "args": {"cmd": "git add -A", "cwd": "/tmp/demo"}},
+                         {"type": "tool_result", "name": "shell_cmd", "result": "[axon] staged"},
+                         {"type": "text", "chunk": "staged the full worktree"},
+                         {"type": "done", "iterations": 1, "fast_path": True},
+                     ],
+                     final_text="staged the full worktree",
+                 ),
+             ), \
+             patch.object(server, "_effective_ai_params", side_effect=AssertionError("AI runtime should not resolve")):
+            response = await server.agent_endpoint(
+                server.AgentRequest(message="Commit the repo", project_id=7),
+                FakeRequest(),
+            )
+
+            chunks = []
+            async for item in response.body_iterator:
+                chunks.append(item)
+
+        self.assertTrue(chunks)
+        self.assertEqual(persisted["count"], 2)
+        self.assertTrue(persisted["logged"])
 
     async def test_chat_login_console_command_uses_selected_codex_override(self):
         persisted: dict[str, object] = {}
@@ -2818,7 +3015,6 @@ class AgentAutonomyRegressionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         snapshot = brain.agent_capture_permission_state()
-        previous_workspace = brain._ACTIVE_WORKSPACE_PATH
         token = brain._ACTIVE_AGENT_RUNTIME_CONTEXT.set(
             {
                 "runtime_permissions_mode": "default",
@@ -2828,16 +3024,18 @@ class AgentAutonomyRegressionTests(unittest.IsolatedAsyncioTestCase):
         )
         try:
             with _writable_tempdir() as tmpdir:
-                brain._ACTIVE_WORKSPACE_PATH = tmpdir
-                result = agent_file_actions._direct_agent_action(
-                    "Create the file /tmp/AXON_DIRECT_TMP_PROBE.txt containing exactly DEFAULT_GATE_PROBE, then reply with done.",
-                    history=[],
-                    project_name="Axon",
-                    workspace_path=tmpdir,
-                    deps=deps,
-                )
+                workspace_token = agent_runtime_state.set_active_workspace_path(tmpdir)
+                try:
+                    result = agent_file_actions._direct_agent_action(
+                        "Create the file /tmp/AXON_DIRECT_TMP_PROBE.txt containing exactly DEFAULT_GATE_PROBE, then reply with done.",
+                        history=[],
+                        project_name="Axon",
+                        workspace_path=tmpdir,
+                        deps=deps,
+                    )
+                finally:
+                    agent_runtime_state.reset_active_workspace_path(workspace_token)
         finally:
-            brain._ACTIVE_WORKSPACE_PATH = previous_workspace
             brain._ACTIVE_AGENT_RUNTIME_CONTEXT.reset(token)
             brain.agent_restore_permission_state(snapshot)
 
@@ -3101,6 +3299,46 @@ class AgentAutonomyRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Commit everything with commit message "feat: update payment, navigation, and tests".', tool_args["_resume_task"])
         self.assertTrue(tool_result.startswith("BLOCKED_CMD:git:git add -A"))
         self.assertEqual(answer, tool_result)
+
+    def test_direct_action_does_not_commit_for_explanatory_question(self):
+        async def fake_stream_cli(messages, **kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_api_chat(**kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_ollama_chat(**kwargs):
+            if False:
+                yield ""
+
+        deps = AgentRuntimeDeps(
+            tool_registry={"shell_cmd": lambda cmd, cwd="", timeout=30: f"BLOCKED_CMD:git:{cmd}"},
+            normalize_tool_args=lambda name, args: args,
+            stream_cli=fake_stream_cli,
+            stream_api_chat=fake_stream_api_chat,
+            stream_ollama_chat=fake_stream_ollama_chat,
+            ollama_execution_profile_sync=lambda *args, **kwargs: {"model": "dummy"},
+            ollama_message_with_images=lambda text, images: {"role": "user", "content": text},
+            api_message_with_images=lambda text, images: {"role": "user", "content": text},
+            cli_message_with_images=lambda text, images: {"role": "user", "content": text},
+            find_cli=lambda path: path,
+            ollama_default_model="dummy",
+            ollama_agent_model="dummy",
+            db_path=Path(tempfile.gettempdir()) / "axon-agent-test.db",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = agent_file_actions._direct_agent_action(
+                "How do I commit the repo?",
+                history=[],
+                project_name="Axon",
+                workspace_path=tmpdir,
+                deps=deps,
+            )
+
+        self.assertIsNone(result)
 
     def test_direct_action_vague_git_add_and_commit_request_drafts_message_and_blocks_stage_all(self):
         async def fake_stream_cli(messages, **kwargs):
@@ -3472,7 +3710,6 @@ class GitCommandApprovalGateTests(unittest.TestCase):
 class FileApprovalGateTests(unittest.TestCase):
     def test_workspace_auto_allows_file_action_inside_active_workspace(self):
         snapshot = brain.agent_capture_permission_state()
-        previous_workspace = brain._ACTIVE_WORKSPACE_PATH
         token = brain._ACTIVE_AGENT_RUNTIME_CONTEXT.set(
             {
                 "runtime_permissions_mode": "default",
@@ -3482,21 +3719,22 @@ class FileApprovalGateTests(unittest.TestCase):
         )
         try:
             with _writable_tempdir() as tmpdir:
-                brain._ACTIVE_WORKSPACE_PATH = tmpdir
-                action = approval_actions.build_edit_approval_action(
-                    "write",
-                    os.path.join(tmpdir, "notes.txt"),
-                    session_id="session-1",
-                )
-                self.assertTrue(brain._action_is_allowed(action))
+                workspace_token = agent_runtime_state.set_active_workspace_path(tmpdir)
+                try:
+                    action = approval_actions.build_edit_approval_action(
+                        "write",
+                        os.path.join(tmpdir, "notes.txt"),
+                        session_id="session-1",
+                    )
+                    self.assertTrue(brain._action_is_allowed(action))
+                finally:
+                    agent_runtime_state.reset_active_workspace_path(workspace_token)
         finally:
-            brain._ACTIVE_WORKSPACE_PATH = previous_workspace
             brain._ACTIVE_AGENT_RUNTIME_CONTEXT.reset(token)
             brain.agent_restore_permission_state(snapshot)
 
     def test_workspace_auto_blocks_file_action_outside_active_workspace(self):
         snapshot = brain.agent_capture_permission_state()
-        previous_workspace = brain._ACTIVE_WORKSPACE_PATH
         token = brain._ACTIVE_AGENT_RUNTIME_CONTEXT.set(
             {
                 "runtime_permissions_mode": "default",
@@ -3506,21 +3744,22 @@ class FileApprovalGateTests(unittest.TestCase):
         )
         try:
             with _writable_tempdir() as tmpdir:
-                brain._ACTIVE_WORKSPACE_PATH = tmpdir
-                action = approval_actions.build_edit_approval_action(
-                    "write",
-                    "/tmp/axon-default-block.txt",
-                    session_id="session-2",
-                )
-                self.assertFalse(brain._action_is_allowed(action))
+                workspace_token = agent_runtime_state.set_active_workspace_path(tmpdir)
+                try:
+                    action = approval_actions.build_edit_approval_action(
+                        "write",
+                        "/tmp/axon-default-block.txt",
+                        session_id="session-2",
+                    )
+                    self.assertFalse(brain._action_is_allowed(action))
+                finally:
+                    agent_runtime_state.reset_active_workspace_path(workspace_token)
         finally:
-            brain._ACTIVE_WORKSPACE_PATH = previous_workspace
             brain._ACTIVE_AGENT_RUNTIME_CONTEXT.reset(token)
             brain.agent_restore_permission_state(snapshot)
 
     def test_tool_write_file_blocks_outside_workspace_in_default_mode(self):
         snapshot = brain.agent_capture_permission_state()
-        previous_workspace = brain._ACTIVE_WORKSPACE_PATH
         token = brain._ACTIVE_AGENT_RUNTIME_CONTEXT.set(
             {
                 "runtime_permissions_mode": "default",
@@ -3533,20 +3772,21 @@ class FileApprovalGateTests(unittest.TestCase):
             if target.exists():
                 target.unlink()
             with _writable_tempdir() as tmpdir:
-                brain._ACTIVE_WORKSPACE_PATH = tmpdir
-                result = brain._tool_write_file(str(target), "DEFAULT_BLOCK")
-                self.assertTrue(result.startswith(f"BLOCKED_EDIT:write:{target}"))
-                self.assertFalse(target.exists())
+                workspace_token = agent_runtime_state.set_active_workspace_path(tmpdir)
+                try:
+                    result = brain._tool_write_file(str(target), "DEFAULT_BLOCK")
+                    self.assertTrue(result.startswith(f"BLOCKED_EDIT:write:{target}"))
+                    self.assertFalse(target.exists())
+                finally:
+                    agent_runtime_state.reset_active_workspace_path(workspace_token)
         finally:
             if target.exists():
                 target.unlink()
-            brain._ACTIVE_WORKSPACE_PATH = previous_workspace
             brain._ACTIVE_AGENT_RUNTIME_CONTEXT.reset(token)
             brain.agent_restore_permission_state(snapshot)
 
     def test_tool_write_file_allows_outside_workspace_in_full_access(self):
         snapshot = brain.agent_capture_permission_state()
-        previous_workspace = brain._ACTIVE_WORKSPACE_PATH
         token = brain._ACTIVE_AGENT_RUNTIME_CONTEXT.set(
             {
                 "runtime_permissions_mode": "full_access",
@@ -3559,15 +3799,17 @@ class FileApprovalGateTests(unittest.TestCase):
             if target.exists():
                 target.unlink()
             with _writable_tempdir() as tmpdir:
-                brain._ACTIVE_WORKSPACE_PATH = tmpdir
-                result = brain._tool_write_file(str(target), "FULL_ACCESS_OK")
-                self.assertIn("Written", result)
-                self.assertTrue(target.exists())
-                self.assertEqual(target.read_text(encoding="utf-8"), "FULL_ACCESS_OK")
+                workspace_token = agent_runtime_state.set_active_workspace_path(tmpdir)
+                try:
+                    result = brain._tool_write_file(str(target), "FULL_ACCESS_OK")
+                    self.assertIn("Written", result)
+                    self.assertTrue(target.exists())
+                    self.assertEqual(target.read_text(encoding="utf-8"), "FULL_ACCESS_OK")
+                finally:
+                    agent_runtime_state.reset_active_workspace_path(workspace_token)
         finally:
             if target.exists():
                 target.unlink()
-            brain._ACTIVE_WORKSPACE_PATH = previous_workspace
             brain._ACTIVE_AGENT_RUNTIME_CONTEXT.reset(token)
             brain.agent_restore_permission_state(snapshot)
 
@@ -3948,262 +4190,6 @@ class TaskSandboxServiceTests(unittest.TestCase):
 
             self.assertTrue(result["discarded"])
             self.assertFalse(sandbox_dir.exists())
-
-
-class AutoSessionServiceTests(unittest.TestCase):
-    def _git(self, cwd: Path, *args: str) -> str:
-        env = {
-            **os.environ,
-            "GIT_AUTHOR_NAME": "Axon Tests",
-            "GIT_AUTHOR_EMAIL": "axon@example.com",
-            "GIT_COMMITTER_NAME": "Axon Tests",
-            "GIT_COMMITTER_EMAIL": "axon@example.com",
-        }
-        result = subprocess.run(
-            ["git", "-C", str(cwd), *args],
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=60,
-        )
-        if result.returncode != 0:
-            raise AssertionError(result.stderr or result.stdout or f"git {' '.join(args)} failed")
-        return (result.stdout or "").strip()
-
-    def test_auto_session_apply_copies_changes_back_to_source(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            repo_root = root / "repo"
-            auto_root = root / "autos"
-            repo_root.mkdir()
-            self._git(repo_root, "init")
-            (repo_root / "app.txt").write_text("old\n", encoding="utf-8")
-            self._git(repo_root, "add", "app.txt")
-            self._git(repo_root, "commit", "-m", "init")
-
-            workspace = {"id": 7, "name": "Demo", "path": str(repo_root)}
-            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
-                meta = auto_session_service.ensure_auto_session(
-                    "auto-1",
-                    workspace,
-                    title="Auto demo",
-                    detail="Run autonomously",
-                    metadata={"status": "completed"},
-                )
-                sandbox_dir = Path(meta["sandbox_path"])
-                (sandbox_dir / "app.txt").write_text("new\n", encoding="utf-8")
-                refreshed = auto_session_service.refresh_auto_session("auto-1")
-                result = auto_session_service.apply_auto_session("auto-1")
-
-            self.assertEqual(refreshed["status"], "review_ready")
-            self.assertTrue(result["applied"])
-            self.assertEqual((repo_root / "app.txt").read_text(encoding="utf-8"), "new\n")
-            self.assertIn("Applied", result["summary"])
-
-    def test_auto_session_discard_removes_worktree(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            repo_root = root / "repo"
-            auto_root = root / "autos"
-            repo_root.mkdir()
-            self._git(repo_root, "init")
-            (repo_root / "app.txt").write_text("old\n", encoding="utf-8")
-            self._git(repo_root, "add", "app.txt")
-            self._git(repo_root, "commit", "-m", "init")
-
-            workspace = {"id": 8, "name": "Demo", "path": str(repo_root)}
-            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
-                meta = auto_session_service.ensure_auto_session(
-                    "auto-2",
-                    workspace,
-                    title="Auto demo",
-                    detail="Run autonomously",
-                    metadata={"status": "ready"},
-                )
-                sandbox_dir = Path(meta["sandbox_path"])
-                result = auto_session_service.discard_auto_session("auto-2")
-
-            self.assertTrue(result["discarded"])
-            self.assertFalse(sandbox_dir.exists())
-
-    def test_auto_session_apply_detects_source_conflicts(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            repo_root = root / "repo"
-            auto_root = root / "autos"
-            repo_root.mkdir()
-            self._git(repo_root, "init")
-            (repo_root / "app.txt").write_text("old\n", encoding="utf-8")
-            self._git(repo_root, "add", "app.txt")
-            self._git(repo_root, "commit", "-m", "init")
-
-            workspace = {"id": 9, "name": "Demo", "path": str(repo_root)}
-            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
-                meta = auto_session_service.ensure_auto_session(
-                    "auto-3",
-                    workspace,
-                    title="Auto demo",
-                    detail="Run autonomously",
-                    metadata={"status": "running"},
-                )
-                sandbox_dir = Path(meta["sandbox_path"])
-                (sandbox_dir / "app.txt").write_text("from sandbox\n", encoding="utf-8")
-                (repo_root / "app.txt").write_text("from source\n", encoding="utf-8")
-                with self.assertRaises(RuntimeError):
-                    auto_session_service.apply_auto_session("auto-3")
-
-    def test_auto_report_uses_evidence_sections(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            repo_root = root / "repo"
-            auto_root = root / "autos"
-            repo_root.mkdir()
-            self._git(repo_root, "init")
-            (repo_root / "app.txt").write_text("old\n", encoding="utf-8")
-            self._git(repo_root, "add", "app.txt")
-            self._git(repo_root, "commit", "-m", "init")
-
-            workspace = {"id": 10, "name": "Demo", "path": str(repo_root)}
-            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
-                auto_session_service.ensure_auto_session(
-                    "auto-4",
-                    workspace,
-                    title="Auto demo",
-                    detail="Run autonomously",
-                    metadata={
-                        "status": "completed",
-                        "final_output": "Changed the landing page.",
-                        "command_receipts": [{"command": "git diff --stat", "summary": "1 file changed"}],
-                        "verification_receipts": [{"command": "npm run build", "label": "npm run build", "summary": "passed"}],
-                        "inferred_notes": ["The next step likely touches dashboard polish."],
-                    },
-                )
-                refreshed = auto_session_service.refresh_auto_session("auto-4")
-
-            report = refreshed["report_markdown"]
-            self.assertIn("## Verified In This Run", report)
-            self.assertIn("## Inferred From Repo State", report)
-            self.assertIn("## Not Yet Verified", report)
-            self.assertIn("## Next Action Not Yet Taken", report)
-
-    def test_auto_refresh_ignores_codex_runtime_artifact(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            repo_root = root / "repo"
-            auto_root = root / "autos"
-            repo_root.mkdir()
-            self._git(repo_root, "init")
-            (repo_root / "README.md").write_text("hello\n", encoding="utf-8")
-            self._git(repo_root, "add", "README.md")
-            self._git(repo_root, "commit", "-m", "init")
-
-            workspace = {"id": 14, "name": "Demo", "path": str(repo_root)}
-            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
-                meta = auto_session_service.ensure_auto_session(
-                    "auto-5",
-                    workspace,
-                    title="Auto demo",
-                    detail="Run autonomously",
-                    metadata={"status": "ready"},
-                )
-                sandbox_dir = Path(meta["sandbox_path"])
-                (sandbox_dir / ".codex").write_text("runtime cache\n", encoding="utf-8")
-                refreshed = auto_session_service.refresh_auto_session("auto-5")
-
-            self.assertEqual(refreshed["changed_files"], [])
-            self.assertEqual(refreshed["status"], "ready")
-
-    def test_auto_refresh_promotes_stale_running_session_to_review_ready(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            repo_root = root / "repo"
-            auto_root = root / "autos"
-            repo_root.mkdir()
-            self._git(repo_root, "init")
-            (repo_root / "README.md").write_text("hello\n", encoding="utf-8")
-            self._git(repo_root, "add", "README.md")
-            self._git(repo_root, "commit", "-m", "init")
-
-            workspace = {"id": 15, "name": "Demo", "path": str(repo_root)}
-            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
-                meta = auto_session_service.ensure_auto_session(
-                    "auto-6",
-                    workspace,
-                    title="Auto demo",
-                    detail="Run autonomously",
-                    metadata={
-                        "status": "running",
-                        "last_run_completed_at": "2026-04-01T10:00:00Z",
-                        "final_output": "Changed the landing page copy.",
-                        "verification_receipts": [{"command": "npm run build", "summary": "passed"}],
-                    },
-                )
-                sandbox_dir = Path(meta["sandbox_path"])
-                (sandbox_dir / "README.md").write_text("updated\n", encoding="utf-8")
-                refreshed = auto_session_service.refresh_auto_session("auto-6")
-
-            self.assertEqual(refreshed["status"], "review_ready")
-            self.assertEqual(refreshed["last_error"], "")
-
-    def test_auto_refresh_marks_stale_running_session_without_handoff_as_error(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            repo_root = root / "repo"
-            auto_root = root / "autos"
-            repo_root.mkdir()
-            self._git(repo_root, "init")
-            (repo_root / "README.md").write_text("hello\n", encoding="utf-8")
-            self._git(repo_root, "add", "README.md")
-            self._git(repo_root, "commit", "-m", "init")
-
-            workspace = {"id": 16, "name": "Demo", "path": str(repo_root)}
-            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
-                auto_session_service.ensure_auto_session(
-                    "auto-7",
-                    workspace,
-                    title="Auto demo",
-                    detail="Run autonomously",
-                    metadata={
-                        "status": "running",
-                        "last_run_completed_at": "2026-04-01T10:00:00Z",
-                    },
-                )
-                refreshed = auto_session_service.refresh_auto_session("auto-7")
-
-            self.assertEqual(refreshed["status"], "error")
-            self.assertIn("reviewable handoff", refreshed["last_error"])
-
-    def test_auto_refresh_marks_deleted_or_invalid_worktree_as_error(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            repo_root = root / "repo"
-            auto_root = root / "autos"
-            repo_root.mkdir()
-            self._git(repo_root, "init")
-            (repo_root / "README.md").write_text("hello\n", encoding="utf-8")
-            self._git(repo_root, "add", "README.md")
-            self._git(repo_root, "commit", "-m", "init")
-
-            workspace = {"id": 17, "name": "Demo", "path": str(repo_root)}
-            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
-                meta = auto_session_service.ensure_auto_session(
-                    "auto-8",
-                    workspace,
-                    title="Auto demo",
-                    detail="Run autonomously",
-                    metadata={"status": "running"},
-                )
-                sandbox_dir = Path(meta["sandbox_path"])
-                git_dir = sandbox_dir / ".git"
-                if git_dir.is_file():
-                    git_dir.unlink()
-                elif git_dir.exists():
-                    shutil.rmtree(git_dir)
-                refreshed = auto_session_service.refresh_auto_session("auto-8")
-
-            self.assertEqual(refreshed["status"], "error")
-            self.assertIn("valid git worktree", refreshed["last_error"])
-            self.assertIn("## Not Yet Verified", refreshed["report_markdown"])
 
 
 class AutoSessionApiTests(unittest.IsolatedAsyncioTestCase):

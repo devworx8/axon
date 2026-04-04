@@ -81,6 +81,7 @@ def _relationship_signal_tokens(
         str(relationship.get("external_id") or "").strip().lower(),
         str(relationship.get("external_name") or "").strip().lower(),
         str(meta.get("project_id") or "").strip().lower(),
+        str(meta.get("project_name") or "").strip().lower(),
         str(meta.get("org_id") or "").strip().lower(),
         str(meta.get("remote_url") or "").strip().lower(),
         str(meta.get("config_file") or "").strip().lower(),
@@ -127,8 +128,9 @@ def infer_workspace_relationships(project: Any) -> list[dict[str, Any]]:
         except Exception:
             payload = {}
         project_id = str(payload.get("projectId") or "").strip()
+        project_name = str(payload.get("projectName") or "").strip()
         org_id = str(payload.get("orgId") or "").strip()
-        if project_id or org_id:
+        if project_id or org_id or project_name:
             inferred.append(
                 {
                     "id": None,
@@ -136,10 +138,10 @@ def infer_workspace_relationships(project: Any) -> list[dict[str, Any]]:
                     "external_system": "vercel",
                     "external_id": project_id,
                     "relationship_type": "primary",
-                    "external_name": project_dict.get("name") or project_id or "Vercel project",
+                    "external_name": project_name or project_dict.get("name") or project_id or "Vercel project",
                     "external_url": "",
                     "status": "inferred",
-                    "meta_json": _json_meta({"project_id": project_id, "org_id": org_id}),
+                    "meta_json": _json_meta({"project_id": project_id, "project_name": project_name, "org_id": org_id}),
                     "source": "inferred",
                 }
             )

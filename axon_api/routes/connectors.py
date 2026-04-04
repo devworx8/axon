@@ -1,15 +1,25 @@
 """API routes for external connectors and workspace relationship views."""
 from __future__ import annotations
 
-from collections import defaultdict
-from typing import Any
-
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
 
 import db as devdb
 import integrations as integ
+from axon_api.routes.connector_models import (
+    WorkspaceConnectorConnectRequest,
+    WorkspaceConnectorReconcileRequest,
+    WorkspaceRelationshipRequest,
+)
 from axon_api.services.attention_query import attention_summary
+from axon_api.services.connector_connection_state import connect_workspace_connector
+from axon_api.services.connector_github_status import github_status_for_workspace
+from axon_api.services.connector_reconcile import reconcile_workspace_connectors
+from axon_api.services.connector_workspace_views import (
+    connector_workspaces_for_system,
+    group_workspace_relationships,
+    row_dict,
+    workspace_connector_summary,
+)
 from axon_api.services.connector_attention import (
     sync_all_connector_attention,
     sync_github_attention,
@@ -18,6 +28,7 @@ from axon_api.services.connector_attention import (
     sync_workspace_connector_attention,
 )
 from axon_api.services.workspace_relationships import (
+    infer_workspace_relationships,
     link_workspace_relationship,
     list_workspace_relationships_for_workspace,
 )
@@ -33,83 +44,34 @@ from axon_data import (
 router = APIRouter(prefix="/api/connectors", tags=["connectors"])
 
 
-def _row(row: Any) -> dict[str, Any]:
-    return dict(row) if row else {}
-
-
-def _group_relationships(rows: list[dict[str, Any]]) -> dict[int, list[dict[str, Any]]]:
-    grouped: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    for row in rows:
-        workspace_id = int(row.get("workspace_id") or 0)
-        if workspace_id:
-            grouped[workspace_id].append(row)
-    return grouped
-
-
-class WorkspaceRelationshipRequest(BaseModel):
-    external_system: str
-    external_id: str = ""
-    relationship_type: str = "primary"
-    external_name: str = ""
-    external_url: str = ""
-    status: str = "active"
-    meta: dict[str, Any] | None = Field(default=None)
-
-
-async def _workspace_connector_summary(db, workspace_id: int) -> dict[str, Any]:
-    project = await get_project(db, workspace_id)
-    relationships = await list_workspace_relationships_for_workspace(db, workspace_id=workspace_id, limit=50)
-    inbox = await attention_summary(db, workspace_id=workspace_id, limit=50)
-    return {
-        "workspace": _row(project),
-        "relationships": relationships,
-        "attention": inbox,
-    }
-
-
-async def _github_status_for_workspace(db, workspace_id: int, branch: str = "", repo_path: str = "") -> dict[str, Any]:
-    project = await get_project(db, workspace_id)
-    if not project and not repo_path:
-        raise HTTPException(404, "Workspace not found")
-    settings = await devdb.get_all_settings(db)
-    token = settings.get("github_token", "")
-    project_dict = _row(project)
-    resolved_repo_path = repo_path or str(project_dict.get("path") or "")
-    if not resolved_repo_path:
-        raise HTTPException(404, "Repository path not found")
-    normalized_repo = normalize_repo_cwd(resolved_repo_path)
-    status = await integ.github_full_status(normalized_repo, token)
-    workflow_preview = {}
-    if branch.strip():
-        cwd, command = read_workflow_status(repo_path=normalized_repo, branch_name=branch)
-        workflow_preview = {"cwd": cwd, "command": command}
-    relationships = await list_workspace_relationships_for_workspace(
-        db,
-        workspace_id=workspace_id,
-        external_system="github",
-        limit=50,
-    )
-    return {
-        "workspace": _row(project),
-        "repo_path": normalized_repo,
-        "relationships": relationships,
-        "github": status,
-        "workflow_preview": workflow_preview,
-    }
-
-
 @router.get("/")
 async def connectors_overview(limit: int = 25):
     async with get_db() as db:
         summary: list[dict[str, Any]] = []
         projects = await get_projects(db, status="active")
         for project in list(projects or [])[: max(1, limit)]:
-            summary.append(await _workspace_connector_summary(db, int(project["id"])))
+            summary.append(
+                await workspace_connector_summary(
+                    db,
+                    workspace_id=int(project["id"]),
+                    get_project_fn=get_project,
+                    list_workspace_relationships_for_workspace_fn=list_workspace_relationships_for_workspace,
+                    attention_summary_fn=attention_summary,
+                )
+            )
         if not summary:
             relationship_rows = await list_workspace_relationships(db, limit=limit)
-            grouped = _group_relationships([dict(row) for row in relationship_rows])
+            grouped = group_workspace_relationships([dict(row) for row in relationship_rows])
             for workspace_id in grouped:
-                summary.append(await _workspace_connector_summary(db, workspace_id))
+                summary.append(
+                    await workspace_connector_summary(
+                        db,
+                        workspace_id=workspace_id,
+                        get_project_fn=get_project,
+                        list_workspace_relationships_for_workspace_fn=list_workspace_relationships_for_workspace,
+                        attention_summary_fn=attention_summary,
+                    )
+                )
     return {"workspaces": summary}
 
 
@@ -121,7 +83,13 @@ async def connectors_overview_alias(limit: int = 25):
 @router.get("/workspaces/{workspace_id}")
 async def connectors_workspace(workspace_id: int):
     async with get_db() as db:
-        return await _workspace_connector_summary(db, workspace_id)
+        return await workspace_connector_summary(
+            db,
+            workspace_id=workspace_id,
+            get_project_fn=get_project,
+            list_workspace_relationships_for_workspace_fn=list_workspace_relationships_for_workspace,
+            attention_summary_fn=attention_summary,
+        )
 
 
 @router.post("/workspaces/{workspace_id}/relationships")
@@ -144,6 +112,68 @@ async def connectors_link_workspace(workspace_id: int, body: WorkspaceRelationsh
     return {"relationship": relationship}
 
 
+@router.post("/workspaces/{workspace_id}/connect")
+async def connectors_connect_workspace(workspace_id: int, body: WorkspaceConnectorConnectRequest):
+    async with get_db() as db:
+        project = await get_project(db, workspace_id)
+        if not project:
+            raise HTTPException(404, "Workspace not found")
+        try:
+            result = await connect_workspace_connector(
+                db,
+                workspace=row_dict(project),
+                external_system=body.external_system,
+                external_id=body.external_id,
+                relationship_type=body.relationship_type,
+                external_name=body.external_name,
+                external_url=body.external_url,
+                status=body.status,
+                token=body.token,
+                secret=body.secret,
+                url=body.url,
+                org_slug=body.org_slug,
+                project_slugs=body.project_slugs,
+                mode=body.mode,
+                auth=body.auth,
+                meta=body.meta,
+                set_setting_fn=devdb.set_setting,
+                get_setting_fn=devdb.get_setting,
+                link_workspace_relationship_fn=link_workspace_relationship,
+                infer_workspace_relationships_fn=infer_workspace_relationships,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        summary = await workspace_connector_summary(
+            db,
+            workspace_id=workspace_id,
+            get_project_fn=get_project,
+            list_workspace_relationships_for_workspace_fn=list_workspace_relationships_for_workspace,
+            attention_summary_fn=attention_summary,
+        )
+    return {**result, "summary": summary}
+
+
+@router.post("/workspaces/{workspace_id}/reconcile")
+async def connectors_reconcile_workspace(
+    workspace_id: int,
+    body: WorkspaceConnectorReconcileRequest | None = None,
+):
+    request = body or WorkspaceConnectorReconcileRequest()
+    async with get_db() as db:
+        project = await get_project(db, workspace_id)
+        if not project:
+            raise HTTPException(404, "Workspace not found")
+        try:
+            return await reconcile_workspace_connectors(
+                db,
+                workspace_id=workspace_id,
+                persist_inferred=request.persist_inferred,
+                allow_repo_writes=request.allow_repo_writes,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+
 @router.get("/github/status")
 async def github_status(
     workspace_id: int | None = None,
@@ -154,7 +184,10 @@ async def github_status(
         if workspace_id is None and not repo_path.strip():
             raise HTTPException(400, "Provide workspace_id or repo_path")
         if workspace_id is not None:
-            return await _github_status_for_workspace(db, workspace_id, branch=branch)
+            try:
+                return await github_status_for_workspace(db, workspace_id, branch=branch)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc))
         settings = await devdb.get_all_settings(db)
         token = settings.get("github_token", "")
         normalized_repo = normalize_repo_cwd(repo_path)
@@ -175,7 +208,10 @@ async def github_status(
 @router.get("/github/workspaces/{workspace_id}/status")
 async def github_workspace_status(workspace_id: int, branch: str = ""):
     async with get_db() as db:
-        return await _github_status_for_workspace(db, workspace_id, branch=branch)
+        try:
+            return await github_status_for_workspace(db, workspace_id, branch=branch)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc))
 
 
 @router.post("/github/workspaces/{workspace_id}/attention-sync")
@@ -191,7 +227,7 @@ async def github_workflow_preview(workspace_id: int, branch: str = ""):
         project = await get_project(db, workspace_id)
         if not project:
             raise HTTPException(404, "Workspace not found")
-        project_dict = _row(project)
+        project_dict = row_dict(project)
         repo_path = normalize_repo_cwd(str(project_dict.get("path") or ""))
         cwd, command = read_workflow_status(repo_path=repo_path, branch_name=branch)
     return {"workspace": project_dict, "cwd": cwd, "command": command}
@@ -201,10 +237,16 @@ async def github_workflow_preview(workspace_id: int, branch: str = ""):
 async def vercel_status(workspace_id: int | None = None):
     async with get_db() as db:
         if workspace_id is None:
-            rows = await list_workspace_relationships(db, external_system="vercel", limit=100)
-            workspaces = []
-            for row in rows:
-                workspaces.append(await _workspace_connector_summary(db, int(row["workspace_id"])))
+            workspaces = await connector_workspaces_for_system(
+                db,
+                external_system="vercel",
+                limit=100,
+                get_projects_fn=get_projects,
+                get_project_fn=get_project,
+                list_workspace_relationships_fn=list_workspace_relationships,
+                list_workspace_relationships_for_workspace_fn=list_workspace_relationships_for_workspace,
+                attention_summary_fn=attention_summary,
+            )
             return {"workspaces": workspaces}
         project = await get_project(db, workspace_id)
         relationships = await list_workspace_relationships_for_workspace(
@@ -215,7 +257,7 @@ async def vercel_status(workspace_id: int | None = None):
         )
         inbox = await attention_summary(db, workspace_id=workspace_id, limit=50)
     return {
-        "workspace": _row(project),
+        "workspace": row_dict(project),
         "relationships": relationships,
         "attention": inbox,
         "status": "linked" if relationships else "unlinked",
@@ -238,10 +280,16 @@ async def vercel_workspace_attention_sync(workspace_id: int):
 async def sentry_status(workspace_id: int | None = None, limit: int = 25):
     async with get_db() as db:
         if workspace_id is None:
-            rows = await list_workspace_relationships(db, external_system="sentry", limit=100)
-            workspaces = []
-            for row in rows:
-                workspaces.append(await _workspace_connector_summary(db, int(row["workspace_id"])))
+            workspaces = await connector_workspaces_for_system(
+                db,
+                external_system="sentry",
+                limit=max(100, limit),
+                get_projects_fn=get_projects,
+                get_project_fn=get_project,
+                list_workspace_relationships_fn=list_workspace_relationships,
+                list_workspace_relationships_for_workspace_fn=list_workspace_relationships_for_workspace,
+                attention_summary_fn=attention_summary,
+            )
             unresolved = await list_error_events(db, source="sentry", status="", limit=limit)
             return {"workspaces": workspaces, "unresolved": unresolved}
         project = await get_project(db, workspace_id)
@@ -254,7 +302,7 @@ async def sentry_status(workspace_id: int | None = None, limit: int = 25):
         unresolved = await list_error_events(db, source="sentry", status="", limit=limit)
         inbox = await attention_summary(db, workspace_id=workspace_id, limit=50)
     return {
-        "workspace": _row(project),
+        "workspace": row_dict(project),
         "relationships": relationships,
         "attention": inbox,
         "unresolved": unresolved,

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { MetricCard } from '@/components/MetricCard';
 import { SurfaceCard, SurfaceHeader } from '@/components/SurfaceCard';
 import { StatusPill } from '@/components/StatusPill';
 import { AttentionItem } from '@/types/companion';
@@ -26,31 +27,76 @@ function AttentionRow({ item, onResolve }: { item: AttentionItem; onResolve?: (i
 
 export function AttentionScreen({
   summary,
-  items,
+  inbox,
   onResolve,
+  onSync,
+  syncing,
 }: {
   summary: { counts: Record<string, number> };
-  items: AttentionItem[];
+  inbox: { now: AttentionItem[]; waiting_on_me: AttentionItem[]; watch: AttentionItem[] };
   onResolve?: (id: number) => void;
+  onSync?: () => void;
+  syncing?: boolean;
 }) {
   return (
     <SurfaceCard>
       <SurfaceHeader title="Attention" subtitle="Now, waiting on me, and watch." />
-      <Text style={styles.counts}>Now {summary.counts.now || 0} · Waiting {summary.counts.waiting_on_me || 0} · Watch {summary.counts.watch || 0}</Text>
+      {onSync ? (
+        <Pressable onPress={onSync} disabled={syncing} style={[styles.syncAction, syncing ? styles.syncActionDisabled : null]}>
+          <Text style={styles.syncActionText}>{syncing ? 'Syncing…' : 'Sync connector signals'}</Text>
+        </Pressable>
+      ) : null}
+      <View style={styles.metrics}>
+        <MetricCard label="Now" value={summary.counts.now || 0} accent="warn" />
+        <MetricCard label="Waiting" value={summary.counts.waiting_on_me || 0} accent="accent" />
+        <MetricCard label="Watch" value={summary.counts.watch || 0} />
+      </View>
       <View style={styles.stack}>
-        {items.length ? items.map(item => <AttentionRow key={item.id} item={item} onResolve={onResolve} />) : <Text style={styles.empty}>No attention items yet.</Text>}
+        <AttentionBucket title="Now" items={inbox.now} onResolve={onResolve} />
+        <AttentionBucket title="Waiting on me" items={inbox.waiting_on_me} onResolve={onResolve} />
+        <AttentionBucket title="Watch" items={inbox.watch} onResolve={onResolve} />
       </View>
     </SurfaceCard>
   );
 }
 
+function AttentionBucket({
+  title,
+  items,
+  onResolve,
+}: {
+  title: string;
+  items: AttentionItem[];
+  onResolve?: (id: number) => void;
+}) {
+  return (
+    <View style={styles.bucket}>
+      <Text style={styles.bucketTitle}>{title}</Text>
+      <View style={styles.stack}>
+        {items.length ? items.map(item => <AttentionRow key={item.id} item={item} onResolve={onResolve} />) : <Text style={styles.empty}>Quiet for now.</Text>}
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  counts: {
-    color: '#7f93ad',
-    fontSize: 12,
+  metrics: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
   },
   stack: {
     gap: 10,
+  },
+  bucket: {
+    gap: 10,
+  },
+  bucketTitle: {
+    color: '#e5eefb',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
   row: {
     borderWidth: 1,
@@ -93,5 +139,19 @@ const styles = StyleSheet.create({
     color: '#7f93ad',
     fontSize: 13,
   },
+  syncAction: {
+    alignSelf: 'flex-start',
+    borderRadius: 12,
+    backgroundColor: '#38bdf8',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  syncActionDisabled: {
+    opacity: 0.6,
+  },
+  syncActionText: {
+    color: '#08111f',
+    fontSize: 12,
+    fontWeight: '800',
+  },
 });
-

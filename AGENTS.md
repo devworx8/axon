@@ -13,22 +13,31 @@ to reason about.
 If a change makes a large file larger, that change is presumed wrong unless it
 also extracts code in the same patch.
 
+Axon must operate as a set of bounded modules, not as one giant codebase. That
+is a permanent project rule.
+
 ## Non-negotiable guardrails
 
-1. No new monoliths.
+1. No new monoliths. Existing monoliths must only shrink.
 2. No new feature may be implemented as a large inline block inside an existing
    monolith when a bounded-context module can be created instead.
-3. If a touched file exceeds its soft limit, extraction is required in the same
-   change unless a written waiver is added to `docs/engineering/guardrails.md`.
-4. Root compatibility files must stay thin:
+3. Critical hotspots and ratcheted oversize files are governed by
+   `scripts/guardrails/hotspot_budgets.json` and may not exceed their checked-in
+   budgets.
+4. Touching a critical hotspot requires same-patch extraction that lowers its
+   ratchet budget, unless there is an active time-boxed waiver in
+   `docs/engineering/guardrail-waivers.json`.
+5. Waivers are emergency-only, time-boxed, and must name an exact extraction
+   follow-up. Expired waivers fail CI.
+6. Root compatibility files must stay thin:
    - `server.py` = app bootstrap + registration + compatibility only
    - `brain.py` = orchestration facade + compatibility only
    - `db.py` = database compatibility facade only
    - `ui/index.html` = shell/layout/partials/bootstrap only
-5. New files must have a single bounded context. Do not create dumping-ground
+7. New files must have a single bounded context. Do not create dumping-ground
    files like `misc.py`, `more_helpers.py`, `big_utils.py`, or `new_logic.js`.
-6. New inline JavaScript in HTML is strongly discouraged. Prefer `ui/js/*`.
-7. Backward compatibility matters. Existing routes, settings keys, storage
+8. New inline JavaScript in HTML is strongly discouraged. Prefer `ui/js/*`.
+9. Backward compatibility matters. Existing routes, settings keys, storage
    paths, and launcher flows must stay stable unless a migration is explicit.
 
 ## File size policy
@@ -40,7 +49,8 @@ These are the target limits after the refactor settles:
 - HTML partial: soft `250`, hard `400`
 - Markdown/design doc: soft `400`, hard `700`
 
-Legacy hotspots are temporarily frozen with baseline budgets and may not grow:
+Critical hotspots are permanently ratcheted with checked-in budgets and may not
+grow:
 
 - `server.py`
 - `brain.py`
@@ -49,6 +59,9 @@ Legacy hotspots are temporarily frozen with baseline budgets and may not grow:
 - `ui/js/dashboard.js`
 - `ui/js/chat.js`
 - `ui/js/voice.js`
+
+Additional oversize tracked files are ratcheted in
+`scripts/guardrails/hotspot_budgets.json` and also may not grow.
 
 `db.py` is already under active extraction and must stay a thin facade.
 
@@ -83,6 +96,7 @@ Every structural change must include the cheapest reliable verification:
 - `python3 -m py_compile` for touched Python modules
 - `node --check` for touched JS modules when applicable
 - targeted smoke tests for touched routes or scripts
+- guardrail scripts when architecture/governance files are touched
 
 ## Anti-hallucination policy — ZERO TOLERANCE
 
@@ -124,5 +138,7 @@ choose the second one.
 See:
 
 - `docs/engineering/guardrails.md`
+- `docs/engineering/guardrail-waivers.json`
 - `docs/architecture/refactor-roadmap.md`
 - `docs/architecture/module-map.md`
+- `scripts/guardrails/hotspot_budgets.json`

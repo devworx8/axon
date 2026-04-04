@@ -9,6 +9,7 @@ PORT=7734
 PIDFILE="$DEVBRAIN_DIR/.pid"
 LOGFILE="$DEVBRAIN_DIR/devbrain.log"
 HEALTH_URL="http://localhost:$PORT/api/health"
+ENV_FILES=("$DEVBRAIN_DIR/.env" "$DEVBRAIN_DIR/.env.local")
 
 health_up() {
   curl -sf "$HEALTH_URL" > /dev/null 2>&1
@@ -64,6 +65,16 @@ if [ -x "$DEVBRAIN_DIR/.venv/bin/python" ]; then
 else
   PYTHON="python3"
 fi
+
+# ── Load optional local environment files ─────────────────────────
+for ENV_FILE in "${ENV_FILES[@]}"; do
+  if [ -f "$ENV_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    set +a
+  fi
+done
 
 # ── Start server ──────────────────────────────────────────────────
 echo "✦ Starting Axon on http://localhost:$PORT  ($PYTHON)"

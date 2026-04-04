@@ -21,6 +21,7 @@ function axonDevopsMixin() {
         this.devopsLoadUsage(),
         this.devopsLoadBackends(),
         this.devopsLoadQuota(),
+        this.loadExpoOverview?.(true),
       ]);
     },
 

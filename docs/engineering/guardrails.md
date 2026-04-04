@@ -5,6 +5,9 @@
 These guardrails exist to stop Axon from sliding back into large, fragile,
 multi-purpose files.
 
+Axon is not allowed to return to a giant centralized codebase under any
+circumstance.
+
 ## Working rule
 
 Every file must have a single dominant reason to change.
@@ -25,8 +28,9 @@ continue feature work.
 
 ### Legacy freeze list
 
-The following files are currently too large and are under extraction. They may
-not grow beyond their baseline budgets:
+The following critical hotspots are under permanent ratchet enforcement. They
+may not grow beyond their checked-in budgets, and touching them requires a
+same-patch size reduction unless there is an active time-boxed waiver:
 
 - `server.py`
 - `brain.py`
@@ -35,6 +39,24 @@ not grow beyond their baseline budgets:
 - `ui/js/dashboard.js`
 - `ui/js/chat.js`
 - `ui/js/voice.js`
+
+Additional oversized tracked files are ratcheted in
+`scripts/guardrails/hotspot_budgets.json`. They may not grow, even when they
+are not on the critical hotspot list.
+
+## Ratchet budget manifest
+
+Machine-enforced budgets live in:
+
+- `scripts/guardrails/hotspot_budgets.json`
+
+The manifest has two groups:
+
+- `critical_hotspots`: the files that must shrink whenever they are touched
+- `ratcheted_oversize_files`: legacy oversized files that may not grow
+
+If a file shrinks, the manifest must be updated in the same patch to ratchet the
+budget down to the new real line count.
 
 ## Boundary rules
 
@@ -105,15 +127,27 @@ A guardrail waiver is allowed only when all of the following are true:
 2. Extraction would materially increase risk right now.
 3. The waiver is documented in the change and includes a follow-up task.
 
-Acceptable waiver note format:
+Waivers are stored in:
 
-```md
-Guardrail waiver:
-- file: path/to/file
-- reason: short operational reason
-- expiry: YYYY-MM-DD or next milestone
-- follow-up: exact extraction target
+- `docs/engineering/guardrail-waivers.json`
+
+Acceptable waiver entry format:
+
+```json
+{
+  "file": "server.py",
+  "reason": "urgent production fix",
+  "expiry": "2026-04-10",
+  "follow_up": "Extract agent routes into axon_api/routes/agent.py"
+}
 ```
+
+Rules:
+
+- waivers only apply to `critical_hotspots`
+- waivers allow a non-shrinking touch, not budget growth
+- expired waivers fail CI
+- missing `reason`, `expiry`, or `follow_up` fails CI
 
 ## Review checklist
 
@@ -125,12 +159,15 @@ Before merging:
 - Is the old entrypoint thinner than before?
 - Did verification run?
 
-## Initial enforcement
+## Current enforcement
 
 CI currently enforces:
 
-- file-size budgets, including legacy freeze budgets
+- tracked-file size budgets using the ratchet manifest
+- critical-hotspot shrink-or-waiver checks
 - `db.py` facade behavior
+- banned dumping-ground file names
 - presence of the architecture and guardrail docs
 
-These checks will get stricter as the monoliths are reduced.
+These checks ratchet tighter as monoliths are reduced. The end state is thin
+compatibility entrypoints plus bounded modules only.

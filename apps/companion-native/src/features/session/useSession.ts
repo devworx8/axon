@@ -20,13 +20,13 @@ export function useSession(config: CompanionConfig) {
     return next.session;
   }, [config]);
 
-  const ensure = useCallback(async (workspaceId?: number | null, summary = 'Companion session active') => {
+  const ensure = useCallback(async (workspaceId?: number | null, summary = 'Axon Online session active') => {
     const next = await upsertCompanionSession(
       {
         workspace_id: workspaceId ?? config.workspaceId ?? null,
         current_route: '/voice',
         current_view: 'voice',
-        active_task: 'Voice companion session',
+        active_task: 'Axon Online voice session',
         summary,
         status: 'active',
         mode: 'voice',

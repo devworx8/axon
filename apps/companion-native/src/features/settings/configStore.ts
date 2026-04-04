@@ -6,6 +6,7 @@ const COMPANION_CONFIG_KEY = 'axon.companion.config';
 
 function normalizeConfig(config: CompanionConfig): CompanionConfig {
   return {
+    apiBaseUrl: config.apiBaseUrl || '',
     accessToken: config.accessToken || '',
     tokenPair: config.tokenPair,
     deviceId: config.deviceId ?? null,
@@ -19,12 +20,12 @@ function normalizeConfig(config: CompanionConfig): CompanionConfig {
 export async function loadCompanionConfig(): Promise<CompanionConfig> {
   const raw = await SecureStore.getItemAsync(COMPANION_CONFIG_KEY);
   if (!raw) {
-    return { workspaceId: null, sessionId: null, deviceId: null };
+    return { apiBaseUrl: '', workspaceId: null, sessionId: null, deviceId: null };
   }
   try {
     return normalizeConfig(JSON.parse(raw) as CompanionConfig);
   } catch {
-    return { workspaceId: null, sessionId: null, deviceId: null };
+    return { apiBaseUrl: '', workspaceId: null, sessionId: null, deviceId: null };
   }
 }
 

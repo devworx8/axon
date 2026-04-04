@@ -1,0 +1,197 @@
+<!-- Runtime status — compact single row -->
+<div class="mt-1 rounded-xl border border-slate-800 bg-slate-950/55 px-2.5 py-1.5">
+  <div class="flex items-center gap-2 flex-wrap">
+    <template x-for="badge in connectionStatusBadges()" :key="badge.key">
+      <span class="rounded-full border px-2 py-0.5 text-[10px]"
+            :class="connectionBadgeClass(badge.state)"
+            x-text="badge.label"></span>
+    </template>
+    <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400"
+          x-text="runtimeStatus.active_model || composerModelSummary() || 'Saved default'"></span>
+    <span x-show="panelBrowserOpen || browserSession()?.connected || currentWorkspacePreview()?.url"
+          class="rounded-full border px-2 py-0.5 text-[10px]"
+          :class="browserControlModeTone()"
+          x-text="browserControlModeLabel()"></span>
+  </div>
+  <div class="mt-1 text-[9px] text-slate-500"
+       x-text="liveFeed.connected ? 'Live · ' + (liveFeed.latest?.at ? timeAgo(liveFeed.latest.at) : 'connected') : (liveFeed.reconnecting ? 'Reconnecting…' : 'Idle')"></div>
+</div>
+
+<!-- ▾ Live Page Control (collapsible) -->
+<div class="mt-1.5 rounded-xl border border-sky-500/20 bg-slate-950/70 overflow-hidden">
+  <button @click="panelBrowserOpen = !panelBrowserOpen" class="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-left group">
+    <span class="text-[9px] text-sky-500/60 transition" :class="panelBrowserOpen ? 'rotate-0' : '-rotate-90'" style="display:inline-block">▾</span>
+    <span class="text-[11px] font-semibold text-white group-hover:text-sky-200 transition">Axon Browser</span>
+    <span class="ml-auto rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] shrink-0"
+          :class="browserPendingProposalCount() && !browserFrameUrl() ? 'border-amber-500/20 bg-amber-500/10 text-amber-200' : browserPreviewStatusTone()"
+          x-text="browserPendingProposalCount() && !browserFrameUrl() ? `${browserPendingProposalCount()} pending` : browserPreviewStatusLabel()"></span>
+  </button>
+  <div x-show="panelBrowserOpen" x-transition class="px-3 pb-3">
+    <div class="mb-3 rounded-2xl border border-slate-800 bg-slate-950/70 overflow-hidden browser-stage">
+      <div class="border-b border-slate-800 bg-slate-950/90 px-3 py-3 browser-stage__header browser-stage__header--compact">
+        <div class="flex flex-wrap items-center gap-2">
+          <div class="browser-stage__traffic shrink-0">
+            <span></span><span></span><span></span>
+          </div>
+          <span class="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.16em]"
+                :class="browserOwnershipTone()"
+                x-text="browserOwnershipLabel()"></span>
+          <span class="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.16em]"
+                :class="browserControlModeTone()"
+                x-text="browserControlModeLabel()"></span>
+          <span class="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.16em]"
+                :class="browserPreviewStatusTone()"
+                x-text="browserPreviewStatusLabel()"></span>
+          <span x-show="browserAttachedWorkspaceLabel()"
+                class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-[10px] text-slate-300"
+                x-text="browserAttachedWorkspaceLabel()"></span>
+          <span x-show="browserPendingProposalCount()"
+                class="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200"
+                x-text="browserPendingProposalLabel()"></span>
+        </div>
+
+        <div class="mt-3 browser-stage__address-row">
+          <button @click="$refs.devPreviewFrame && browserFrameUrl() && ($refs.devPreviewFrame.src = browserFrameUrl())"
+                  class="browser-stage__icon-btn"
+                  title="Reload browser frame">↻</button>
+          <div class="min-w-0 flex-1 rounded-xl border border-slate-800 bg-slate-950 px-3 py-2">
+            <div class="truncate text-[11px] text-slate-200" x-text="browserFrameUrl() || 'No live page attached yet'"></div>
+            <div class="mt-0.5 truncate text-[10px] text-slate-500" x-text="browserCommandLabel()"></div>
+          </div>
+          <button x-show="browserFrameUrl()"
+                  @click="window.open(browserFrameUrl(), '_blank', 'noopener,noreferrer')"
+                  class="browser-stage__icon-btn"
+                  title="Open in browser">↗</button>
+        </div>
+
+        <div class="mt-2 flex flex-wrap items-center gap-2 text-[10px] browser-stage__meta-line">
+          <span x-show="currentWorkspacePreview()?.framework"
+                class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 uppercase tracking-[0.16em] text-slate-400"
+                x-text="currentWorkspacePreview()?.framework"></span>
+          <span x-show="currentWorkspacePreview()?.status"
+                class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 uppercase tracking-[0.16em] text-slate-400"
+                x-text="String(currentWorkspacePreview()?.status || '').replace(/_/g, ' ')"></span>
+          <span x-show="browserSession()?.last_seen_at"
+                class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-slate-500"
+                x-text="'Seen ' + timeAgo(browserSession().last_seen_at)"></span>
+          <span x-show="browserSourcePath()"
+                class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-slate-500"
+                x-text="browserSourcePath()"></span>
+        </div>
+
+        <div class="mt-3 browser-stage__toolbar browser-stage__toolbar--ribbon">
+          <button @click="browserPrimaryAction()"
+                  class="browser-stage__action browser-stage__action--primary"
+                  x-text="browserPrimaryActionLabel()"></button>
+          <button @click="openWorkspaceTestTab()"
+                  class="browser-stage__action">
+            Test Tab
+          </button>
+          <button @click="snapPreviewPanelHalf()"
+                  class="browser-stage__action">
+            Split 50%
+          </button>
+          <button x-show="currentWorkspacePreview()?.url"
+                  @click="window.open(currentWorkspacePreview()?.url, '_blank', 'noopener,noreferrer')"
+                  class="browser-stage__action">
+            Browser
+          </button>
+          <button x-show="currentWorkspacePreview()?.url"
+                  @click="navigator.clipboard?.writeText(currentWorkspacePreview()?.url || ''); showToast('Preview URL copied')"
+                  class="browser-stage__action">
+            Copy URL
+          </button>
+          <button x-show="currentWorkspacePreview()?.url"
+                  @click="stopWorkspacePreview()"
+                  class="browser-stage__action browser-stage__action--danger">
+            Stop
+          </button>
+        </div>
+      </div>
+
+      <div class="browser-stage__frame-shell border-t border-slate-800/70 bg-slate-950/95">
+        <template x-if="browserFrameUrl()">
+          <div class="preview-frame-shell overflow-hidden bg-slate-950" style="height: min(62vh, 720px);">
+            <div class="h-full w-full bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.08),_rgba(15,23,42,0.2)_38%,_rgba(2,6,23,0.96)_72%)]">
+              <iframe x-ref="devPreviewFrame" :src="browserFrameUrl()" class="w-full h-full border-0 bg-slate-950"
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                      loading="lazy"></iframe>
+            </div>
+          </div>
+        </template>
+        <div x-show="currentWorkspacePreviewLoading()"
+             class="border-t border-amber-500/10 bg-amber-500/8 px-4 py-4 text-[11px] text-amber-100">
+          <div class="flex items-center gap-2">
+            <span class="axon-spinner axon-spinner--sm"></span>
+            <span>Axon is starting the live page for <span class="font-semibold" x-text="scopedWorkspacePreviewState().workspace_name || chatProject?.name || 'this workspace'"></span>.</span>
+          </div>
+        </div>
+        <div x-show="currentWorkspacePreviewError() || currentWorkspacePreview()?.last_error"
+             class="border-t border-rose-500/12 bg-rose-500/8 px-4 py-4 text-[11px] text-rose-100">
+          <div class="font-semibold text-rose-200">Browser surface needs attention</div>
+          <div class="mt-1 leading-5 text-rose-100/90"
+               x-text="currentWorkspacePreviewError() || currentWorkspacePreview()?.last_error"></div>
+        </div>
+        <div x-show="!browserFrameUrl() && !currentWorkspacePreviewLoading() && !currentWorkspacePreviewError()"
+             class="browser-stage__empty bg-slate-950/80">
+          <div class="text-sm font-semibold text-slate-200">No live browser surface attached</div>
+          <div class="mt-1 text-[11px] leading-5 text-slate-500">
+            Start a live page to move this panel from passive preview to an explicit Axon-controlled browser surface for inspect, verify, and browser actions.
+          </div>
+          <div class="mt-3 flex flex-wrap justify-center gap-2">
+            <button @click="browserPrimaryAction()"
+                    class="browser-stage__action browser-stage__action--primary">
+              Start Live Page
+            </button>
+            <button @click="openWorkspaceTestTab()"
+                    class="browser-stage__action">
+              Open Test Tab
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div x-show="!browserFrameUrl()" class="mt-2 flex gap-1.5">
+      <input x-ref="previewUrlInput" type="text" placeholder="http://localhost:3000"
+             class="flex-1 rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-[11px] text-slate-200 placeholder-slate-600 focus:border-sky-500/50 transition font-mono"
+             @keydown.enter="setScopedPreviewUrl($el.value.trim())" />
+      <button @click="setScopedPreviewUrl($refs.previewUrlInput?.value?.trim())"
+              class="rounded-lg border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 text-[10px] text-sky-300 hover:bg-sky-500/20 transition">Preview</button>
+    </div>
+
+    <div x-show="browserActions.proposals?.length" class="mt-3 browser-stage__pending-strip">
+      <div class="flex items-center justify-between gap-2">
+        <div class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Pending browser actions</div>
+        <span class="rounded-full border border-amber-500/30 bg-amber-500/12 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-widest text-amber-300"
+              x-text="browserPendingProposalLabel()"></span>
+      </div>
+      <div class="mt-2 space-y-2">
+        <template x-for="proposal in (browserActions.proposals || [])" :key="proposal.id">
+          <div class="browser-stage__pending-item">
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span class="text-[11px] font-semibold text-white" x-text="proposal.summary"></span>
+                <span class="rounded-full border border-slate-700/60 bg-slate-900/50 px-2 py-0.5 text-[9px] uppercase tracking-[0.12em] text-slate-400"
+                      x-text="browserActionScopeLabel(proposal.scope)"></span>
+              </div>
+              <div x-show="proposal.target || proposal.url"
+                   class="mt-1 truncate text-[10px] text-slate-400"
+                   x-text="proposal.target || proposal.url"></div>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <button @click="approveBrowserAction(proposal.id)"
+                      class="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-200 transition hover:border-emerald-400/35 hover:text-emerald-100">
+                Approve
+              </button>
+              <button @click="rejectBrowserAction(proposal.id)"
+                      class="rounded-lg border border-rose-500/20 bg-rose-500/10 px-2 py-1 text-[10px] text-rose-200 transition hover:border-rose-400/35 hover:text-rose-100">
+                Reject
+              </button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div><!-- /panelBrowserOpen -->
+</div>

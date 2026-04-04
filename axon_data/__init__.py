@@ -130,6 +130,47 @@ from .companion_voice import (
     list_companion_voice_turns,
     log_companion_voice_turn,
 )
+from .trusted_devices import (
+    get_trusted_device_state,
+    list_trusted_device_states,
+    upsert_trusted_device_state,
+)
+from .mobile_elevation import (
+    create_mobile_elevation_session,
+    get_mobile_elevation_session,
+    get_mobile_elevation_session_by_key,
+    list_mobile_elevation_sessions,
+    update_mobile_elevation_session,
+)
+from .mobile_challenges import (
+    create_risk_challenge,
+    get_risk_challenge,
+    get_risk_challenge_by_key,
+    list_risk_challenges,
+    update_risk_challenge,
+)
+from .action_receipts import (
+    create_action_receipt,
+    get_action_receipt,
+    list_action_receipts,
+)
+from .control_capabilities import (
+    get_control_capability,
+    list_control_capabilities,
+    upsert_control_capability,
+)
+from .mcp_registry import (
+    get_mcp_cache,
+    get_mcp_server,
+    get_mcp_server_by_key,
+    list_mcp_capabilities,
+    list_mcp_servers,
+    list_mcp_sessions,
+    upsert_mcp_cache,
+    upsert_mcp_capability,
+    upsert_mcp_server,
+    upsert_mcp_session,
+)
 from .settings import get_all_settings, get_setting, set_setting
 from .tasks import add_task, delete_task, get_tasks, update_task, update_task_status
 from .terminal import (
@@ -306,6 +347,35 @@ __all__ = [
     "get_companion_voice_turn",
     "list_companion_voice_turns",
     "log_companion_voice_turn",
+    "get_trusted_device_state",
+    "list_trusted_device_states",
+    "upsert_trusted_device_state",
+    "create_mobile_elevation_session",
+    "get_mobile_elevation_session",
+    "get_mobile_elevation_session_by_key",
+    "list_mobile_elevation_sessions",
+    "update_mobile_elevation_session",
+    "create_risk_challenge",
+    "get_risk_challenge",
+    "get_risk_challenge_by_key",
+    "list_risk_challenges",
+    "update_risk_challenge",
+    "create_action_receipt",
+    "get_action_receipt",
+    "list_action_receipts",
+    "get_control_capability",
+    "list_control_capabilities",
+    "upsert_control_capability",
+    "get_mcp_cache",
+    "get_mcp_server",
+    "get_mcp_server_by_key",
+    "list_mcp_capabilities",
+    "list_mcp_servers",
+    "list_mcp_sessions",
+    "upsert_mcp_cache",
+    "upsert_mcp_capability",
+    "upsert_mcp_server",
+    "upsert_mcp_session",
     "disable_companion_push_subscription",
     "get_companion_push_subscription",
     "list_companion_push_subscriptions",

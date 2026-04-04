@@ -1,0 +1,205 @@
+<section class="rounded-[26px] border border-slate-800 bg-[radial-gradient(circle_at_top_left,rgba(244,63,94,0.08),transparent_36%),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(15,23,42,0.78))] p-4 shadow-[0_18px_60px_rgba(15,23,42,0.24)] md:p-5">
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div class="max-w-2xl">
+      <div class="text-[10px] font-semibold uppercase tracking-[0.22em] text-rose-300/75">Attention Inbox</div>
+      <div class="mt-2 text-lg font-semibold text-white">What needs you now</div>
+      <div class="mt-1 text-sm leading-6 text-slate-400">Urgent signals, approvals, and slower watch-list drift grouped so the next move is obvious.</div>
+    </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <span x-show="attentionUpdatedAt"
+            class="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 text-[10px] text-slate-400"
+            x-text="'Updated ' + timeAgo(attentionUpdatedAt)"></span>
+      <button @click="loadAttentionInbox()"
+              class="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-950/80 px-3 py-2 text-[11px] text-slate-200 transition hover:border-slate-500">
+        <span class="h-2 w-2 rounded-full bg-cyan-300" :class="attentionLoading ? 'animate-pulse' : ''"></span>
+        <span x-text="attentionLoading ? 'Refreshing…' : 'Refresh inbox'"></span>
+      </button>
+    </div>
+  </div>
+
+  <div class="mt-5 dashboard-attention-stats">
+    <template x-for="bucket in ['now', 'waiting_on_me', 'watch']" :key="`attention-stat-${bucket}`">
+      <div class="rounded-2xl border p-3.5" :class="attentionBucketPanelTone(bucket)">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-200/80" x-text="attentionBucketLabel(bucket)"></div>
+            <div class="mt-2 text-2xl font-semibold text-white" x-text="attentionBucketCount(bucket)"></div>
+          </div>
+          <span class="rounded-full border px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.16em]"
+                :class="attentionBucketTone(bucket)"
+                x-text="bucket === 'now' ? 'Live' : bucket === 'waiting_on_me' ? 'Blocked' : 'Observe'"></span>
+        </div>
+        <div class="mt-2 text-[11px] leading-5 text-slate-300/80" x-text="attentionBucketDescription(bucket)"></div>
+      </div>
+    </template>
+  </div>
+
+  <div x-show="attentionError" class="mt-4 rounded-2xl border border-rose-500/20 bg-rose-500/8 px-4 py-3 text-sm text-rose-200" x-text="attentionError"></div>
+  <div x-show="attentionLoading" class="mt-4 rounded-2xl border border-slate-800 bg-slate-950/60 px-4 py-6 text-sm text-slate-400">Refreshing attention inbox…</div>
+
+  <div class="mt-5 dashboard-attention-layout">
+    <section class="rounded-[24px] border p-4" :class="attentionBucketPanelTone('now')">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <div class="text-[11px] font-semibold uppercase tracking-[0.18em] text-rose-200/85">Now</div>
+          <div class="mt-1 text-sm leading-6 text-slate-300/80">High-urgency items across connected systems and Axon runtime activity.</div>
+        </div>
+        <span class="rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
+              :class="attentionBucketTone('now')"
+              x-text="`${attentionBucketCount('now')} live`"></span>
+      </div>
+
+      <template x-if="attentionBucketLeadItem('now') && !attentionLoading">
+        <article class="mt-4 rounded-[22px] border p-4 shadow-[0_14px_34px_rgba(2,6,23,0.22)]" :class="attentionCardTone(attentionBucketLeadItem('now'))">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
+                    :class="attentionSourceTone(attentionBucketLeadItem('now').source)"
+                    x-text="attentionBucketLeadItem('now').source || 'system'"></span>
+              <span class="rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
+                    :class="attentionSeverityTone(attentionBucketLeadItem('now'))"
+                    x-text="attentionSeverityLabel(attentionBucketLeadItem('now'))"></span>
+              <span x-show="Number(attentionBucketLeadItem('now').occurrence_count || 0) > 1"
+                    class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-1 text-[10px] text-slate-300"
+                    x-text="`Seen ${attentionBucketLeadItem('now').occurrence_count}x`"></span>
+            </div>
+            <div class="text-[11px] text-slate-400" x-text="attentionItemAge(attentionBucketLeadItem('now'))"></div>
+          </div>
+
+          <div class="mt-4 text-[17px] font-semibold leading-7 text-white" x-text="attentionBucketLeadItem('now').title"></div>
+          <div class="mt-2 text-sm leading-7 text-slate-300"
+               x-text="attentionBucketLeadItem('now').summary || attentionBucketLeadItem('now').detail || 'Open this item to inspect the full context and next action.'"></div>
+
+          <div class="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+            <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1"
+                  x-text="attentionWorkspaceLabel(attentionBucketLeadItem('now'))"></span>
+            <span x-show="attentionBucketLeadItem('now').status"
+                  class="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1"
+                  x-text="String(attentionBucketLeadItem('now').status || '').replace(/_/g, ' ')"></span>
+          </div>
+
+          <div class="mt-5 flex flex-wrap items-center gap-2">
+            <button @click="openAttentionItem(attentionBucketLeadItem('now'))"
+                    class="inline-flex items-center justify-center rounded-xl border border-slate-500/60 bg-slate-950/80 px-3 py-2 text-[11px] font-medium text-white transition hover:border-slate-300"
+                    x-text="attentionPrimaryActionLabel(attentionBucketLeadItem('now'))"></button>
+            <button @click.stop="acknowledgeAttentionItem(attentionBucketLeadItem('now'))"
+                    class="inline-flex items-center justify-center rounded-xl border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-[11px] text-amber-200 transition hover:bg-amber-500/12">
+              Acknowledge
+            </button>
+            <button @click.stop="resolveAttentionItem(attentionBucketLeadItem('now'))"
+                    class="inline-flex items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/8 px-3 py-2 text-[11px] text-emerald-200 transition hover:bg-emerald-500/12">
+              Resolve
+            </button>
+          </div>
+        </article>
+      </template>
+
+      <template x-if="!attentionBucketLeadItem('now') && !attentionLoading">
+        <div class="mt-4 rounded-[22px] border border-dashed border-slate-700 bg-slate-950/65 px-4 py-6">
+          <div class="text-sm font-medium text-slate-200">Inbox clear</div>
+          <div class="mt-1 text-sm leading-6 text-slate-400" x-text="attentionBucketEmptyCopy('now')"></div>
+        </div>
+      </template>
+
+      <div x-show="attentionBucketRemainingItems('now').length" class="mt-4 grid gap-3 md:grid-cols-2">
+        <template x-for="item in attentionBucketRemainingItems('now')" :key="`attention-now-${item.id}`">
+          <article class="rounded-2xl border p-3.5" :class="attentionCardTone(item)">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.14em]"
+                        :class="attentionSourceTone(item.source)"
+                        x-text="item.source || 'system'"></span>
+                  <span class="rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.14em]"
+                        :class="attentionSeverityTone(item)"
+                        x-text="attentionSeverityLabel(item)"></span>
+                </div>
+                <div class="mt-2 text-[14px] font-medium leading-6 text-slate-100" x-text="item.title"></div>
+              </div>
+              <div class="shrink-0 text-[10px] text-slate-500" x-text="attentionItemAge(item)"></div>
+            </div>
+            <div class="mt-2 text-[12px] leading-6 text-slate-400 line-clamp-3" x-text="item.summary || item.detail || attentionBucketDescription('now')"></div>
+            <div class="mt-4 flex flex-wrap items-center justify-between gap-2">
+              <div class="truncate text-[10px] text-slate-500" x-text="attentionWorkspaceLabel(item)"></div>
+              <div class="flex flex-wrap items-center gap-1.5">
+                <button @click="openAttentionItem(item)"
+                        class="rounded-lg border border-slate-700 bg-slate-900/80 px-2.5 py-1.5 text-[10px] text-slate-200 transition hover:border-slate-500"
+                        x-text="attentionPrimaryActionLabel(item)"></button>
+                <button @click.stop="acknowledgeAttentionItem(item)"
+                        class="rounded-lg border border-amber-500/20 bg-amber-500/8 px-2.5 py-1.5 text-[10px] text-amber-200 transition hover:bg-amber-500/12">
+                  Ack
+                </button>
+                <button @click.stop="resolveAttentionItem(item)"
+                        class="rounded-lg border border-emerald-500/20 bg-emerald-500/8 px-2.5 py-1.5 text-[10px] text-emerald-200 transition hover:bg-emerald-500/12">
+                  Resolve
+                </button>
+              </div>
+            </div>
+          </article>
+        </template>
+      </div>
+    </section>
+
+    <div class="dashboard-attention-side-stack">
+      <template x-for="bucket in ['waiting_on_me', 'watch']" :key="`attention-side-${bucket}`">
+        <section class="rounded-[24px] border p-4" :class="attentionBucketPanelTone(bucket)">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <div class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200/85" x-text="attentionBucketLabel(bucket)"></div>
+              <div class="mt-1 text-sm leading-6 text-slate-300/80" x-text="attentionBucketDescription(bucket)"></div>
+            </div>
+            <span class="rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
+                  :class="attentionBucketTone(bucket)"
+                  x-text="attentionBucketCount(bucket)"></span>
+          </div>
+
+          <div class="mt-4 space-y-3">
+            <template x-if="!attentionBucketItems(bucket, 3).length && !attentionLoading">
+              <div class="rounded-2xl border border-dashed border-slate-700 bg-slate-950/65 px-4 py-5">
+                <div class="text-sm font-medium text-slate-200">Quiet for now</div>
+                <div class="mt-1 text-sm leading-6 text-slate-400" x-text="attentionBucketEmptyCopy(bucket)"></div>
+              </div>
+            </template>
+
+            <template x-for="item in attentionBucketItems(bucket, 3)" :key="`attention-${bucket}-${item.id}`">
+              <article class="rounded-2xl border p-3.5" :class="attentionCardTone(item)">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-1.5">
+                      <span class="rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.14em]"
+                            :class="attentionSourceTone(item.source)"
+                            x-text="item.source || 'system'"></span>
+                      <span class="rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.14em]"
+                            :class="attentionSeverityTone(item)"
+                            x-text="attentionSeverityLabel(item)"></span>
+                    </div>
+                    <div class="mt-2 text-[14px] font-medium leading-6 text-slate-100" x-text="item.title"></div>
+                    <div class="mt-1 text-[12px] leading-6 text-slate-400 line-clamp-3" x-text="item.summary || item.detail || attentionBucketDescription(bucket)"></div>
+                  </div>
+                  <div class="shrink-0 text-[10px] text-slate-500" x-text="attentionItemAge(item)"></div>
+                </div>
+
+                <div class="mt-4 flex flex-wrap items-center justify-between gap-2">
+                  <div class="truncate text-[10px] text-slate-500" x-text="attentionWorkspaceLabel(item)"></div>
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    <button @click="openAttentionItem(item)"
+                            class="rounded-lg border border-slate-700 bg-slate-900/80 px-2.5 py-1.5 text-[10px] text-slate-200 transition hover:border-slate-500"
+                            x-text="attentionPrimaryActionLabel(item)"></button>
+                    <button @click.stop="acknowledgeAttentionItem(item)"
+                            class="rounded-lg border border-amber-500/20 bg-amber-500/8 px-2.5 py-1.5 text-[10px] text-amber-200 transition hover:bg-amber-500/12">
+                      Ack
+                    </button>
+                    <button @click.stop="resolveAttentionItem(item)"
+                            class="rounded-lg border border-emerald-500/20 bg-emerald-500/8 px-2.5 py-1.5 text-[10px] text-emerald-200 transition hover:bg-emerald-500/12">
+                      Resolve
+                    </button>
+                  </div>
+                </div>
+              </article>
+            </template>
+          </div>
+        </section>
+      </template>
+    </div>
+  </div>
+</section>

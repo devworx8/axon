@@ -14,6 +14,14 @@ from .agent_paths import (
     _resolve_user_path,
     _workspace_root_path,
 )
+from .agent_commit_intents import (
+    commit_scope_is_all_changes as _commit_scope_is_all_changes,
+    commit_scope_is_stage_all_request as _commit_scope_is_stage_all_request,
+    extract_commit_message as _extract_commit_message,
+    extract_push_remote as _extract_push_remote,
+    looks_like_commit_request as _looks_like_commit_request,
+    looks_like_push_request as _looks_like_push_request,
+)
 from .github_orchestrator import (
     extract_quoted_value,
     push_branch,
@@ -238,56 +246,6 @@ def _extract_explicit_shell_command(user_message: str) -> Optional[str]:
     return candidate.rstrip(".,;:!?")
 
 
-def _looks_like_commit_request(user_message: str) -> bool:
-    lower = (user_message or "").lower()
-    commit_phrases = (
-        "git commit",
-        "commit and push",
-        "git add and commit",
-        "add and commit",
-        "stage and commit",
-        "stage the changes and commit",
-        "stage everything and commit",
-        "commit everything",
-        "commit all changes",
-        "commit the changes",
-        "commit these changes",
-        "commit the current changes",
-        "commit the worktree",
-        "commit the current worktree",
-        "create a local commit",
-        "make a local commit",
-        "create a git commit",
-        "make a git commit",
-    )
-    return any(phrase in lower for phrase in commit_phrases)
-
-
-def _looks_like_push_request(user_message: str) -> bool:
-    lower = (user_message or "").lower()
-    return any(phrase in lower for phrase in (
-        "git push",
-        "commit and push",
-        "push this branch",
-        "push the branch",
-        "push branch",
-        "push my changes",
-        "push the changes",
-        "publish the branch",
-    ))
-
-
-def _extract_push_remote(user_message: str) -> str:
-    remote = "origin"
-    remote_match = _re.search(r"\bto\s+([A-Za-z0-9._/-]+)\b", user_message or "", flags=_re.IGNORECASE)
-    if not remote_match:
-        return remote
-    candidate_remote = remote_match.group(1).strip()
-    if candidate_remote and candidate_remote.lower() not in {"branch", "pr", "pull", "request"}:
-        return candidate_remote
-    return remote
-
-
 def _looks_like_pr_request(user_message: str) -> bool:
     lower = (user_message or "").lower()
     return any(phrase in lower for phrase in (
@@ -313,49 +271,6 @@ def _looks_like_workflow_status_request(user_message: str) -> bool:
         "workflow runs",
         "pipeline status",
     ))
-
-
-def _commit_scope_is_all_changes(user_message: str) -> bool:
-    lower = (user_message or "").lower()
-    scope_phrases = (
-        "everything",
-        "all changes",
-        "full worktree",
-        "whole worktree",
-        "entire worktree",
-        "full repo",
-        "entire repo",
-    )
-    return any(phrase in lower for phrase in scope_phrases) or _commit_scope_is_stage_all_request(user_message)
-
-
-def _extract_commit_message(user_message: str) -> Optional[str]:
-    patterns = (
-        r'\b(?:with|using)\s+(?:the\s+)?commit message\s+["\'`]([^"\']+?)["\'`]',
-        r'\bcommit message\s*[:=]?\s*["\'`]([^"\']+?)["\'`]',
-        r'\bmessage\s*[:=]?\s*["\'`]([^"\']+?)["\'`]',
-        r'\bas\s+["\'`]([^"\']+?)["\'`]',
-        r'\bcalled\s+["\'`]([^"\']+?)["\'`]',
-        r'\bnamed\s+["\'`]([^"\']+?)["\'`]',
-    )
-    for pattern in patterns:
-        match = _re.search(pattern, user_message, flags=_re.IGNORECASE | _re.DOTALL)
-        if match:
-            return _strip_wrapping_quotes(match.group(1).strip())
-    return None
-
-
-def _commit_scope_is_stage_all_request(user_message: str) -> bool:
-    lower = (user_message or "").lower()
-    scope_phrases = (
-        "git add and commit",
-        "add and commit",
-        "stage and commit",
-        "stage the changes and commit",
-        "stage everything and commit",
-        "stage all changes and commit",
-    )
-    return any(phrase in lower for phrase in scope_phrases)
 
 
 def _mentions_workspace_root(user_message: str) -> bool:

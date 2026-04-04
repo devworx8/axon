@@ -1,0 +1,100 @@
+<section class="rounded-[28px] border border-blue-500/15 bg-gradient-to-br from-slate-900 via-slate-900/95 to-slate-900/80 p-5 shadow-[0_28px_90px_rgba(30,64,175,0.12)] backdrop-blur md:p-6">
+  <div class="flex flex-col gap-5 2xl:flex-row 2xl:items-start 2xl:justify-between">
+    <div class="min-w-0 2xl:max-w-3xl">
+      <div class="flex flex-wrap items-center gap-2">
+        <div class="text-[10px] font-semibold uppercase tracking-[0.24em] text-cyan-300/80">Operator Console</div>
+        <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em]"
+              :class="phaseChipClass(liveOperator.phase || 'observe')"
+              x-text="phaseLabel(liveOperator.phase || 'observe')"></span>
+        <template x-for="badge in connectionStatusBadges().slice(0, 3)" :key="`dashboard-connection-${badge.key}`">
+          <span class="rounded-full border px-2 py-0.5 text-[9px]"
+                :class="connectionBadgeClass(badge.state)"
+                x-text="badge.label"></span>
+        </template>
+      </div>
+      <h2 class="mt-3 text-xl font-bold text-white sm:text-2xl md:text-3xl"
+          x-text="'Good ' + (new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 17 ? 'afternoon' : 'evening') + (currentUser.name ? ', ' + currentUser.name.split(' ')[0] : '')"></h2>
+      <p class="mt-2 max-w-3xl text-sm leading-6 text-slate-400">Axon is your local operator. It observes, plans, executes, and verifies work on your machine inside safe boundaries, then keeps the most useful proof and next actions in view.</p>
+
+      <div class="mt-5 flex flex-wrap gap-2">
+        <button @click="switchTab('chat')" class="flex items-center justify-center gap-2 rounded-2xl border border-blue-500/30 bg-blue-600/15 px-4 py-2.5 text-sm font-semibold text-blue-200 transition hover:border-blue-400/40 hover:bg-blue-500/20 press-scale shadow-sm shadow-blue-500/10">
+          💬 Open Console
+        </button>
+        <button @click="runScan()" :disabled="scanning" class="flex items-center justify-center gap-2 rounded-2xl border border-slate-700/70 bg-slate-950/70 px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:border-slate-500 press-scale">
+          <span x-text="scanning ? '⏳' : '🔄'"></span>
+          <span x-text="scanning ? 'Scanning…' : 'Run Axon Scan'"></span>
+        </button>
+        <button @click="switchTab('tasks'); showAddTask = true" class="flex items-center justify-center gap-2 rounded-2xl border border-slate-700/70 bg-slate-950/70 px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:border-slate-500 press-scale">
+          ➕ New Mission
+        </button>
+        <button x-show="!isMobile" @click="activeTab = 'chat'; toggleLocalToolsPanel()" class="flex items-center justify-center gap-2 rounded-2xl border border-amber-500/25 bg-amber-500/8 px-4 py-2.5 text-sm font-medium text-amber-300/80 transition hover:border-amber-400/40 press-scale">
+          🖥️ Local Tools
+        </button>
+      </div>
+    </div>
+
+    <div class="grid gap-3 md:grid-cols-2 2xl:w-[420px] 2xl:grid-cols-1">
+      <div class="rounded-2xl border border-blue-500/20 bg-blue-600/8 px-4 py-3">
+        <div class="flex items-center justify-between gap-2">
+          <div class="text-[10px] uppercase tracking-[0.2em] text-slate-500">Current focus</div>
+          <span class="h-2 w-2 rounded-full shrink-0"
+                :class="liveOperator.active ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'"></span>
+        </div>
+        <div class="mt-2 text-sm font-medium text-slate-100" x-text="liveOperator.title || lastOperatorOutcome.title || 'Standing by'"></div>
+        <div class="mt-1 text-[11px] leading-5 text-slate-400" x-text="liveOperator.detail || lastOperatorOutcome.summary || 'The next visible action appears here as soon as Axon starts working.'"></div>
+        <div x-show="liveOperator.workspaceName || chatProject?.name" class="mt-2 text-[10px] text-blue-400/70" x-text="'Workspace: ' + (liveOperator.workspaceName || chatProject?.name)"></div>
+      </div>
+
+      <div class="rounded-2xl border border-cyan-500/15 bg-slate-950/60 px-4 py-3">
+        <div class="flex items-center justify-between gap-2">
+          <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Proof of work</div>
+          <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em]"
+                :class="phaseChipClass(liveOperator.phase || agentProgressState || 'observe')"
+                x-text="phaseLabel(liveOperator.phase || agentProgressState || 'observe')"></span>
+        </div>
+        <div class="mt-2 text-sm font-medium text-slate-100" x-text="lastOperatorOutcome.tool ? prettyToolName(lastOperatorOutcome.tool) : 'Waiting for the next action'"></div>
+        <div class="mt-1 text-[11px] leading-5 text-slate-400" x-text="lastOperatorOutcome.summary || 'The latest verified result lands here so you can see proof that work really happened.'"></div>
+        <div class="mt-2 flex items-center justify-between text-[10px] text-slate-500">
+          <span x-text="liveOperator.startedAt ? 'Started ' + timeAgo(liveOperator.startedAt) : 'Ready now'"></span>
+          <span class="truncate max-w-[140px]" x-text="liveOperator.workspaceName || chatProject?.name || dashboardWeakestWorkspace()?.name || 'Global'"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-5 grid gap-2 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
+    <div class="rounded-2xl border border-slate-800 bg-slate-950/60 px-4 py-3">
+      <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Workspaces</div>
+      <div class="mt-1 text-lg font-semibold text-white" x-text="dashStats.active"></div>
+      <div class="text-[11px] text-slate-500" x-text="'of ' + dashStats.projects + ' tracked'"></div>
+    </div>
+    <div class="rounded-2xl border border-slate-800 bg-slate-950/60 px-4 py-3">
+      <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Missions</div>
+      <div class="mt-1 text-lg font-semibold text-white" x-text="dashStats.tasks"></div>
+      <div class="text-[11px] text-slate-500"><span class="font-semibold text-amber-400" x-text="dashStats.urgent"></span> priority</div>
+    </div>
+    <div class="rounded-2xl border border-slate-800 bg-slate-950/60 px-4 py-3">
+      <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">System health</div>
+      <div class="mt-1 text-lg font-semibold" :class="dashStats.health_avg >= 70 ? 'text-emerald-400' : dashStats.health_avg >= 40 ? 'text-amber-400' : 'text-rose-400'" x-text="dashStats.health_avg + '%'"></div>
+      <div class="text-[11px] text-slate-500">across active workspaces</div>
+    </div>
+    <div class="rounded-2xl border border-slate-800 bg-slate-950/60 px-4 py-3">
+      <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Runtime</div>
+      <div class="mt-1 text-sm font-semibold text-white" x-text="runtimeStatus.runtime_label || backendBadge()"></div>
+      <div class="text-[11px] text-slate-500" x-text="runtimeStatus.active_model || composerModelSummary() || 'Awaiting model selection'"></div>
+    </div>
+    <div class="rounded-2xl border border-slate-800 bg-slate-950/60 px-4 py-3">
+      <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Weakest workspace</div>
+      <div class="mt-1 text-sm font-semibold text-white truncate" x-text="dashboardWeakestWorkspace()?.name || 'No workspace pinned'"></div>
+      <div class="text-[11px] text-slate-500" x-text="dashboardWeakestWorkspace() ? `${dashboardWeakestWorkspace().health}% health` : 'Axon will pin the weakest workspace here.'"></div>
+    </div>
+    <div class="rounded-2xl border border-slate-800 bg-slate-950/60 px-4 py-3">
+      <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Live feed</div>
+      <div class="mt-1 flex items-center gap-1.5">
+        <span class="h-2 w-2 rounded-full" :class="liveFeed.connected ? 'bg-emerald-400' : 'bg-slate-600'"></span>
+        <span class="text-sm font-semibold text-white" x-text="liveFeed.connected ? 'Connected' : (liveFeed.reconnecting ? 'Reconnecting…' : 'Idle')"></span>
+      </div>
+      <div class="text-[11px] text-slate-500" x-text="liveFeed.latest?.at ? 'Updated ' + timeAgo(liveFeed.latest.at) : 'Waiting for the next live event'"></div>
+    </div>
+  </div>
+</section>

@@ -1,0 +1,161 @@
+<!-- Right: terminal toggle + project filter + clear -->
+<div class="flex items-center gap-2 min-w-0">
+  <button @click="openConsoleInNewWindow()"
+          title="Open a fresh console window"
+          class="w-8 h-8 flex items-center justify-center rounded-lg bg-slate-800/60 border border-slate-700/60 text-slate-400 text-xs transition hover:border-sky-500/30 hover:text-sky-200"
+          aria-label="Open a fresh console window">
+    <span aria-hidden="true">↗</span>
+  </button>
+  <button @click="toggleTerminalMode()"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition press-scale"
+          :class="composerOptions.terminal_mode ? 'border border-amber-500/30 bg-amber-500/10 text-amber-200' : 'bg-slate-800/60 border border-slate-700/60 text-slate-400 hover:border-amber-500/30 hover:text-amber-200'">
+    <span>⌨️</span><span>Terminal</span>
+  </button>
+  <select x-model="chatProjectId" @change="activateWorkspaceTab($event.target.value)"
+          class="bg-slate-800/60 border border-slate-700/60 text-slate-400 text-xs rounded-lg px-2 py-1.5 hover:border-slate-600 transition max-w-[140px] truncate">
+    <option value="">All workspaces</option>
+    <template x-for="p in projects" :key="p.id"><option :value="p.id" x-text="p.name"></option></template>
+  </select>
+  <button @click="loadProjects()" title="Refresh workspaces"
+          class="w-7 h-7 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition press-scale flex-shrink-0">
+    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+    </svg>
+  </button>
+  <button @click="addFolderModal.open = true" title="Add folder as workspace"
+          class="w-7 h-7 flex items-center justify-center rounded-lg text-slate-500 hover:text-emerald-400 hover:bg-slate-800 transition press-scale flex-shrink-0">
+    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+      <line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/>
+    </svg>
+  </button>
+  <button @click="clearHistory()" class="p-1.5 text-slate-600 hover:text-slate-300 hover:bg-slate-800 rounded-lg transition" title="Clear history">
+    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+  </button>
+</div>
+</div>
+
+<!-- Mobile: project context pill -->
+<div x-show="chatProject || activeWorkspaceRunCount()" class="md:hidden flex flex-wrap items-center gap-2 px-4 py-2 bg-blue-600/10 border-b border-blue-500/20 shrink-0">
+  <span class="text-[11px] text-blue-400" x-text="chatProject ? '📁 Run target:' : '🗂️ Overview:'"></span>
+  <span class="text-[11px] font-semibold text-blue-300 flex-1 truncate" x-text="chatProject?.name || 'All workspaces'"></span>
+  <span x-show="activeWorkspaceRunCount()"
+        class="rounded-full border border-emerald-500/20 bg-emerald-500/8 px-2 py-1 text-[9px] text-emerald-200"
+        x-text="activeWorkspaceRunCount() === 1 ? '1 active run' : `${activeWorkspaceRunCount()} active runs`"></span>
+  <span x-show="shouldShowWorkspaceBranch()"
+        class="max-w-[46vw] truncate rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[9px] text-emerald-200"
+        :title="workspaceBranchTitle()">
+    branch <span x-text="currentWorkspaceBranchName()"></span>
+  </span>
+  <button @click="chatProjectId=''; updateChatProject()" x-show="chatProject" class="text-[10px] text-slate-500 hover:text-slate-300">✕ Clear</button>
+</div>
+
+<div x-show="activeTab === 'chat'"
+     x-effect="maybeRefreshWorkspaceEnvFromStatus()"
+     class="shrink-0 border-b border-slate-800/70 bg-slate-950/30 px-4 py-2">
+  <div class="flex items-center gap-2 pb-0.5">
+    <div class="min-w-0 flex-1 overflow-x-auto">
+      <div class="flex items-center gap-2 min-w-max">
+        <template x-for="projectId in consoleWorkspaceTabs" :key="workspaceTabKey(projectId)">
+          <div class="flex items-center gap-1 rounded-xl border transition shrink-0"
+               :class="String(chatProjectId || '') === String(projectId || '') ? 'border-blue-500/30 bg-blue-500/10 text-blue-100' : 'border-slate-800 bg-slate-900/60 text-slate-300'">
+            <button @click="activateWorkspaceTab(projectId)"
+                    class="flex items-center gap-1.5 max-w-[132px] truncate px-2.5 py-1.5 text-[11px] font-medium md:max-w-[148px]"
+                    :title="workspaceTabLabel(projectId)">
+              <span x-show="workspaceRunIsActive(projectId)"
+                    class="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
+              <span class="truncate" x-text="workspaceTabDisplayLabel(projectId)"></span>
+              <span x-show="!projectId && activeWorkspaceRunCount()"
+                    class="rounded-full border border-emerald-500/20 bg-emerald-500/8 px-1.5 py-0.5 text-[9px] text-emerald-200 shrink-0"
+                    x-text="activeWorkspaceRunCount()"></span>
+              <span x-show="projectId && workspaceQueueSize(projectId)"
+                    class="rounded-full border border-violet-500/20 bg-violet-500/8 px-1.5 py-0.5 text-[9px] text-violet-200 shrink-0"
+                    x-text="workspaceQueueSize(projectId)"></span>
+            </button>
+            <button x-show="projectId"
+                    @click.stop="openWorkspaceInNewWindow(projectId)"
+                    title="Open this workspace in a fresh window"
+                    class="rounded-lg px-1.5 py-1 text-[10px] text-slate-400 transition hover:text-sky-200">
+              ↗
+            </button>
+            <button x-show="projectId"
+                    @click.stop="closeWorkspaceTab(projectId)"
+                    title="Close workspace tab"
+                    class="rounded-lg pr-2 pl-0.5 py-1 text-[10px] text-slate-500 transition hover:text-rose-300">
+              ✕
+            </button>
+          </div>
+        </template>
+      </div>
+    </div>
+    <div class="relative shrink-0 z-20" @keydown.escape.stop="workspaceTabMenuOpen = false">
+      <button @click="workspaceTabMenuOpen = !workspaceTabMenuOpen"
+              title="Add workspace tab"
+              class="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-slate-800 bg-slate-900/60 text-slate-400 transition hover:border-slate-600 hover:text-slate-200">
+        +
+      </button>
+      <div x-show="workspaceTabMenuOpen"
+           x-cloak
+           @click.outside="workspaceTabMenuOpen = false"
+           class="axon-floating-panel absolute right-0 top-10 z-[220] w-56 rounded-2xl border border-slate-800 p-2 shadow-2xl shadow-black/35">
+        <button @click="addWorkspaceTab('')"
+                class="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs text-slate-300 transition hover:bg-slate-900 hover:text-white">
+          <span>All workspaces</span>
+          <span class="text-[10px] text-slate-500">tab</span>
+        </button>
+        <template x-for="p in availableWorkspaceTabProjects()" :key="`workspace-picker-${p.id}`">
+          <button @click="addWorkspaceTab(p.id)"
+                  class="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs text-slate-300 transition hover:bg-slate-900 hover:text-white">
+            <span class="truncate" x-text="p.name"></span>
+            <span class="text-[10px] text-slate-500">add</span>
+          </button>
+        </template>
+        <div x-show="availableWorkspaceTabProjects().length === 0"
+             class="px-3 py-2 text-[11px] text-slate-500">
+          All workspaces are already open as tabs.
+        </div>
+      </div>
+    </div>
+    <div class="ml-auto hidden md:flex items-center gap-2 text-[10px] text-slate-500 shrink-0">
+      <span x-show="autonomousConsoleActive()" class="rounded-full border border-emerald-500/20 bg-emerald-500/8 px-2 py-1 text-emerald-200">Auto</span>
+      <span x-show="!autonomousConsoleActive()" class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1 text-slate-400">Fresh window</span>
+      <span x-show="shouldShowWorkspaceBranch()"
+            class="max-w-[180px] truncate rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-emerald-200"
+            :title="workspaceBranchTitle()">
+        branch <span x-text="currentWorkspaceBranchName()"></span>
+      </span>
+      <span class="rounded-full border border-sky-500/20 bg-sky-500/8 px-2 py-1 text-sky-200">Fullscreen</span>
+      <button x-show="canFollowLiveWorkspace()"
+              @click="followLiveWorkspace()"
+              class="rounded-full border border-emerald-500/20 bg-emerald-500/8 px-2 py-1 text-emerald-200 transition hover:border-emerald-400/35 hover:text-emerald-100">
+        Follow live workspace
+      </button>
+    </div>
+  </div>
+
+  <div class="mt-2 flex flex-wrap items-center gap-2 text-[10px]">
+    <span class="rounded-full border px-2 py-1"
+          :class="chatProjectId ? 'border-emerald-500/20 bg-emerald-500/8 text-emerald-200' : 'border-amber-500/20 bg-amber-500/8 text-amber-200'"
+          x-text="chatProjectId ? 'Run target selected' : 'Overview mode'"></span>
+    <span x-show="shouldShowWorkspaceBranch()"
+          class="max-w-[180px] truncate rounded-full border border-emerald-500/20 bg-emerald-500/8 px-2 py-1 text-emerald-200"
+          :title="workspaceBranchTitle()">
+      branch <span x-text="currentWorkspaceBranchName()"></span>
+    </span>
+    <span class="text-slate-400" x-text="consoleWorkspaceTargetHint()"></span>
+    <template x-for="run in activeWorkspaceRuns().slice(0, 3)" :key="`active-run-${run.workspaceId}`">
+      <button @click="activateWorkspaceTab(run.workspaceId)"
+              class="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/8 px-2 py-1 text-[10px] text-emerald-200 transition hover:border-emerald-400/35 hover:text-emerald-100">
+        <span class="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span class="truncate max-w-[120px]" x-text="run.label"></span>
+        <span x-show="run.queueSize"
+              class="rounded-full border border-violet-500/20 bg-violet-500/10 px-1.5 py-0.5 text-[9px] text-violet-200"
+              x-text="`+${run.queueSize}`"></span>
+      </button>
+    </template>
+    <span x-show="activeWorkspaceRunCount() > 3"
+          class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1 text-slate-400"
+          x-text="`+${activeWorkspaceRunCount() - 3} more active`"></span>
+  </div>
+</div>

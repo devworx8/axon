@@ -1,15 +1,41 @@
 {
   "expo": {
-    "name": "Axon Companion",
-    "slug": "axon-companion-native",
-    "scheme": "axoncompanion",
-    "platforms": ["ios", "android", "web"],
+    "name": "Axon Online",
+    "owner": "king-prod",
+    "slug": "axon-online",
+    "scheme": "axononline",
+    "version": "0.1.0",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
     "orientation": "portrait",
-    "plugins": ["expo-secure-store"],
+    "plugins": [
+      "expo-secure-store",
+      "expo-dev-client",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow Axon Online to capture your voice so it can transcribe and run mobile commands."
+        }
+      ]
+    ],
+    "ios": {
+      "bundleIdentifier": "za.org.edudashpro.axononline"
+    },
+    "android": {
+      "package": "za.org.edudashpro.axononline"
+    },
     "extra": {
       "apiBaseUrl": "http://127.0.0.1:7734",
-      "defaultWorkspaceId": null
+      "defaultWorkspaceId": null,
+      "eas": {
+        "projectId": "2dcf2ff8-d911-42a8-bcd7-8bc9203ef46c"
+      }
     }
   }
 }
-

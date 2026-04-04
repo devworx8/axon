@@ -21,3 +21,9 @@ task_sandboxes/
 tools/
 resources/*/paste-*.png
 AXON_LIVE_APPROVAL_SMOKE.txt
+.expo/
+apps/companion-native/.expo/
+node_modules/
+apps/companion-native/node_modules/
+.cache/
+brain.db

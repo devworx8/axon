@@ -65,9 +65,9 @@ function axonChatConsoleCommandsMixin() {
         threadMode: 'ask',
         resources: [],
       });
-      this.chatLoading = true;
-      this._chatLoadingWorkspaceId = String(this.chatProjectId || '').trim();
-      this.beginLiveOperator?.('chat', message);
+      const workspaceId = String(this.chatProjectId || '').trim();
+      this.setWorkspaceRunLoading?.(workspaceId, true);
+      this.beginLiveOperator?.('chat', message, workspaceId);
       this.scrollChat?.();
 
       try {
@@ -95,8 +95,8 @@ function axonChatConsoleCommandsMixin() {
         );
       }
 
-      this.chatLoading = false;
-      this.clearLiveOperator?.(1200);
+      this.setWorkspaceRunLoading?.(workspaceId, false);
+      this.clearLiveOperator?.(1200, workspaceId);
       this.scrollChat?.();
       this._processQueue?.();
       return true;

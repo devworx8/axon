@@ -50,7 +50,7 @@
                 </button>
               </div>
             </div>
-            <div x-show="devopsCliInstallResult?.message"
+          <div x-show="devopsCliInstallResult?.message"
                  class="rounded-xl border px-3 py-2 text-[11px]"
                  :class="devopsCliInstallResult?.status === 'completed' ? 'border-emerald-500/20 bg-emerald-500/8 text-emerald-200' : (devopsCliInstallResult?.status === 'error' ? 'border-rose-500/20 bg-rose-500/8 text-rose-200' : 'border-amber-500/20 bg-amber-500/8 text-amber-200')">
               <div x-text="devopsCliInstallResult?.message"></div>
@@ -59,6 +59,99 @@
                 Detected binary:
                 <code class="rounded bg-slate-950 px-1 py-0.5 text-slate-300" x-text="devopsCliInstallResult?.extension?.binary"></code>
               </div>
+            </div>
+          </div>
+
+          <!-- Expo / EAS -->
+          <div class="bg-slate-900 rounded-xl border border-slate-800 p-4 space-y-4">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <h3 class="text-sm font-medium text-slate-300">Expo / EAS</h3>
+                <p class="mt-1 text-xs text-slate-500">Status, build triggers, and update publishing for Expo-backed mobile workspaces.</p>
+              </div>
+              <div class="flex gap-2 shrink-0">
+                <button @click="loadExpoOverview(true)"
+                        class="px-3 py-1.5 rounded-lg border border-slate-700 text-slate-400 hover:text-white transition text-xs">
+                  Refresh
+                </button>
+                <button @click="activeTab = 'projects'; analysisPanel = false"
+                        class="px-3 py-1.5 rounded-lg border border-cyan-500/25 bg-cyan-500/8 text-cyan-200 hover:bg-cyan-500/12 transition text-xs">
+                  Open workspaces
+                </button>
+              </div>
+            </div>
+
+            <div class="rounded-xl border px-4 py-3" :class="expoStatusTone()">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Platform status</div>
+                  <div class="mt-1 text-sm font-medium text-slate-100" x-text="expoOverview?.status || 'unknown'"></div>
+                </div>
+                <span class="rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.16em]" :class="expoStatusTone()" x-text="expoLoading ? 'Refreshing' : (expoOverview?.status || 'unknown')"></span>
+              </div>
+              <div class="mt-2 text-[11px] leading-5 text-slate-400" x-text="expoOverviewLabel()"></div>
+              <div class="mt-2 text-[10px] text-slate-500" x-text="expoOverview?.updated_at ? 'Updated ' + timeAgo(expoOverview.updated_at) : 'Not yet refreshed'"></div>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-3">
+                <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Projects</div>
+                <div class="mt-1 text-lg font-semibold text-white" x-text="expoOverview?.projects?.length || 0"></div>
+              </div>
+              <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-3">
+                <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Builds</div>
+                <div class="mt-1 text-lg font-semibold text-white" x-text="expoOverview?.builds?.length || 0"></div>
+              </div>
+              <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-3">
+                <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Last build</div>
+                <div class="mt-1 text-sm font-medium text-white" x-text="expoOverview?.builds?.[0] ? expoBuildStatusLabel(expoOverview.builds[0]) : '—'"></div>
+              </div>
+              <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-3">
+                <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Updated</div>
+                <div class="mt-1 text-sm font-medium text-white" x-text="expoOverview?.updated_at ? timeAgo(expoOverview.updated_at) : '—'"></div>
+              </div>
+            </div>
+
+            <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+              <button @click="requestExpoProjectStatus(expoOverviewPrimaryProject())"
+                      class="rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-left text-xs text-slate-300 hover:border-cyan-500/30 hover:text-white transition">
+                <div class="font-medium">Project status</div>
+                <div class="mt-0.5 text-[10px] text-slate-500">Ask Axon to refresh Expo state for the focused or first linked project.</div>
+              </button>
+              <button @click="requestExpoAndroidDevBuild(expoOverviewPrimaryProject())"
+                      class="rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-left text-xs text-slate-300 hover:border-cyan-500/30 hover:text-white transition">
+                <div class="font-medium">Android dev build</div>
+                <div class="mt-0.5 text-[10px] text-slate-500">Start an EAS development build for Android.</div>
+              </button>
+              <button @click="requestExpoIosDevBuild(expoOverviewPrimaryProject())"
+                      class="rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-left text-xs text-slate-300 hover:border-cyan-500/30 hover:text-white transition">
+                <div class="font-medium">iOS dev build</div>
+                <div class="mt-0.5 text-[10px] text-slate-500">Start an EAS development build for iPhone.</div>
+              </button>
+              <button @click="requestExpoUpdatePublish(expoOverviewPrimaryProject())"
+                      class="rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-left text-xs text-slate-300 hover:border-cyan-500/30 hover:text-white transition">
+                <div class="font-medium">Publish update</div>
+                <div class="mt-0.5 text-[10px] text-slate-500">Send an Expo update to the current channel.</div>
+              </button>
+            </div>
+
+            <div class="space-y-2">
+              <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Recent builds</div>
+              <div x-show="!expoOverview?.builds?.length" class="rounded-xl border border-dashed border-slate-800 bg-slate-950/60 px-3 py-3 text-[11px] text-slate-500">
+                No Expo builds loaded yet. Refresh after connecting the Expo project or triggering a build.
+              </div>
+              <template x-for="build in (expoOverview?.builds || []).slice(0, 4)" :key="build?.id || build?.build_id || build?.created_at">
+                <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-3">
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <div class="text-sm font-medium text-slate-100 truncate" x-text="build?.platform || build?.profile || 'Expo build'"></div>
+                      <div class="mt-1 text-[11px] text-slate-500" x-text="expoBuildMeta(build)"></div>
+                    </div>
+                    <span class="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em]" :class="expoStatusChipClass(build?.state || build?.status)" x-text="expoBuildStatusLabel(build)"></span>
+                  </div>
+                  <div class="mt-2 text-[11px] text-slate-400" x-text="build?.message || build?.summary || build?.artifact_url || 'Build details unavailable'"></div>
+                </div>
+              </template>
             </div>
           </div>
 

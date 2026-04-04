@@ -1,25 +1,39 @@
 {
-  "name": "axon-companion-native",
+  "name": "axon-online-native",
   "private": true,
   "version": "0.1.0",
   "main": "node_modules/expo/AppEntry.js",
   "scripts": {
     "start": "expo start",
+    "start:dev-client": "expo start --dev-client",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "typecheck": "tsc --noEmit"
+    "doctor": "npx expo-doctor",
+    "typecheck": "tsc --noEmit",
+    "eas:build:android:dev": "npx eas-cli build -p android --profile development",
+    "eas:build:ios:dev": "npx eas-cli build -p ios --profile development",
+    "axon:start": "../../start.sh",
+    "axon:stop": "../../stop.sh"
   },
   "dependencies": {
-    "expo": "^51.0.0",
-    "expo-secure-store": "^13.0.0",
-    "expo-status-bar": "^1.12.1",
-    "react": "18.3.1",
-    "react-native": "0.74.1"
+    "@expo/metro-runtime": "~6.1.2",
+    "expo": "^54.0.0",
+    "expo-audio": "~1.1.1",
+    "expo-dev-client": "~6.0.16",
+    "expo-local-authentication": "~17.0.8",
+    "expo-secure-store": "~15.0.8",
+    "expo-speech": "~14.0.8",
+    "expo-status-bar": "~3.0.9",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-web": "^0.21.0"
   },
   "devDependencies": {
-    "@types/react": "^18.3.3",
+    "@types/react": "~19.1.10",
     "babel-plugin-module-resolver": "^5.0.2",
-    "typescript": "^5.5.4"
+    "typescript": "~5.9.2"
   }
 }

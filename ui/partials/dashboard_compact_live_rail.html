@@ -1,0 +1,124 @@
+<div class="xl:hidden grid gap-3 md:grid-cols-2">
+  <section class="hero-card rounded-[24px] border border-cyan-500/18 bg-slate-900/80 p-4 shadow-[0_16px_60px_rgba(8,145,178,0.10)] backdrop-blur">
+    <div class="flex items-center justify-between gap-2">
+      <div class="text-[10px] font-semibold uppercase tracking-[0.22em] text-cyan-300/70">Axon Live</div>
+      <div class="flex items-center gap-1.5">
+        <span class="h-1.5 w-1.5 rounded-full animate-pulse"
+              :class="liveOperator.active ? 'bg-emerald-400' : 'bg-slate-600'"></span>
+        <span class="rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.16em]"
+              :class="phaseChipClass(liveOperator.phase || agentProgressState || 'observe')"
+              x-text="phaseLabel(liveOperator.phase || agentProgressState || 'observe')"></span>
+      </div>
+    </div>
+    <div class="mt-3 font-semibold leading-snug text-slate-100" x-text="liveOperator.title || 'Standing by'"></div>
+    <div class="mt-1 text-[11px] leading-5 text-slate-400" x-text="liveOperator.detail || 'Axon Live shows what Axon is doing right now.'"></div>
+    <div class="mt-3 h-1 overflow-hidden rounded-full bg-slate-950/90">
+      <div class="h-full rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-cyan-300 transition-all duration-500"
+           :style="`width:${operatorProgressWidth()}`"></div>
+    </div>
+    <div class="mt-2 flex items-center justify-between text-[10px] text-slate-500">
+      <span x-text="liveOperator.startedAt ? 'Started ' + timeAgo(liveOperator.startedAt) : 'Waiting for a task'"></span>
+      <span class="truncate max-w-[120px]" x-text="liveOperator.workspaceName || chatProject?.name || 'Global'"></span>
+    </div>
+  </section>
+
+  <section class="hidden rounded-[24px] border border-slate-800 bg-slate-900/60 p-4 md:block">
+    <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400 mb-3">Runtime · Connection</div>
+    <div class="flex flex-wrap gap-1.5 mb-3">
+      <template x-for="badge in connectionStatusBadges()" :key="badge.key">
+        <span class="rounded-full border px-2 py-0.5 text-[10px]"
+              :class="connectionBadgeClass(badge.state)"
+              x-text="badge.label"></span>
+      </template>
+      <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400"
+            x-text="runtimeStatus.runtime_label || backendBadge()"></span>
+    </div>
+    <div class="space-y-2">
+      <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+        <div class="text-[10px] uppercase tracking-wide text-slate-500">Model</div>
+        <div class="mt-1 text-[11px] font-medium text-slate-100" x-text="runtimeStatus.active_model || composerModelSummary() || 'Awaiting model selection'"></div>
+      </div>
+      <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+        <div class="text-[10px] uppercase tracking-wide text-slate-500">Live feed</div>
+        <div class="mt-1 flex items-center gap-1.5">
+          <span class="h-1.5 w-1.5 rounded-full" :class="liveFeed.connected ? 'bg-emerald-400' : 'bg-slate-600'"></span>
+          <span class="text-[11px] font-medium text-slate-100"
+                x-text="liveFeed.connected ? 'Connected' : (liveFeed.reconnecting ? 'Reconnecting…' : 'Idle')"></span>
+        </div>
+        <div x-show="liveFeed.latest?.at" class="mt-0.5 text-[10px] text-slate-500" x-text="'Updated ' + timeAgo(liveFeed.latest?.at)"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="rounded-[24px] border border-slate-800 bg-slate-900/60 p-4 md:col-span-2">
+    <div class="flex items-center justify-between gap-2 mb-3">
+      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Recent Steps</div>
+      <span class="text-[10px] text-slate-600" x-text="`${dashboardLiveEntries().length} entries`"></span>
+    </div>
+    <div class="space-y-2 max-h-[260px] overflow-y-auto pr-0.5 no-scrollbar">
+      <template x-if="!dashboardLiveEntries().length">
+        <div class="rounded-xl border border-dashed border-slate-800 bg-slate-950/70 px-3 py-3 text-[11px] text-slate-500">
+          Steps appear here as Axon works through a request.
+        </div>
+      </template>
+      <template x-for="entry in dashboardLiveEntries()" :key="entry.id">
+        <div class="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2.5">
+          <div class="flex items-center justify-between gap-1.5">
+            <span class="rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.14em]"
+                  :class="phaseChipClass(entry.phase || 'observe')"
+                  x-text="phaseLabel(entry.phase || 'observe')"></span>
+            <span class="text-[10px] text-slate-500 shrink-0" x-text="timeAgo(entry.at || entry.created_at)"></span>
+          </div>
+          <div class="mt-1.5 text-[11px] font-medium leading-tight text-slate-100" x-text="entry.title"></div>
+          <div x-show="entry.detail" class="mt-0.5 text-[10px] leading-4 text-slate-400 line-clamp-2" x-text="entry.detail"></div>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <section class="rounded-[24px] border border-slate-800 bg-slate-900/60 p-4 md:col-span-2">
+    <div class="flex items-center justify-between gap-2 mb-3">
+      <div>
+        <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Desktop Preview</div>
+        <div class="text-[10px] text-slate-500 mt-0.5">Proof that work is happening</div>
+      </div>
+      <button @click="refreshDesktopPreview(true)"
+              class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-[10px] text-slate-300 transition hover:border-slate-500">
+        ↻
+      </button>
+    </div>
+    <div class="overflow-hidden rounded-xl border border-slate-800 bg-slate-950/80 aspect-video flex items-center justify-center">
+      <img x-show="desktopPreview.url" :src="desktopPreview.url" alt="Live desktop preview" class="h-full w-full object-cover" />
+      <div x-show="!desktopPreview.url && desktopPreview.loading" class="text-[11px] text-slate-400">Capturing desktop…</div>
+      <div x-show="!desktopPreview.url && !desktopPreview.loading && !desktopPreview.error" class="px-4 text-center text-[11px] text-slate-500">Refresh to capture the desktop state.</div>
+      <div x-show="desktopPreview.error" class="px-4 text-center text-[11px] text-amber-300" x-text="desktopPreview.error"></div>
+    </div>
+    <div class="mt-2 flex items-center justify-between text-[10px] text-slate-500">
+      <span x-text="desktopPreview.lastUpdated ? 'Updated ' + timeAgo(desktopPreview.lastUpdated) : 'Not yet captured'"></span>
+      <span x-show="liveOperator.workspaceName" x-text="liveOperator.workspaceName" class="truncate max-w-[120px]"></span>
+    </div>
+  </section>
+
+  <section x-show="terminal.approvalRequired" class="rounded-[24px] border border-amber-500/25 bg-amber-500/8 p-4 md:col-span-2">
+    <div class="flex items-center gap-2 mb-3">
+      <span class="text-amber-400 text-base">⚠️</span>
+      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300">Approval Required</div>
+    </div>
+    <div class="text-[11px] text-slate-300 mb-2">Axon wants to run a terminal command:</div>
+    <div class="rounded-xl border border-amber-500/20 bg-slate-950/70 px-3 py-2 font-mono text-[11px] text-amber-200 break-all" x-text="terminal.pendingCommand"></div>
+    <div class="mt-3 flex gap-2">
+      <button @click="activeTab = 'chat'; executeTerminalCommand(true)"
+              class="flex-1 rounded-xl bg-emerald-600/20 border border-emerald-500/30 px-3 py-2 text-[11px] font-semibold text-emerald-300 transition hover:bg-emerald-600/30">
+        Approve
+      </button>
+      <button @click="terminal.approvalRequired = false; terminal.pendingCommand = ''"
+              class="flex-1 rounded-xl bg-rose-600/20 border border-rose-500/30 px-3 py-2 text-[11px] font-semibold text-rose-300 transition hover:bg-rose-600/30">
+        Reject
+      </button>
+      <button @click="activeTab = 'chat'; toggleTerminalMode(true)"
+              class="rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-[11px] text-slate-300 transition hover:border-slate-500">
+        Inspect
+      </button>
+    </div>
+  </section>
+</div>

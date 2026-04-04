@@ -17,6 +17,10 @@ function axonWorkspaceRunsMixin() {
   });
 
   return {
+    isChatLoadingHere() {
+      return !!this.currentWorkspaceRunActive?.();
+    },
+
     workspaceRunKey(workspaceId = null) {
       const raw = workspaceId == null ? this.chatProjectId : workspaceId;
       const value = String(raw || '').trim();
@@ -39,6 +43,7 @@ function axonWorkspaceRunsMixin() {
           loading: false,
           abortController: null,
           queue: [],
+          mismatch: null,
           liveOperator: defaultLiveOperator(key === '__all__' ? '' : key),
           liveOperatorFeed: [],
           liveOperatorTimer: null,
@@ -55,11 +60,60 @@ function axonWorkspaceRunsMixin() {
       return !!this.workspaceRunStateFor().loading;
     },
 
+    currentWorkspaceRunMismatch() {
+      const state = this.workspaceRunStateFor();
+      return state?.mismatch || null;
+    },
+
+    workspaceRunIsActive(workspaceId = null) {
+      return !!this.workspaceRunStateFor(workspaceId).loading;
+    },
+
+    activeWorkspaceRuns() {
+      return this.workspaceRunEntries()
+        .filter(entry => entry.loading && entry.key !== '__all__')
+        .map(entry => {
+          const workspaceId = String(entry.key || '').trim();
+          const project = (this.projects || []).find(p => String(p.id) === workspaceId);
+          return {
+            workspaceId,
+            label: project?.name || `Workspace ${workspaceId}`,
+            queueSize: Array.isArray(entry.queue) ? entry.queue.length : 0,
+            phase: String(entry.liveOperator?.phase || 'observe'),
+          };
+        });
+    },
+
+    activeWorkspaceRunCount() {
+      return this.activeWorkspaceRuns().length;
+    },
+
     firstOtherActiveWorkspaceId() {
       const currentKey = this.workspaceRunKey();
       const match = this.workspaceRunEntries().find(entry => entry.loading && entry.key !== currentKey);
       if (!match || match.key === '__all__') return '';
       return match.key;
+    },
+
+    crossWorkspaceAgentLabel() {
+      if (!this.chatLoading || this.isChatLoadingHere()) return '';
+      const otherRuns = this.activeWorkspaceRuns().filter(run => run.workspaceId !== String(this.chatProjectId || '').trim());
+      if (!otherRuns.length) return '';
+      if (otherRuns.length === 1) return `${otherRuns[0].label} is running · Tap to follow`;
+      return `${otherRuns.length} other workspaces are running · Tap to follow`;
+    },
+
+    consoleWorkspaceTargetHint() {
+      const workspaceId = String(this.chatProjectId || '').trim();
+      if (workspaceId) {
+        const label = this.workspaceTabLabel?.(workspaceId) || `Workspace ${workspaceId}`;
+        if (this.workspaceRunIsActive(workspaceId)) return `${label} is the active run target. You can steer it, queue more work, or switch tabs and follow another workspace.`;
+        return `${label} is the selected run target. New agent and local-tool runs start here.`;
+      }
+      if (this.activeWorkspaceRunCount()) {
+        return 'All workspaces is overview mode. Pick a workspace tab before starting a new agent or local-tool run.';
+      }
+      return 'All workspaces is overview mode. Pick a workspace tab when you want Axon to edit, scan, or open a live page.';
     },
 
     refreshWorkspaceRunBindings() {
@@ -81,6 +135,7 @@ function axonWorkspaceRunsMixin() {
       const state = this.workspaceRunStateFor(workspaceId);
       state.loading = !!loading;
       if (!loading) state.abortController = null;
+      if (loading) state.mismatch = null;
       this.refreshWorkspaceRunBindings();
       return state;
     },
@@ -136,6 +191,7 @@ function axonWorkspaceRunsMixin() {
       const state = this.workspaceRunStateFor(workspaceId);
       if (state.liveOperatorTimer) clearTimeout(state.liveOperatorTimer);
       const normalizedWorkspaceId = state.key === '__all__' ? '' : state.key;
+      state.mismatch = null;
       state.liveOperator = {
         active: true,
         mode,
@@ -180,23 +236,49 @@ function axonWorkspaceRunsMixin() {
       return state.liveOperator;
     },
 
+    recordWorkspaceRunMismatch(expectedWorkspaceId = '', reportedWorkspaceId = '', event = {}) {
+      const expected = String(expectedWorkspaceId || '').trim();
+      const reported = String(reportedWorkspaceId || '').trim();
+      if (!expected || !reported || expected === reported) return null;
+      const state = this.workspaceRunStateFor(expected);
+      state.mismatch = {
+        expectedWorkspaceId: expected,
+        expectedLabel: this.workspaceTabLabel?.(expected) || `Workspace ${expected}`,
+        reportedWorkspaceId: reported,
+        reportedLabel: this.workspaceTabLabel?.(reported) || `Workspace ${reported}`,
+        eventType: String(event?.type || '').trim() || 'runtime_event',
+        at: new Date().toISOString(),
+      };
+      this.pushWorkspaceLiveOperatorFeed?.(
+        expected,
+        'recover',
+        'Workspace routing mismatch',
+        `Axon started this run in ${state.mismatch.expectedLabel}, but the runtime reported ${state.mismatch.reportedLabel}.`,
+      );
+      this.refreshWorkspaceRunBindings();
+      return state.mismatch;
+    },
+
     syncWorkspaceLiveOperatorSnapshot(snapshot = {}) {
       if (!snapshot || typeof snapshot !== 'object') return;
       const workspaceId = String(snapshot.workspace_id || '').trim();
       const state = this.workspaceRunStateFor(workspaceId);
-      if (!snapshot.active) {
-        if (!state.loading) this.clearWorkspaceLiveOperator(workspaceId, 0);
+      const autoSessionId = String(snapshot.auto_session_id || '').trim();
+      if (!snapshot.active && !autoSessionId) {
+        state.loading = false;
+        this.clearWorkspaceLiveOperator(workspaceId, 0);
         return;
       }
+      state.loading = !!snapshot.active;
       this.patchWorkspaceLiveOperator(workspaceId, {
-        active: true,
+        active: !!snapshot.active,
         mode: snapshot.mode || state.liveOperator.mode || 'chat',
         phase: snapshot.phase || state.liveOperator.phase || 'observe',
         title: snapshot.title || state.liveOperator.title || 'Axon is working…',
         detail: snapshot.detail || snapshot.summary || state.liveOperator.detail || '',
         tool: snapshot.tool || state.liveOperator.tool || '',
         startedAt: snapshot.started_at || state.liveOperator.startedAt || '',
-        autoSessionId: String(snapshot.auto_session_id || state.liveOperator.autoSessionId || '').trim(),
+        autoSessionId: autoSessionId || String(state.liveOperator.autoSessionId || '').trim(),
         updatedAt: snapshot.updated_at || state.liveOperator.updatedAt || new Date().toISOString(),
       });
       if (Array.isArray(snapshot.feed) && snapshot.feed.length) {
@@ -218,6 +300,7 @@ function axonWorkspaceRunsMixin() {
       const reset = () => {
         state.liveOperator = defaultLiveOperator(normalizedWorkspaceId);
         state.liveOperatorFeed = [];
+        state.mismatch = null;
         if (String(this.chatProjectId || '').trim() === normalizedWorkspaceId) {
           this.stopDesktopPreview?.();
         }

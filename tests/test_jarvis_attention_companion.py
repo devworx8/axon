@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import unittest
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from axon_api.services import companion_runtime, connector_attention, sentry_bridge
+from fastapi import HTTPException
+
+from axon_api.routes import companion as companion_routes
+from axon_api.services import auth_runtime_state, companion_live, companion_runtime, connector_attention, sentry_bridge
 
 
 class ConnectorAttentionTests(unittest.IsolatedAsyncioTestCase):
@@ -69,11 +73,85 @@ class SentryBridgeAttentionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CompanionRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_process_voice_turn_uses_fast_path_for_workspace_question(self):
+        fake_db = object()
+        session = {"id": 7, "workspace_id": 202, "session_key": "companion:1:202:", "summary": ""}
+        project = {"id": 202, "name": "Axon", "path": "/home/edp/.devbrain", "git_branch": "main"}
+        user_turn = {"id": 100, "role": "user", "content": "What is the workspace path?"}
+        assistant_turn = {"id": 101, "role": "assistant", "content": "Path: /home/edp/.devbrain"}
+        refreshed_session = dict(session) | {"summary": "Path: /home/edp/.devbrain"}
+
+        with patch.object(companion_runtime, "get_project", AsyncMock(return_value=project)), \
+             patch.object(companion_runtime, "get_all_settings", AsyncMock(return_value={"ai_backend": "cli", "cli_runtime_path": "/tmp/codex", "cli_runtime_model": "gpt-5.4"})), \
+             patch.object(companion_runtime, "get_companion_session", AsyncMock(return_value=refreshed_session)), \
+             patch.object(companion_runtime, "list_workspace_relationships_for_workspace", AsyncMock(return_value=[])), \
+             patch.object(companion_runtime, "attention_summary", AsyncMock(return_value={"counts": {"now": 0, "waiting_on_me": 0, "watch": 0}})), \
+             patch.object(companion_runtime.companion_sessions_service, "ensure_companion_session", AsyncMock(return_value=session)), \
+             patch.object(companion_runtime.companion_sessions_service, "touch_companion_session", AsyncMock(return_value=True)), \
+             patch.object(companion_runtime.companion_voice_service, "record_companion_voice_turn", AsyncMock(side_effect=[user_turn, assistant_turn])) as record_mock, \
+             patch.object(companion_runtime.companion_voice_service, "list_recent_companion_voice_turns", AsyncMock(return_value=[user_turn])), \
+             patch.object(companion_runtime.brain, "chat", AsyncMock()) as chat_mock:
+            result = await companion_runtime.process_companion_voice_turn(
+                fake_db,
+                device_id=1,
+                workspace_id=202,
+                content="What is the workspace path?",
+                transcript="What is the workspace path?",
+            )
+
+        self.assertIn("/home/edp/.devbrain", result["response_text"])
+        self.assertEqual(result["tokens_used"], 0)
+        self.assertEqual(result["voice_mode"], "")
+        self.assertEqual(result["live"]["focus"]["workspace"]["path"], "/home/edp/.devbrain")
+        chat_mock.assert_not_awaited()
+        self.assertEqual(record_mock.await_count, 2)
+
+    async def test_process_voice_turn_upgrades_to_agent_for_local_operator_request(self):
+        fake_db = object()
+        session = {"id": 7, "workspace_id": 202, "session_key": "companion:1:202:", "summary": ""}
+        project = {"id": 202, "name": "Axon", "path": "/home/edp/.devbrain"}
+        user_turn = {"id": 100, "role": "user", "content": "List the top-level files"}
+        assistant_turn = {"id": 101, "role": "assistant", "content": "Top-level files: README.md"}
+        refreshed_session = dict(session) | {"summary": "Top-level files: README.md", "agent_session_id": "agent-123"}
+
+        with patch.object(companion_runtime, "get_project", AsyncMock(return_value=project)), \
+             patch.object(companion_runtime, "get_all_settings", AsyncMock(return_value={"ai_backend": "cli", "cli_runtime_path": "/tmp/codex", "cli_runtime_model": "gpt-5.4"})), \
+             patch.object(companion_runtime, "get_companion_session", AsyncMock(return_value=refreshed_session)), \
+             patch.object(companion_runtime, "list_workspace_relationships_for_workspace", AsyncMock(return_value=[])), \
+             patch.object(companion_runtime, "attention_summary", AsyncMock(return_value={"counts": {"now": 0, "waiting_on_me": 0, "watch": 0}})), \
+             patch.object(companion_runtime.companion_sessions_service, "ensure_companion_session", AsyncMock(return_value=session)), \
+             patch.object(companion_runtime.companion_sessions_service, "touch_companion_session", AsyncMock(return_value=True)) as touch_mock, \
+             patch.object(companion_runtime.companion_voice_service, "record_companion_voice_turn", AsyncMock(side_effect=[user_turn, assistant_turn])), \
+             patch.object(companion_runtime.companion_voice_service, "list_recent_companion_voice_turns", AsyncMock(return_value=[user_turn])), \
+             patch.object(companion_runtime.brain, "_requires_local_operator_execution", return_value=True), \
+             patch.object(companion_runtime.companion_agent_bridge, "run_companion_agent_turn", AsyncMock(return_value={
+                 "response_text": "Top-level files: README.md",
+                 "tokens_used": 0,
+                 "backend": "agent",
+                 "approval_required": {"message": "Approval required.", "approval_action": {"session_id": "agent-123"}},
+                 "agent_session_id": "agent-123",
+                 "tool_events": [{"type": "tool_call"}],
+             })) as agent_mock:
+            result = await companion_runtime.process_companion_voice_turn(
+                fake_db,
+                device_id=1,
+                workspace_id=202,
+                content="List the top-level files",
+                transcript="List the top-level files",
+            )
+
+        self.assertEqual(result["backend"], "agent")
+        self.assertEqual(result["approval_required"]["message"], "Approval required.")
+        agent_mock.assert_awaited_once()
+        touch_kwargs = touch_mock.await_args.kwargs
+        self.assertEqual(touch_kwargs["status"], "awaiting_approval")
+        self.assertEqual(touch_kwargs["agent_session_id"], "agent-123")
+
     async def test_process_voice_turn_creates_reply_and_updates_session(self):
         fake_db = object()
         session = {"id": 7, "workspace_id": 202, "session_key": "companion:1:202:", "summary": ""}
         project = {"id": 202, "name": "Axon", "path": "/home/edp/.devbrain"}
-        user_turn = {"id": 100, "role": "user", "content": "What needs attention?"}
+        user_turn = {"id": 100, "role": "user", "content": "Say hello from companion."}
         assistant_turn = {"id": 101, "role": "assistant", "content": "Voice reply ready."}
         refreshed_session = dict(session) | {"summary": "Voice reply ready."}
 
@@ -91,15 +169,184 @@ class CompanionRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 fake_db,
                 device_id=1,
                 workspace_id=202,
-                content="What needs attention?",
-                transcript="What needs attention?",
+                content="Say hello from companion.",
+                transcript="Say hello from companion.",
             )
 
         self.assertEqual(result["response_text"], "Voice reply ready.")
         self.assertEqual(result["tokens_used"], 42)
         self.assertEqual(result["session"]["id"], 7)
+        self.assertEqual(result["live"]["focus"]["workspace"]["name"], "Axon")
         chat_mock.assert_awaited_once()
         self.assertEqual(record_mock.await_count, 2)
+
+
+class CompanionLiveSnapshotTests(unittest.IsolatedAsyncioTestCase):
+    async def test_build_live_snapshot_includes_operator_and_focus_workspace(self):
+        snapshot = {
+            "active": True,
+            "mode": "agent",
+            "phase": "execute",
+            "title": "Running tests",
+            "detail": "Axon is checking the repo.",
+            "workspace_id": 9,
+            "updated_at": "2026-04-04T00:00:00Z",
+            "feed": [{"id": "1"}],
+        }
+        with patch.dict(companion_live.LIVE_OPERATOR_SNAPSHOT, snapshot, clear=True), \
+             patch.object(companion_live, "get_project", AsyncMock(return_value={"id": 9, "name": "Dashpro", "path": "/tmp/dashpro", "git_branch": "development"})), \
+             patch.object(companion_live, "get_companion_session", AsyncMock(return_value={"id": 4, "workspace_id": 9})), \
+             patch.object(companion_live, "get_companion_presence", AsyncMock(return_value={"device_id": 7, "workspace_id": 9})):
+            result = await companion_live.build_companion_live_snapshot(object(), device_id=7, session_id=4)
+
+        self.assertTrue(result["operator"]["active"])
+        self.assertEqual(result["operator"]["workspace_name"], "Dashpro")
+        self.assertEqual(result["focus"]["workspace"]["path"], "/tmp/dashpro")
+
+
+class AuthRuntimeStateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_auth_middleware_allows_options_preflight(self):
+        request = SimpleNamespace(method="OPTIONS", url=SimpleNamespace(path="/api/attention/summary"))
+        called = False
+
+        async def call_next(_request):
+            nonlocal called
+            called = True
+            return {"ok": True}
+
+        response = await auth_runtime_state.auth_middleware(
+            request,
+            call_next,
+            dev_local_auth_bypass_active_fn=lambda _request: False,
+            db_module=SimpleNamespace(get_db=None),
+            extract_session_token_fn=lambda _request: "",
+            valid_session_async_fn=AsyncMock(return_value=False),
+            json_response_cls=lambda body, status_code=200: {"body": body, "status_code": status_code},
+        )
+
+        self.assertTrue(called)
+        self.assertEqual(response, {"ok": True})
+
+    async def test_auth_middleware_accepts_companion_bearer_for_safe_mobile_paths(self):
+        @asynccontextmanager
+        async def fake_db():
+            yield object()
+
+        async def fake_get_setting(_conn, key):
+            self.assertEqual(key, "auth_pin_hash")
+            return "enabled"
+
+        request = SimpleNamespace(
+            method="GET",
+            url=SimpleNamespace(path="/api/attention/summary"),
+            headers={"Authorization": "Bearer companion-token"},
+            query_params={},
+        )
+
+        async def call_next(_request):
+            return {"ok": True}
+
+        response = await auth_runtime_state.auth_middleware(
+            request,
+            call_next,
+            dev_local_auth_bypass_active_fn=lambda _request: False,
+            db_module=SimpleNamespace(get_db=fake_db, get_setting=fake_get_setting),
+            extract_session_token_fn=lambda _request: "",
+            valid_session_async_fn=AsyncMock(return_value=True),
+            json_response_cls=lambda body, status_code=200: {"body": body, "status_code": status_code},
+        )
+
+        self.assertEqual(response, {"ok": True})
+
+
+class CompanionRouteScopeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_companion_devices_only_returns_authenticated_device(self):
+        request = SimpleNamespace()
+        device_row = {"id": 7, "name": "Phone A", "device_key": "phone-a"}
+
+        with patch.object(companion_routes, "_require_companion_context", AsyncMock(return_value=("", {}, device_row))):
+            result = await companion_routes.companion_devices(request)
+
+        self.assertEqual(result["devices"], [device_row])
+
+    async def test_companion_session_detail_blocks_other_device_session(self):
+        @asynccontextmanager
+        async def fake_db():
+            yield object()
+
+        request = SimpleNamespace()
+        device_row = {"id": 7}
+        session_row = {"id": 11, "device_id": 99, "session_key": "other"}
+
+        with patch.object(companion_routes, "_require_companion_context", AsyncMock(return_value=("", {}, device_row))), \
+             patch.object(companion_routes, "get_db", fake_db), \
+             patch.object(companion_routes, "get_companion_session", AsyncMock(return_value=session_row)):
+            with self.assertRaises(HTTPException) as exc:
+                await companion_routes.companion_session_detail(11, request)
+
+        self.assertEqual(exc.exception.status_code, 403)
+
+    async def test_auth_middleware_accepts_companion_bearer_for_mobile_control_path(self):
+        @asynccontextmanager
+        async def fake_db():
+            yield object()
+
+        async def fake_get_setting(_conn, key):
+            self.assertEqual(key, "auth_pin_hash")
+            return "enabled"
+
+        request = SimpleNamespace(
+            method="GET",
+            url=SimpleNamespace(path="/api/mobile/actions/capabilities"),
+            headers={"Authorization": "Bearer companion-token"},
+            query_params={},
+        )
+
+        async def call_next(_request):
+            return {"ok": True}
+
+        response = await auth_runtime_state.auth_middleware(
+            request,
+            call_next,
+            dev_local_auth_bypass_active_fn=lambda _request: False,
+            db_module=SimpleNamespace(get_db=fake_db, get_setting=fake_get_setting),
+            extract_session_token_fn=lambda _request: "",
+            valid_session_async_fn=AsyncMock(return_value=True),
+            json_response_cls=lambda body, status_code=200: {"body": body, "status_code": status_code},
+        )
+
+        self.assertEqual(response, {"ok": True})
+
+    async def test_auth_middleware_accepts_companion_bearer_for_mcp_path(self):
+        @asynccontextmanager
+        async def fake_db():
+            yield object()
+
+        async def fake_get_setting(_conn, key):
+            self.assertEqual(key, "auth_pin_hash")
+            return "enabled"
+
+        request = SimpleNamespace(
+            method="GET",
+            url=SimpleNamespace(path="/api/mcp/servers"),
+            headers={"Authorization": "Bearer companion-token"},
+            query_params={},
+        )
+
+        async def call_next(_request):
+            return {"ok": True}
+
+        response = await auth_runtime_state.auth_middleware(
+            request,
+            call_next,
+            dev_local_auth_bypass_active_fn=lambda _request: False,
+            db_module=SimpleNamespace(get_db=fake_db, get_setting=fake_get_setting),
+            extract_session_token_fn=lambda _request: "",
+            valid_session_async_fn=AsyncMock(return_value=True),
+            json_response_cls=lambda body, status_code=200: {"body": body, "status_code": status_code},
+        )
+
+        self.assertEqual(response, {"ok": True})
 
 
 if __name__ == "__main__":

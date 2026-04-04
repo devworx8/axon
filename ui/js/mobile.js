@@ -69,6 +69,8 @@ function axonMobileMixin() {
         const res = await this.api('POST', `/api/projects/${p.id}/analyse`);
         this.analysisText = res.analysis;
       } catch(e) { this.analysisText = `⚠️ Error: ${e.message}`; }
+      this.loadExpoProjectSummary?.(p, true);
+      this.loadExpoProjectBuilds?.(p, true);
       this.analysisLoading = false;
     },
 

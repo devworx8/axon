@@ -1,70 +1,165 @@
-import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import React from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { SurfaceCard, SurfaceHeader } from '@/components/SurfaceCard';
-import { useTheme } from '@/theme/ThemeProvider';
+import { AxonModeCard } from '@/features/axon/AxonModeCard';
+import { ApprovalRequired } from '@/types/companion';
+import { LocalVoiceStatus } from '@/types/companion';
+import { AxonModeStatus } from '@/types/companion';
+import { VoiceCaptureCard } from './VoiceCaptureCard';
+import { VoiceCommandComposer } from './VoiceCommandComposer';
+import { VoiceOutcomeCard } from './VoiceOutcomeCard';
 
 type Props = {
   onSubmit: (text: string) => void;
   sending?: boolean;
   transcript?: string;
   response?: string;
+  backend?: string;
+  tokensUsed?: number;
+  approval?: ApprovalRequired | null;
+  voiceMode?: string;
+  error?: string | null;
+  workspaceLabel?: string;
+  onOpenSession?: () => void;
+  speaking?: boolean;
+  onSpeak?: () => void;
+  onStopSpeaking?: () => void;
+  liveVoiceStatus?: LocalVoiceStatus | null;
+  checkingVoiceStatus?: boolean;
+  recording?: boolean;
+  transcribing?: boolean;
+  recordingDuration?: string;
+  liveTranscript?: string;
+  liveEngine?: string;
+  liveError?: string | null;
+  onStartLiveVoice?: () => void;
+  onStopLiveVoice?: () => void;
+  onRefreshLiveVoice?: () => void;
+  axon?: AxonModeStatus | null;
+  axonWakePhrase: string;
+  onChangeAxonWakePhrase: (value: string) => void;
+  axonBusy?: boolean;
+  axonError?: string | null;
+  onArmAxon?: () => void;
+  onDisarmAxon?: () => void;
 };
 
-export function VoiceScreen({ onSubmit, sending, transcript, response }: Props) {
-  const [text, setText] = useState('');
-  const { colors } = useTheme();
+export function VoiceScreen({
+  onSubmit,
+  sending,
+  transcript,
+  response,
+  backend,
+  tokensUsed,
+  approval,
+  voiceMode,
+  error,
+  workspaceLabel,
+  onOpenSession,
+  speaking,
+  onSpeak,
+  onStopSpeaking,
+  liveVoiceStatus,
+  checkingVoiceStatus,
+  recording,
+  transcribing,
+  recordingDuration,
+  liveTranscript,
+  liveEngine,
+  liveError,
+  onStartLiveVoice,
+  onStopLiveVoice,
+  onRefreshLiveVoice,
+  axon,
+  axonWakePhrase,
+  onChangeAxonWakePhrase,
+  axonBusy,
+  axonError,
+  onArmAxon,
+  onDisarmAxon,
+}: Props) {
 
   return (
-    <SurfaceCard>
-      <SurfaceHeader title="Voice" subtitle="Capture a command, then let Axon route it to the right workspace." />
-      <TextInput
-        multiline
-        value={text}
-        onChangeText={setText}
-        placeholder="Ask Axon to inspect a repo, open a PR, or report attention..."
-        placeholderTextColor={colors.muted}
-        style={[styles.input, { borderColor: colors.border, color: colors.text, backgroundColor: '#0b1627' }]}
+    <View style={styles.stack}>
+      <AxonModeCard
+        axon={axon}
+        wakePhrase={axonWakePhrase}
+        onChangeWakePhrase={onChangeAxonWakePhrase}
+        busy={axonBusy}
+        error={axonError}
+        onArm={onArmAxon}
+        onDisarm={onDisarmAxon}
       />
-      <Pressable onPress={() => onSubmit(text.trim())} style={[styles.button, !text.trim() && styles.buttonDisabled]} disabled={!text.trim() || !!sending}>
-        <Text style={styles.buttonText}>{sending ? 'Sending...' : 'Send voice turn'}</Text>
-      </Pressable>
-      <View style={styles.stack}>
-        {transcript ? <Text style={[styles.meta, { color: colors.muted }]}>Transcript: {transcript}</Text> : null}
-        {response ? <Text style={[styles.meta, { color: colors.muted }]}>Reply: {response}</Text> : null}
-      </View>
-    </SurfaceCard>
+      <VoiceCaptureCard
+        voiceStatus={liveVoiceStatus}
+        checkingStatus={checkingVoiceStatus}
+        isRecording={recording}
+        transcribing={transcribing}
+        durationLabel={recordingDuration}
+        transcript={liveTranscript}
+        engine={liveEngine}
+        error={liveError}
+        onStart={onStartLiveVoice}
+        onStop={onStopLiveVoice}
+        onRefresh={onRefreshLiveVoice}
+      />
+      <SurfaceCard>
+        <SurfaceHeader title="Axon Voice Mode" subtitle="Run a command fast, then let Axon route it to the right workspace or approval flow." />
+        <Text style={styles.helper}>Typed fallback stays available even when live capture is unavailable, muted, or not the fastest path.</Text>
+        <VoiceCommandComposer
+          onSubmit={onSubmit}
+          sending={sending}
+          voiceMode={voiceMode}
+          workspaceLabel={workspaceLabel}
+          placeholder="Ask Axon what changed, what needs attention, or what to do next."
+          prompts={[
+            'What needs attention right now?',
+            'What is the workspace path?',
+            'Inspect the active workspace and tell me what matters.',
+          ]}
+        />
+      </SurfaceCard>
+      <VoiceOutcomeCard
+        transcript={transcript}
+        response={response}
+        backend={backend}
+        tokensUsed={tokensUsed}
+        approval={approval}
+        error={error}
+        onOpenSession={onOpenSession}
+        speaking={speaking}
+        onSpeak={onSpeak}
+        onStopSpeaking={onStopSpeaking}
+      />
+      {approval?.resume_task ? (
+        <SurfaceCard>
+          <SurfaceHeader title="Next step" subtitle="Axon already knows what comes after approval." />
+          <Text style={styles.nextStep}>{approval.resume_task}</Text>
+        </SurfaceCard>
+      ) : null}
+      {!transcript && !response && !approval && !error ? (
+        <SurfaceCard>
+          <SurfaceHeader title="What works today" subtitle="Use live capture or typed commands to drive the same Axon mobile control path." />
+          <Text style={styles.nextStep}>Use this screen to record a command, type a fallback prompt, retrieve workspace facts with zero tokens on fast paths, and escalate protected actions into a resumable mobile session.</Text>
+        </SurfaceCard>
+      ) : null}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  input: {
-    minHeight: 100,
-    borderWidth: 1,
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    textAlignVertical: 'top',
-  },
-  button: {
-    borderRadius: 14,
-    paddingVertical: 12,
-    alignItems: 'center',
-    backgroundColor: '#8b5cf6',
-  },
-  buttonDisabled: {
-    opacity: 0.55,
-  },
-  buttonText: {
-    color: '#08111f',
-    fontWeight: '800',
-  },
   stack: {
-    gap: 8,
+    gap: 14,
   },
-  meta: {
-    fontSize: 12,
+  helper: {
+    color: '#94a3b8',
+    fontSize: 13,
     lineHeight: 18,
+  },
+  nextStep: {
+    color: '#e5eefb',
+    fontSize: 14,
+    lineHeight: 20,
   },
 });

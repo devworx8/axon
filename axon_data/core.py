@@ -8,19 +8,25 @@ from pathlib import Path
 
 import aiosqlite
 
+from axon_data.aiosqlite_compat import ensure_aiosqlite_compat
+from axon_data.core_migrations import apply_core_migrations
+from axon_data.default_settings_seed import seed_default_settings
 
 DB_PATH = Path.home() / ".devbrain" / "devbrain.db"
 
-_LEGACY_SETTING_KEYS = {
-    "extra_allowed_cmds",
-}
+ensure_aiosqlite_compat()
+
+
+def _db_connect_path() -> str:
+    """Normalize the configured database path for sqlite connectors."""
+    return str(DB_PATH)
 
 
 class _DevBrainDB:
     """Async context manager that yields a configured aiosqlite connection."""
 
     async def __aenter__(self) -> aiosqlite.Connection:
-        self._conn = await aiosqlite.connect(DB_PATH)
+        self._conn = await aiosqlite.connect(_db_connect_path())
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA foreign_keys=ON")
@@ -37,7 +43,7 @@ def get_db() -> _DevBrainDB:
 
 async def init_db():
     """Create all tables on first run."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_db_connect_path()) as db:
         db.row_factory = aiosqlite.Row
         await db.executescript(
             """
@@ -537,6 +543,148 @@ async def init_db():
                 UNIQUE(workspace_id, external_system, external_id)
             );
 
+            CREATE TABLE IF NOT EXISTS trusted_device_states (
+                device_id            INTEGER PRIMARY KEY REFERENCES companion_devices(id) ON DELETE CASCADE,
+                trust_state          TEXT DEFAULT 'paired',
+                max_risk_tier        TEXT DEFAULT 'act',
+                biometric_enabled    INTEGER DEFAULT 0,
+                last_biometric_at    TEXT,
+                elevated_until       TEXT,
+                meta_json            TEXT DEFAULT '{}',
+                created_at           TEXT DEFAULT (datetime('now')),
+                updated_at           TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS mobile_elevation_sessions (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id            INTEGER NOT NULL REFERENCES companion_devices(id) ON DELETE CASCADE,
+                elevation_key        TEXT NOT NULL UNIQUE,
+                risk_tier            TEXT DEFAULT 'destructive',
+                granted_scopes_json  TEXT DEFAULT '[]',
+                status               TEXT DEFAULT 'active',
+                verified_via         TEXT DEFAULT '',
+                verified_at          TEXT,
+                expires_at           TEXT,
+                meta_json            TEXT DEFAULT '{}',
+                created_at           TEXT DEFAULT (datetime('now')),
+                updated_at           TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS risk_challenges (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                challenge_key        TEXT NOT NULL UNIQUE,
+                device_id            INTEGER NOT NULL REFERENCES companion_devices(id) ON DELETE CASCADE,
+                session_id           INTEGER REFERENCES companion_sessions(id) ON DELETE SET NULL,
+                workspace_id         INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+                action_type          TEXT NOT NULL DEFAULT '',
+                risk_tier            TEXT DEFAULT 'destructive',
+                title                TEXT NOT NULL DEFAULT '',
+                summary              TEXT DEFAULT '',
+                status               TEXT DEFAULT 'pending',
+                requires_biometric   INTEGER DEFAULT 1,
+                request_json         TEXT DEFAULT '{}',
+                meta_json            TEXT DEFAULT '{}',
+                expires_at           TEXT,
+                confirmed_at         TEXT,
+                rejected_at          TEXT,
+                created_at           TEXT DEFAULT (datetime('now')),
+                updated_at           TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS action_receipts (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                receipt_key          TEXT NOT NULL UNIQUE,
+                device_id            INTEGER REFERENCES companion_devices(id) ON DELETE SET NULL,
+                session_id           INTEGER REFERENCES companion_sessions(id) ON DELETE SET NULL,
+                workspace_id         INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+                challenge_id         INTEGER REFERENCES risk_challenges(id) ON DELETE SET NULL,
+                action_type          TEXT NOT NULL DEFAULT '',
+                risk_tier            TEXT DEFAULT 'observe',
+                status               TEXT DEFAULT 'completed',
+                outcome              TEXT DEFAULT '',
+                title                TEXT DEFAULT '',
+                summary              TEXT DEFAULT '',
+                request_json         TEXT DEFAULT '{}',
+                result_json          TEXT DEFAULT '{}',
+                created_at           TEXT DEFAULT (datetime('now')),
+                updated_at           TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS control_capabilities (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                action_type          TEXT NOT NULL UNIQUE,
+                system_name          TEXT NOT NULL DEFAULT 'axon',
+                scope                TEXT DEFAULT 'global',
+                risk_tier            TEXT DEFAULT 'observe',
+                mobile_direct_allowed INTEGER DEFAULT 0,
+                destructive          INTEGER DEFAULT 0,
+                available            INTEGER DEFAULT 1,
+                description          TEXT DEFAULT '',
+                meta_json            TEXT DEFAULT '{}',
+                created_at           TEXT DEFAULT (datetime('now')),
+                updated_at           TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS mcp_servers (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                server_key           TEXT NOT NULL UNIQUE,
+                name                 TEXT NOT NULL DEFAULT '',
+                transport            TEXT NOT NULL DEFAULT 'server_adapter',
+                endpoint             TEXT DEFAULT '',
+                auth_source          TEXT DEFAULT '',
+                scope                TEXT DEFAULT 'global',
+                risk_tier            TEXT DEFAULT 'observe',
+                enabled              INTEGER DEFAULT 1,
+                status               TEXT DEFAULT 'online',
+                meta_json            TEXT DEFAULT '{}',
+                last_seen_at         TEXT,
+                created_at           TEXT DEFAULT (datetime('now')),
+                updated_at           TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS mcp_capabilities (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                capability_key       TEXT NOT NULL UNIQUE,
+                server_id            INTEGER REFERENCES mcp_servers(id) ON DELETE CASCADE,
+                system_name          TEXT NOT NULL DEFAULT '',
+                tool_name            TEXT NOT NULL DEFAULT '',
+                action_type          TEXT NOT NULL DEFAULT '',
+                scope                TEXT DEFAULT 'global',
+                risk_tier            TEXT DEFAULT 'observe',
+                cache_ttl_seconds    INTEGER DEFAULT 0,
+                mobile_direct_allowed INTEGER DEFAULT 0,
+                available            INTEGER DEFAULT 1,
+                meta_json            TEXT DEFAULT '{}',
+                created_at           TEXT DEFAULT (datetime('now')),
+                updated_at           TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS mcp_sessions (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                server_id            INTEGER NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+                session_key          TEXT NOT NULL UNIQUE,
+                status               TEXT DEFAULT 'online',
+                detail               TEXT DEFAULT '',
+                last_error           TEXT DEFAULT '',
+                meta_json            TEXT DEFAULT '{}',
+                last_seen_at         TEXT,
+                created_at           TEXT DEFAULT (datetime('now')),
+                updated_at           TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS mcp_cache (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                cache_key            TEXT NOT NULL UNIQUE,
+                server_key           TEXT NOT NULL DEFAULT '',
+                capability_key       TEXT NOT NULL DEFAULT '',
+                workspace_id         INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+                summary              TEXT DEFAULT '',
+                payload_json         TEXT DEFAULT '{}',
+                expires_at           TEXT,
+                created_at           TEXT DEFAULT (datetime('now')),
+                updated_at           TEXT DEFAULT (datetime('now'))
+            );
+
             CREATE VIRTUAL TABLE IF NOT EXISTS memory_items_fts
             USING fts5(title, summary, content, source, content='memory_items', content_rowid='id');
 
@@ -589,187 +737,29 @@ async def init_db():
                 ON companion_voice_turns(session_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_workspace_relationships_workspace
                 ON workspace_relationships(workspace_id, external_system);
+            CREATE INDEX IF NOT EXISTS idx_trusted_device_states_state
+                ON trusted_device_states(trust_state, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_mobile_elevation_sessions_device
+                ON mobile_elevation_sessions(device_id, status, expires_at);
+            CREATE INDEX IF NOT EXISTS idx_risk_challenges_device
+                ON risk_challenges(device_id, status, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_action_receipts_device
+                ON action_receipts(device_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_control_capabilities_system
+                ON control_capabilities(system_name, risk_tier);
+            CREATE INDEX IF NOT EXISTS idx_mcp_servers_status
+                ON mcp_servers(status, enabled);
+            CREATE INDEX IF NOT EXISTS idx_mcp_capabilities_server
+                ON mcp_capabilities(server_id, available);
+            CREATE INDEX IF NOT EXISTS idx_mcp_sessions_server
+                ON mcp_sessions(server_id, status, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_mcp_cache_lookup
+                ON mcp_cache(server_key, capability_key, workspace_id);
 
-            INSERT OR IGNORE INTO settings (key, value) VALUES
-                ('anthropic_api_key', ''),
-                ('scan_interval_hours', '6'),
-                ('morning_digest_hour', '8'),
-                ('notify_desktop', 'true'),
-                ('max_chat_history', '50'),
-                ('projects_root', '~/Desktop'),
-                ('ai_backend', 'ollama'),
-                ('claude_cli_path', ''),
-                ('claude_cli_session_persistence_enabled', '0'),
-                ('vault_salt', ''),
-                ('vault_pw_hash', ''),
-                ('vault_totp_enc', ''),
-                ('github_token', ''),
-                ('slack_webhook_url', ''),
-                ('webhook_urls', ''),
-                ('webhook_secret', ''),
-                ('azure_speech_key', ''),
-                ('azure_speech_region', 'eastus'),
-                ('resource_storage_path', '~/.devbrain/resources'),
-                ('resource_upload_max_mb', '20'),
-                ('resource_url_import_enabled', '1'),
-                ('live_feed_enabled', '1'),
-                ('terminal_default_mode', 'read_only'),
-                ('terminal_command_timeout_seconds', '25'),
-                ('autonomy_profile', 'workspace_auto'),
-                ('runtime_permissions_mode', 'default'),
-                ('memory_first_enabled', '1'),
-                ('external_fetch_policy', 'cache_first'),
-                ('quick_model', ''),
-                ('standard_model', ''),
-                ('deep_model', ''),
-                ('workspace_snapshot_ttl_seconds', '60'),
-                ('memory_query_cache_ttl_seconds', '45'),
-                ('external_fetch_cache_ttl_seconds', '21600'),
-                ('max_history_turns', '10'),
-                ('sentry_api_token', ''),
-                ('sentry_org_slug', ''),
-                ('sentry_project_slugs', ''),
-                ('monthly_token_budget', '0'),
-                ('monthly_cost_budget_usd', '0'),
-                ('usage_alert_threshold_pct', '80'),
-                ('error_check_interval_minutes', '5'),
-                ('ci_check_interval_minutes', '10'),
-                ('auto_fix_enabled', '0');
             """
         )
-
-        async def ensure_column(table: str, column: str, definition: str):
-            cur = await db.execute(f"PRAGMA table_info({table})")
-            rows = await cur.fetchall()
-            existing = {row["name"] for row in rows}
-            if column not in existing:
-                await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-
-        async def get_setting_value(key: str) -> str | None:
-            cur = await db.execute("SELECT value FROM settings WHERE key = ?", (key,))
-            row = await cur.fetchone()
-            return str(row["value"] or "") if row else None
-
-        async def put_setting_value(key: str, value: str):
-            await db.execute(
-                """
-                INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
-                """,
-                (key, value),
-            )
-
-        async def delete_setting_value(key: str):
-            await db.execute("DELETE FROM settings WHERE key = ?", (key,))
-
-        def normalize_autonomy_profile(value: str | None) -> str:
-            normalized = str(value or "").strip().lower()
-            return normalized if normalized == "manual" else "workspace_auto"
-
-        def normalize_runtime_permissions_mode(value: str | None, *, autonomy_profile: str | None = None) -> str:
-            normalized = str(value or "").strip().lower()
-            if normalized in {"default", "ask_first", "full_access"}:
-                return normalized
-            return "ask_first" if normalize_autonomy_profile(autonomy_profile) == "manual" else "default"
-
-        def normalize_external_fetch_policy(value: str | None) -> str:
-            normalized = str(value or "").strip().lower()
-            return "live_first" if normalized == "live_first" else "cache_first"
-
-        def normalize_history_turns(value: str | None) -> str:
-            raw = str(value or "").strip()
-            if not raw or raw == "12":
-                return "10"
-            try:
-                parsed = int(raw)
-            except Exception:
-                return "10"
-            return str(max(6, min(60, parsed)))
-
-        await ensure_column("prompts", "meta_json", "TEXT DEFAULT '{}'")
-        await ensure_column("memory_items", "pinned", "INTEGER DEFAULT 0")
-        await ensure_column("resources", "file_path", "TEXT DEFAULT ''")
-        await ensure_column("resources", "trust_level", "TEXT DEFAULT 'medium'")
-        await ensure_column("resources", "pinned", "INTEGER DEFAULT 0")
-        await ensure_column(
-            "resources",
-            "workspace_id",
-            "INTEGER REFERENCES projects(id) ON DELETE SET NULL",
-        )
-        await ensure_column("resource_chunks", "content", "TEXT DEFAULT ''")
-        await ensure_column("resource_chunks", "token_estimate", "INTEGER DEFAULT 0")
-        await ensure_column("resource_chunks", "embedding_model", "TEXT DEFAULT ''")
-        await ensure_column("resource_chunks", "embedding_vector", "TEXT DEFAULT ''")
-        await ensure_column("memory_items", "memory_type", "TEXT DEFAULT ''")
-        await ensure_column("memory_items", "source_ref", "TEXT DEFAULT ''")
-        await ensure_column(
-            "memory_items",
-            "mission_id",
-            "INTEGER REFERENCES tasks(id) ON DELETE SET NULL",
-        )
-        await ensure_column("memory_items", "last_used_at", "TEXT")
-        await ensure_column(
-            "research_packs",
-            "workspace_id",
-            "INTEGER REFERENCES projects(id) ON DELETE SET NULL",
-        )
-        await ensure_column(
-            "projects",
-            "owner_user_id",
-            "INTEGER REFERENCES users(id) ON DELETE SET NULL",
-        )
-        await ensure_column(
-            "projects",
-            "team_id",
-            "INTEGER REFERENCES teams(id) ON DELETE SET NULL",
-        )
-        await ensure_column("projects", "visibility", "TEXT DEFAULT 'personal'")
-        await ensure_column(
-            "tasks",
-            "assigned_user_id",
-            "INTEGER REFERENCES users(id) ON DELETE SET NULL",
-        )
-        await ensure_column(
-            "tasks",
-            "created_by_user_id",
-            "INTEGER REFERENCES users(id) ON DELETE SET NULL",
-        )
-        await ensure_column(
-            "tasks",
-            "owner_user_id",
-            "INTEGER REFERENCES users(id) ON DELETE SET NULL",
-        )
-        await ensure_column("tasks", "due_at", "TEXT")
-        await ensure_column("approval_grants", "destructive", "INTEGER DEFAULT 0")
-        await ensure_column("approval_grants", "meta_json", "TEXT DEFAULT '{}'")
-        await ensure_column("external_fetch_cache", "summary", "TEXT DEFAULT ''")
-        for legacy_key in _LEGACY_SETTING_KEYS:
-            await delete_setting_value(legacy_key)
-
-        current_autonomy = await get_setting_value("autonomy_profile")
-        normalized_autonomy = normalize_autonomy_profile(current_autonomy)
-        if current_autonomy != normalized_autonomy:
-            await put_setting_value("autonomy_profile", normalized_autonomy)
-
-        current_runtime_permissions = await get_setting_value("runtime_permissions_mode")
-        normalized_runtime_permissions = normalize_runtime_permissions_mode(
-            current_runtime_permissions,
-            autonomy_profile=normalized_autonomy,
-        )
-        if current_runtime_permissions != normalized_runtime_permissions:
-            await put_setting_value("runtime_permissions_mode", normalized_runtime_permissions)
-
-        current_fetch_policy = await get_setting_value("external_fetch_policy")
-        normalized_fetch_policy = normalize_external_fetch_policy(current_fetch_policy)
-        if current_fetch_policy != normalized_fetch_policy:
-            await put_setting_value("external_fetch_policy", normalized_fetch_policy)
-
-        current_history_turns = await get_setting_value("max_history_turns")
-        normalized_history_turns = normalize_history_turns(current_history_turns)
-        if current_history_turns != normalized_history_turns:
-            await put_setting_value("max_history_turns", normalized_history_turns)
-        await db.execute("INSERT INTO memory_items_fts(memory_items_fts) VALUES ('rebuild')")
-        await db.execute("INSERT INTO resource_chunks_fts(resource_chunks_fts) VALUES ('rebuild')")
+        await seed_default_settings(db)
+        await apply_core_migrations(db)
         await db.commit()
 
     print(f"[Axon] Database initialised at {DB_PATH}")

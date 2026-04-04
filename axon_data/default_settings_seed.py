@@ -1,0 +1,63 @@
+"""Seed data for default settings rows."""
+
+from __future__ import annotations
+
+DEFAULT_SETTINGS = (
+    ("anthropic_api_key", ""),
+    ("scan_interval_hours", "6"),
+    ("morning_digest_hour", "8"),
+    ("notify_desktop", "true"),
+    ("max_chat_history", "50"),
+    ("projects_root", "~/Desktop"),
+    ("ai_backend", "ollama"),
+    ("claude_cli_path", ""),
+    ("claude_cli_session_persistence_enabled", "0"),
+    ("vault_salt", ""),
+    ("vault_pw_hash", ""),
+    ("vault_totp_enc", ""),
+    ("github_token", ""),
+    ("vercel_api_token", ""),
+    ("slack_webhook_url", ""),
+    ("webhook_urls", ""),
+    ("webhook_secret", ""),
+    ("azure_speech_key", ""),
+    ("azure_speech_region", "eastus"),
+    ("resource_storage_path", "~/.devbrain/resources"),
+    ("resource_upload_max_mb", "20"),
+    ("resource_url_import_enabled", "1"),
+    ("live_feed_enabled", "1"),
+    ("terminal_default_mode", "read_only"),
+    ("terminal_command_timeout_seconds", "25"),
+    ("autonomy_profile", "workspace_auto"),
+    ("runtime_permissions_mode", "default"),
+    ("memory_first_enabled", "1"),
+    ("external_fetch_policy", "cache_first"),
+    ("quick_model", ""),
+    ("standard_model", ""),
+    ("deep_model", ""),
+    ("workspace_snapshot_ttl_seconds", "60"),
+    ("memory_query_cache_ttl_seconds", "45"),
+    ("external_fetch_cache_ttl_seconds", "21600"),
+    ("max_history_turns", "10"),
+    ("sentry_api_token", ""),
+    ("sentry_org_slug", ""),
+    ("sentry_project_slugs", ""),
+    ("connector_credentials_json", "{}"),
+    ("monthly_token_budget", "0"),
+    ("monthly_cost_budget_usd", "0"),
+    ("usage_alert_threshold_pct", "80"),
+    ("error_check_interval_minutes", "5"),
+    ("ci_check_interval_minutes", "10"),
+    ("auto_fix_enabled", "0"),
+    ("mobile_elevation_ttl_minutes", "15"),
+    ("mobile_break_glass_enabled", "0"),
+    ("mobile_total_control_enabled", "1"),
+    ("mcp_servers_json", "[]"),
+)
+
+
+async def seed_default_settings(db) -> None:
+    await db.executemany(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+        DEFAULT_SETTINGS,
+    )

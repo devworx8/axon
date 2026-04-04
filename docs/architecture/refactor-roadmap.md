@@ -19,6 +19,23 @@ Break Axon into bounded modules without breaking:
 
 Status: completed
 
+## Phase 0.5 — Anti-monolith enforcement
+
+Target:
+
+- make hotspot growth impossible in CI
+- require shrink-or-waiver behavior for critical hotspots
+- ratchet all currently oversized tracked files
+
+Mechanics:
+
+- `scripts/guardrails/hotspot_budgets.json`
+- `docs/engineering/guardrail-waivers.json`
+- `scripts/guardrails/check_file_sizes.py`
+- `scripts/guardrails/check_hotspot_changes.py`
+
+Status: completed
+
 ## Phase 1 — Database extraction
 
 Target:
@@ -108,6 +125,7 @@ Initial slices:
 - modal partials
 
 Status: pending
+Blocked by: `ui/index.html`, `ui/js/chat.js`, and `ui/js/dashboard.js` ratchet reduction work
 
 ## Phase 5 — Manual and docs breakup
 
@@ -127,3 +145,4 @@ It is done when:
 - module boundaries are clear
 - CI blocks new monolith growth
 - the live app behaves the same or better
+- all ratcheted hotspot budgets have been driven down below hard limits

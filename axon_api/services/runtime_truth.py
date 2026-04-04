@@ -49,6 +49,103 @@ def _codex_self_heal_ready(codex_runtime: dict[str, Any]) -> bool:
     return bool(codex_runtime.get("installed")) and bool(auth.get("logged_in"))
 
 
+async def resolved_api_runtime(
+    settings: dict[str, Any],
+    provider_id: str,
+    *,
+    provider_registry_module,
+    devvault_module,
+    db_module,
+    conn=None,
+) -> tuple[dict[str, Any], str]:
+    candidate_settings = dict(settings)
+    candidate_settings["api_provider"] = provider_id
+    runtime = provider_registry_module.runtime_api_config(candidate_settings)
+    resolved_key = runtime.get("api_key", "")
+
+    if devvault_module.VaultSession.is_unlocked() and (not resolved_key or resolved_key == "set"):
+        async def _resolve(db):
+            return await devvault_module.vault_resolve_provider_key(db, provider_id)
+
+        if conn:
+            vault_key = await _resolve(conn)
+        else:
+            async with db_module.get_db() as db_conn:
+                vault_key = await _resolve(db_conn)
+        if vault_key:
+            resolved_key = vault_key
+
+    return runtime, resolved_key
+
+
+async def selected_api_runtime_truth(
+    settings: dict[str, Any],
+    *,
+    provider_registry_module,
+    resolved_api_runtime_fn,
+    conn=None,
+) -> dict[str, Any]:
+    provider_id = provider_registry_module.selected_api_provider_id(settings)
+    runtime, resolved_key = await resolved_api_runtime_fn(settings, provider_id, conn)
+    public = provider_registry_module.public_runtime_api_config(settings)
+    public["provider_id"] = provider_id
+    public["provider_label"] = runtime.get("provider_label", public.get("provider_label", "API"))
+    public["transport"] = runtime.get("transport", public.get("transport", ""))
+    public["api_base_url"] = runtime.get("api_base_url", public.get("api_base_url", ""))
+    public["api_model"] = runtime.get("api_model", public.get("api_model", ""))
+    public["api_key_configured"] = bool(str(resolved_key or "").strip())
+    public["key_hint"] = provider_registry_module.mask_secret(str(resolved_key or "")) if resolved_key else public.get("key_hint", "")
+    return public
+
+
+async def runtime_truth_for_settings(
+    settings: dict[str, Any],
+    *,
+    selected_api_runtime_truth_fn,
+    selected_cli_path_fn,
+    cli_runtime_family_fn,
+    claude_cli_runtime_module,
+    codex_cli_runtime_module,
+    resolve_selected_cli_binary_fn,
+    cli_runtime_key_fn,
+    current_cli_cooldown_fn,
+    build_runtime_truth_fn,
+    ollama_service_status_fn,
+    conn=None,
+    backend_override: str = "",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    truth_settings = dict(settings)
+    if backend_override:
+        truth_settings["ai_backend"] = backend_override
+    selected_cli_override = selected_cli_path_fn(settings)
+    selected_cli_family = cli_runtime_family_fn(selected_cli_override) if selected_cli_override else "claude"
+    claude_runtime = {
+        **claude_cli_runtime_module.build_cli_runtime_snapshot(selected_cli_override if selected_cli_family == "claude" else ""),
+        "runtime_id": "claude",
+        "runtime_name": "Claude CLI",
+    }
+    codex_runtime = {
+        **codex_cli_runtime_module.build_codex_runtime_snapshot(selected_cli_override if selected_cli_family == "codex" else ""),
+        "runtime_id": "codex",
+        "runtime_name": "Codex CLI",
+    }
+    cli_runtime = codex_runtime if selected_cli_family == "codex" else claude_runtime
+    cli_binary = str(cli_runtime.get("binary") or resolve_selected_cli_binary_fn(selected_cli_override) or "")
+    cooldown = current_cli_cooldown_fn(key=cli_runtime_key_fn(cli_binary)) if cli_binary else {}
+    status = {
+        "selected_api_provider": await selected_api_runtime_truth_fn(settings, conn),
+        "cli_runtime": cli_runtime,
+        "codex_runtime": codex_runtime,
+        "cli_cooldown_remaining_seconds": float(cooldown.get("remaining_seconds") or 0),
+    }
+    truth = build_runtime_truth_fn(
+        status,
+        settings=truth_settings,
+        ollama_running=bool(ollama_service_status_fn().get("running")),
+    )
+    return truth, status
+
+
 def build_runtime_truth(
     status: dict[str, Any],
     *,

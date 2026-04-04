@@ -19,7 +19,7 @@ function axonHelpersMixin() {
       const template = document.createElement('template');
       template.innerHTML = html;
       const allowedTags = new Set([
-        'A', 'ARTICLE', 'B', 'BLOCKQUOTE', 'BR', 'BUTTON', 'CODE', 'DEL', 'DIV', 'EM', 'H1', 'H2', 'H3', 'H4',
+        'A', 'ARTICLE', 'B', 'BLOCKQUOTE', 'BR', 'CODE', 'DEL', 'DIV', 'EM', 'H1', 'H2', 'H3', 'H4',
         'H5', 'H6', 'HR', 'I', 'LI', 'OL', 'P', 'PRE', 'S', 'SPAN', 'STRONG', 'TABLE', 'TBODY',
         'TD', 'TH', 'THEAD', 'TR', 'UL',
       ]);
@@ -47,25 +47,6 @@ function axonHelpersMixin() {
             }
             return;
           }
-          // Allow class on CODE/SPAN for syntax highlighting (hljs-*)
-          // Allow class on DIV/PRE/BUTTON for axon code blocks (axon-cb*)
-          if (name === 'class') {
-            const tag = node.tagName;
-            if (tag === 'CODE' || tag === 'SPAN') {
-              const safe = value.split(/\s+/).filter(c => /^(hljs|language-)/.test(c)).join(' ');
-              if (safe) { node.setAttribute('class', safe); } else { node.removeAttribute('class'); }
-              return;
-            }
-            if (tag === 'DIV' || tag === 'PRE' || tag === 'BUTTON') {
-              const safe = value.split(/\s+/).filter(c => /^axon-cb/.test(c)).join(' ');
-              if (safe) { node.setAttribute('class', safe); } else { node.removeAttribute('class'); }
-              return;
-            }
-          }
-          // Allow type/tabindex only on BUTTON (for code block copy)
-          if ((name === 'type' || name === 'tabindex') && node.tagName === 'BUTTON') return;
-          // Allow aria-hidden on DIV (line numbers)
-          if (name === 'aria-hidden' && node.tagName === 'DIV') return;
           if (name !== 'href' && name !== 'colspan' && name !== 'rowspan') {
             node.removeAttribute(attr.name);
           }
@@ -78,14 +59,11 @@ function axonHelpersMixin() {
     renderMd(text) {
       if (!text || typeof marked === 'undefined') return text || '';
       if (!this._markdownConfigured) {
-        // Use custom code block renderer (axon-codeblock) — handles hljs internally
-        const codeRenderer = typeof this.getCodeBlockRenderer === 'function'
-          ? this.getCodeBlockRenderer()
-          : {};
-        marked.use({
+        marked.setOptions({
           gfm: true,
           breaks: true,
-          renderer: codeRenderer,
+          headerIds: false,
+          mangle: false,
         });
         this._markdownConfigured = true;
       }
@@ -239,219 +217,6 @@ function axonHelpersMixin() {
     showToast(msg, duration=2500) {
       this.toast = { show: true, message: msg };
       setTimeout(() => this.toast.show = false, duration);
-    },
-
-    // Signature takes 4 explicit params so Alpine tracks each property change reactively.
-    renderToolBlock(name, args, result, status) {
-      const isRunning = status === 'running';
-      args = args || {};
-      result = result || '';
-
-      const esc = (s) => String(s || '')
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
-      const highlight = (code, lang) => {
-        if (typeof hljs !== 'undefined') {
-          if (lang && lang !== 'plaintext' && hljs.getLanguage(lang)) {
-            return hljs.highlight(code, { language: lang }).value;
-          }
-          if (lang === 'plaintext') return esc(code);
-          return hljs.highlightAuto(code).value;
-        }
-        return esc(code);
-      };
-
-      const extToLang = (path) => {
-        const ext = String(path || '').split('.').pop().toLowerCase();
-        return { js: 'javascript', ts: 'typescript', tsx: 'typescript', jsx: 'javascript',
-                 py: 'python', sh: 'bash', bash: 'bash', html: 'html', css: 'css',
-                 json: 'json', md: 'markdown', yml: 'yaml', yaml: 'yaml',
-                 rs: 'rust', go: 'go', java: 'java', rb: 'ruby', php: 'php',
-                 c: 'c', cpp: 'cpp', cs: 'csharp', sql: 'sql', toml: 'ini' }[ext] || 'plaintext';
-      };
-
-      // A flush section: divider + label bar + code
-      const section = (code, lang, label, isInput) => {
-        const highlighted = highlight(code, lang);
-        const bg = isInput ? 'rgba(2,6,23,0.95)' : 'rgba(2,6,23,0.7)';
-        const labelColor = isInput ? '#f59e0b' : '#475569';
-        return `<div style="border-top:1px solid rgba(30,41,59,0.8)">` +
-          `<div style="padding:3px 12px;background:rgba(2,6,23,0.55)">` +
-          `<span style="font-size:9px;text-transform:uppercase;letter-spacing:.12em;color:${labelColor};font-family:monospace">${label}</span></div>` +
-          `<pre style="margin:0;padding:8px 12px;font-size:11px;line-height:1.6;overflow-x:auto;overflow-y:auto;max-height:240px;background:${bg}">` +
-          `<code class="hljs language-${esc(lang)}">${highlighted}</code></pre></div>`;
-      };
-
-      const pathRow = (p) => p
-        ? `<div style="border-top:1px solid rgba(30,41,59,0.8);padding:4px 12px;background:rgba(2,6,23,0.55)">` +
-          `<span style="font-size:10px;color:#64748b;font-family:monospace">${esc(p)}</span></div>`
-        : '';
-
-      const runningRow = () =>
-        `<div style="border-top:1px solid rgba(30,41,59,0.8);padding:7px 12px;background:rgba(2,6,23,0.7)">` +
-        `<span style="font-size:10px;color:#f59e0b;font-family:monospace;opacity:0.55">executing…</span></div>`;
-
-      const successRow = (msg) =>
-        `<div style="border-top:1px solid rgba(16,185,129,0.15);padding:5px 12px;background:rgba(6,78,59,0.2)">` +
-        `<span style="font-size:10px;color:#34d399;font-family:monospace">✓ ${esc(msg)}</span></div>`;
-
-      const approvalInlineNote = (title, subject, detail) => {
-        const safeSubject = String(subject || '').trim();
-        return `<div class="axon-approval-note">`
-          + `<div class="axon-approval-note__header">`
-          + `<span class="axon-approval-note__badge">Approval required</span>`
-          + `<span class="axon-approval-note__title">${esc(title)}</span>`
-          + `</div>`
-          + (safeSubject ? `<code class="axon-approval-note__subject">${esc(safeSubject)}</code>` : '')
-          + `<div class="axon-approval-note__detail">${esc(detail)}</div>`
-          + `</div>`;
-      };
-
-      // Blocked file-edit gate UI — routed to the bottom composer approval dock
-      const blockedEditHtml = (op, filePath) => {
-        const shortPath = filePath.replace(/^\/home\/[^/]+/, '~').split('/').slice(-3).join('/');
-        const opLabel = { write: 'Write', edit: 'Edit', delete: 'Delete', append: 'Append', create: 'Create' }[op] || op;
-        return approvalInlineNote(
-          `Axon is paused before it can ${opLabel.toLowerCase()} this file.`,
-          shortPath,
-          'Use the approval controls near the composer to continue the task from here.'
-        );
-      };
-
-      let html = '';
-
-      if (name === 'shell_cmd') {
-        const cmd = args.cmd || args.command || '';
-        if (cmd) html += section(cmd, 'bash', '$ command', true);
-        // Detect blocked command — show approval UI instead of raw error
-        if (result && result.startsWith('BLOCKED_CMD:')) {
-          const parts = result.split(':');
-          const blockedName = parts[1] || cmd.split(' ')[0];
-          const fullCmd = parts.slice(2).join(':') || cmd;
-          html += approvalInlineNote(
-            'Axon is paused before it can run this command.',
-            fullCmd || blockedName,
-            'Use the approval controls near the composer to allow or deny this step without losing continuity.'
-          );
-        } else if (result) {
-          html += section(result.slice(0, 1200), 'plaintext', 'output', false);
-        } else if (isRunning && cmd) html += runningRow();
-
-      } else if (name === 'shell_bg') {
-        const cmd = args.cmd || args.command || '';
-        if (cmd) html += section(cmd, 'bash', '$ background', true);
-        if (result && result.startsWith('BLOCKED_CMD:')) {
-          const parts = result.split(':');
-          const blockedName = parts[1] || cmd.split(' ')[0];
-          const fullCmd = parts.slice(2).join(':') || cmd || blockedName;
-          html += approvalInlineNote(
-            'Axon is paused before it can run this background command.',
-            fullCmd,
-            'Use the approval controls near the composer to continue the same task from here.'
-          );
-        } else if (result) html += section(result.slice(0, 2000), 'plaintext', 'process output', false);
-        else if (isRunning && cmd) html += runningRow();
-
-      } else if (name === 'shell_bg_check') {
-        const pidLabel = args.pid ? `PID ${args.pid}` : 'process';
-        if (result) html += section(result.slice(0, 2000), 'plaintext', pidLabel, false);
-        else if (isRunning) html += runningRow();
-
-      } else if (name === 'write_file' || name === 'edit_file' || name === 'delete_file' || name === 'append_file' || name === 'create_file') {
-        const lang = extToLang(args.path || '');
-        html += pathRow(args.path);
-        if (result && result.startsWith('BLOCKED_EDIT:')) {
-          const parts = result.split(':');
-          const op = parts[1] || name.replace('_file', '');
-          const filePath = parts.slice(2).join(':');
-          html += blockedEditHtml(op, filePath);
-        } else {
-          if (name === 'write_file' && args.content) html += section(args.content, lang, lang !== 'plaintext' ? lang : 'content', true);
-          if (name === 'edit_file' && args.old_string) html += section(`- ${args.old_string}\n+ ${args.new_string || ''}`, 'diff', 'diff', true);
-          if (result) html += successRow(result.slice(0, 180));
-          else if (isRunning) html += runningRow();
-        }
-
-      } else if (name === 'read_file') {
-        const lang = extToLang(args.path || '');
-        html += pathRow(args.path);
-        if (result) html += section(result.slice(0, 1200), lang, lang !== 'plaintext' ? lang : 'file', false);
-        else if (isRunning) html += runningRow();
-
-      } else if (name === 'list_dir') {
-        html += pathRow(args.path);
-        if (result) html += section(result.slice(0, 800), 'plaintext', 'directory', false);
-        else if (isRunning) html += runningRow();
-
-      } else if (name === 'search_code' || name === 'search_files') {
-        const query = args.query || args.pattern || args.q || '';
-        if (query) html += pathRow('🔍 ' + query);
-        if (result) html += section(result.slice(0, 800), 'plaintext', 'matches', false);
-        else if (isRunning) html += runningRow();
-
-      } else {
-        if (Object.keys(args).length) {
-          html += section(JSON.stringify(args, null, 2), 'json', name.replace(/_/g, ' '), true);
-        }
-        if (result) html += section(result.slice(0, 600), 'plaintext', 'result', false);
-        else if (isRunning && Object.keys(args).length) html += runningRow();
-      }
-
-      return html;
-    },
-
-    toolPreview(name, args) {
-      if (!name || !args) return '';
-      if (name === 'shell_cmd' || name === 'shell_bg') return String(args.cmd || args.command || '').split('\n')[0].slice(0, 60);
-      if (name === 'shell_bg_check') return args.pid ? `PID ${args.pid}` : '';
-      if (name === 'write_file' || name === 'read_file') return String(args.path || '').split('/').slice(-2).join('/');
-      if (name === 'list_dir') return String(args.path || '').replace(/^\/home\/[^/]+/, '~');
-      if (name === 'search_code' || name === 'search_files') return String(args.query || args.pattern || '').slice(0, 50);
-      const keys = Object.keys(args);
-      return keys.length === 1 ? String(args[keys[0]] || '').slice(0, 50) : '';
-    },
-
-    /* ── Cowork sidebar: Progress Steps ── */
-    coworkSteps() {
-      const msgs = this.chatMessages || [];
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        const msg = msgs[i];
-        if (msg.role === 'assistant' && msg.workingBlocks?.length) {
-          return msg.workingBlocks.map((b, idx) => ({
-            num: idx + 1,
-            label: this.prettyToolName(b.name),
-            detail: this.toolPreview(b.name, b.args),
-            status: b.status,
-          }));
-        }
-      }
-      return [];
-    },
-
-    /* ── Cowork sidebar: Working Files ── */
-    coworkFiles() {
-      const msgs = this.chatMessages || [];
-      const fileMap = new Map();
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        const msg = msgs[i];
-        if (msg.role === 'assistant' && msg.workingBlocks?.length) {
-          for (const b of msg.workingBlocks) {
-            const a = b.args || {};
-            const p = a.path || a.file_path || a.filepath || '';
-            if (!p) continue;
-            const act = (b.name === 'write_file' || b.name === 'edit_file') ? 'edited'
-                      : b.name === 'read_file' ? 'read'
-                      : b.name === 'list_dir' ? 'listed' : 'used';
-            if (!fileMap.has(p) || act === 'edited') fileMap.set(p, act);
-          }
-          break;
-        }
-      }
-      return [...fileMap.entries()].map(([path, action]) => ({
-        path,
-        short: path.replace(/^\/home\/[^/]+/, '~').split('/').slice(-3).join('/'),
-        action,
-      }));
     },
 
   };

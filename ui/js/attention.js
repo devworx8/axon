@@ -44,19 +44,48 @@ function axonAttentionMixin() {
       return 'Now';
     },
 
-    attentionBucketItems(bucket) {
+    attentionBucketItems(bucket, limit = 4, offset = 0) {
       const items = this.attentionInbox?.[bucket];
-      return Array.isArray(items) ? items.slice(0, 4) : [];
+      const rows = Array.isArray(items) ? items : [];
+      const start = Math.max(0, Number(offset || 0));
+      const size = Number(limit || 0);
+      return size > 0 ? rows.slice(start, start + size) : rows.slice(start);
     },
 
     attentionBucketCount(bucket) {
       return Number(this.attentionInbox?.counts?.[bucket] || 0);
     },
 
+    attentionBucketLeadItem(bucket) {
+      return this.attentionBucketItems(bucket, 1, 0)[0] || null;
+    },
+
+    attentionBucketRemainingItems(bucket, offset = 1, limit = 3) {
+      return this.attentionBucketItems(bucket, limit, offset);
+    },
+
+    attentionBucketDescription(bucket) {
+      if (bucket === 'waiting_on_me') return 'Approvals, reviews, and decisions waiting on a human response.';
+      if (bucket === 'watch') return 'Signals worth monitoring before they become urgent.';
+      return 'Fresh issues and linked-system signals that deserve immediate attention.';
+    },
+
+    attentionBucketEmptyCopy(bucket) {
+      if (bucket === 'waiting_on_me') return 'Nothing is blocked on you right now.';
+      if (bucket === 'watch') return 'No slow-burn drift is being tracked right now.';
+      return 'Nothing urgent is asking for attention right now.';
+    },
+
     attentionBucketTone(bucket) {
       if (bucket === 'now') return 'border-rose-500/20 bg-rose-500/8 text-rose-200';
       if (bucket === 'waiting_on_me') return 'border-amber-500/20 bg-amber-500/8 text-amber-200';
       return 'border-cyan-500/20 bg-cyan-500/8 text-cyan-200';
+    },
+
+    attentionBucketPanelTone(bucket) {
+      if (bucket === 'now') return 'border-rose-500/20 bg-[linear-gradient(180deg,rgba(76,5,25,0.28),rgba(2,6,23,0.78))]';
+      if (bucket === 'waiting_on_me') return 'border-amber-500/20 bg-[linear-gradient(180deg,rgba(120,53,15,0.24),rgba(2,6,23,0.78))]';
+      return 'border-cyan-500/20 bg-[linear-gradient(180deg,rgba(8,47,73,0.24),rgba(2,6,23,0.78))]';
     },
 
     attentionSourceTone(source = '') {
@@ -71,9 +100,32 @@ function axonAttentionMixin() {
 
     attentionSeverityTone(item = {}) {
       const severity = String(item?.severity || '').trim().toLowerCase();
-      if (severity === 'critical' || severity === 'fatal') return 'text-rose-300';
-      if (severity === 'high') return 'text-amber-300';
-      return 'text-slate-400';
+      if (severity === 'critical' || severity === 'fatal') return 'border-rose-500/20 bg-rose-500/10 text-rose-100';
+      if (severity === 'high') return 'border-amber-500/20 bg-amber-500/10 text-amber-100';
+      if (severity === 'low') return 'border-cyan-500/20 bg-cyan-500/10 text-cyan-100';
+      return 'border-slate-700 bg-slate-900/80 text-slate-300';
+    },
+
+    attentionSeverityLabel(item = {}) {
+      return String(item?.severity || 'medium').trim().toLowerCase() || 'medium';
+    },
+
+    attentionCardTone(item = {}) {
+      const severity = this.attentionSeverityLabel(item);
+      if (severity === 'critical' || severity === 'fatal') return 'border-rose-500/25 bg-[linear-gradient(180deg,rgba(136,19,55,0.18),rgba(2,6,23,0.82))]';
+      if (severity === 'high') return 'border-amber-500/25 bg-[linear-gradient(180deg,rgba(120,53,15,0.18),rgba(2,6,23,0.82))]';
+      if (severity === 'low') return 'border-cyan-500/20 bg-[linear-gradient(180deg,rgba(8,47,73,0.16),rgba(2,6,23,0.82))]';
+      return 'border-slate-700 bg-slate-950/72';
+    },
+
+    attentionItemAge(item = {}) {
+      return this.timeAgo?.(item?.last_seen_at || item?.updated_at || item?.created_at) || 'recently';
+    },
+
+    attentionWorkspaceLabel(item = {}) {
+      if (String(item?.project_name || '').trim()) return item.project_name;
+      if (Number(item?.workspace_id || 0) > 0) return `Workspace #${item.workspace_id}`;
+      return 'Global';
     },
 
     attentionPrimaryActionLabel(item = {}) {

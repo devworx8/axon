@@ -3,10 +3,17 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { useTheme } from '@/theme/ThemeProvider';
 
-export function StatusPill({ label, tone = 'neutral' }: { label: string; tone?: 'neutral' | 'ok' | 'warn' | 'danger' }) {
+export function StatusPill({
+  label,
+  tone = 'neutral',
+}: {
+  label: string;
+  tone?: 'neutral' | 'accent' | 'ok' | 'warn' | 'danger';
+}) {
   const { colors } = useTheme();
   const stylesByTone = {
     neutral: { backgroundColor: '#162235', borderColor: colors.border, color: colors.text },
+    accent: { backgroundColor: '#102235', borderColor: '#1d4960', color: colors.accent },
     ok: { backgroundColor: '#10271d', borderColor: '#1d4d3b', color: colors.success },
     warn: { backgroundColor: '#2d2310', borderColor: '#6b4f13', color: colors.warning },
     danger: { backgroundColor: '#2b141d', borderColor: '#742234', color: colors.danger },
@@ -34,4 +41,3 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
 });
-

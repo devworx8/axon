@@ -18,8 +18,19 @@ export function usePresence(config: CompanionConfig) {
     }
   }, [config]);
 
-  const heartbeat = useCallback(async (workspaceId?: number | null, sessionId?: number | null) => {
-    const next = await sendPresenceHeartbeat({ device_id: config.deviceId ?? undefined, workspace_id: workspaceId ?? null, session_id: sessionId ?? null }, config);
+  const heartbeat = useCallback(async (
+    workspaceId?: number | null,
+    sessionId?: number | null,
+    voiceState: string = 'idle',
+    activeRoute: string = '',
+  ) => {
+    const next = await sendPresenceHeartbeat({
+      device_id: config.deviceId ?? undefined,
+      workspace_id: workspaceId ?? null,
+      session_id: sessionId ?? null,
+      voice_state: voiceState,
+      active_route: activeRoute,
+    }, config);
     setPresence(next.presence);
     return next.presence;
   }, [config]);

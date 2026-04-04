@@ -234,6 +234,39 @@ async def unlock_vault(db, master_password: str, totp_code: str, session_ttl: in
     return True, ""
 
 
+async def unlock_vault_with_password_only(db, master_password: str, session_ttl: int = VaultSession.DEFAULT_TTL) -> tuple[bool, str]:
+    """
+    Trusted-device fallback unlock.
+
+    This verifies the master password and derives the in-memory vault key without
+    checking TOTP. Callers must enforce an out-of-band second factor such as a
+    trusted-device biometric challenge before using this path.
+    """
+    cur = await db.execute("SELECT value FROM settings WHERE key = 'vault_salt'")
+    row = await cur.fetchone()
+    if not row:
+        return False, "Vault not set up"
+
+    salt = base64.b64decode(row["value"])
+    key = derive_key(master_password, salt)
+    pw_hash = hash_password_for_storage(master_password, salt)
+
+    cur = await db.execute("SELECT value FROM settings WHERE key = 'vault_pw_hash'")
+    stored_hash = (await cur.fetchone())["value"]
+    if not hmac.compare_digest(pw_hash, stored_hash):
+        return False, "Incorrect master password"
+
+    cur = await db.execute("SELECT value FROM settings WHERE key = 'vault_totp_enc'")
+    enc_totp = (await cur.fetchone())["value"]
+    try:
+        decrypt(enc_totp, key)
+    except Exception:
+        return False, "Vault data corrupted"
+
+    VaultSession.unlock(key, session_ttl=session_ttl)
+    return True, ""
+
+
 # ─── Secret CRUD ─────────────────────────────────────────────────────────────
 
 async def vault_list_secrets(db) -> list[dict]:
@@ -359,6 +392,46 @@ async def vault_resolve_provider_key(db, provider_id: str) -> str:
                 return secret["password"]
 
     return ""
+
+
+async def vault_resolve_named_secret(db, secret_name: str) -> str:
+    """
+    Resolve a vault secret by exact name (case-insensitive) and return its
+    decrypted password/value. Returns an empty string when the vault is locked
+    or no matching secret exists.
+    """
+    key = VaultSession.get_key()
+    if key is None:
+        return ""
+
+    name = str(secret_name or "").strip()
+    if not name:
+        return ""
+
+    cur = await db.execute(
+        "SELECT id FROM vault_secrets WHERE lower(trim(name)) = lower(trim(?)) LIMIT 1",
+        (name,),
+    )
+    row = await cur.fetchone()
+    if not row:
+        return ""
+
+    secret = await vault_get_secret(db, row["id"], key)
+    if secret and secret.get("password"):
+        return str(secret["password"]).strip()
+    return ""
+
+
+async def vault_has_named_secret(db, secret_name: str) -> bool:
+    """Return True when a vault secret exists with the given exact name."""
+    name = str(secret_name or "").strip()
+    if not name:
+        return False
+    cur = await db.execute(
+        "SELECT 1 FROM vault_secrets WHERE lower(trim(name)) = lower(trim(?)) LIMIT 1",
+        (name,),
+    )
+    return await cur.fetchone() is not None
 
 
 async def vault_resolve_all_provider_keys(db) -> dict[str, str]:

@@ -1,0 +1,153 @@
+{
+  "version": 1,
+  "generated_on": "2026-04-03",
+  "critical_hotspots": {
+    "server.py": {
+      "max_lines": 1900,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "axon_api/",
+      "rule": "bootstrap, registration, and compatibility only"
+    },
+    "brain.py": {
+      "max_lines": 4772,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "axon_core/",
+      "rule": "orchestration facade and compatibility only"
+    },
+    "ui/index.html": {
+      "max_lines": 5566,
+      "soft_limit": 250,
+      "hard_limit": 400,
+      "target": "ui/partials/ + ui/js/",
+      "rule": "shell, layout, partial includes, and bootstrap only"
+    },
+    "ui/js/dashboard.js": {
+      "max_lines": 3561,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "ui/js/dashboard-* slices",
+      "rule": "dashboard concerns must be split by bounded context"
+    },
+    "ui/js/chat.js": {
+      "max_lines": 2654,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "ui/js/chat-* slices",
+      "rule": "chat, streaming, approvals, and auto-session logic must stay split"
+    },
+    "ui/manual.html": {
+      "max_lines": 1046,
+      "soft_limit": 250,
+      "hard_limit": 400,
+      "target": "ui/partials/manual-*",
+      "rule": "manual shell only; chapters belong in partials"
+    },
+    "ui/js/voice.js": {
+      "max_lines": 913,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "ui/js/voice-* slices",
+      "rule": "voice capture, provider, and playback logic must stay split"
+    }
+  },
+  "ratcheted_oversize_files": {
+    "axon_api/routes/companion.py": {
+      "max_lines": 571,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "axon_api/routes/ + axon_api/services/companion_*"
+    },
+    "axon_api/routes/connection_browser.py": {
+      "max_lines": 521,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "axon_api/routes/browser_* + axon_api/services/browser_*"
+    },
+    "axon_api/routes/maintenance.py": {
+      "max_lines": 796,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "axon_api/routes/maintenance_* + axon_api/services/maintenance_*"
+    },
+    "axon_api/services/live_preview_sessions.py": {
+      "max_lines": 603,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "axon_api/services/live_preview_*"
+    },
+    "axon_api/services/sandbox_sessions.py": {
+      "max_lines": 674,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "axon_api/services/sandbox_*"
+    },
+    "axon_core/agent.py": {
+      "max_lines": 1154,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "axon_core/agent_*"
+    },
+    "axon_core/agent_file_actions.py": {
+      "max_lines": 1051,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "axon_core/agent_actions/*"
+    },
+    "axon_core/agent_output.py": {
+      "max_lines": 647,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "axon_core/agent_output_*"
+    },
+    "axon_core/agent_toolspecs.py": {
+      "max_lines": 650,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "axon_core/tools/*"
+    },
+    "axon_core/session_store.py": {
+      "max_lines": 557,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "axon_core/session_*"
+    },
+    "axon_data/core.py": {
+      "max_lines": 757,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "axon_data/* repositories"
+    },
+    "document_engine.py": {
+      "max_lines": 607,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "document engine slices"
+    },
+    "tests/test_cli_runtime_regressions.py": {
+      "max_lines": 4448,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "tests/test_cli_runtime_* slices"
+    },
+    "ui/js/helpers.js": {
+      "max_lines": 508,
+      "soft_limit": 350,
+      "hard_limit": 500,
+      "target": "ui/js/helper-* slices"
+    },
+    "ui/partials/dashboard.html": {
+      "max_lines": 375,
+      "soft_limit": 250,
+      "hard_limit": 400,
+      "target": "ui/partials/dashboard-*"
+    },
+    "ui/partials/settings.html": {
+      "max_lines": 1247,
+      "soft_limit": 250,
+      "hard_limit": 400,
+      "target": "ui/partials/settings-*"
+    }
+  }
+}

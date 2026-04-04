@@ -9,13 +9,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+      - name: Boundary guardrails
+        run: python3 scripts/guardrails/check_boundaries.py
+
       - name: File size guardrails
         run: python3 scripts/guardrails/check_file_sizes.py
 
-      - name: Boundary guardrails
-        run: python3 scripts/guardrails/check_boundaries.py
+      - name: Critical hotspot change guardrails
+        run: python3 scripts/guardrails/check_hotspot_changes.py
+
+      - name: Guardrail script tests
+        run: python3 -B -m unittest tests.test_guardrail_scripts

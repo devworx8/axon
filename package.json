@@ -1,0 +1,14 @@
+{
+  "name": "axon-workspace-tools",
+  "private": true,
+  "scripts": {
+    "start": "npm --prefix ./apps/companion-native run start",
+    "doctor": "npm --prefix ./apps/companion-native run doctor",
+    "android": "npm --prefix ./apps/companion-native run android",
+    "ios": "npm --prefix ./apps/companion-native run ios",
+    "web": "npm --prefix ./apps/companion-native run web",
+    "typecheck:companion": "npm --prefix ./apps/companion-native run typecheck",
+    "axon:start": "./start.sh",
+    "axon:stop": "./stop.sh"
+  }
+}

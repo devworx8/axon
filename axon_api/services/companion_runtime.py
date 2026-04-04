@@ -6,9 +6,11 @@ from typing import Any
 
 import brain
 import provider_registry
+from axon_api.services import companion_agent_bridge, companion_fast_path, companion_live
 from axon_api.services import companion_sessions as companion_sessions_service
 from axon_api.services import companion_voice as companion_voice_service
 from axon_api.services.attention_query import attention_summary
+from axon_api.services.live_operator_state import set_live_operator
 from axon_api.services.workspace_relationships import list_workspace_relationships_for_workspace
 from axon_data import get_all_settings, get_companion_session, get_project
 
@@ -127,6 +129,19 @@ async def _voice_context_block(db, *, workspace_id: int | None = None) -> tuple[
     return ("\n".join(lines), project)
 
 
+async def _voice_context_data(
+    db,
+    *,
+    workspace_id: int | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    if not workspace_id:
+        return {}, [], {"counts": {"now": 0, "waiting_on_me": 0, "watch": 0}}
+    project = _row(await get_project(db, workspace_id))
+    relationships = await list_workspace_relationships_for_workspace(db, workspace_id=workspace_id, limit=10)
+    attention = await attention_summary(db, workspace_id=workspace_id, limit=10)
+    return project, relationships, attention
+
+
 async def process_companion_voice_turn(
     db,
     *,
@@ -145,6 +160,9 @@ async def process_companion_voice_turn(
     session = await ensure_voice_session(db, device_id=device_id, workspace_id=workspace_id, session_id=session_id)
     resolved_workspace_id = workspace_id if workspace_id is not None else session.get("workspace_id")
     context_block, project = await _voice_context_block(db, workspace_id=resolved_workspace_id)
+    context_project, relationships, attention = await _voice_context_data(db, workspace_id=resolved_workspace_id)
+    if context_project:
+        project = context_project
 
     user_turn = await companion_voice_service.record_companion_voice_turn(
         db,
@@ -172,24 +190,183 @@ async def process_companion_voice_turn(
 
     settings = await get_all_settings(db)
     ai = _companion_model_kwargs(settings)
-    response = await brain.chat(
-        user_message=content,
-        history=history,
-        context_block=context_block,
-        project_name=str(project.get("name") or "").strip() or None,
-        workspace_path=str(project.get("path") or "").strip(),
-        backend=str(ai.get("backend") or "cli"),
-        api_key=str(ai.get("api_key") or "").strip(),
-        api_provider=str(ai.get("api_provider") or "").strip(),
-        api_base_url=str(ai.get("api_base_url") or "").strip(),
-        api_model=str(ai.get("api_model") or "").strip(),
-        cli_path=str(ai.get("cli_path") or "").strip(),
-        cli_model=str(ai.get("cli_model") or "").strip(),
-        ollama_url=str(ai.get("ollama_url") or "").strip(),
-        ollama_model=str(ai.get("ollama_model") or "").strip(),
+    response_text = ""
+    tokens_used = 0
+    response_backend = str(ai.get("backend") or settings.get("ai_backend") or "").strip()
+    approval_required: dict[str, Any] | None = None
+    tool_events: list[dict[str, Any]] = []
+    agent_session_id = ""
+    assistant_meta: dict[str, Any] = {"surface": "companion_voice_reply", "budget_class": "quick"}
+
+    set_live_operator(
+        active=True,
+        mode="agent",
+        phase="observe",
+        title="Listening on Axon Online",
+        detail=str(content or "").strip()[:180],
+        workspace_id=resolved_workspace_id,
     )
-    response_text = str(response.get("content") or "").strip()
-    tokens_used = int(response.get("tokens") or 0)
+
+    fast_path = companion_fast_path.maybe_build_fast_voice_response(
+        content,
+        project=project,
+        relationships=relationships,
+        attention=attention,
+    )
+    if fast_path:
+        response_text = str(fast_path.get("content") or "").strip()
+        tokens_used = int(fast_path.get("tokens_used") or 0)
+        response_backend = str(fast_path.get("backend") or "local").strip()
+        assistant_meta = {
+            "surface": "companion_voice_fast_path",
+            "budget_class": "quick",
+            "evidence_source": str(fast_path.get("evidence_source") or "workspace_snapshot"),
+            "fast_path": True,
+        }
+        set_live_operator(
+            active=False,
+            mode="agent",
+            phase="verify",
+            title="Live voice reply ready",
+            detail="Answered from local Axon context without a model call.",
+            summary=response_text[:180],
+            workspace_id=resolved_workspace_id,
+        )
+    else:
+        workspace_path = str(project.get("path") or "").strip()
+        needs_operator = bool(
+            resolved_workspace_id
+            and workspace_path
+            and brain._requires_local_operator_execution(
+                content,
+                db_path=brain.DEVBRAIN_DB_PATH,
+                workspace_path=workspace_path,
+            )
+        )
+        if needs_operator:
+            agent_result = await companion_agent_bridge.run_companion_agent_turn(
+                user_message=content,
+                history=history,
+                context_block=context_block,
+                project=project,
+                ai=ai,
+                settings=settings,
+                workspace_id=resolved_workspace_id,
+            )
+            response_text = str(agent_result.get("response_text") or "").strip()
+            tokens_used = int(agent_result.get("tokens_used") or 0)
+            response_backend = str(agent_result.get("backend") or "agent").strip()
+            approval_required = agent_result.get("approval_required")
+            tool_events = list(agent_result.get("tool_events") or [])
+            agent_session_id = str(agent_result.get("agent_session_id") or "").strip()
+            assistant_meta = {
+                "surface": "companion_voice_agent",
+                "budget_class": "quick",
+                "tool_event_count": len(tool_events),
+            }
+            if approval_required:
+                set_live_operator(
+                    active=False,
+                    mode="agent",
+                    phase="recover",
+                    title="Live voice paused for approval",
+                    detail=str(approval_required.get("message") or "Axon needs approval before it can continue.")[:180],
+                    summary=response_text[:180],
+                    workspace_id=resolved_workspace_id,
+                    auto_session_id=agent_session_id,
+                )
+            else:
+                set_live_operator(
+                    active=False,
+                    mode="agent",
+                    phase="verify",
+                    title="Live voice reply ready",
+                    detail="Axon finished the operator-backed response.",
+                    summary=response_text[:180],
+                    workspace_id=resolved_workspace_id,
+                    auto_session_id=agent_session_id,
+                )
+        else:
+            set_live_operator(
+                active=True,
+                mode="agent",
+                phase="plan",
+                title="Reasoning through the live voice request",
+                detail="Axon is preparing a direct reply.",
+                workspace_id=resolved_workspace_id,
+                preserve_started=True,
+            )
+            response = await brain.chat(
+                user_message=content,
+                history=history,
+                context_block=context_block,
+                project_name=str(project.get("name") or "").strip() or None,
+                workspace_path=workspace_path,
+                backend=str(ai.get("backend") or "cli"),
+                api_key=str(ai.get("api_key") or "").strip(),
+                api_provider=str(ai.get("api_provider") or "").strip(),
+                api_base_url=str(ai.get("api_base_url") or "").strip(),
+                api_model=str(ai.get("api_model") or "").strip(),
+                cli_path=str(ai.get("cli_path") or "").strip(),
+                cli_model=str(ai.get("cli_model") or "").strip(),
+                ollama_url=str(ai.get("ollama_url") or "").strip(),
+                ollama_model=str(ai.get("ollama_model") or "").strip(),
+            )
+            response_text = str(response.get("content") or "").strip()
+            tokens_used = int(response.get("tokens") or 0)
+            if resolved_workspace_id and companion_agent_bridge.needs_local_operator_upgrade(response_text):
+                agent_result = await companion_agent_bridge.run_companion_agent_turn(
+                    user_message=content,
+                    history=history,
+                    context_block=context_block,
+                    project=project,
+                    ai=ai,
+                    settings=settings,
+                    workspace_id=resolved_workspace_id,
+                )
+                response_text = str(agent_result.get("response_text") or "").strip()
+                tokens_used = int(agent_result.get("tokens_used") or 0)
+                response_backend = str(agent_result.get("backend") or "agent").strip()
+                approval_required = agent_result.get("approval_required")
+                tool_events = list(agent_result.get("tool_events") or [])
+                agent_session_id = str(agent_result.get("agent_session_id") or "").strip()
+                assistant_meta = {
+                    "surface": "companion_voice_agent",
+                    "budget_class": "quick",
+                    "tool_event_count": len(tool_events),
+                }
+                if approval_required:
+                    set_live_operator(
+                        active=False,
+                        mode="agent",
+                        phase="recover",
+                        title="Live voice paused for approval",
+                        detail=str(approval_required.get("message") or "Axon needs approval before it can continue.")[:180],
+                        summary=response_text[:180],
+                        workspace_id=resolved_workspace_id,
+                        auto_session_id=agent_session_id,
+                    )
+                else:
+                    set_live_operator(
+                        active=False,
+                        mode="agent",
+                        phase="verify",
+                        title="Live voice reply ready",
+                        detail="Axon finished the operator-backed response.",
+                        summary=response_text[:180],
+                        workspace_id=resolved_workspace_id,
+                        auto_session_id=agent_session_id,
+                    )
+            else:
+                set_live_operator(
+                    active=False,
+                    mode="agent",
+                    phase="verify",
+                    title="Live voice reply ready",
+                    detail="Axon finished the direct response.",
+                    summary=response_text[:180],
+                    workspace_id=resolved_workspace_id,
+                )
 
     assistant_turn = await companion_voice_service.record_companion_voice_turn(
         db,
@@ -199,29 +376,46 @@ async def process_companion_voice_turn(
         content=response_text,
         transcript=response_text,
         response_text=response_text,
-        provider=str(ai.get("backend") or settings.get("ai_backend") or "").strip(),
+        provider=response_backend,
         voice_mode=voice_mode,
         language=language,
         audio_format=audio_format,
         tokens_used=tokens_used,
         status="completed",
-        meta={"surface": "companion_voice_reply", "budget_class": "quick"},
+        meta=assistant_meta,
     )
 
     await companion_sessions_service.touch_companion_session(
         db,
         session_id=int(session["id"]),
+        status="awaiting_approval" if approval_required else "active",
+        agent_session_id=agent_session_id or None,
         current_route="/voice",
         current_view="voice",
         active_task=content[:160],
         summary=response_text[:220] or "Voice reply ready.",
     )
     refreshed_session = await get_companion_session(db, int(session["id"]))
+    session_payload = dict(refreshed_session) if refreshed_session else dict(session)
+    live_snapshot = await companion_live.build_companion_live_snapshot(
+        db,
+        device_id=device_id,
+        session_id=int(session["id"]),
+        workspace_id=resolved_workspace_id,
+        session_row=session_payload,
+        presence_row={},
+        operator_project_row=project,
+        focus_project_row=project,
+    )
     return {
-        "session": dict(refreshed_session) if refreshed_session else session,
+        "session": session_payload,
         "user_turn": user_turn,
         "assistant_turn": assistant_turn,
         "response_text": response_text,
         "tokens_used": tokens_used,
-        "backend": str(ai.get("backend") or settings.get("ai_backend") or "").strip(),
+        "backend": response_backend,
+        "voice_mode": voice_mode,
+        "approval_required": approval_required,
+        "tool_events": tool_events,
+        "live": live_snapshot,
     }

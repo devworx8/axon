@@ -56,6 +56,8 @@ async def touch_companion_session(
     db,
     *,
     session_id: int,
+    status: str | None = None,
+    agent_session_id: str | None = None,
     current_route: str | None = None,
     current_view: str | None = None,
     active_task: str | None = None,
@@ -64,6 +66,8 @@ async def touch_companion_session(
     await update_companion_session_state(
         db,
         session_id,
+        status=status,
+        agent_session_id=agent_session_id,
         current_route=current_route,
         current_view=current_view,
         active_task=active_task,
@@ -113,4 +117,3 @@ async def list_companion_workspace_sessions(
         limit=limit,
     )
     return [dict(row) for row in rows]
-

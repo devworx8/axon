@@ -1,17 +1,21 @@
 # Axon Module Map
 
-## Current hotspots
+## Critical hotspots
 
 | File | Current size | Direction |
 | --- | ---: | --- |
-| `server.py` | 6027 lines | Extract to `axon_api/` |
-| `brain.py` | 1928 lines | Extract to `axon_core/` (agent slice wired; legacy in-file agent block removed) |
+| `server.py` | 9702 lines | Extract to `axon_api/` |
+| `brain.py` | 4772 lines | Extract to `axon_core/` |
 | `db.py` | facade | Extraction completed into `axon_data/` |
-| `ui/index.html` | 6089 lines | Shell + partials |
+| `ui/index.html` | 5731 lines | Shell + partials |
 | `ui/manual.html` | 1046 lines | Shell + chapter partials |
-| `ui/js/dashboard.js` | 2287 lines | Split by dashboard concerns |
-| `ui/js/chat.js` | 999 lines | Split by chat/composer/agent/terminal concerns |
+| `ui/js/dashboard.js` | 3561 lines | Split by dashboard concerns |
+| `ui/js/chat.js` | 2654 lines | Split by chat/composer/agent/terminal concerns |
 | `ui/js/voice.js` | 913 lines | Split by voice input/output/provider concerns |
+
+Additional oversized tracked files are ratcheted in
+`scripts/guardrails/hotspot_budgets.json` and may not grow while they are being
+split.
 
 ## Target package layout
 

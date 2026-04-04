@@ -12,6 +12,10 @@ function axonProjectsMixin() {
         this.projects = await this.api('GET', '/api/projects' + qs);
         if (this.showGithubStatus) this.loadProjectGithubSummaries(this.projects);
         else this.projectGithubSummaries = {};
+        const expoProjects = (this.projects || []).filter(p => this.expoProjectMatch?.(p)).slice(0, 8);
+        if (expoProjects.length && typeof this.refreshExpoProject === 'function') {
+          await Promise.all(expoProjects.map(p => this.refreshExpoProject(p)));
+        }
       } catch(e) { this.showToast('Failed to load workspaces'); }
       this.projectsLoading = false;
     },

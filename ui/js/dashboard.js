@@ -17,10 +17,10 @@ function axonDashboardMixin() {
     },
 
     toggleLocalToolsPanel() {
-      this.composerOptions.terminal_mode = true;
-      this.terminal.panelOpen = true;
-      // Do NOT auto-create a terminal session here — user must click "Open Shell"
-      this.loadTerminalSessions();
+      this.composerOptions.terminal_mode = !this.composerOptions.terminal_mode;
+      if (this.composerOptions.terminal_mode && !this.terminal.sessions.length) {
+        this.createTerminalSession();
+      }
     },
 
     async loadLatestDigest() {
@@ -110,9 +110,6 @@ function axonDashboardMixin() {
           this.connectionState = status.connection;
           this.connectionState.domain_checked_at = new Date().toISOString();
         }
-        if (this.settingsForm && typeof status.cli_model === 'string' && (this.settingsForm.ai_backend || '').toLowerCase() === 'cli') {
-          this.settingsForm.cli_runtime_model = status.cli_model || '';
-        }
       } catch (e) {
         this.runtimeStatus = {
           ...this.runtimeStatus,
@@ -131,12 +128,8 @@ function axonDashboardMixin() {
         },
         {
           label: 'Active Model',
-          value: this.usesOllamaBackend()
-            ? (this.runtimeStatus.active_model || this.activeChatModel() || 'Waiting')
-            : ((this.settingsForm?.ai_backend || '').toLowerCase() === 'cli'
-              ? this.activeCliModelLabel()
-              : (this.runtimeStatus.active_model || this.selectedApiProviderModel() || 'Waiting')),
-          tone: (this.runtimeStatus.active_model || this.runtimeStatus.cli_model || this.selectedApiProviderModel()) ? 'ok' : 'neutral',
+          value: this.runtimeStatus.active_model || this.activeChatModel() || 'Waiting',
+          tone: this.runtimeStatus.active_model ? 'ok' : 'neutral',
         },
         {
           label: 'Secure Vault',
@@ -176,7 +169,7 @@ function axonDashboardMixin() {
 
     dashboardLiveEntries() {
       if ((this.liveOperatorFeed || []).length) {
-        return [...this.liveOperatorFeed].slice(-6);
+        return [...this.liveOperatorFeed].slice(-6).reverse();
       }
       return (this.dashRecentActivity || []).slice(0, 6).map(item => ({
         id: `activity-${item.id}`,
@@ -210,19 +203,6 @@ function axonDashboardMixin() {
       return (this.settingsForm?.ai_backend || '').toLowerCase() === 'ollama';
     },
 
-    currentBackendId() {
-      return (
-        (this.settingsForm?.ai_backend || this.runtimeStatus?.backend || 'api')
-          .toString()
-          .trim()
-          .toLowerCase()
-      );
-    },
-
-    currentBackendSupportsAgent() {
-      return ['ollama', 'api', 'cli'].includes(this.currentBackendId());
-    },
-
     activeChatModel() {
       return this.selectedChatModel || this.settingsForm?.code_model || this.settingsForm?.ollama_model || '';
     },
@@ -231,7 +211,6 @@ function axonDashboardMixin() {
       const icons = {
         ollama: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M7 15c0-3.314 2.239-6 5-6s5 2.686 5 6-2.239 4-5 4-5-.686-5-4z"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 10c-.333-2 1-5 3-5 1.48 0 2.44 1.12 3 2.5M10 14h.01M14 14h.01"/></svg>`,
         cli: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6.75h16v10.5H4z"/><path stroke-linecap="round" stroke-linejoin="round" d="m8 10 2 2-2 2m5 0h3"/></svg>`,
-        codex: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3.5 17.5 6v6L12 15.5 6.5 12V6L12 3.5z"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v8M8.5 10 15.5 14M15.5 10 8.5 14"/></svg>`,
         anthropic: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="m6 18 6-12 6 12"/><path stroke-linecap="round" stroke-linejoin="round" d="M8.5 13h7"/></svg>`,
         openai_gpts: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3.5 17.5 6v6L12 15.5 6.5 12V6L12 3.5z"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v8M8.5 10 15.5 14M15.5 10 8.5 14"/></svg>`,
         gemini_gems: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="m12 2 2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2L12 2Z"/></svg>`,
@@ -243,7 +222,6 @@ function axonDashboardMixin() {
     providerIdentityTone(providerId = '') {
       if (providerId === 'ollama') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
       if (providerId === 'cli') return 'border-green-500/20 bg-green-500/10 text-green-200';
-      if (providerId === 'codex') return 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200';
       if (providerId === 'anthropic') return 'border-orange-500/20 bg-orange-500/10 text-orange-200';
       if (providerId === 'openai_gpts') return 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200';
       if (providerId === 'gemini_gems') return 'border-indigo-500/20 bg-indigo-500/10 text-indigo-200';
@@ -269,10 +247,10 @@ function axonDashboardMixin() {
         };
       }
       return {
-        providerId: this.cliRuntimeId() === 'codex' ? 'codex' : 'cli',
-        providerLabel: this.cliRuntimeName(),
-        modelLabel: this.activeCliModelLabel(),
-        transportLabel: this.cliRuntimeId() === 'codex' ? 'Local extension' : 'Local bridge',
+        providerId: 'cli',
+        providerLabel: 'CLI Agent',
+        modelLabel: this.runtimeStatus?.active_model || this.settingsForm?.code_model || this.settingsForm?.ollama_model || 'Saved default',
+        transportLabel: 'Local bridge',
       };
     },
 
@@ -335,7 +313,7 @@ function axonDashboardMixin() {
     backendBadge() {
       const backend = (this.settingsForm?.ai_backend || 'ollama').toLowerCase();
       if (backend === 'ollama') return 'Local Ollama';
-      if (backend === 'cli') return this.cliRuntimeName();
+      if (backend === 'cli') return 'CLI Agent';
       return this.selectedApiProviderLabel();
     },
 
@@ -363,7 +341,7 @@ function axonDashboardMixin() {
 
     selectedApiProviderModel() {
       return this.runtimeStatus?.selected_api_provider?.api_model
-        || this.providerValue(this.settingsForm?.api_provider || 'deepseek', 'model')
+        || this.providerValue(this.settingsForm?.api_provider || 'anthropic', 'model')
         || '';
     },
 
@@ -373,965 +351,6 @@ function axonDashboardMixin() {
       if (transport === 'gemini') return 'Gemini';
       if (transport === 'anthropic') return 'Anthropic Messages';
       return transport;
-    },
-
-    cliModelOptions() {
-      const options = Array.isArray(this.runtimeStatus?.cli_models) ? [...this.runtimeStatus.cli_models] : [];
-      const selected = String(this.settingsForm?.cli_runtime_model || this.runtimeStatus?.cli_model || '').trim();
-      if (selected && !options.some(item => String(item?.id || '') === selected)) {
-        options.push({ id: selected, label: selected, description: 'Saved custom model' });
-      }
-      if (options.length) return options;
-      if (this.cliRuntimeId() === 'codex') {
-        return [{ id: '', label: 'Codex default' }];
-      }
-      return [
-        { id: '', label: 'Claude default' },
-        { id: 'sonnet', label: 'Sonnet' },
-        { id: 'opus', label: 'Opus' },
-        { id: 'haiku', label: 'Haiku' },
-        { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6' },
-        { id: 'claude-opus-4-5', label: 'claude-opus-4-5' },
-        { id: 'claude-haiku-4-5', label: 'claude-haiku-4-5' },
-      ];
-    },
-
-    cliModelLabel(modelId = '') {
-      const selected = String(modelId || '').trim();
-      const option = this.cliModelOptions().find(item => String(item.id || '') === selected);
-      if (option?.label) return option.label;
-      return selected || (this.cliRuntimeId() === 'codex' ? 'Codex default' : 'Claude default');
-    },
-
-    activeCliModelLabel() {
-      const selected = this.settingsForm?.cli_runtime_model || this.runtimeStatus?.cli_model || '';
-      return this.cliModelLabel(selected);
-    },
-
-    async saveCliModelQuiet() {
-      try {
-        await this.api('POST', '/api/settings', {
-          cli_runtime_model: this.settingsForm.cli_runtime_model || '',
-        });
-        await this.loadRuntimeStatus();
-      } catch (e) {
-        this.showToast('Failed to update CLI model');
-      }
-    },
-
-    cliRuntimeInfo() {
-      return this.runtimeStatus?.cli_runtime || { auth: {}, selected_environment: {} };
-    },
-
-    cliRuntimeId() {
-      return this.cliRuntimeInfo()?.runtime_id || 'claude';
-    },
-
-    cliRuntimeName() {
-      return this.cliRuntimeInfo()?.runtime_name || (this.cliRuntimeId() === 'codex' ? 'Codex CLI' : 'Claude CLI');
-    },
-
-    cliRuntimeBinaryName() {
-      const fallback = this.cliRuntimeId() === 'codex' ? 'codex' : 'claude';
-      const path = this.settingsForm?.cli_runtime_path || this.cliRuntimeInfo().binary || this.runtimeStatus?.cli_binary || fallback;
-      return String(path || fallback).split('/').pop() || fallback;
-    },
-
-    cliRuntimeSourceSummary() {
-      const info = this.cliRuntimeInfo();
-      const runtimeName = this.cliRuntimeName();
-      if (!info.installed) {
-        return info.install_available
-          ? `${runtimeName} is not installed yet. Axon can install it and then auto-detect it.`
-          : `${runtimeName} is not installed and npm is not currently available in Axon's environment.`;
-      }
-      const env = info.selected_environment || {};
-      if (info.manual_override_path) {
-        return `Using manual override${env.label ? ` · ${env.label}` : ''}`;
-      }
-      if (info.using_auto_discovery) {
-        return `Auto-detected${env.label ? ` · ${env.label}` : ''}`;
-      }
-      return env.label || 'Detected locally';
-    },
-
-    cliRuntimeAuthSummary() {
-      const info = this.cliRuntimeInfo();
-      const auth = info.auth || {};
-      if (this.cliCooldownSummary()) return this.cliCooldownSummary();
-      if (!info.installed) return `Install ${this.cliRuntimeName()} to use its local login.`;
-      if (auth.logged_in) return auth.message || 'Signed in';
-      return auth.message || 'Not signed in';
-    },
-
-    cliCooldownSummary() {
-      const remaining = Number(this.runtimeStatus?.cli_cooldown_remaining_seconds || 0);
-      if (!(remaining > 0)) return '';
-      return `Claude CLI is cooling down for about ${Math.ceil(remaining)}s after a rate limit. Axon will use a fallback runtime until it clears.`;
-    },
-
-    formatRuntimeAuthMethod(method = '') {
-      const value = String(method || '').trim().toLowerCase();
-      if (!value) return 'Pending';
-      if (value === 'claude.ai') return 'Claude subscription';
-      if (value === 'console') return 'Anthropic Console';
-      if (value === 'chatgpt') return 'ChatGPT';
-      if (value === 'api_key') return 'API key';
-      if (value === 'local') return 'Local runtime';
-      return value.replace(/[_-]/g, ' ');
-    },
-
-    runtimeObservabilityRows() {
-      return [
-        {
-          key: 'selected',
-          label: 'Selected runtime',
-          value: this.runtimeStatus?.selected_runtime_label || this.runtimeStatus?.runtime_label || 'Pending',
-        },
-        {
-          key: 'effective',
-          label: 'Effective runtime',
-          value: this.runtimeStatus?.effective_runtime_label || this.runtimeStatus?.runtime_label || 'Pending',
-        },
-        {
-          key: 'auth',
-          label: 'Auth',
-          value: this.formatRuntimeAuthMethod(this.runtimeStatus?.auth_method),
-        },
-        {
-          key: 'subscription',
-          label: 'Plan',
-          value: this.runtimeStatus?.subscription_type || 'Not reported',
-        },
-      ];
-    },
-
-    runtimeFallbackSummaryText() {
-      return this.runtimeStatus?.fallback_reason || 'No active fallback.';
-    },
-
-    runtimeProviderErrorText() {
-      return this.runtimeStatus?.provider_error || '';
-    },
-
-    browserSession() {
-      const raw = this.browserActions?.session || {};
-      const scope = this.currentPreviewScope?.() || {};
-      const scopeWorkspaceId = String(scope.workspace_id || '').trim();
-      if (!scopeWorkspaceId) return raw;
-      const attachedWorkspaceId = String(raw?.attached_workspace_id || '').trim();
-      const attachedAutoSessionId = String(raw?.attached_auto_session_id || '').trim();
-      const scopeAutoSessionId = String(scope.auto_session_id || '').trim();
-      if (attachedWorkspaceId && attachedWorkspaceId !== scopeWorkspaceId) return {};
-      if (attachedAutoSessionId !== scopeAutoSessionId) return {};
-      return raw;
-    },
-
-    currentPreviewScopeKey() {
-      const scope = this.currentPreviewScope?.() || {};
-      return `${String(scope.workspace_id || '').trim()}:${String(scope.auto_session_id || '').trim()}`;
-    },
-
-    browserFrameUrl() {
-      return String(
-        this.currentWorkspacePreview?.()?.url
-        || this.browserSession()?.attached_preview_url
-        || this.devPreview?.url
-        || this.browserSession()?.url
-        || ''
-      ).trim();
-    },
-
-    browserOwnershipLabel() {
-      return this.browserSession()?.ownership_label || (this.browserSession()?.control_owner === 'axon' ? 'Axon controls this browser now' : 'Manual browser');
-    },
-
-    browserOwnershipTone() {
-      return this.browserSession()?.control_owner === 'axon'
-        ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
-        : 'border-slate-700 bg-slate-950/70 text-slate-300';
-    },
-
-    browserControlModeLabel() {
-      return String(this.browserSession()?.mode || '').toLowerCase() === 'inspect_auto' ? 'Auto control' : 'Manual control';
-    },
-
-    browserControlModeTone() {
-      return String(this.browserSession()?.mode || '').toLowerCase() === 'inspect_auto'
-        ? 'border-sky-500/25 bg-sky-500/10 text-sky-200'
-        : 'border-amber-500/25 bg-amber-500/10 text-amber-200';
-    },
-
-    browserAttachedWorkspaceLabel() {
-      const session = this.browserSession();
-      return session?.attached_workspace_name || this.workspacePreview?.workspace_name || this.chatProject?.name || 'Workspace';
-    },
-
-    browserControlStatusLabel() {
-      const preview = this.currentWorkspacePreview?.() || {};
-      const status = String(preview?.status || this.browserSession()?.attached_preview_status || '').trim().toLowerCase();
-      if (this.workspacePreview?.loading) return 'Starting';
-      if (status === 'running') return 'Live';
-      if (status) return status.replace(/_/g, ' ');
-      if (this.browserSession()?.connected) return 'Attached';
-      return 'Idle';
-    },
-
-    browserControlDetail() {
-      const preview = this.currentWorkspacePreview?.() || {};
-      if (this.workspacePreview?.loading) {
-        return `Axon is starting a live page for ${this.browserAttachedWorkspaceLabel()}.`;
-      }
-      if (this.workspacePreview?.error) return this.workspacePreview.error;
-      if (preview?.last_error) return preview.last_error;
-      if (this.browserSession()?.control_owner === 'axon' && this.browserFrameUrl()) {
-        return `${this.browserAttachedWorkspaceLabel()} is attached to Axon's browser surface.`;
-      }
-      return 'Start the live page to give Axon a controlled browser surface for preview and browser actions.';
-    },
-
-    browserPreviewStatusKey() {
-      const preview = this.currentWorkspacePreview?.() || {};
-      const rawStatus = String(preview?.status || this.browserSession()?.attached_preview_status || '').trim().toLowerCase();
-      if (this.workspacePreview?.loading) return 'starting';
-      if (this.workspacePreview?.error || preview?.last_error || rawStatus === 'error') return 'error';
-      if (rawStatus === 'running') return preview?.healthy === false ? 'attention' : 'live';
-      if (rawStatus === 'starting') return 'starting';
-      if (rawStatus === 'stopped') return 'stopped';
-      if (this.browserSession()?.control_owner === 'axon' && this.browserFrameUrl()) return 'attached';
-      if (this.browserSession()?.connected) return 'connected';
-      return 'idle';
-    },
-
-    browserPreviewStatusLabel() {
-      const key = this.browserPreviewStatusKey();
-      if (key === 'live') return 'Live';
-      if (key === 'attention') return 'Needs attention';
-      if (key === 'starting') return 'Starting';
-      if (key === 'error') return 'Error';
-      if (key === 'attached') return 'Attached';
-      if (key === 'connected') return 'Connected';
-      if (key === 'stopped') return 'Stopped';
-      return 'Idle';
-    },
-
-    browserPreviewStatusTone() {
-      const key = this.browserPreviewStatusKey();
-      if (key === 'live') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
-      if (key === 'attention' || key === 'starting') return 'border-amber-500/20 bg-amber-500/10 text-amber-200';
-      if (key === 'error') return 'border-rose-500/20 bg-rose-500/10 text-rose-200';
-      if (key === 'attached' || key === 'connected') return 'border-sky-500/20 bg-sky-500/10 text-sky-200';
-      if (key === 'stopped') return 'border-slate-700 bg-slate-950/70 text-slate-400';
-      return 'border-slate-700 bg-slate-950/70 text-slate-400';
-    },
-
-    browserControlHeadline() {
-      const workspace = this.browserAttachedWorkspaceLabel();
-      const owner = String(this.browserSession()?.control_owner || '').toLowerCase();
-      const status = this.browserPreviewStatusKey();
-      if (status === 'live' && owner === 'axon') return `Axon owns the live browser for ${workspace}.`;
-      if (status === 'attached' && owner === 'axon') return `Axon is attached to ${workspace}.`;
-      if (status === 'starting') return `Starting the live browser for ${workspace}.`;
-      if (status === 'error' || status === 'attention') return `The ${workspace} browser surface needs attention.`;
-      if (this.browserFrameUrl()) return `${workspace} is visible in the browser surface.`;
-      return `No live browser is attached for ${workspace}.`;
-    },
-
-    browserSourcePath() {
-      return String(
-        this.currentWorkspacePreview?.()?.source_workspace_path
-        || this.browserSession()?.attached_source_workspace_path
-        || this.chatProject?.path
-        || ''
-      ).trim();
-    },
-
-    browserSourceLabel() {
-      const source = this.browserSourcePath();
-      if (!source) return 'No source workspace linked yet';
-      const parts = source.split('/').filter(Boolean);
-      return parts[parts.length - 1] || source;
-    },
-
-    browserCommandLabel() {
-      return String(
-        this.browserSession()?.title
-        || this.currentWorkspacePreview?.()?.command
-        || 'Attach a live page so Axon can inspect, verify, and propose browser actions here.'
-      ).trim();
-    },
-
-    browserPendingProposalCount() {
-      const explicit = Number(this.browserActions?.pending_count || 0);
-      if (explicit > 0) return explicit;
-      return (this.browserActions?.proposals || []).filter(item => String(item?.status || 'pending') === 'pending').length;
-    },
-
-    browserPendingProposalLabel() {
-      const count = this.browserPendingProposalCount();
-      if (!count) return 'No browser actions waiting';
-      return count === 1 ? '1 browser action waiting' : `${count} browser actions waiting`;
-    },
-
-    browserRecentActionHistory() {
-      return (this.browserActions?.history || []).slice(0, 3);
-    },
-
-    browserHistoryStatusLabel(item = {}) {
-      if (item?.execution_result) return 'Executed';
-      const status = String(item?.status || '').trim().toLowerCase();
-      if (status === 'approved') return 'Approved';
-      if (status === 'rejected') return 'Rejected';
-      return 'Pending';
-    },
-
-    browserHistoryStatusTone(item = {}) {
-      const status = this.browserHistoryStatusLabel(item).toLowerCase();
-      if (status === 'executed') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
-      if (status === 'approved') return 'border-sky-500/20 bg-sky-500/10 text-sky-200';
-      if (status === 'rejected') return 'border-rose-500/20 bg-rose-500/10 text-rose-200';
-      return 'border-slate-700 bg-slate-950/70 text-slate-400';
-    },
-
-    browserHistoryDetail(item = {}) {
-      const execution = item?.execution_result || {};
-      const message = String(execution?.message || execution?.detail || '').trim();
-      if (message) return message;
-      return String(item?.target || item?.url || '').trim();
-    },
-
-    browserPrimaryActionLabel() {
-      return this.browserFrameUrl() ? 'Restart Live Page' : 'Start Live Page';
-    },
-
-    async browserPrimaryAction() {
-      if (this.browserFrameUrl()) return this.restartWorkspacePreview();
-      return this.ensureWorkspacePreview({ openExternal: false, attachBrowser: true });
-    },
-
-    runtimeLoginAuthSummary(session = null) {
-      const auth = session?.auth_snapshot || {};
-      const parts = [];
-      const provider = auth.provider_label || '';
-      const method = this.formatRuntimeAuthMethod(auth.auth_method || '');
-      if (provider) parts.push(provider);
-      if (method && method !== 'Pending' && method !== provider) parts.push(method);
-      if (auth.subscription_type) parts.push(auth.subscription_type);
-      if (auth.email) parts.push(auth.email);
-      return parts.join(' · ') || 'Waiting for runtime auth details.';
-    },
-
-    codexRuntimeInfo() {
-      return this.runtimeStatus?.codex_runtime || { auth: {} };
-    },
-
-    codexRuntimeAuthSummary() {
-      const info = this.codexRuntimeInfo();
-      const auth = info.auth || {};
-      if (!info.installed) {
-        return info.install_available
-          ? 'Codex CLI is not installed yet. Axon can install it via npm.'
-          : 'Codex CLI is not installed and npm is not currently available in Axon\'s environment.';
-      }
-      return auth.message || 'Codex CLI is installed.';
-    },
-
-    async refreshClaudeCliStatus(silent = false) {
-      try {
-        await this.loadRuntimeStatus();
-        if (!silent) this.showToast(`${this.cliRuntimeName()} status refreshed`);
-      } catch (e) {
-        if (!silent) this.showToast(`Refresh failed: ${e.message || e}`);
-      }
-    },
-
-    async useAutoDetectedCli() {
-      try {
-        this.settingsForm.cli_runtime_path = '';
-        await this.api('POST', '/api/settings', { cli_runtime_path: '' });
-        await this.loadRuntimeStatus();
-        this.showToast('CLI runtime will now use auto-discovery');
-      } catch (e) {
-        this.showToast(`Failed to clear CLI override: ${e.message || e}`);
-      }
-    },
-
-    async selectCliEnvironment(env) {
-      const nextPath = env?.path || '';
-      const nextFamily = String(env?.family || '');
-      const currentFamily = this.cliRuntimeId();
-      this.settingsForm.ai_backend = 'cli';
-      this.settingsForm.cli_runtime_path = nextPath;
-      if (nextFamily && currentFamily && nextFamily !== currentFamily) {
-        this.settingsForm.cli_runtime_model = '';
-      }
-      try {
-        await this.api('POST', '/api/settings', {
-          ai_backend: 'cli',
-          cli_runtime_path: nextPath,
-          cli_runtime_model: this.settingsForm.cli_runtime_model || '',
-        });
-        await this.loadRuntimeStatus();
-      } catch (_) {}
-    },
-
-    async _copyCommandPreview(text) {
-      if (!text) return;
-      try {
-        await navigator.clipboard.writeText(text);
-      } catch (_) {
-        // Ignore clipboard failures; the prepared command is still shown in the UI.
-      }
-    },
-
-    runtimeLoginPendingStatus(status = '') {
-      return ['pending', 'browser_opened', 'waiting'].includes(String(status || '').toLowerCase());
-    },
-
-    runtimeLoginFamilyLabel(family = '') {
-      return String(family || '').toLowerCase() === 'codex' ? 'Codex CLI' : 'Claude CLI';
-    },
-
-    runtimeLoginStatusClass(status = '') {
-      const value = String(status || '').toLowerCase();
-      if (value === 'authenticated') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
-      if (value === 'failed' || value === 'cancelled') return 'border-rose-500/30 bg-rose-500/10 text-rose-200';
-      if (this.runtimeLoginPendingStatus(value)) return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
-      return 'border-slate-700 bg-slate-900 text-slate-300';
-    },
-
-    closeRuntimeLoginModal() {
-      if (this.runtimeLoginModal?.pollHandle) {
-        clearTimeout(this.runtimeLoginModal.pollHandle);
-      }
-      this.runtimeLoginModal = {
-        ...this.runtimeLoginModal,
-        open: false,
-        loading: false,
-        error: '',
-        pollHandle: null,
-      };
-    },
-
-    async copyRuntimeLoginValue(value, label = 'Value') {
-      if (!value) return;
-      try {
-        await navigator.clipboard.writeText(String(value));
-        this.showToast(`${label} copied`);
-      } catch (_) {
-        this.showToast(`Could not copy ${label.toLowerCase()}`);
-      }
-    },
-
-    _maybeOpenRuntimeLoginBrowser(session) {
-      const url = String(session?.browser_url || '').trim();
-      if (!url) return;
-      if (this.runtimeLoginModal?.autoOpenedUrl === url) return;
-      this.runtimeLoginModal.autoOpenedUrl = url;
-      try {
-        window.open(url, '_blank', 'noopener,noreferrer');
-      } catch (_) {
-        // Keep the URL visible in the modal even if popup opening is blocked.
-      }
-    },
-
-    _scheduleRuntimeLoginPoll(delayMs = 2000) {
-      if (!this.runtimeLoginModal?.open) return;
-      if (!this.runtimeLoginPendingStatus(this.runtimeLoginModal?.session?.status)) return;
-      if (this.runtimeLoginModal?.pollHandle) clearTimeout(this.runtimeLoginModal.pollHandle);
-      this.runtimeLoginModal.pollHandle = setTimeout(() => {
-        this.refreshRuntimeLoginSession(true);
-      }, Math.max(750, Number(delayMs || 0)));
-    },
-
-    async retryRuntimeLoginSession() {
-      const family = String(this.runtimeLoginModal?.family || '').toLowerCase();
-      if (!family) return;
-      const session = this.runtimeLoginModal?.session || {};
-      const payload = family === 'codex'
-        ? {}
-        : {
-            mode: session?.mode || 'claudeai',
-            email: session?.email || this.currentUser?.email || '',
-          };
-      return this.startRuntimeLogin(family, payload);
-    },
-
-    async startRuntimeLogin(family, payload = {}) {
-      const familyName = String(family || '').toLowerCase() === 'codex' ? 'codex' : 'claude';
-      const loadingKey = familyName === 'codex' ? 'codex_login' : 'login';
-      if (this.cliRuntimeActionLoading?.[loadingKey]) return;
-      this.cliRuntimeActionLoading[loadingKey] = true;
-      if (familyName === 'codex') {
-        this.codexRuntimeActionResult = null;
-      } else {
-        this.cliRuntimeActionResult = null;
-      }
-      this.runtimeLoginModal = {
-        open: true,
-        family: familyName,
-        session: null,
-        loading: true,
-        error: '',
-        autoOpenedUrl: '',
-        pollHandle: this.runtimeLoginModal?.pollHandle || null,
-      };
-      try {
-        const endpoint = `/api/runtime/${familyName}/login/start`;
-        const res = await this.api('POST', endpoint, payload);
-        const session = res?.session || null;
-        this.runtimeLoginModal = {
-          ...this.runtimeLoginModal,
-          family: familyName,
-          session,
-          loading: false,
-          error: '',
-        };
-        this._maybeOpenRuntimeLoginBrowser(session);
-        if (session?.status === 'authenticated') {
-          await this.loadRuntimeStatus();
-          this.showToast(`${this.runtimeLoginFamilyLabel(familyName)} is already signed in`);
-        } else {
-          this.showToast(`${this.runtimeLoginFamilyLabel(familyName)} sign-in started`);
-          this._scheduleRuntimeLoginPoll();
-        }
-      } catch (e) {
-        const message = e.message || `${this.runtimeLoginFamilyLabel(familyName)} login failed`;
-        this.runtimeLoginModal = {
-          ...this.runtimeLoginModal,
-          family: familyName,
-          loading: false,
-          error: message,
-        };
-        if (familyName === 'codex') {
-          this.codexRuntimeActionResult = { status: 'error', message };
-        } else {
-          this.cliRuntimeActionResult = { status: 'error', message };
-        }
-        this.showToast(message);
-      }
-      this.cliRuntimeActionLoading[loadingKey] = false;
-    },
-
-    async refreshRuntimeLoginSession(silent = false) {
-      const family = String(this.runtimeLoginModal?.family || '').toLowerCase();
-      const sessionId = String(this.runtimeLoginModal?.session?.session_id || '').trim();
-      if (!family || !sessionId) return null;
-      const previousStatus = String(this.runtimeLoginModal?.session?.status || '').toLowerCase();
-      try {
-        const res = await this.api('GET', `/api/runtime/${family}/login/${encodeURIComponent(sessionId)}`);
-        const session = res?.session || null;
-        this.runtimeLoginModal = {
-          ...this.runtimeLoginModal,
-          session,
-          loading: false,
-          error: '',
-        };
-        this._maybeOpenRuntimeLoginBrowser(session);
-        if (session?.status === 'authenticated') {
-          await this.loadRuntimeStatus();
-          if (this.runtimeLoginModal?.pollHandle) clearTimeout(this.runtimeLoginModal.pollHandle);
-          this.runtimeLoginModal.pollHandle = null;
-          if (!silent || previousStatus !== 'authenticated') this.showToast(`${this.runtimeLoginFamilyLabel(family)} signed in`);
-        } else if (this.runtimeLoginPendingStatus(session?.status)) {
-          this._scheduleRuntimeLoginPoll();
-        } else {
-          if (this.runtimeLoginModal?.pollHandle) clearTimeout(this.runtimeLoginModal.pollHandle);
-          this.runtimeLoginModal.pollHandle = null;
-          if (!silent && previousStatus !== String(session?.status || '').toLowerCase() && session?.message) {
-            this.showToast(session.message);
-          }
-        }
-        return session;
-      } catch (e) {
-        const message = e.message || 'Login status unavailable';
-        this.runtimeLoginModal = {
-          ...this.runtimeLoginModal,
-          loading: false,
-          error: message,
-        };
-        if (!silent) this.showToast(message);
-        return null;
-      }
-    },
-
-    async cancelRuntimeLoginSession() {
-      const family = String(this.runtimeLoginModal?.family || '').toLowerCase();
-      const sessionId = String(this.runtimeLoginModal?.session?.session_id || '').trim();
-      if (!family || !sessionId) {
-        this.closeRuntimeLoginModal();
-        return;
-      }
-      this.runtimeLoginModal.loading = true;
-      try {
-        const res = await this.api('POST', `/api/runtime/${family}/login/${encodeURIComponent(sessionId)}/cancel`, {});
-        this.runtimeLoginModal = {
-          ...this.runtimeLoginModal,
-          session: res?.session || this.runtimeLoginModal.session,
-          loading: false,
-          error: '',
-        };
-        if (this.runtimeLoginModal?.pollHandle) clearTimeout(this.runtimeLoginModal.pollHandle);
-        this.runtimeLoginModal.pollHandle = null;
-        this.showToast(`${this.runtimeLoginFamilyLabel(family)} sign-in cancelled`);
-      } catch (e) {
-        const message = e.message || 'Could not cancel login';
-        this.runtimeLoginModal = {
-          ...this.runtimeLoginModal,
-          loading: false,
-          error: message,
-        };
-        this.showToast(message);
-      }
-    },
-
-    async installClaudeCli() {
-      if (this.cliRuntimeActionLoading?.install) return;
-      this.cliRuntimeActionLoading.install = true;
-      this.cliRuntimeActionResult = null;
-      try {
-        const endpoint = this.cliRuntimeId() === 'codex' ? '/api/runtime/codex/install' : '/api/runtime/cli/install';
-        const res = await this.api('POST', endpoint, {});
-        this.cliRuntimeActionResult = res;
-        if (res.command_preview) await this._copyCommandPreview(res.command_preview);
-        await this.loadRuntimeStatus();
-        this.showToast(res.message || `${this.cliRuntimeName()} install finished`);
-      } catch (e) {
-        this.cliRuntimeActionResult = { status: 'error', message: e.message || `${this.cliRuntimeName()} install failed` };
-        this.showToast(`${this.cliRuntimeName()} install failed: ${e.message || e}`);
-      }
-      this.cliRuntimeActionLoading.install = false;
-    },
-
-    async loginClaudeCli() {
-      const family = this.cliRuntimeId() === 'codex' ? 'codex' : 'claude';
-      const payload = family === 'codex'
-        ? {}
-        : { mode: 'claudeai', email: this.currentUser?.email || '' };
-      return this.startRuntimeLogin(family, payload);
-    },
-
-    async logoutClaudeCli() {
-      if (this.cliRuntimeActionLoading?.logout) return;
-      this.cliRuntimeActionLoading.logout = true;
-      this.cliRuntimeActionResult = null;
-      try {
-        const endpoint = this.cliRuntimeId() === 'codex' ? '/api/runtime/codex/logout' : '/api/runtime/cli/logout';
-        const res = await this.api('POST', endpoint, {});
-        this.cliRuntimeActionResult = res;
-        if (res.command_preview) await this._copyCommandPreview(res.command_preview);
-        await this.loadRuntimeStatus();
-        if (String(this.runtimeLoginModal?.family || '') === 'claude') this.closeRuntimeLoginModal();
-        this.showToast(res.message || `${this.cliRuntimeName()} signed out`);
-      } catch (e) {
-        this.cliRuntimeActionResult = { status: 'error', message: e.message || `${this.cliRuntimeName()} sign out failed` };
-        this.showToast(`${this.cliRuntimeName()} sign out failed: ${e.message || e}`);
-      }
-      this.cliRuntimeActionLoading.logout = false;
-    },
-
-    async installCodexCli() {
-      if (this.cliRuntimeActionLoading?.codex_install) return;
-      this.cliRuntimeActionLoading.codex_install = true;
-      this.codexRuntimeActionResult = null;
-      try {
-        const res = await this.api('POST', '/api/runtime/codex/install', {});
-        this.codexRuntimeActionResult = res;
-        if (res.command_preview) await this._copyCommandPreview(res.command_preview);
-        await this.loadRuntimeStatus();
-        this.showToast(res.message || 'Codex CLI install finished');
-      } catch (e) {
-        this.codexRuntimeActionResult = { status: 'error', message: e.message || 'Codex CLI install failed' };
-        this.showToast(`Codex CLI install failed: ${e.message || e}`);
-      }
-      this.cliRuntimeActionLoading.codex_install = false;
-    },
-
-    async loginCodexCli() {
-      return this.startRuntimeLogin('codex', {});
-    },
-
-    async logoutCodexCli() {
-      if (this.cliRuntimeActionLoading?.codex_logout) return;
-      this.cliRuntimeActionLoading.codex_logout = true;
-      this.codexRuntimeActionResult = null;
-      try {
-        const res = await this.api('POST', '/api/runtime/codex/logout', {});
-        this.codexRuntimeActionResult = res;
-        if (res.command_preview) await this._copyCommandPreview(res.command_preview);
-        await this.loadRuntimeStatus();
-        if (String(this.runtimeLoginModal?.family || '') === 'codex') this.closeRuntimeLoginModal();
-        this.showToast(res.message || 'Codex CLI signed out');
-      } catch (e) {
-        this.codexRuntimeActionResult = { status: 'error', message: e.message || 'Codex CLI sign out failed' };
-        this.showToast(`Codex CLI sign out failed: ${e.message || e}`);
-      }
-      this.cliRuntimeActionLoading.codex_logout = false;
-    },
-
-    currentPreviewScope() {
-      const projectId = parseInt(String(this.chatProjectId || 0), 10) || 0;
-      const auto = this.currentWorkspaceAutoSession?.() || null;
-      return {
-        workspace_id: projectId || null,
-        workspace_name: this.chatProject?.name || '',
-        auto_session_id: String(auto?.session_id || '').trim(),
-        title: String(auto?.title || this.chatProject?.name || 'workspace').trim(),
-      };
-    },
-
-    currentWorkspacePreview() {
-      const scope = this.currentPreviewScope?.() || {};
-      const scopeWorkspaceId = String(scope.workspace_id || '').trim();
-      if (!scopeWorkspaceId) return null;
-      const state = this.workspacePreview || {};
-      const session = state.session || null;
-      if (!session) return null;
-      const previewWorkspaceId = String(state.workspace_id || session.workspace_id || '').trim();
-      const previewAutoSessionId = String(state.auto_session_id || session.auto_session_id || '').trim();
-      const scopeAutoSessionId = String(scope.auto_session_id || '').trim();
-      if (previewWorkspaceId && previewWorkspaceId !== scopeWorkspaceId) return null;
-      if (previewAutoSessionId !== scopeAutoSessionId) return null;
-      return session;
-    },
-
-    previewReadyForCurrentWorkspace() {
-      return !!String(this.currentWorkspacePreview?.()?.url || '').trim();
-    },
-
-    composerCompactMode() {
-      if (this.isMobile) return false;
-      const previewOpen = !!(
-        this.panelBrowserOpen &&
-        (
-          this.devPreview?.url ||
-          this.currentWorkspacePreview?.()?.url ||
-          this.workspacePreview?.loading
-        )
-      );
-      const panelWidth = Number(this.consolePanelWidth || 0);
-      return previewOpen || panelWidth >= Math.round(window.innerWidth * 0.4);
-    },
-
-    ensureWorkspacePreviewLayout(forceHalf = false) {
-      if (this.isMobile) return;
-      const target = Math.round(window.innerWidth * (forceHalf ? 0.5 : 0.44));
-      const next = Math.max(420, Math.min(Math.round(window.innerWidth * 0.78), target));
-      if (Number(this.consolePanelWidth || 0) < next) {
-        this.applyConsolePanelWidth(next);
-      }
-    },
-
-    snapPreviewPanelHalf() {
-      this.ensureWorkspacePreviewLayout(true);
-      this.panelBrowserOpen = true;
-    },
-
-    async loadWorkspacePreview() {
-      const scope = this.currentPreviewScope();
-      const scopeKey = this.currentPreviewScopeKey();
-      const requestSeq = Number(this._workspacePreviewRequestSeq || 0) + 1;
-      this._workspacePreviewRequestSeq = requestSeq;
-      this._workspacePreviewScopeKey = scopeKey;
-      if (!scope.workspace_id) {
-        this.workspacePreview = { session: null, loading: false, error: '', workspace_id: null, workspace_name: '', auto_session_id: '' };
-        this.devPreview.url = '';
-        this.devPreview.visible = false;
-        return null;
-      }
-      const scopedPreview = this.currentWorkspacePreview?.() || null;
-      this.workspacePreview = {
-        session: scopedPreview,
-        loading: true,
-        error: '',
-        workspace_id: scope.workspace_id,
-        workspace_name: scope.workspace_name,
-        auto_session_id: scope.auto_session_id,
-      };
-      if (!scopedPreview) {
-        this.devPreview.url = '';
-        this.devPreview.visible = false;
-      }
-      try {
-        const qs = new URLSearchParams();
-        if (scope.auto_session_id) qs.set('auto_session_id', scope.auto_session_id);
-        const data = await this.api('GET', `/api/workspaces/${encodeURIComponent(scope.workspace_id)}/preview${qs.toString() ? `?${qs.toString()}` : ''}`);
-        if (requestSeq !== this._workspacePreviewRequestSeq || this._workspacePreviewScopeKey !== scopeKey) return null;
-        this.workspacePreview = {
-          session: data?.preview || null,
-          loading: false,
-          error: '',
-          workspace_id: scope.workspace_id,
-          workspace_name: scope.workspace_name,
-          auto_session_id: scope.auto_session_id,
-        };
-        if (data?.preview?.url) {
-          this.devPreview.url = data.preview.url;
-          this.devPreview.visible = true;
-          this.panelBrowserOpen = true;
-          this.ensureWorkspacePreviewLayout(true);
-        } else {
-          this.devPreview.url = '';
-          this.devPreview.visible = false;
-        }
-        if (!data?.preview?.url && scope.auto_session_id) {
-          const auto = this.currentWorkspaceAutoSession?.() || null;
-          if (auto?.preview_url) {
-            this.workspacePreview = {
-              ...(this.workspacePreview || {}),
-              session: {
-                ...(this.workspacePreview?.session || {}),
-                auto_session_id: scope.auto_session_id,
-                url: auto.preview_url,
-                status: auto.preview_status || 'starting',
-                title: auto.title || scope.title,
-              },
-            };
-            this.devPreview.url = auto.preview_url;
-            this.devPreview.visible = true;
-            this.panelBrowserOpen = true;
-            this.ensureWorkspacePreviewLayout(true);
-          }
-        }
-        return data?.preview || null;
-      } catch (e) {
-        if (requestSeq !== this._workspacePreviewRequestSeq || this._workspacePreviewScopeKey !== scopeKey) return null;
-        this.workspacePreview = { session: null, loading: false, error: e.message || 'Preview unavailable' };
-        this.devPreview.url = '';
-        this.devPreview.visible = false;
-        return null;
-      }
-    },
-
-    async ensureWorkspacePreview(options = {}) {
-      const scope = this.currentPreviewScope();
-      const scopeKey = this.currentPreviewScopeKey();
-      if (!scope.workspace_id) {
-        if (!options.silent) this.showToast('Select a workspace before opening the live page');
-        return null;
-      }
-      const openExternal = options.openExternal === true;
-      let restart = !!options.restart;
-      const attachBrowser = options.attachBrowser !== false;
-      let preview = this.currentWorkspacePreview();
-      const previewStatus = String(preview?.status || '').toLowerCase();
-      const stalePreview = /expo start/.test(String(preview?.command || '')) && /--host 127\.0\.0\.1/.test(String(preview?.command || ''));
-      const missingAutoSourcePath = !!(scope.auto_session_id && !String(preview?.source_workspace_path || '').trim());
-      if (!restart && (previewStatus === 'error' || previewStatus === 'stopped' || stalePreview || missingAutoSourcePath)) {
-        restart = true;
-      }
-      if (!restart && preview?.url && ['running', 'starting'].includes(previewStatus)) {
-        this.devPreview.url = preview.url;
-        this.devPreview.visible = true;
-        this.panelBrowserOpen = true;
-        this.ensureWorkspacePreviewLayout(true);
-        if (openExternal) window.open(preview.url, '_blank', 'noopener,noreferrer');
-        return preview;
-      }
-
-      this.workspacePreview = { ...(this.workspacePreview || {}), loading: true, error: '' };
-      try {
-        const payload = {
-          auto_session_id: scope.auto_session_id || '',
-          restart,
-          attach_browser: attachBrowser,
-        };
-        const data = await this.api('POST', `/api/workspaces/${encodeURIComponent(scope.workspace_id)}/preview/start`, payload);
-        if (this.currentPreviewScopeKey() !== scopeKey) return null;
-        preview = data?.preview || null;
-        this.workspacePreview = {
-          session: preview,
-          loading: false,
-          error: '',
-          workspace_id: scope.workspace_id,
-          workspace_name: scope.workspace_name,
-          auto_session_id: scope.auto_session_id,
-        };
-        if (data?.browser_actions) {
-          this.browserActions = { ...this.browserActions, ...data.browser_actions };
-        }
-        if (preview?.url) {
-          this.devPreview.url = preview.url;
-          this.devPreview.visible = true;
-          this.panelBrowserOpen = true;
-          this.ensureWorkspacePreviewLayout(true);
-          if (openExternal) window.open(preview.url, '_blank', 'noopener,noreferrer');
-          if (!options.silent) this.showToast(`Live preview ready for ${scope.workspace_name || 'workspace'}`);
-        } else if (!options.silent) {
-          this.showToast('Preview started, but no URL is available yet');
-        }
-        return preview;
-      } catch (e) {
-        if (this.currentPreviewScopeKey() !== scopeKey) return null;
-        this.workspacePreview = { ...(this.workspacePreview || {}), loading: false, error: e.message || 'Preview start failed' };
-        this.devPreview.url = '';
-        if (!options.silent) this.showToast(`Live preview failed: ${e.message || e}`);
-        return null;
-      }
-    },
-
-    async restartWorkspacePreview() {
-      return this.ensureWorkspacePreview({ restart: true, openExternal: false, attachBrowser: true });
-    },
-
-    async stopWorkspacePreview() {
-      const scope = this.currentPreviewScope();
-      if (!scope.workspace_id) return;
-      try {
-        const qs = new URLSearchParams();
-        if (scope.auto_session_id) qs.set('auto_session_id', scope.auto_session_id);
-        const data = await this.api('DELETE', `/api/workspaces/${encodeURIComponent(scope.workspace_id)}/preview${qs.toString() ? `?${qs.toString()}` : ''}`);
-        this.workspacePreview = { ...(this.workspacePreview || {}), session: data?.preview || null, loading: false, error: '' };
-        this.devPreview.url = '';
-        this.devPreview.visible = false;
-        this.panelBrowserOpen = false;
-        this.showToast('Live preview stopped');
-      } catch (e) {
-        this.showToast(`Could not stop live preview: ${e.message || e}`);
-      }
-    },
-
-    workspaceTestUrl() {
-      const auto = this.currentWorkspaceAutoSession?.() || null;
-      const candidates = [
-        this.currentWorkspacePreview?.()?.url,
-        this.devPreview?.url,
-        auto?.preview_url,
-        auto?.dev_url,
-        this._workspaceEnv?.preview_url,
-        this._workspaceEnv?.dev_url,
-      ];
-      for (const value of candidates) {
-        const url = String(value || '').trim();
-        if (!url) continue;
-        if (/^https?:\/\//i.test(url)) return url;
-      }
-      return '';
-    },
-
-    async openWorkspaceTestTab() {
-      const current = this.currentWorkspacePreview();
-      const currentStatus = String(current?.status || '').toLowerCase();
-      const shouldRestart =
-        this.autonomousConsoleActive?.()
-        || !current?.url
-        || currentStatus === 'error'
-        || currentStatus === 'stopped'
-        || /--host 127\.0\.0\.1/.test(String(current?.command || ''));
-      const preview = await this.ensureWorkspacePreview({
-        openExternal: false,
-        attachBrowser: true,
-        restart: shouldRestart,
-      });
-      if (!preview?.url) {
-        this.showToast('No test URL available for this workspace yet');
-        return;
-      }
-      this.devPreview.url = preview.url;
-      this.devPreview.visible = true;
-      this.panelBrowserOpen = true;
-      this.ensureWorkspacePreviewLayout(true);
-      this.showToast(`Testing ${this.currentPreviewScope().workspace_name || 'workspace'} inside Axon`);
     },
 
     consoleRuntimeLabel() {
@@ -1344,49 +363,7 @@ function axonDashboardMixin() {
         const model = this.selectedApiProviderModel();
         return model ? `${provider} · ${model}` : provider;
       }
-      return `${this.cliRuntimeName()} · ${this.activeCliModelLabel()}`;
-    },
-
-    composerEnvLabel() {
-      const data = this.composerEnvData();
-      const parts = [];
-      if (data.venv) parts.push(`(${data.venv})`);
-      parts.push(data.work_dir || 'console');
-      if (data.auto && data.source_dir) parts.push(`src:(${data.source_dir})`);
-      if (data.git_branch) parts.push(`git:(${data.git_branch})`);
-      return parts.join(' → ');
-    },
-
-    composerEnvData() {
-      const p = this.chatProject;
-      const auto = this.autonomousConsoleActive?.() ? (this.currentWorkspaceAutoSession?.() || null) : null;
-      if (p?.path) {
-        const env = this._workspaceEnv || {};
-        const sourceDir = p.path.split('/').pop() || p.name;
-        const sandboxPath = String(auto?.sandbox_path || '').trim();
-        const sandboxDir = sandboxPath ? sandboxPath.split('/').pop() || '' : '';
-        return {
-          venv: env.venv || '',
-          git_branch: String(auto?.branch_name || env.git_branch || p.git_branch || ''),
-          work_dir: sandboxDir || sourceDir,
-          source_dir: sandboxDir ? sourceDir : '',
-          auto: !!sandboxDir,
-          auto_label: sandboxDir ? 'worktree' : '',
-        };
-      }
-      return this.runtimeStatus?.env || {};
-    },
-
-    async _refreshWorkspaceEnv() {
-      const p = this.chatProject;
-      if (!p?.path) { this._workspaceEnv = null; return; }
-      try {
-        const qs = new URLSearchParams({ path: p.path, project_id: String(p.id || '') });
-        const autoSessionId = String(this.currentWorkspaceAutoSession?.()?.session_id || '').trim();
-        if (autoSessionId) qs.set('auto_session_id', autoSessionId);
-        const data = await this.api('GET', `/api/workspace/env?${qs.toString()}`);
-        this._workspaceEnv = data || {};
-      } catch { this._workspaceEnv = null; }
+      return 'CLI agent';
     },
 
     assistantRuntimeLabel() {
@@ -1397,15 +374,14 @@ function axonDashboardMixin() {
         const model = this.selectedApiProviderModel();
         return model ? `${provider} · ${model}` : provider;
       }
-      return `${this.cliRuntimeName()} · ${this.activeCliModelLabel()}`;
+      return 'CLI Agent';
     },
 
     browserActionRiskClass(risk) {
-      // Kept for legacy callers; the new perm-card system uses inline :class bindings
       const value = String(risk || 'medium').toLowerCase();
-      if (value === 'high')   return 'border-rose-500/30 bg-rose-500/12 text-rose-200';
-      if (value === 'low')    return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200';
-      return 'border-amber-500/25 bg-amber-500/10 text-amber-200';
+      if (value === 'high') return 'border-rose-500/20 bg-rose-500/10 text-rose-200';
+      if (value === 'low') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
+      return 'border-amber-500/20 bg-amber-500/10 text-amber-200';
     },
 
     browserActionScopeLabel(scope) {
@@ -1417,15 +393,12 @@ function axonDashboardMixin() {
 
     browserActionIcon(actionType) {
       const value = String(actionType || '').toLowerCase();
-      if (value.includes('navigate') || value.includes('open'))    return '🌐';
-      if (value.includes('submit') || value.includes('form'))       return '📤';
-      if (value.includes('click') || value.includes('press'))       return '👆';
-      if (value.includes('type') || value.includes('fill') || value.includes('input')) return '⌨️';
-      if (value.includes('scroll'))                                 return '↕️';
-      if (value.includes('screenshot') || value.includes('snapshot')) return '📸';
-      if (value.includes('inspect') || value.includes('read'))      return '🔍';
-      if (value.includes('download') || value.includes('file'))     return '📥';
-      return '🖱️';
+      if (value.includes('navigate') || value.includes('open')) return '↗';
+      if (value.includes('click') || value.includes('press')) return '⌖';
+      if (value.includes('type') || value.includes('fill')) return '⌨';
+      if (value.includes('inspect') || value.includes('snapshot')) return '◫';
+      if (value.includes('submit')) return '⤴';
+      return '◦';
     },
 
     async loadBrowserActions() {
@@ -1441,33 +414,6 @@ function axonDashboardMixin() {
         this.browserActions.loading = false;
         this.showToast(`Browser actions unavailable: ${e.message || e}`);
       }
-    },
-
-    async loadServerLogs(tail = null) {
-      this.serverLogs.loading = true;
-      this.serverLogs.error = '';
-      try {
-        const lines = Number(tail || this.serverLogs.tail || 200);
-        const payload = await this.api('GET', `/api/server/logs?tail=${encodeURIComponent(lines)}`);
-        this.serverLogs = {
-          ...this.serverLogs,
-          open: true,
-          loading: false,
-          path: payload.path || '',
-          text: payload.text || '',
-          available: !!payload.available,
-          tail: lines,
-        };
-      } catch (e) {
-        this.serverLogs.loading = false;
-        this.serverLogs.error = e.message || 'Server logs unavailable';
-        this.showToast(`Server logs unavailable: ${e.message || e}`);
-      }
-    },
-
-    async openServerLogs() {
-      this.serverLogs.open = true;
-      await this.loadServerLogs(this.serverLogs.tail || 200);
     },
 
     async approveBrowserAction(id) {
@@ -1543,8 +489,8 @@ function axonDashboardMixin() {
           tone: this.runtimeStatus.runtime_state === 'active' ? 'ok' : 'warn',
         },
         {
-          label: `Model ${((this.settingsForm?.ai_backend || '').toLowerCase() === 'cli') ? this.activeCliModelLabel() : (this.runtimeStatus.active_model || this.selectedApiProviderModel() || 'pending')}`,
-          tone: (((this.settingsForm?.ai_backend || '').toLowerCase() === 'cli') ? this.activeCliModelLabel() : (this.runtimeStatus.active_model || this.selectedApiProviderModel())) ? 'neutral' : 'warn',
+          label: `Model ${this.runtimeStatus.active_model || this.selectedApiProviderModel() || 'pending'}`,
+          tone: (this.runtimeStatus.active_model || this.selectedApiProviderModel()) ? 'neutral' : 'warn',
         },
       ];
       if (!this.usesOllamaBackend()) {
@@ -1591,7 +537,6 @@ function axonDashboardMixin() {
         anthropic: 'anthropic_api_key',
         openai_gpts: 'openai_api_key',
         gemini_gems: 'gemini_api_key',
-        deepseek: 'deepseek_api_key',
         generic_api: 'generic_api_key',
       };
       return map[providerId] || '';
@@ -1602,7 +547,6 @@ function axonDashboardMixin() {
         anthropic: 'anthropic_base_url',
         openai_gpts: 'openai_base_url',
         gemini_gems: 'gemini_base_url',
-        deepseek: 'deepseek_base_url',
         generic_api: 'generic_api_url',
       };
       return map[providerId] || '';
@@ -1613,7 +557,6 @@ function axonDashboardMixin() {
         anthropic: 'anthropic_api_model',
         openai_gpts: 'openai_api_model',
         gemini_gems: 'gemini_api_model',
-        deepseek: 'deepseek_api_model',
         generic_api: 'generic_api_model',
       };
       return map[providerId] || '';
@@ -1624,97 +567,14 @@ function axonDashboardMixin() {
         anthropic: '_anthropicKeyHint',
         openai_gpts: '_openaiKeyHint',
         gemini_gems: '_geminiKeyHint',
-        deepseek: '_deepseekKeyHint',
         generic_api: '_genericKeyHint',
       };
       return map[providerId] || '';
     },
 
     activeApiProviderCard() {
-      const id = this.settingsForm?.api_provider || 'deepseek';
-      return this.runtimeApiProviders().find(provider => provider.id === id) || null;
-    },
-
-    runtimeApiProviders() {
-      const builtins = [
-        {
-          id: 'deepseek',
-          label: 'DeepSeek',
-          transport: 'openai_compatible',
-          default_base_url: 'https://api.deepseek.com/v1',
-          default_model: 'deepseek-reasoner',
-          model: this.settingsForm?.deepseek_api_model || 'deepseek-reasoner',
-          configured: !!(this.settingsForm?._deepseekKeyHint || this.settingsForm?.deepseek_api_key),
-        },
-        {
-          id: 'anthropic',
-          label: 'Anthropic',
-          transport: 'anthropic',
-          default_base_url: 'https://api.anthropic.com/v1',
-          default_model: 'claude-sonnet-4-5',
-          model: this.settingsForm?.anthropic_api_model || 'claude-sonnet-4-5',
-          configured: !!(this.settingsForm?._anthropicKeyHint || this.settingsForm?.anthropic_api_key),
-        },
-        {
-          id: 'gemini_gems',
-          label: 'Gemini',
-          transport: 'gemini',
-          default_base_url: 'https://generativelanguage.googleapis.com/v1beta',
-          default_model: 'gemini-2.5-pro',
-          model: this.settingsForm?.gemini_api_model || 'gemini-2.5-pro',
-          configured: !!(this.settingsForm?._geminiKeyHint || this.settingsForm?.gemini_api_key),
-        },
-      ];
-
-      const runtime = Array.isArray(this.runtimeStatus?.api_providers) ? this.runtimeStatus.api_providers : [];
-      const selected = this.runtimeStatus?.selected_api_provider || {};
-      const selectedId = selected.provider_id || this.settingsForm?.api_provider || 'deepseek';
-      const orderedIds = builtins.map(provider => provider.id);
-      const byId = new Map();
-
-      for (const provider of builtins) {
-        byId.set(provider.id, {
-          ...provider,
-          enabled: provider.id === selectedId,
-          selected: provider.id === selectedId,
-          external: true,
-        });
-      }
-
-      for (const provider of runtime) {
-        if (!provider?.id) continue;
-        const merged = {
-          ...(byId.get(provider.id) || {}),
-          ...provider,
-        };
-        merged.enabled = provider.id === selectedId;
-        merged.selected = provider.id === selectedId;
-        byId.set(provider.id, merged);
-        if (!orderedIds.includes(provider.id)) orderedIds.push(provider.id);
-      }
-
-      if (selectedId) {
-        const existing = byId.get(selectedId) || {};
-        byId.set(selectedId, {
-          id: selectedId,
-          label: selected.provider_label || existing.label || selectedId,
-          transport: selected.transport || existing.transport || 'api',
-          base_url: selected.api_base_url || existing.base_url || existing.default_base_url || '',
-          default_base_url: existing.default_base_url || selected.api_base_url || '',
-          model: selected.api_model || existing.model || existing.default_model || '',
-          default_model: existing.default_model || selected.api_model || '',
-          configured: typeof existing.configured === 'boolean' ? existing.configured : true,
-          external: true,
-          enabled: true,
-          selected: true,
-          ...existing,
-        });
-        if (!orderedIds.includes(selectedId)) orderedIds.unshift(selectedId);
-      }
-
-      return orderedIds
-        .map(id => byId.get(id))
-        .filter(Boolean);
+      const id = this.settingsForm?.api_provider || 'anthropic';
+      return (this.runtimeStatus.api_providers || []).find(provider => provider.id === id) || null;
     },
 
     providerValue(providerId, kind) {
@@ -1743,12 +603,11 @@ function axonDashboardMixin() {
     providerKeyPlaceholder(providerId) {
       if (providerId === 'anthropic') return 'sk-ant-...';
       if (providerId === 'gemini_gems') return 'AIza...';
-      if (providerId === 'deepseek') return 'sk-...';
       return 'Paste provider key';
     },
 
     providerRuntimeHint(providerId) {
-      const card = this.runtimeApiProviders().find(provider => provider.id === providerId)
+      const card = (this.runtimeStatus.api_providers || []).find(provider => provider.id === providerId)
         || (this.runtimeStatus.cloud_agents || []).find(provider => provider.id === providerId);
       if (!card) return 'External adapter configuration stays isolated from local-only workflows.';
       const base = card.base_url || card.default_base_url || 'custom endpoint';
@@ -1818,7 +677,7 @@ function axonDashboardMixin() {
     },
 
     async testCloudProvider(providerId) {
-      const card = this.runtimeApiProviders().find(provider => provider.id === providerId)
+      const card = (this.runtimeStatus.api_providers || []).find(provider => provider.id === providerId)
         || (this.runtimeStatus.cloud_agents || []).find(provider => provider.id === providerId);
       if (!card) return;
       this.cloudProviderTests[providerId] = { ok: false, message: 'Testing…' };
@@ -1934,10 +793,7 @@ function axonDashboardMixin() {
 
     openComposerMenu() {
       this.showComposerMenu = !this.showComposerMenu;
-      if (this.showComposerMenu) {
-        this.showResourcePicker = false;
-        if (this.isMobile) this.showConsoleDetails = false;
-      }
+      if (this.showComposerMenu) this.showResourcePicker = false;
     },
 
     normalizedComposerOptions() {
@@ -1973,7 +829,12 @@ function axonDashboardMixin() {
       }
       if (opts.action_mode) chips.push({ key: 'action_mode', label: opts.action_mode.replace(/_/g, ' ') });
       if (opts.agent_role) chips.push({ key: 'agent_role', label: `${opts.agent_role} mode` });
+      if (opts.include_timeline_history) chips.push({ key: 'include_timeline_history', label: 'timeline history' });
+      if (opts.pin_context) chips.push({ key: 'pin_context', label: 'pin context' });
+      if (opts.require_approval) chips.push({ key: 'require_approval', label: 'approval' });
+      if (opts.simulation_mode) chips.push({ key: 'simulation_mode', label: 'simulation' });
       if (opts.terminal_mode) chips.push({ key: 'terminal_mode', label: 'terminal' });
+      if (opts.live_desktop_feed) chips.push({ key: 'live_desktop_feed', label: 'live desktop' });
       if (opts.use_workspace_memory === false) chips.push({ key: 'use_workspace_memory', label: 'workspace memory off' });
       if (opts.safe_mode === false) chips.push({ key: 'safe_mode', label: 'safe mode off' });
       if (opts.external_mode && opts.external_mode !== 'local_first') {
@@ -1986,50 +847,6 @@ function axonDashboardMixin() {
       }
       if (opts.research_pack_title) chips.push({ key: 'research_pack_id', label: `pack: ${opts.research_pack_title}` });
       return chips;
-    },
-
-    consolePanelWidthBounds() {
-      return {
-        min: 360,
-        max: Math.max(360, Math.round(window.innerWidth * 0.78)),
-      };
-    },
-
-    normalizeConsolePanelWidth(value) {
-      const bounds = this.consolePanelWidthBounds();
-      let next = Math.max(bounds.min, Math.min(bounds.max, Math.round(Number(value || bounds.min))));
-      const snapHalf = Math.round(window.innerWidth * 0.5);
-      const snapWide = Math.round(window.innerWidth * 0.44);
-      if (Math.abs(next - snapHalf) <= 22) {
-        next = snapHalf;
-      } else if (this.panelBrowserOpen && Math.abs(next - snapWide) <= 18) {
-        next = snapWide;
-      }
-      return Math.max(bounds.min, Math.min(bounds.max, next));
-    },
-
-    applyConsolePanelWidth(value) {
-      const next = this.normalizeConsolePanelWidth(value);
-      this.consolePanelWidth = next;
-      this.writeWindowPref?.('consolePanelWidth', String(next));
-      return next;
-    },
-
-    beginConsolePanelResize(pointerX) {
-      this.consolePanelResizing = true;
-      this.consolePanelResizeStartX = Number(pointerX || 0);
-      this.consolePanelResizeStartW = Number(this.consolePanelWidth || 420);
-    },
-
-    updateConsolePanelResize(pointerX) {
-      if (!this.consolePanelResizing) return;
-      const delta = this.consolePanelResizeStartX - Number(pointerX || 0);
-      this.applyConsolePanelWidth(this.consolePanelResizeStartW + delta);
-      setTimeout(() => this.fitXterm?.(), 50);
-    },
-
-    finishConsolePanelResize() {
-      this.consolePanelResizing = false;
     },
 
     removeComposerChip(key) {
@@ -2076,9 +893,6 @@ function axonDashboardMixin() {
       }
       const agent = this.resolveChatMode(this.chatInput) === 'agent';
       const opts = this.normalizedComposerOptions();
-      if (agent && opts.agent_role === 'auto') {
-        return 'Give Axon a concrete workspace goal and it will keep going until blocked or done...';
-      }
       if (!agent) {
         if (opts.intelligence_mode === 'deep_research') return 'Ask Axon to research, synthesize, and explain...';
         if (opts.action_mode === 'generate') return 'Tell Axon what to create...';
@@ -2346,17 +1160,6 @@ function axonDashboardMixin() {
           detail: event.message || 'Axon hit an error and stopped safely.',
         };
         this.pushLiveOperatorFeed('recover', 'Needs attention', event.message || 'Axon hit an error and stopped safely.');
-        return;
-      }
-      if (event.type === 'approval_required') {
-        this.liveOperator = {
-          ...this.liveOperator,
-          active: true,
-          phase: 'recover',
-          title: 'Awaiting approval',
-          detail: event.message || 'Axon paused until you approve or deny the blocked action.',
-        };
-        this.pushLiveOperatorFeed('recover', 'Awaiting approval', event.message || 'Axon paused until you approve or deny the blocked action.');
       }
     },
 
@@ -2411,10 +1214,6 @@ function axonDashboardMixin() {
         if (ct.includes('application/json')) {
           const body = await resp.json();
           const msg = body.message || body.detail || 'Desktop preview unavailable';
-          if (body.status === 'no_display' || body.status === 'capture_failed') {
-            this.desktopPreview.enabled = false;
-            this.stopDesktopPreview();
-          }
           throw new Error(body.status === 'no_display'
             ? '🖥️ Screen capture unavailable in this environment'
             : msg);
@@ -2513,41 +1312,6 @@ function axonDashboardMixin() {
       return badges;
     },
 
-    localToolsSafetyBadge() {
-      const approvalMode = String(
-        this.browserActions?.approval_mode
-        || this.browserActions?.session?.mode
-        || 'approval_required'
-      ).toLowerCase();
-      const autoSession = this.currentWorkspaceAutoSession?.() || null;
-      if (this.autonomousConsoleActive?.() && autoSession) {
-        return {
-          label: 'Auto sandbox',
-          tone: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200',
-          title: 'Axon is operating inside an isolated Auto worktree for this workspace.',
-        };
-      }
-      if (approvalMode === 'approval_required') {
-        return {
-          label: 'Approval gate',
-          tone: 'border-amber-500/20 bg-amber-500/10 text-amber-200',
-          title: 'Clicks, typing, navigation, and other sensitive actions still require your approval.',
-        };
-      }
-      if (approvalMode === 'inspect_auto') {
-        return {
-          label: 'Inspect auto',
-          tone: 'border-sky-500/20 bg-sky-500/10 text-sky-200',
-          title: 'Inspection actions are auto-approved, while mutating browser actions stay guarded.',
-        };
-      }
-      return {
-        label: 'Guarded tools',
-        tone: 'border-slate-700 bg-slate-950/60 text-slate-300',
-        title: 'Local tools are available, but sensitive machine actions are still guarded by Axon safety rules.',
-      };
-    },
-
     terminalModeOptions() {
       return [
         { value: 'read_only', label: 'Read-only' },
@@ -2578,10 +1342,8 @@ function axonDashboardMixin() {
       const enabled = typeof force === 'boolean' ? force : !this.composerOptions.terminal_mode;
       this.composerOptions.terminal_mode = enabled;
       this.terminal.panelOpen = enabled;
-      // Auto-widen panel for terminal, shrink back when hidden
-      if (enabled && this.consolePanelWidth < 520) this.applyConsolePanelWidth(520);
-      else if (!enabled && this.consolePanelWidth > 420) this.applyConsolePanelWidth(420);
       if (!enabled) return;
+      await this.loadTerminalSessions();
       await this.ensureTerminalSession();
     },
 
@@ -2619,13 +1381,11 @@ function axonDashboardMixin() {
     },
 
     async ensureTerminalSession() {
-      // Always sync with server to avoid creating duplicates
-      await this.loadTerminalSessions();
       if (this.terminal.activeSessionId) {
         await this.loadTerminalSessionDetail(this.terminal.activeSessionId, { silent: true });
         return;
       }
-      // Don't auto-create — let the user explicitly click "New session"
+      await this.createTerminalSession();
     },
 
     async createTerminalSession() {
@@ -2719,41 +1479,6 @@ function axonDashboardMixin() {
       this.terminal.stopping = false;
     },
 
-    async closeTerminalSession(sessionId) {
-      if (!sessionId) return;
-      // Kill PTY if it's the active one
-      if (this.ptyConnected && (Number(this.terminal.activeSessionId) === Number(sessionId) || String(this._ptySessionId || '') === String(sessionId))) {
-        this.disconnectPty();
-      }
-      try {
-        await this.api('DELETE', `/api/terminal/sessions/${sessionId}`);
-        this.terminal.sessions = (this.terminal.sessions || []).filter(s => Number(s.id) !== Number(sessionId));
-        if (Number(this.terminal.activeSessionId) === Number(sessionId)) {
-          const nextSession = this.terminal.sessions[0] || null;
-          this.terminal.activeSessionId = nextSession?.id || null;
-          this.terminal.sessionDetail = null;
-          if (nextSession?.id) {
-            await this.loadTerminalSessionDetail(nextSession.id);
-          }
-        }
-        this.showToast('Session closed');
-      } catch (e) {
-        this.showToast(`Close failed: ${e.message}`);
-      }
-    },
-
-    async killAllTerminalSessions() {
-      if (this.ptyConnected) this.disconnectPty();
-      const sessions = [...(this.terminal.sessions || [])];
-      for (const s of sessions) {
-        try { await this.api('DELETE', `/api/terminal/sessions/${s.id}`); } catch (_) {}
-      }
-      this.terminal.sessions = [];
-      this.terminal.activeSessionId = null;
-      this.terminal.sessionDetail = null;
-      this.showToast(`Killed ${sessions.length} session(s)`);
-    },
-
     async connectLiveFeed() {
       if (!this.settingsForm.live_feed_enabled) {
         this.liveFeed.connected = false;
@@ -2799,12 +1524,6 @@ function axonDashboardMixin() {
             if (!line.startsWith('data: ')) continue;
             try {
               const payload = JSON.parse(line.slice(6));
-              if (payload.type === 'heartbeat') {
-                // Keep-alive — just update connection state
-                this.liveFeed.connected = true;
-                this.liveFeed.reconnecting = false;
-                continue;
-              }
               this.handleLiveFeedSnapshot(payload);
             } catch (_) {}
           }
@@ -2816,7 +1535,7 @@ function axonDashboardMixin() {
         this.liveFeed.connecting = false;
         this.liveFeed.reconnecting = true;
         this.liveFeed.error = e.message || 'Live feed unavailable';
-        setTimeout(() => this.connectLiveFeed(), 6000);
+        setTimeout(() => this.connectLiveFeed(), 3000);
       }
     },
 
@@ -2825,12 +1544,6 @@ function axonDashboardMixin() {
       this.liveFeed.connected = true;
       this.liveFeed.reconnecting = false;
       if (payload?.connection) this.connectionState = payload.connection;
-      if (payload?.operator && typeof this.syncLiveOperatorFromSnapshot === 'function') {
-        this.syncLiveOperatorFromSnapshot(payload.operator);
-      }
-      if (Array.isArray(payload?.auto_sessions) && typeof this.syncAutoSessionsFromSnapshot === 'function') {
-        this.syncAutoSessionsFromSnapshot(payload.auto_sessions);
-      }
       if (payload?.browser_actions) {
         this.browserActions = {
           ...this.browserActions,
@@ -2851,10 +1564,7 @@ function axonDashboardMixin() {
 
     async openResourcePicker() {
       this.showResourcePicker = !this.showResourcePicker;
-      if (this.showResourcePicker) {
-        this.showComposerMenu = false;
-        if (this.isMobile) this.showConsoleDetails = false;
-      }
+      if (this.showResourcePicker) this.showComposerMenu = false;
       if (this.showResourcePicker && !this.resources.length) {
         await this.loadResources();
       }
@@ -2893,31 +1603,6 @@ function axonDashboardMixin() {
       return resource?.title || resource?.name || `Resource ${resource?.id || ''}`.trim();
     },
 
-    resourceContentUrl(id) {
-      const base = '/api/resources/' + id + '/content';
-      return this.authToken ? base + '?token=' + encodeURIComponent(this.authToken) : base;
-    },
-
-    extractGeneratedResource(resultText) {
-      const text = String(resultText || '');
-      const idMatch = text.match(/resource\s+#(\d+)/i);
-      if (!idMatch) return null;
-      const titleMatch = text.match(/resource\s+#\d+\s*:\s*([^\n]+)/i);
-      return {
-        id: Number(idMatch[1]),
-        kind: 'image',
-        title: (titleMatch?.[1] || 'Generated image').trim(),
-      };
-    },
-
-    attachGeneratedResource(message, resultText) {
-      const resource = this.extractGeneratedResource(resultText);
-      if (!resource) return;
-      if (!Array.isArray(message.resources)) message.resources = [];
-      if (message.resources.some(item => Number(item?.id) === resource.id)) return;
-      message.resources.push(resource);
-    },
-
     resourceStatusClass(status) {
       const value = String(status || '').toLowerCase();
       if (value === 'ready') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300';
@@ -2942,43 +1627,8 @@ function axonDashboardMixin() {
 
     parseStoredChatMessage(content) {
       const raw = String(content || '');
-      const prefix = 'AXON_CHAT_V1:';
-      if (raw.startsWith(prefix)) {
-        try {
-          const payload = JSON.parse(raw.slice(prefix.length));
-          if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
-            const resources = Array.isArray(payload.resources)
-              ? payload.resources
-                .map((resource, index) => {
-                  if (resource && typeof resource === 'object') {
-                    const title = String(resource.title || resource.name || `resource ${index + 1}`).trim();
-                    if (!title) return null;
-                    return {
-                      ...resource,
-                      id: resource.id ?? `history-${index}-${title}`,
-                      title,
-                    };
-                  }
-                  const title = String(resource || '').trim();
-                  if (!title) return null;
-                  return { id: `history-${index}-${title}`, title };
-                })
-                .filter(Boolean)
-              : [];
-            return {
-              content: String(payload.content || ''),
-              resources,
-              mode: String(payload.mode || ''),
-              threadMode: String(payload.thread_mode || payload.threadMode || ''),
-              modelLabel: String(payload.model_label || payload.modelLabel || ''),
-            };
-          }
-        } catch (error) {
-          // Fall back to the legacy parser when the envelope is malformed.
-        }
-      }
       const match = raw.match(/\n\n\[Attached resources: ([^\]]+)\]\s*$/);
-      if (!match) return { content: raw, resources: [], mode: '', threadMode: '', modelLabel: '' };
+      if (!match) return { content: raw, resources: [] };
       const titles = match[1]
         .split(',')
         .map(item => item.trim())
@@ -2987,9 +1637,6 @@ function axonDashboardMixin() {
       return {
         content: raw.slice(0, match.index).trimEnd(),
         resources: titles,
-        mode: '',
-        threadMode: '',
-        modelLabel: '',
       };
     },
 
@@ -3017,7 +1664,6 @@ function axonDashboardMixin() {
       try {
         const form = new FormData();
         files.forEach(file => form.append('files', file));
-        if (this.chatProjectId) form.append('workspace_id', this.chatProjectId);
         const resp = await fetch('/api/resources/upload', {
           method: 'POST',
           headers: this.authHeaders(),
@@ -3048,12 +1694,10 @@ function axonDashboardMixin() {
         const data = await this.api('POST', '/api/resources/import-url', {
           url,
           title: this.resourceImportForm.title.trim() || '',
-          workspace_id: this.chatProjectId ? parseInt(this.chatProjectId, 10) : null,
         });
-        const item = data?.item || data;
-        if (item?.id) {
-          await this.loadResources(item.id);
-          this.mergeSelectedResources([item]);
+        if (data?.item) {
+          await this.loadResources(data.item.id);
+          this.mergeSelectedResources([data.item]);
           this.showToast('Resource imported');
         }
         this.resourceImportForm = { url: '', title: '' };
@@ -3213,7 +1857,7 @@ function axonDashboardMixin() {
 
     shouldAutoUseAgent(msg) {
       const text = (msg || '').trim();
-      if (!text || !this.currentBackendSupportsAgent()) return false;
+      if (!text || !this.usesOllamaBackend()) return false;
       const lower = text.toLowerCase();
       const explainers = ['how do i', 'how can i', 'what is', 'why is', 'explain', 'teach me'];
       if (explainers.some(prefix => lower.startsWith(prefix))) return false;
@@ -3229,12 +1873,8 @@ function axonDashboardMixin() {
 
     resolveChatMode(msg) {
       const preferred = this.composerPreferredMode(msg);
-      if (preferred) {
-        return preferred === 'agent' && !this.currentBackendSupportsAgent() ? 'chat' : preferred;
-      }
-      return this.currentBackendSupportsAgent() && (this.agentMode || this.shouldAutoUseAgent(msg))
-        ? 'agent'
-        : 'chat';
+      if (preferred) return preferred;
+      return this.agentMode || this.shouldAutoUseAgent(msg) ? 'agent' : 'chat';
     },
 
     createAssistantPlaceholder(respId, mode, retryResources = []) {
@@ -3247,26 +1887,12 @@ function axonDashboardMixin() {
         mode,
         modelLabel: this.assistantRuntimeLabel(),
         agentEvents: mode === 'agent' ? [] : undefined,
-        resources: [],
         retryResources,
       };
     },
 
     async streamChatMessage(msg, mode, respId, resourceIds = []) {
-      let effectiveMode = mode;
-      const needsLocalTools = this.shouldAutoUseAgent(msg);
-      if (effectiveMode !== 'agent' && needsLocalTools && this.currentBackendSupportsAgent()) {
-        effectiveMode = 'agent';
-      }
-      if (effectiveMode === 'chat' && needsLocalTools && !this.currentBackendSupportsAgent()) {
-        this.updateLiveOperator('chat', {
-          type: 'error',
-          message: 'This request needs local tools, but the current runtime cannot execute operator actions.',
-        });
-        throw new Error('This request needs local tools. Switch to an agent-capable runtime to run it safely.');
-      }
-
-      const endpoint = effectiveMode === 'agent' ? '/api/agent' : '/api/chat/stream';
+      const endpoint = mode === 'agent' ? '/api/agent' : '/api/chat/stream';
       const payload = {
         message: msg,
         project_id: this.chatProjectId ? parseInt(this.chatProjectId) : null,
@@ -3283,23 +1909,23 @@ function axonDashboardMixin() {
 
       if (resp.status === 401) {
         this.handleAuthRequired();
-        this.updateLiveOperator(effectiveMode, { type: 'error', message: 'Session expired.' });
+        this.updateLiveOperator(mode, { type: 'error', message: 'Session expired.' });
         throw new Error('Session expired');
       }
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-        this.updateLiveOperator(effectiveMode, { type: 'error', message: err.detail || resp.statusText });
+        this.updateLiveOperator(mode, { type: 'error', message: err.detail || resp.statusText });
         throw new Error(err.detail || resp.statusText);
       }
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
-      if (effectiveMode === 'agent') {
+      if (mode === 'agent') {
         this.setAgentStage('plan');
-        this.updateLiveOperator(effectiveMode, { type: 'text' });
+        this.updateLiveOperator(mode, { type: 'text' });
       } else {
-        this.updateLiveOperator(effectiveMode, { chunk: 'stream-open' });
+        this.updateLiveOperator(mode, { chunk: 'stream-open' });
       }
 
       while (true) {
@@ -3315,47 +1941,33 @@ function axonDashboardMixin() {
             const idx = this.chatMessages.findIndex(m => m.id === respId);
             if (idx < 0) continue;
 
-            if (effectiveMode === 'agent') {
+            if (mode === 'agent') {
               if (data.type === 'text') {
                 if (this.chatMessages[idx].agentEvents?.length) this.setAgentStage('verify');
                 this.chatMessages[idx].content += data.chunk;
-                this.updateLiveOperator(effectiveMode, data);
+                this.updateLiveOperator(mode, data);
                 this.scrollChat();
               } else if (data.type === 'tool_call' || data.type === 'tool_result') {
                 this.setAgentStage(data.type === 'tool_call' ? 'execute' : 'verify');
                 this.chatMessages[idx].agentEvents.push(data);
-                if (data.type === 'tool_result' && data.name === 'generate_image') {
-                  this.attachGeneratedResource(this.chatMessages[idx], data.result);
-                }
-                this.updateLiveOperator(effectiveMode, data);
+                this.updateLiveOperator(mode, data);
                 this.scrollChat();
-              } else if (data.type === 'context_usage') {
-                this.agentCtxPct = data.pct || 0;
-                this.agentCtxIter = data.iteration || 0;
-                this.agentMaxIter = data.max_iterations || this.agentMaxIter || 75;
               } else if (data.type === 'done') {
                 this.setAgentStage('verify');
                 this.chatMessages[idx].streaming = false;
-                this.updateLiveOperator(effectiveMode, data);
+                this.updateLiveOperator(mode, data);
               } else if (data.type === 'error') {
                 this.setAgentStage('recover');
                 this.chatMessages[idx].content += `\n⚠️ ${data.message}`;
                 this.chatMessages[idx].streaming = false;
                 this.chatMessages[idx].error = true;
                 this.chatMessages[idx].retryMsg = msg;
-                this.updateLiveOperator(effectiveMode, data);
-              } else if (data.type === 'approval_required') {
-                this.setAgentStage('recover');
-                this.chatMessages[idx].streaming = false;
-                this.chatMessages[idx].pendingApproval = data;
-                this.updateLiveOperator(effectiveMode, data);
-                this.checkInterruptedSession?.();
-                this.showToast(data.message || 'Approval required to continue this task');
+                this.updateLiveOperator(mode, data);
               }
             } else {
               if (data.chunk) {
                 this.chatMessages[idx].content += data.chunk;
-                this.updateLiveOperator(effectiveMode, data);
+                this.updateLiveOperator(mode, data);
                 this.scrollChat();
               }
               if (data.done) {
@@ -3380,179 +1992,6 @@ function axonDashboardMixin() {
         this.rememberOperatorOutcome(mode, this.chatMessages[idx]);
       }
       this.clearLiveOperator(this.liveOperator.phase === 'recover' ? 4200 : 1400);
-    },
-
-    // ── PTY / xterm.js ─────────────────────────────────────────────────────
-
-    initXterm(wrapEl) {
-      if (this._xtermInst) return;  // already initialised
-      if (typeof Terminal === 'undefined') return;  // xterm.js not loaded yet
-
-      const term = new Terminal({
-        theme: {
-          background: '#0d0d0d',
-          foreground: '#e2e8f0',
-          cursor: '#f59e0b',
-          selectionBackground: 'rgba(245,158,11,0.3)',
-          black: '#1e293b', brightBlack: '#475569',
-          red: '#f87171', brightRed: '#fca5a5',
-          green: '#4ade80', brightGreen: '#86efac',
-          yellow: '#fbbf24', brightYellow: '#fcd34d',
-          blue: '#60a5fa', brightBlue: '#93c5fd',
-          magenta: '#c084fc', brightMagenta: '#d8b4fe',
-          cyan: '#22d3ee', brightCyan: '#67e8f9',
-          white: '#cbd5e1', brightWhite: '#f1f5f9',
-        },
-        fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", monospace',
-        fontSize: 13,
-        lineHeight: 1.4,
-        cursorStyle: 'bar',
-        cursorBlink: true,
-        scrollback: 5000,
-        allowProposedApi: true,
-      });
-
-      // CDN UMD bundles export as window.FitAddon = { FitAddon: class }
-      const FitAddonClass = (typeof FitAddon !== 'undefined' && FitAddon.FitAddon) ? FitAddon.FitAddon : FitAddon;
-      const fitAddon = new FitAddonClass();
-      term.loadAddon(fitAddon);
-
-      if (typeof WebLinksAddon !== 'undefined') {
-        const WebLinksClass = WebLinksAddon.WebLinksAddon || WebLinksAddon;
-        term.loadAddon(new WebLinksClass());
-      }
-
-      const container = wrapEl.querySelector('#axon-xterm');
-      term.open(container);
-      // Defer fit — container needs at least one paint cycle to have real pixel dimensions.
-      // Immediate fit() when panel is freshly shown produces ~3 rows (height not yet resolved).
-      setTimeout(() => { try { fitAddon.fit(); } catch(_) {} }, 50);
-      setTimeout(() => { try { fitAddon.fit(); } catch(_) {} }, 200);
-
-      this._xtermInst = term;
-      this._xtermFit = fitAddon;
-
-      // Handle resize (covers drag-handle and window resize)
-      const ro = new ResizeObserver(() => {
-        // Small debounce to avoid excessive fit() during drag
-        clearTimeout(this._xtermRoTimer);
-        this._xtermRoTimer = setTimeout(() => { try { fitAddon.fit(); } catch(_) {} }, 30);
-      });
-      ro.observe(container);
-
-      // Forward user input to PTY WebSocket
-      term.onData(data => {
-        if (this._ptyWs && this._ptyWs.readyState === WebSocket.OPEN) {
-          this._ptyWs.send(JSON.stringify({ type: 'input', data }));
-        }
-      });
-
-      // Forward terminal resize to PTY
-      term.onResize(({ cols, rows }) => {
-        if (this._ptyWs && this._ptyWs.readyState === WebSocket.OPEN) {
-          this._ptyWs.send(JSON.stringify({ type: 'resize', cols, rows }));
-        }
-      });
-
-      term.writeln('\x1b[90mAxon Interactive Terminal — click \x1b[32mOpen Terminal\x1b[90m to connect\x1b[0m');
-    },
-
-    fitXterm() {
-      try { this._xtermFit && this._xtermFit.fit(); } catch(_) {}
-    },
-
-    async connectPty() {
-      if (this._ptyWs) this.disconnectPty();
-
-      // Lazy-init xterm if it wasn't initialised yet (panel was hidden at x-init time)
-      if (!this._xtermInst) {
-        const wrap = this.$refs && this.$refs.xtermWrap;
-        if (wrap) this.initXterm(wrap);
-        if (!this._xtermInst) {
-          // xterm.js CDN not loaded yet — retry after a short delay
-          await new Promise(r => setTimeout(r, 600));
-          if (wrap) this.initXterm(wrap);
-        }
-      }
-      if (this._xtermInst && this._xtermFit) {
-        try { this._xtermFit.fit(); } catch(_) {}
-      }
-
-      // Use active session ID if one exists, otherwise use a transient PTY ID.
-      // Do NOT auto-create DB sessions here — user must click "New session" explicitly.
-      const sessionId = String(this.terminal.activeSessionId || this._ptySessionId || ('pty-' + Date.now()));
-      this._ptySessionId = sessionId;
-
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const tokenParam = this.authToken ? `?token=${encodeURIComponent(this.authToken)}` : '';
-      const ws = new WebSocket(`${proto}://${location.host}/ws/pty/${sessionId}${tokenParam}`);
-
-      ws.onopen = () => {
-        this.ptyConnected = true;
-        if (this._xtermInst) {
-          this._xtermInst.clear();
-          this._xtermInst.writeln('\x1b[90mConnected to Axon interactive shell\x1b[0m');
-          // Send initial resize
-          const { cols, rows } = this._xtermInst;
-          ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-          // Fit after a tick (dimensions stabilise)
-          setTimeout(() => {
-            try { this._xtermFit && this._xtermFit.fit(); } catch(_) {}
-            this.focusXterm();
-          }, 100);
-        }
-      };
-
-      ws.onmessage = async (evt) => {
-        try {
-          const msg = JSON.parse(evt.data);
-          if (msg.type === 'data' && this._xtermInst) {
-            const bytes = atob(msg.data);
-            const arr = new Uint8Array(bytes.length);
-            for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-            this._xtermInst.write(arr);
-          } else if (msg.type === 'error') {
-            if (this._xtermInst) {
-              this._xtermInst.writeln(`\r\n\x1b[31m[${msg.message || 'Interactive shell error'}]\x1b[0m`);
-            }
-            this.showToast(msg.message || 'Interactive shell error');
-          } else if (msg.type === 'exit') {
-            if (this._xtermInst) {
-              this._xtermInst.writeln(`\r\n\x1b[90m[Process exited with code ${msg.code ?? '?'}]\x1b[0m`);
-            }
-            this.disconnectPty();
-          }
-        } catch(e) {
-          console.warn('PTY WS message error', e);
-        }
-      };
-
-      ws.onerror = () => {
-        if (this._xtermInst) {
-          this._xtermInst.writeln('\r\n\x1b[31m[WebSocket error — check server logs]\x1b[0m');
-        }
-      };
-
-      ws.onclose = () => {
-        this.ptyConnected = false;
-        this._ptyWs = null;
-      };
-
-      this._ptyWs = ws;
-    },
-
-    disconnectPty() {
-      if (this._ptyWs) {
-        try { this._ptyWs.close(); } catch(_) {}
-        this._ptyWs = null;
-      }
-      this.ptyConnected = false;
-    },
-
-    focusXterm() {
-      try {
-        if (this._xtermInst) this._xtermInst.focus();
-      } catch (_) {}
     },
 
   };

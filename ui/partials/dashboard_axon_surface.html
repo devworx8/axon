@@ -1,0 +1,167 @@
+                <section class="rounded-[26px] border border-slate-800 bg-slate-900/65 p-4 shadow-[0_18px_60px_rgba(15,23,42,0.2)] md:p-5">
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.22em] text-cyan-300/75">Axon Surface</div>
+                      <div class="mt-2 text-lg font-semibold text-white">Axon Online and linked systems</div>
+                      <div class="mt-1 text-sm leading-6 text-slate-400">The paired Axon device, armed Axon mode state, and the linked delivery systems Axon can already correlate with your workspaces.</div>
+                    </div>
+                    <button @click="refreshAxonSurfaces()"
+                            class="rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2 text-[11px] text-slate-300 transition hover:border-slate-500">
+                      Refresh
+                    </button>
+                  </div>
+
+                  <div class="mt-4 grid gap-3 lg:grid-cols-[1.25fr_0.95fr]">
+                    <div class="rounded-2xl border px-4 py-4" :class="companionStatusTone()">
+                      <div class="flex items-center justify-between gap-3">
+                        <div>
+                          <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Paired device</div>
+                          <div class="mt-1 text-sm font-medium text-slate-100" x-text="companionDeviceName() || 'No paired Axon Online device yet'"></div>
+                        </div>
+                        <span class="rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.16em]"
+                              :class="companionStatusTone()"
+                              x-text="companionConnectionLabel()"></span>
+                      </div>
+                      <div class="mt-2 text-[11px] leading-5 text-slate-400" x-text="companionPresenceSummary()"></div>
+                      <div class="mt-4 grid grid-cols-3 gap-2">
+                        <div class="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-3">
+                          <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Wake</div>
+                          <div class="mt-1 text-sm font-semibold text-white" x-text="companionAxonWakePhrase()"></div>
+                        </div>
+                        <div class="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-3">
+                          <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Axon mode</div>
+                          <div class="mt-1 text-sm font-semibold text-white" x-text="companionAxonStatusLabel()"></div>
+                        </div>
+                        <div class="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-3">
+                          <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Reply voice</div>
+                          <div class="mt-1 text-sm font-semibold text-white" x-text="companionAxonVoiceLabel()"></div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="rounded-2xl border border-cyan-500/15 bg-slate-950/60 px-4 py-4">
+                      <div class="flex items-center justify-between gap-3">
+                        <div>
+                          <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Axon mode</div>
+                          <div class="mt-1 text-sm font-medium text-slate-100">Foreground sentinel status</div>
+                        </div>
+                        <span class="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] text-cyan-200"
+                              x-text="companionAxonStatusLabel()"></span>
+                      </div>
+                      <div class="mt-3 text-sm leading-6 text-slate-300" x-text="companionAxonSummary()"></div>
+                      <div x-show="companionAxonLastCommand()" class="mt-4 rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-3">
+                        <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Last command</div>
+                        <div class="mt-1 text-sm font-medium text-white" x-text="companionAxonLastCommand()"></div>
+                      </div>
+                      <div class="mt-4 flex flex-wrap gap-1.5">
+                        <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400"
+                              x-text="`${companionStatus.counts?.active_devices || companionStatus.counts?.presence || 0} active`"></span>
+                        <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400"
+                              x-text="`${companionStatus.counts?.active_sessions || companionStatus.counts?.sessions || 0} sessions`"></span>
+                        <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400"
+                              x-text="voice.server?.detail || 'Speech readiness pending'"></span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="mt-4 rounded-2xl border px-4 py-3" :class="expoStatusTone()">
+                    <div class="flex items-start justify-between gap-3">
+                      <div class="min-w-0">
+                        <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Expo / EAS</div>
+                        <div class="mt-1 text-sm font-medium text-slate-100">Builds and updates for mobile workspaces</div>
+                      </div>
+                      <button @click="activeTab = 'devops'; loadExpoOverview(true)"
+                              class="rounded-lg border border-slate-700 bg-slate-950/70 px-2.5 py-1.5 text-[10px] uppercase tracking-[0.14em] text-slate-300 hover:border-cyan-500/30 hover:text-white transition">
+                        DevOps
+                      </button>
+                    </div>
+                    <div class="mt-2 text-[11px] leading-5 text-slate-400" x-text="expoOverviewLabel()"></div>
+                    <div class="mt-2 flex flex-wrap gap-1.5">
+                      <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400"
+                            x-text="`${expoOverview?.projects?.length || 0} projects`"></span>
+                      <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400"
+                            x-text="`${expoOverview?.builds?.length || 0} builds`"></span>
+                      <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400"
+                            x-text="`${expoOverview?.active_builds?.length || 0} active`"></span>
+                      <span class="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em]"
+                            :class="expoStatusTone()"
+                            x-text="expoOverview?.status || 'unknown'"></span>
+                    </div>
+                    <div class="mt-3">
+                      <div class="flex items-center justify-between gap-2">
+                        <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Active delivery</div>
+                        <span class="text-[10px] text-slate-500" x-text="deliveryActivity?.updated_at ? `Updated ${timeAgo(deliveryActivity.updated_at)}` : 'Waiting for activity'"></span>
+                      </div>
+                      <div class="mt-2 space-y-2">
+                        <template x-if="!deliveryItems().length">
+                          <div class="rounded-2xl border border-dashed border-slate-800 bg-slate-950/60 px-3 py-3 text-[11px] text-slate-500">
+                            Active EAS builds and Vercel deploy approvals appear here while they are underway.
+                          </div>
+                        </template>
+                        <template x-for="item in deliveryItems()" :key="`${item.kind}-${item.action_type}-${item.created_at}-${item.title}`">
+                          <div class="rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-3">
+                            <div class="flex items-start justify-between gap-3">
+                              <div class="min-w-0">
+                                <div class="flex items-center gap-2">
+                                  <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-slate-400"
+                                        x-text="deliveryItemLabel(item)"></span>
+                                  <span class="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em]"
+                                        :class="expoStatusChipClass(item.status)"
+                                        x-text="expoBuildStatusLabel({ status: item.status })"></span>
+                                </div>
+                                <div class="mt-2 text-sm font-medium text-slate-100" x-text="item.title || 'Delivery action'"></div>
+                                <div class="mt-1 text-[11px] leading-5 text-slate-400" x-text="item.summary || 'No summary yet.'"></div>
+                                <div class="mt-1 text-[10px] text-slate-500" x-text="deliveryItemMeta(item)"></div>
+                              </div>
+                              <a x-show="item.url"
+                                 :href="item.url"
+                                 target="_blank"
+                                 rel="noopener noreferrer"
+                                 class="shrink-0 rounded-lg border border-slate-700 bg-slate-950/70 px-2.5 py-1.5 text-[10px] uppercase tracking-[0.14em] text-slate-300 hover:border-cyan-500/30 hover:text-white transition">
+                                Open
+                              </a>
+                            </div>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="mt-4">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Workspace links</div>
+                      <span class="text-[10px] text-slate-500" x-text="`${connectorWorkspaceItems().length} workspaces`"></span>
+                    </div>
+                    <div x-show="connectorsError" class="mt-3 rounded-2xl border border-rose-500/20 bg-rose-500/8 px-3 py-3 text-[11px] text-rose-200" x-text="connectorsError"></div>
+                    <div x-show="connectorsLoading" class="mt-3 rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-3 text-[11px] text-slate-400">Refreshing connector graph…</div>
+                    <div class="mt-3 space-y-2">
+                      <template x-if="!connectorWorkspaceItems().length && !connectorsLoading">
+                        <div class="rounded-2xl border border-dashed border-slate-800 bg-slate-950/60 px-3 py-3 text-[11px] text-slate-500">
+                          No linked workspaces yet. Axon will surface GitHub, Vercel, and Sentry here as relationships are inferred or linked.
+                        </div>
+                      </template>
+                      <template x-for="entry in connectorWorkspaceItems()" :key="`connector-workspace-${entry.workspace?.id || entry.workspace?.name}`">
+                        <button @click="openConnectorWorkspace(entry)"
+                                class="w-full rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-3 text-left transition hover:border-cyan-500/25 hover:bg-cyan-500/8">
+                          <div class="flex items-start justify-between gap-3">
+                            <div class="min-w-0">
+                              <div class="text-sm font-medium text-slate-100 truncate" x-text="entry.workspace?.name || 'Unknown workspace'"></div>
+                              <div class="mt-1 text-[11px] text-slate-500" x-text="entry.workspace?.path || 'No path recorded'"></div>
+                            </div>
+                            <div class="text-right text-[10px] text-slate-500 shrink-0">
+                              <div x-text="`${entry.attention?.counts?.now || 0} now`"></div>
+                              <div x-text="`${entry.attention?.counts?.waiting_on_me || 0} waiting`"></div>
+                            </div>
+                          </div>
+                          <div class="mt-3 flex flex-wrap gap-1.5">
+                            <template x-for="relationship in connectorRelationshipItems(entry)" :key="`${entry.workspace?.id}-${relationship.external_system}-${relationship.external_id || relationship.external_name}`">
+                              <span class="rounded-full border px-2 py-0.5 text-[10px]"
+                                    :class="connectorSystemTone(relationship.external_system)"
+                                    x-text="connectorRelationshipLabel(relationship)"></span>
+                            </template>
+                          </div>
+                        </button>
+                      </template>
+                    </div>
+                  </div>
+                </section>

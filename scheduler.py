@@ -12,8 +12,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from axon_core.cli_command import cli_session_persistence_enabled
-
 # Scheduler is a singleton — created once in server.py
 scheduler: Optional[AsyncIOScheduler] = None
 
@@ -98,10 +96,7 @@ async def job_morning_digest():
             settings = await devdb.get_all_settings(conn)
             backend = settings.get("ai_backend", "ollama")
             api_key = settings.get("anthropic_api_key", "")
-            cli_path = settings.get("cli_runtime_path", settings.get("claude_cli_path", ""))
-            cli_session_persistence = cli_session_persistence_enabled(
-                settings.get("claude_cli_session_persistence_enabled")
-            )
+            cli_path = settings.get("claude_cli_path", "")
 
             if backend == "api" and not api_key:
                 print("[Axon] No Anthropic API key — skipping morning brief")
@@ -116,10 +111,7 @@ async def job_morning_digest():
 
             digest = await brain.generate_digest(
                 projects, tasks, activity,
-                api_key=api_key,
-                backend=backend,
-                cli_path=cli_path,
-                cli_session_persistence=cli_session_persistence,
+                api_key=api_key, backend=backend, cli_path=cli_path
             )
 
             await devdb.log_event(conn, "digest", digest[:200] + "..." if len(digest) > 200 else digest)
@@ -173,28 +165,6 @@ async def job_task_reminders():
         print(f"[Axon] Mission reminder error: {e}")
 
 
-# ─── DevOps scheduled jobs ──────────────────────────────────────────────────
-
-async def _job_sentry_poll():
-    """Scheduled: poll Sentry for new unresolved issues."""
-    try:
-        from axon_api.services.sentry_bridge import poll_sentry_issues
-        await poll_sentry_issues()
-    except Exception as e:
-        print(f"[Axon] Sentry poll error: {e}")
-
-
-async def _job_auto_fix():
-    """Scheduled: run one auto-fix cycle if enabled."""
-    try:
-        from axon_core.auto_fix import run_auto_fix_cycle
-        result = await run_auto_fix_cycle()
-        if result.get("status") not in ("disabled", "no_errors"):
-            print(f"[Axon] Auto-fix cycle result: {result}")
-    except Exception as e:
-        print(f"[Axon] Auto-fix cycle error: {e}")
-
-
 # ─── Scheduler setup ─────────────────────────────────────────────────────────
 
 def setup_scheduler(
@@ -229,34 +199,6 @@ def setup_scheduler(
         id="task_reminders",
         replace_existing=True,
         misfire_grace_time=300,
-    )
-
-    # Process webhook retry queue every 45 seconds
-    from integrations import process_webhook_queue
-    sched.add_job(
-        process_webhook_queue,
-        trigger=IntervalTrigger(seconds=45),
-        id="webhook_queue",
-        replace_existing=True,
-        misfire_grace_time=30,
-    )
-
-    # ── DevOps: Sentry error poll ────────────────────────────────────────────
-    sched.add_job(
-        _job_sentry_poll,
-        trigger=IntervalTrigger(minutes=5),
-        id="sentry_poll",
-        replace_existing=True,
-        misfire_grace_time=120,
-    )
-
-    # ── DevOps: Auto-fix cycle ───────────────────────────────────────────────
-    sched.add_job(
-        _job_auto_fix,
-        trigger=IntervalTrigger(minutes=10),
-        id="auto_fix_cycle",
-        replace_existing=True,
-        misfire_grace_time=120,
     )
 
     return sched
