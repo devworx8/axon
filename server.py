@@ -64,6 +64,7 @@ from axon_api.services import connection_config_state as connection_config_state
 from axon_api.services import console_commands as console_command_service
 from axon_api.services import local_voice_dependencies as local_voice_dependencies_service
 from axon_api.services import local_voice_execution as local_voice_execution_service
+from axon_api.services import local_voice_runtime as local_voice_runtime_service
 from axon_api.services import live_preview_sessions as live_preview_service
 from axon_api.services import ops_runtime_facade as ops_runtime_facade_service
 from axon_api.services import resource_route_state as resource_route_state_service
@@ -72,7 +73,7 @@ from axon_api.services import runtime_truth as runtime_truth_service
 from axon_api.services import settings_runtime_state as settings_runtime_state_service
 from axon_api.services import task_sandboxes as task_sandbox_service
 from axon_api.services import workspace_sandbox_state as workspace_sandbox_service
-from axon_api.routes import agent_control, agent_routes, auto_session_routes, chat_routes, runtime_cli as runtime_cli_routes, settings_memory, task_sandbox_routes, workspace_projects
+from axon_api.routes import agent_control, agent_routes, auto_session_routes, chat_routes, runtime_cli as runtime_cli_routes, settings_memory, task_sandbox_routes, voice_status, workspace_projects
 from axon_core import agent_fast_path, agent_runtime_state, approval_actions
 from axon_core.chat_context import select_history_for_chat
 from axon_core.cli_command import cli_session_persistence_enabled
@@ -133,6 +134,13 @@ BLOCKED_TERMINAL_PATTERNS = (
     ":(){",
     "chmod -r 777 /",
 )
+
+_local_voice_state: dict[str, object] = {
+    "speaking": False,
+    "last_engine": "",
+    "last_error": "",
+    "updated_at": "",
+}
 
 _live_operator_snapshot = {
     "active": False,
@@ -539,33 +547,26 @@ def _valid_session(token: str) -> bool:
     return True
 
 # Paths that don't require auth
-_AUTH_EXEMPT = {"/", "/sw.js", "/manifest.json", "/manual", "/manual.html",
-                "/api/health", "/api/tunnel/status", "/api/tunnel/start", "/api/tunnel/stop"}
-_AUTH_EXEMPT_PREFIXES = ("/api/auth/", "/icons/", "/js/", "/styles.css")
+_AUTH_EXEMPT = set(auth_runtime_state_service.AUTH_EXEMPT) | {
+    "/api/tunnel/start",
+    "/api/tunnel/stop",
+}
+_AUTH_EXEMPT_PREFIXES = auth_runtime_state_service.AUTH_EXEMPT_PREFIXES
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    """Protect API routes with session token when a PIN is set."""
-    path = request.url.path
-
-    # Always allow auth endpoints, static assets, and the UI itself
-    if path in _AUTH_EXEMPT or path.startswith(_AUTH_EXEMPT_PREFIXES):
-        return await call_next(request)
-
-    # Check if auth is enabled (PIN is set)
-    async with devdb.get_db() as conn:
-        pin_hash = await devdb.get_setting(conn, "auth_pin_hash")
-
-    # No PIN set = auth disabled, allow everything
-    if not pin_hash:
-        return await call_next(request)
-
-    # PIN is set — require valid session token
-    token = _extract_session_token(request)
-    if not token or not _valid_session(token):
-        return JSONResponse({"detail": "Authentication required"}, status_code=401)
-
-    return await call_next(request)
+    """Protect API routes with session or companion auth when a PIN is set."""
+    return await auth_runtime_state_service.auth_middleware(
+        request,
+        call_next,
+        auth_exempt=_AUTH_EXEMPT,
+        auth_exempt_prefixes=_AUTH_EXEMPT_PREFIXES,
+        dev_local_auth_bypass_active_fn=auth_runtime_state_service.dev_local_auth_bypass_active,
+        db_module=devdb,
+        extract_session_token_fn=_extract_session_token,
+        valid_session_async_fn=_valid_session_async,
+        json_response_cls=JSONResponse,
+    )
 
 
 class PinSetup(BaseModel):
@@ -577,12 +578,19 @@ class PinLogin(BaseModel):
 @app.get("/api/auth/status")
 async def auth_status(request: Request):
     """Check if auth is enabled and if current session is valid."""
+    if auth_runtime_state_service.dev_local_auth_bypass_active(request):
+        return {
+            "auth_enabled": False,
+            "session_valid": True,
+            "dev_bypass": True,
+        }
     async with devdb.get_db() as conn:
         pin_hash = await devdb.get_setting(conn, "auth_pin_hash")
     token = _extract_session_token(request)
     return {
         "auth_enabled": bool(pin_hash),
-        "session_valid": (not pin_hash) or bool(token and _valid_session(token)),
+        "session_valid": (not pin_hash) or bool(token and await _valid_session_async(token)),
+        "dev_bypass": False,
     }
 
 @app.post("/api/auth/setup")
@@ -4975,6 +4983,28 @@ def _piper_python_available() -> bool:
     )
 
 
+def _local_voice_paths(settings: Optional[dict[str, str]] = None) -> dict[str, str]:
+    return local_voice_runtime_service.local_voice_paths(
+        settings,
+        read_settings_sync=_read_settings_sync,
+        os_module=os,
+    )
+
+
+def _local_voice_status(settings: Optional[dict[str, str]] = None) -> dict[str, object]:
+    return local_voice_runtime_service.local_voice_status(
+        settings,
+        read_settings_sync=_read_settings_sync,
+        local_voice_paths_fn=_local_voice_paths,
+        resolve_ffmpeg_path_fn=_resolve_ffmpeg_path,
+        piper_python_available_fn=_piper_python_available,
+        python_module_available_fn=_python_module_available,
+        local_voice_state=_local_voice_state,
+        shutil_module=shutil,
+        pathlib_path_cls=Path,
+    )
+
+
 def _speak_local_text(text: str, *, model_path: str, config_path: str = "") -> tuple[bytes, str]:
     return local_voice_execution_service.speak_local_text(
         text,
@@ -5224,10 +5254,15 @@ _agent_control_router, _agent_control_handlers = agent_control.build_agent_contr
     allowed_cmds=set(getattr(brain, "_ALLOWED_CMDS", set())),
     enqueue_steer_message=agent_runtime_state.enqueue_steer_message,
 )
+_voice_status_router, _voice_status_handlers = voice_status.build_voice_status_router(
+    db_module=devdb,
+    local_voice_status=_local_voice_status,
+)
 route_registry.register_core_routers(
     app,
     auto_session_router=_auto_session_router,
     agent_control_router=_agent_control_router,
+    voice_status_router=_voice_status_router,
 )
 
 ApproveActionBody = agent_control.ApproveActionBody

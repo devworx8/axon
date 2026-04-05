@@ -2,10 +2,11 @@
   <div class="mission-control-header">
     <div class="min-w-0">
       <div class="mission-eyebrow">Mission Control</div>
-      <h2 class="mission-title">A.X.O.N Command Center</h2>
-      <p class="mission-subtitle">A live posture ring, attention sectors, and high-trust actions synced to the operator state.</p>
+      <h2 class="mission-title">J.A.R.V.I.S // Axon Control Ring</h2>
+      <p class="mission-subtitle">A Stark-style posture ring for live operator state, approval pressure, runtime lanes, and one-tap response paths.</p>
     </div>
     <div class="mission-pill-row">
+      <span class="mission-pill mission-pill--stark">JARVIS mode</span>
       <span class="mission-pill" :class="missionPostureChipClass()" x-text="missionPostureLabel()"></span>
       <span class="mission-pill" :class="companionStatusTone()" x-text="companionConnectionLabel()"></span>
       <span class="mission-pill" :class="runtimeStatusTone()" x-text="runtimeStatus.runtime_label || backendBadge()"></span>
@@ -65,7 +66,7 @@
         <div class="mission-ops-header">
           <div>
             <div class="mission-ops-label">Quick Ops</div>
-            <div class="mission-ops-subtitle">One tap execution from the control ring.</div>
+            <div class="mission-ops-subtitle">One-tap execution from the command ring.</div>
           </div>
           <div class="mission-ops-status" x-show="missionActionBusy" x-text="missionActionBusy ? 'Executing...' : ''"></div>
         </div>

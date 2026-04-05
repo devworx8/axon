@@ -1749,7 +1749,7 @@ function axonDashboardMixin() {
       if (String(resource.kind || '').toLowerCase() === 'image') {
         this.visionWarningDismissed = false;
       }
-      this.activeTab = 'chat';
+      this.switchTab('chat');
       this.showResourcePicker = false;
       this.showToast('Resource attached to the console');
     },
@@ -1761,7 +1761,7 @@ function axonDashboardMixin() {
       if (String(resource.kind || '').toLowerCase() === 'image') {
         this.visionWarningDismissed = false;
       }
-      this.activeTab = 'chat';
+      this.switchTab('chat');
       this.showToast('Resource attached for Deep Research');
     },
 

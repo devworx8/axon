@@ -16,6 +16,9 @@ class UiRendererTests(unittest.TestCase):
 
         self.assertIn("DevOps Monitor", body)
         self.assertIn("activeTab === 'devops'", body)
+        self.assertIn('/js/navigation.js', body)
+        self.assertIn('/js/runtime_selector.js', body)
+        self.assertIn('Control Room', body)
 
 
 if __name__ == "__main__":

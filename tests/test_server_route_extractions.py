@@ -138,9 +138,30 @@ class RouterRegistrationTests(unittest.TestCase):
         paths = {route.path for route in server.app.routes}
         self.assertIn("/api/connectors/overview", paths)
 
+    def test_server_app_registers_companion_router(self):
+        paths = {route.path for route in server.app.routes}
+        self.assertIn("/api/companion/status", paths)
+
+    def test_server_app_registers_mobile_control_router(self):
+        paths = {route.path for route in server.app.routes}
+        self.assertIn("/api/mobile/control/trust", paths)
+        self.assertIn("/api/mobile/axon/arm", paths)
+
+    def test_server_app_registers_mobile_mission_router(self):
+        paths = {route.path for route in server.app.routes}
+        self.assertIn("/api/mobile/mission/snapshot", paths)
+
+    def test_server_app_registers_mcp_router(self):
+        paths = {route.path for route in server.app.routes}
+        self.assertIn("/api/mcp/servers", paths)
+
     def test_server_app_registers_mobile_vault_router(self):
         paths = {route.path for route in server.app.routes}
         self.assertIn("/api/mobile/vault/status", paths)
+
+    def test_server_app_registers_voice_status_router(self):
+        paths = {route.path for route in server.app.routes}
+        self.assertIn("/api/voice/status", paths)
 
 
 class TerminalRouteExtractionTests(unittest.IsolatedAsyncioTestCase):

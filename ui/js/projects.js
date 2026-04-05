@@ -109,7 +109,7 @@ function axonProjectsMixin() {
       }
       this._userScrolled = false;
       this.showScrollToBottom = false;
-      this.activeTab = 'chat';
+      this.switchTab('chat');
       if (usedWorkspaceTabs) {
         this.$nextTick(() => requestAnimationFrame(() => this.scrollChat?.(true)));
       } else if (alreadyInChat && typeof this.loadChatHistory === 'function') {

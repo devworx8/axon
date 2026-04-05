@@ -2,11 +2,16 @@
   <div class="flex flex-col gap-5">
     <div class="flex flex-wrap items-center justify-between gap-4">
       <div class="min-w-0">
-        <div class="text-[10px] font-semibold uppercase tracking-[0.24em] text-cyan-300/80">Workspace Console</div>
+        <div class="workspace-console-kicker">J.A.R.V.I.S Tactical Console</div>
         <h2 class="mt-3 text-2xl font-bold text-white sm:text-3xl">
-          <span x-text="'Console - ' + missionWorkspaceLabel()"></span>
+          <span x-text="'Command Deck - ' + missionWorkspaceLabel()"></span>
         </h2>
-        <p class="mt-2 text-sm leading-6 text-slate-400" x-text="consoleWorkspaceTargetHint()"></p>
+        <p class="mt-2 text-sm leading-6 text-slate-400">Launch the immersive console, keep the live operator in sight, and steer the current workspace like a control room instead of a generic chat feed.</p>
+        <div class="workspace-console-chip-row mt-3">
+          <span class="workspace-console-chip" x-text="runtimeStatus.runtime_label || backendBadge()"></span>
+          <span class="workspace-console-chip" x-text="missionPostureLabel()"></span>
+          <span class="workspace-console-chip" x-text="activeWorkspaceRunCount() === 1 ? '1 active run' : `${activeWorkspaceRunCount()} active runs`"></span>
+        </div>
       </div>
       <div class="flex flex-col items-end gap-2">
         <span class="rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.18em]"
@@ -18,7 +23,7 @@
 
     <div class="grid gap-2 sm:grid-cols-2">
       <button @click="switchTab('chat')" class="workspace-console-btn primary">
-        Open Console
+        Launch JARVIS Console
       </button>
       <button @click="quickResume()" :disabled="!canQuickResume()" class="workspace-console-btn">
         Resume last run
@@ -38,6 +43,21 @@
       <button @click="stopWorkspaceRun()" :disabled="!currentWorkspaceRunActive()" class="workspace-console-btn danger">
         Stop run
       </button>
+    </div>
+
+    <div class="workspace-console-telemetry-grid">
+      <div class="workspace-console-telemetry-card">
+        <div class="workspace-console-telemetry-label">Selected lane</div>
+        <div class="workspace-console-telemetry-value" x-text="runtimeStatus.runtime_label || backendBadge()"></div>
+      </div>
+      <div class="workspace-console-telemetry-card">
+        <div class="workspace-console-telemetry-label">Primary workspace</div>
+        <div class="workspace-console-telemetry-value" x-text="missionWorkspaceLabel()"></div>
+      </div>
+      <div class="workspace-console-telemetry-card">
+        <div class="workspace-console-telemetry-label">Target hint</div>
+        <div class="workspace-console-telemetry-value" x-text="consoleWorkspaceTargetHint()"></div>
+      </div>
     </div>
 
     <div class="grid gap-3 md:grid-cols-2">

@@ -169,7 +169,7 @@ function axonResourcesMixin() {
         await this.applyPromptPreset(pr, { showToast: false });
       }
       this.chatInput = pr.content;
-      this.activeTab = 'chat';
+      this.switchTab('chat');
       this.showToast(this.promptIsComposerPreset(pr) ? 'Preset loaded into Console' : 'Playbook sent to Console');
     },
 

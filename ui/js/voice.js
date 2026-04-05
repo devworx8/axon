@@ -7,6 +7,14 @@ function axonVoiceMixin() {
 
     // ── New state ──
     voiceMode: false,
+    voiceStatus: {
+      available: false,
+      preferred_mode: 'browser',
+      transcription_available: false,
+      synthesis_available: false,
+      detail: '',
+      state: {},
+    },
 
     // ── Computed-like helpers ──
     azureSpeechConfigured() {
@@ -25,6 +33,25 @@ function axonVoiceMixin() {
       this.speechInputSupported = hasBrowserRecognition || (hasAzureSdk && this.azureSpeechConfigured());
       this.speechOutputSupported = !!window.speechSynthesis || this.azureSpeechConfigured();
       this.speechSupported = this.speechInputSupported || this.speechOutputSupported;
+    },
+
+    async loadVoiceStatus(force = false) {
+      if (!force && this.voiceStatus?.detail) return this.voiceStatus;
+      try {
+        const status = await this.api('GET', '/api/voice/status');
+        this.voiceStatus = status || this.voiceStatus;
+      } catch (e) {
+        this.voiceStatus = {
+          available: false,
+          preferred_mode: 'browser',
+          transcription_available: false,
+          synthesis_available: false,
+          detail: e?.message || 'Voice status unavailable',
+          state: {},
+        };
+      }
+      this.refreshVoiceCapability();
+      return this.voiceStatus;
     },
 
     voiceInputAvailable() {
@@ -69,7 +96,7 @@ function axonVoiceMixin() {
 
     openVoiceCommandCenter() {
       this.showVoiceOrb = true;
-      this.activeTab = 'chat';
+      this.switchTab('chat');
       this.refreshVoiceCapability();
       if (this.chatInput && !this.voiceTranscript) {
         this.voiceTranscript = this.chatInput;

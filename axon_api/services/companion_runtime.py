@@ -237,11 +237,7 @@ async def process_companion_voice_turn(
         needs_operator = bool(
             resolved_workspace_id
             and workspace_path
-            and brain._requires_local_operator_execution(
-                content,
-                db_path=brain.DEVBRAIN_DB_PATH,
-                workspace_path=workspace_path,
-            )
+            and brain._requires_local_operator_execution(content)
         )
         if needs_operator:
             agent_result = await companion_agent_bridge.run_companion_agent_turn(

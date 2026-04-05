@@ -97,20 +97,27 @@
     ════════════════════════════════════════════════════════════ -->
     <div x-show="activeTab === 'chat'" class="flex flex-col h-full">
       <!-- Console header — desktop only -->
-      <div class="hidden md:flex items-center justify-between px-4 py-2.5 border-b border-slate-800 bg-slate-950/70 backdrop-blur shrink-0 gap-3">
+      <div class="console-command-header hidden md:flex items-center justify-between px-4 py-2.5 border-b border-slate-800 bg-slate-950/70 backdrop-blur shrink-0 gap-3">
         <!-- Left: back + title -->
-        <div class="flex items-center gap-2 min-w-0">
-          <button x-show="chatProject" @click="activeTab = 'projects'"
-                  class="shrink-0 p-1 rounded-md text-slate-500 hover:text-white hover:bg-slate-800 transition">
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+        <div class="console-command-nav flex items-center gap-3 min-w-0">
+          <button @click="returnFromConsole()"
+                  class="console-return-link shrink-0">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+            <span x-text="consoleReturnText()"></span>
           </button>
-          <span class="text-sm font-medium text-slate-300 truncate" x-text="chatProject ? chatProject.name : 'Axon Console'"></span>
+          <div class="min-w-0">
+            <div class="console-header-kicker" x-text="consoleOriginKicker()"></div>
+            <div class="mt-1 flex items-center gap-2 min-w-0">
+              <span class="console-header-title truncate" x-text="chatProject ? chatProject.name : 'Axon Console'"></span>
+              <span class="console-header-chip shrink-0">HUD online</span>
+            </div>
+          </div>
         </div>
 
         <!-- Centre: model picker pill (always visible) -->
         <div class="flex-1 flex justify-center">
           <div class="relative" x-data>
-            <button @click="chatModelOpen = !chatModelOpen; if(chatModelOpen && ollamaModels.length===0) loadOllamaModels()"
+            <button @click="toggleRuntimePicker()"
                     class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 hover:border-slate-500/80 transition group select-none">
               <div class="w-1.5 h-1.5 rounded-full shrink-0"
                    :class="settingsForm.ai_backend === 'ollama' ? 'bg-green-400' : settingsForm.ai_backend === 'api' ? 'bg-blue-400' : 'bg-slate-500'"></div>
@@ -129,7 +136,7 @@
                   <button @click.stop="loadOllamaModels()" class="text-slate-600 hover:text-slate-400 transition">↻</button>
                 </div>
                 <template x-for="m in ollamaModels" :key="m.name">
-                  <button @click="selectedChatModel = m.name; settingsForm.ollama_model = m.name; settingsForm.code_model = m.name; api('POST', '/api/settings', {ollama_model: m.name, code_model: m.name}).catch(()=>{}); chatModelOpen=false"
+                  <button @click="applyOllamaChatModel(m.name)"
                           :class="activeChatModel() === m.name ? 'bg-blue-600/15 text-blue-300' : 'text-slate-300 hover:bg-slate-800/80'"
                           class="w-full text-left px-3 py-2.5 text-sm flex items-center gap-2.5 transition">
                     <div class="w-1.5 h-1.5 rounded-full shrink-0" :class="activeChatModel() === m.name ? 'bg-blue-400' : 'bg-slate-700'"></div>
@@ -139,8 +146,54 @@
                 </template>
                 <div x-show="ollamaModels.length === 0" class="px-3 py-3 text-xs text-slate-500 text-center">No models — Settings → Ollama</div>
               </div>
-              <div x-show="settingsForm.ai_backend !== 'ollama'" class="px-4 py-3 text-xs text-slate-400 text-center">
-                Model selection requires the Ollama backend
+              <div x-show="settingsForm.ai_backend === 'cli'">
+                <div class="px-3 py-1.5 text-[10px] text-slate-500 uppercase tracking-wider border-b border-slate-800/80">CLI runtime models</div>
+                <template x-for="m in (runtimeStatus.cli_models || [])" :key="m.id || 'default'">
+                  <button @click="applyCliRuntimeModel(m.id || '')"
+                          :class="currentCliRuntimeModel() === (m.id || '') ? 'bg-blue-600/15 text-blue-300' : 'text-slate-300 hover:bg-slate-800/80'"
+                          class="w-full text-left px-3 py-2.5 text-sm transition">
+                    <div class="flex items-start gap-2.5">
+                      <div class="w-1.5 h-1.5 rounded-full shrink-0 mt-1.5" :class="currentCliRuntimeModel() === (m.id || '') ? 'bg-blue-400' : 'bg-slate-700'"></div>
+                      <div class="min-w-0 flex-1">
+                        <div class="truncate" x-text="m.label"></div>
+                        <div class="mt-0.5 text-[11px] text-slate-500" x-text="m.description"></div>
+                      </div>
+                    </div>
+                  </button>
+                </template>
+                <div x-show="(runtimeStatus.cli_models || []).length === 0" class="px-3 py-3 text-xs text-slate-500 text-center">No CLI presets available yet</div>
+              </div>
+              <div x-show="settingsForm.ai_backend === 'api'">
+                <div class="px-3 py-1.5 text-[10px] text-slate-500 uppercase tracking-wider border-b border-slate-800/80">API providers</div>
+                <template x-for="provider in runtimePickerProviderCards()" :key="provider.id">
+                  <button @click="applyApiRuntimeProvider(provider.id)"
+                          :class="runtimePickerSelectedProviderId() === provider.id ? 'bg-blue-600/15 text-blue-300' : 'text-slate-300 hover:bg-slate-800/80'"
+                          class="w-full text-left px-3 py-2.5 text-sm transition">
+                    <div class="flex items-start gap-2.5">
+                      <div class="w-1.5 h-1.5 rounded-full shrink-0 mt-1.5" :class="runtimePickerSelectedProviderId() === provider.id ? 'bg-blue-400' : 'bg-slate-700'"></div>
+                      <div class="min-w-0 flex-1">
+                        <div class="truncate" x-text="provider.label"></div>
+                        <div class="mt-0.5 text-[11px] text-slate-500" x-text="provider.model || provider.default_model"></div>
+                      </div>
+                    </div>
+                  </button>
+                </template>
+                <div class="border-t border-slate-800/80 px-3 py-3 space-y-2">
+                  <div class="text-[10px] uppercase tracking-wider text-slate-500">Selected provider model</div>
+                  <input x-model="runtimePickerDraftModel"
+                         type="text"
+                         :placeholder="runtimePickerApiModelPlaceholder()"
+                         class="w-full rounded-lg border border-slate-700/70 bg-slate-950/80 px-3 py-2 text-sm text-slate-200 outline-none focus:border-blue-500/70">
+                  <button @click="saveApiRuntimeModel()"
+                          :disabled="runtimePickerSaving"
+                          class="w-full rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-sm text-blue-200 transition hover:bg-blue-500/15 disabled:opacity-60">
+                    Save API model
+                  </button>
+                </div>
+              </div>
+              <div x-show="runtimePickerError" class="border-t border-rose-500/20 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-200" x-text="runtimePickerError"></div>
+              <div x-show="!['ollama','cli','api'].includes(String(settingsForm.ai_backend || '').toLowerCase())" class="px-4 py-3 text-xs text-slate-400 text-center">
+                Runtime selection is unavailable for this backend
               </div>
             </div>
           </div>
@@ -160,10 +213,13 @@
       </div>
 
       <!-- Mobile: project context pill -->
-      <div x-show="chatProject" class="md:hidden flex items-center gap-2 px-4 py-2 bg-blue-600/10 border-b border-blue-500/20 shrink-0">
-        <span class="text-[11px] text-blue-400">📁 Workspace:</span>
-        <span class="text-[11px] font-semibold text-blue-300 flex-1 truncate" x-text="chatProject?.name"></span>
-        <button @click="chatProjectId=''; updateChatProject()" class="text-[10px] text-slate-500 hover:text-slate-300">✕ Clear</button>
+      <div x-show="activeTab === 'chat'" class="console-mobile-return md:hidden flex items-center gap-2 px-4 py-2 border-b shrink-0">
+        <button @click="returnFromConsole()" class="console-mobile-back shrink-0">Control Room</button>
+        <div class="min-w-0 flex-1">
+          <div class="console-mobile-kicker" x-text="consoleOriginKicker()"></div>
+          <div class="console-mobile-title" x-text="chatProject?.name || 'Axon Console'"></div>
+        </div>
+        <button x-show="chatProject" @click="chatProjectId=''; updateChatProject()" class="text-[10px] text-slate-500 hover:text-slate-300">✕ Clear</button>
       </div>
 
       <!-- Desktop: side-by-side | Mobile: stacked -->
@@ -2857,7 +2913,7 @@
     <!-- Right: contextual actions -->
     <div class="flex items-center gap-1.5 shrink-0">
       <div x-show="activeTab === 'chat'" class="relative" x-data>
-        <button @click="chatModelOpen = !chatModelOpen; if(chatModelOpen && ollamaModels.length===0) loadOllamaModels()"
+        <button @click="toggleRuntimePicker()"
                 class="flex max-w-[138px] items-center gap-1.5 rounded-xl border border-slate-700/60 bg-slate-900/80 px-2.5 py-2 text-[10px] text-slate-200">
           <span class="w-3.5 h-3.5 shrink-0" x-html="providerIdentityIcon(consoleProviderIdentity().providerId)"></span>
           <span class="truncate" x-text="consoleProviderIdentity().modelLabel"></span>
@@ -2882,7 +2938,7 @@
               <button @click.stop="loadOllamaModels()" class="text-slate-600 hover:text-slate-400 transition">↻</button>
             </div>
             <template x-for="m in ollamaModels" :key="m.name">
-              <button @click="selectedChatModel = m.name; settingsForm.ollama_model = m.name; settingsForm.code_model = m.name; api('POST', '/api/settings', {ollama_model: m.name, code_model: m.name}).catch(()=>{}); chatModelOpen=false"
+              <button @click="applyOllamaChatModel(m.name)"
                       :class="activeChatModel() === m.name ? 'bg-blue-600/15 text-blue-300' : 'text-slate-300 hover:bg-slate-800/80'"
                       class="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition">
                 <div class="w-1.5 h-1.5 rounded-full shrink-0" :class="activeChatModel() === m.name ? 'bg-blue-400' : 'bg-slate-700'"></div>
@@ -2892,9 +2948,55 @@
             </template>
             <div x-show="ollamaModels.length === 0" class="px-3 py-3 text-center text-xs text-slate-500">No models — Settings → Ollama</div>
           </div>
-          <div x-show="!usesOllamaBackend()" class="px-3 py-3 text-xs text-slate-400">
+          <div x-show="settingsForm.ai_backend === 'cli'">
+            <div class="border-b border-slate-800/80 px-3 py-1.5 text-[10px] uppercase tracking-[0.16em] text-slate-500">CLI runtime models</div>
+            <template x-for="m in (runtimeStatus.cli_models || [])" :key="m.id || 'default'">
+              <button @click="applyCliRuntimeModel(m.id || '')"
+                      :class="currentCliRuntimeModel() === (m.id || '') ? 'bg-blue-600/15 text-blue-300' : 'text-slate-300 hover:bg-slate-800/80'"
+                      class="w-full px-3 py-2.5 text-left text-sm transition">
+                <div class="flex items-start gap-2.5">
+                  <div class="w-1.5 h-1.5 rounded-full shrink-0 mt-1.5" :class="currentCliRuntimeModel() === (m.id || '') ? 'bg-blue-400' : 'bg-slate-700'"></div>
+                  <div class="min-w-0 flex-1">
+                    <div class="truncate" x-text="m.label"></div>
+                    <div class="mt-0.5 text-[11px] text-slate-500" x-text="m.description"></div>
+                  </div>
+                </div>
+              </button>
+            </template>
+            <div x-show="(runtimeStatus.cli_models || []).length === 0" class="px-3 py-3 text-center text-xs text-slate-500">No CLI presets available yet</div>
+          </div>
+          <div x-show="settingsForm.ai_backend === 'api'">
+            <div class="border-b border-slate-800/80 px-3 py-1.5 text-[10px] uppercase tracking-[0.16em] text-slate-500">API providers</div>
+            <template x-for="provider in runtimePickerProviderCards()" :key="provider.id">
+              <button @click="applyApiRuntimeProvider(provider.id)"
+                      :class="runtimePickerSelectedProviderId() === provider.id ? 'bg-blue-600/15 text-blue-300' : 'text-slate-300 hover:bg-slate-800/80'"
+                      class="w-full px-3 py-2.5 text-left text-sm transition">
+                <div class="flex items-start gap-2.5">
+                  <div class="w-1.5 h-1.5 rounded-full shrink-0 mt-1.5" :class="runtimePickerSelectedProviderId() === provider.id ? 'bg-blue-400' : 'bg-slate-700'"></div>
+                  <div class="min-w-0 flex-1">
+                    <div class="truncate" x-text="provider.label"></div>
+                    <div class="mt-0.5 text-[11px] text-slate-500" x-text="provider.model || provider.default_model"></div>
+                  </div>
+                </div>
+              </button>
+            </template>
+            <div class="border-t border-slate-800/80 px-3 py-3 space-y-2">
+              <div class="text-[10px] uppercase tracking-wider text-slate-500">Selected provider model</div>
+              <input x-model="runtimePickerDraftModel"
+                     type="text"
+                     :placeholder="runtimePickerApiModelPlaceholder()"
+                     class="w-full rounded-xl border border-slate-700/70 bg-slate-950/80 px-3 py-2 text-sm text-slate-200 outline-none focus:border-blue-500/70">
+              <button @click="saveApiRuntimeModel()"
+                      :disabled="runtimePickerSaving"
+                      class="w-full rounded-xl border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-sm text-blue-200 transition hover:bg-blue-500/15 disabled:opacity-60">
+                Save API model
+              </button>
+            </div>
+          </div>
+          <div x-show="runtimePickerError" class="border-t border-rose-500/20 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-200" x-text="runtimePickerError"></div>
+          <div x-show="!['ollama','cli','api'].includes(String(settingsForm.ai_backend || '').toLowerCase())" class="px-3 py-3 text-xs text-slate-400">
             <div class="truncate text-slate-200" x-text="consoleProviderIdentity().providerLabel"></div>
-            <div class="mt-1 truncate" x-text="consoleProviderIdentity().modelLabel"></div>
+            <div class="mt-1 truncate">Runtime selection is unavailable for this backend</div>
           </div>
         </div>
       </div>
@@ -3015,6 +3117,8 @@
 <!-- ── Axon Modules ── -->
 <script src="/js/helpers.js"></script>
 <script src="/js/codeblocks.js"></script>
+<script src="/js/navigation.js"></script>
+<script src="/js/runtime_selector.js"></script>
 <script src="/js/auth.js"></script>
 <script src="/js/dashboard.js"></script>
 <script src="/js/attention.js"></script>
@@ -3530,6 +3634,10 @@ function devbrain() {
     },
 
     switchTab(id) {
+      const previousTab = this.activeTab;
+      if (id === 'chat' && previousTab !== 'chat' && typeof this.rememberConsoleOrigin === 'function') {
+        this.rememberConsoleOrigin(previousTab);
+      }
       this.activeTab = id;
       if (id === 'dashboard') this.loadDashboard();
       else if (id === 'projects') this.loadProjects();
@@ -3564,6 +3672,8 @@ function devbrain() {
     state,
     axonHelpersMixin(),
     axonCodeblocksMixin(),
+    axonNavigationMixin(),
+    axonRuntimeSelectorMixin(),
     axonAuthMixin(),
     axonDashboardMixin(),
     axonAttentionMixin(),
