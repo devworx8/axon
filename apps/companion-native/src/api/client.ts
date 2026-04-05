@@ -9,17 +9,39 @@ import {
 const DEFAULT_BASE_URL = 'http://127.0.0.1:7734';
 const DEFAULT_AXON_PORT = '7734';
 
+type ExpoExtraConfig = {
+  apiBaseUrl?: unknown;
+  expoClient?: {
+    hostUri?: unknown;
+    debuggerHost?: unknown;
+  } | null;
+};
+
+type ExpoManifestLike = {
+  extra?: ExpoExtraConfig | null;
+  hostUri?: unknown;
+  debuggerHost?: unknown;
+};
+
+type ExpoConstantsLike = {
+  expoConfig?: ExpoManifestLike | null;
+  manifest?: ExpoManifestLike | null;
+  manifest2?: ExpoManifestLike | null;
+};
+
+function readExpoConstants(): ExpoConstantsLike {
+  return (Constants as unknown as ExpoConstantsLike | null | undefined) || {};
+}
+
 function normalizeBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, '');
 }
 
 function readExpoExtraApiBaseUrl(): string {
-  const expoConfig = (Constants as { expoConfig?: Record<string, unknown> } | null | undefined)?.expoConfig;
-  const manifest = (Constants as { manifest?: Record<string, unknown> } | null | undefined)?.manifest;
-  const manifest2 = (Constants as { manifest2?: Record<string, unknown> } | null | undefined)?.manifest2;
-  const configExtra = (expoConfig as { extra?: Record<string, unknown> } | null | undefined)?.extra;
-  const manifestExtra = (manifest as { extra?: Record<string, unknown> } | null | undefined)?.extra;
-  const manifest2Extra = (manifest2 as { extra?: Record<string, unknown> } | null | undefined)?.extra;
+  const { expoConfig, manifest, manifest2 } = readExpoConstants();
+  const configExtra = expoConfig?.extra;
+  const manifestExtra = manifest?.extra;
+  const manifest2Extra = manifest2?.extra;
   const candidate = (
     configExtra?.apiBaseUrl
     || manifestExtra?.apiBaseUrl
@@ -29,16 +51,14 @@ function readExpoExtraApiBaseUrl(): string {
 }
 
 function readExpoHostUri(): string {
-  const config = (Constants as { expoConfig?: Record<string, unknown> } | null | undefined)?.expoConfig;
-  const manifest = (Constants as { manifest?: Record<string, unknown> } | null | undefined)?.manifest;
-  const manifest2 = (Constants as { manifest2?: Record<string, unknown> } | null | undefined)?.manifest2;
+  const { expoConfig, manifest, manifest2 } = readExpoConstants();
   const hostCandidate = (
-    config?.hostUri
-    || config?.debuggerHost
+    expoConfig?.hostUri
+    || expoConfig?.debuggerHost
     || manifest?.hostUri
     || manifest?.debuggerHost
-    || (manifest2?.extra as Record<string, unknown> | null | undefined)?.expoClient?.hostUri
-    || (manifest2?.extra as Record<string, unknown> | null | undefined)?.expoClient?.debuggerHost
+    || manifest2?.extra?.expoClient?.hostUri
+    || manifest2?.extra?.expoClient?.debuggerHost
     || manifest2?.hostUri
     || manifest2?.debuggerHost
   );

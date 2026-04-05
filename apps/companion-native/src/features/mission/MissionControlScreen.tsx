@@ -1,91 +1,155 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
-import { SurfaceCard, SurfaceHeader } from '@/components/SurfaceCard';
 import { PlatformSnapshot } from '@/types/companion';
 
 export function MissionControlScreen({ snapshot }: { snapshot: PlatformSnapshot | null }) {
-  return (
-    <View style={styles.stack}>
-      <SurfaceCard>
-        <SurfaceHeader title="Axon Command Center" subtitle="Cinematic ops cockpit UI. Live wiring comes next." />
-        <View style={styles.hudRow}>
-          {['Ops', 'Voice', 'Attention', 'Systems', 'Runs'].map((label) => (
-            <View key={label} style={styles.hudChip}>
-              <View style={styles.hudChipRing} />
-              <Text style={styles.hudChipText}>{label}</Text>
-            </View>
-          ))}
-        </View>
-      </SurfaceCard>
+  const { width, height } = useWindowDimensions();
+  const padding = Math.min(10, Math.max(6, width * 0.03));
+  const maxWidth = Math.max(300, Math.min(width - padding * 2, 520));
+  const ringSize = Math.max(170, Math.min(width * 0.68, height * 0.34));
+  const ringInner = ringSize * 0.72;
+  const ringMid = ringSize * 0.48;
+  const coreSize = ringSize * 0.2;
+  const attentionCounts = snapshot?.attention?.summary?.counts || {};
+  const posture = String(snapshot?.posture || 'healthy').replace(/_/g, ' ');
+  const focusName = snapshot?.focus?.workspace?.name || 'Global platform view';
+  const axonState = snapshot?.axon?.armed ? String(snapshot?.axon?.monitoring_state || 'armed') : 'standby';
+  const systemCount = snapshot?.systems?.length || 0;
+  const runCount = snapshot?.sessions?.length || 0;
+  const cpuValue = snapshot?.systems?.find((item) => String(item.key || item.label || '').toLowerCase().includes('cpu'))?.meta?.value;
+  const memValue = snapshot?.systems?.find((item) => String(item.key || item.label || '').toLowerCase().includes('mem'))?.meta?.value;
+  const cpuDisplay = typeof cpuValue === 'number' ? `${cpuValue}%` : '53%';
+  const memDisplay = typeof memValue === 'number' ? `${memValue}%` : '80%';
 
-      <View style={styles.hero}>
-        <View style={styles.heroGlow} />
-        <View style={styles.heroRingOuter}>
-          <View style={styles.heroRingMid}>
-            <View style={styles.heroRingInner}>
-              <View style={styles.heroCore} />
+  return (
+    <View style={[styles.screen, { paddingHorizontal: padding, paddingTop: padding, paddingBottom: padding }]}>
+      <View style={[styles.stack, { maxWidth }]}>
+        <View style={styles.floatingCard}>
+          <View style={styles.panel}>
+            <Text style={styles.panelTitle}>Axon Command Center</Text>
+            <View style={styles.hudRow}>
+              {[
+                { label: 'Ops', value: posture },
+                { label: 'Voice', value: axonState },
+                { label: 'Attention', value: `${Number(attentionCounts.now || 0)} now` },
+                { label: 'Systems', value: `${systemCount} live` },
+                { label: 'Runs', value: `${runCount} active` },
+              ].map((item) => (
+                <View key={item.label} style={styles.hudChip}>
+                  <View style={styles.hudChipRing} />
+                  <View>
+                    <Text style={styles.hudChipText}>{item.label}</Text>
+                    <Text style={styles.hudChipValue}>{item.value}</Text>
+                  </View>
+                </View>
+              ))}
             </View>
           </View>
         </View>
-        <Text style={styles.heroTitle}>A.X.O.N</Text>
-        <Text style={styles.heroSub}>Voice ready · Command center online</Text>
-      </View>
 
-      <View style={styles.statsRow}>
-        <SurfaceCard>
-          <Text style={styles.statLabel}>CPU</Text>
-          <Text style={styles.statValue}>53%</Text>
-          <View style={styles.miniRing} />
-        </SurfaceCard>
-        <SurfaceCard>
-          <Text style={styles.statLabel}>Memory</Text>
-          <Text style={styles.statValue}>80%</Text>
-          <View style={styles.miniRing} />
-        </SurfaceCard>
-      </View>
-
-      <SurfaceCard>
-        <SurfaceHeader title="Systems strip" subtitle="Visual placeholders for platform systems and sensors." />
-        <View style={styles.systemStrip}>
-          {['Runtime', 'Preview', 'Deploy', 'Signals', 'Vault'].map((item) => (
-            <View key={item} style={styles.systemNode}>
-              <View style={styles.systemDot} />
-              <Text style={styles.systemLabel}>{item}</Text>
+        <View style={[styles.hero, { height: ringSize + 30 }]}>
+          <View style={[styles.heroGlow, { width: ringSize + 120, height: ringSize + 120, borderRadius: (ringSize + 120) / 2 }]} />
+          <View style={styles.heroHalo} />
+          <View style={[styles.heroRingOuter, { width: ringSize, height: ringSize, borderRadius: ringSize / 2 }]}>
+            <View style={[styles.heroRingMid, { width: ringInner, height: ringInner, borderRadius: ringInner / 2 }]}>
+              <View style={[styles.heroRingInner, { width: ringMid, height: ringMid, borderRadius: ringMid / 2 }]}>
+                <View style={[styles.heroCore, { width: coreSize, height: coreSize, borderRadius: coreSize / 2 }]} />
+              </View>
             </View>
-          ))}
+          </View>
+          <View style={styles.heroSweep} />
+          <Text style={styles.heroTitle}>A.X.O.N</Text>
+          <Text style={styles.heroSub}>Voice ready · Command center online</Text>
         </View>
-      </SurfaceCard>
 
-      <SurfaceCard>
-        <SurfaceHeader title="Operator focus" subtitle="Primary scene for mission context and next action." />
-        <View style={styles.focusPanel}>
-          <Text style={styles.focusTitle}>{snapshot?.focus?.workspace?.name || 'Global platform view'}</Text>
-          <Text style={styles.focusSub}>
-            Axon is standing by. Voice loop is armed and awaiting command.
-          </Text>
+        <View style={styles.metricsRow}>
+          <View style={styles.floatingCard}>
+            <View style={styles.panel}>
+              <Text style={styles.statLabel}>CPU</Text>
+              <Text style={styles.statValue}>{cpuDisplay}</Text>
+              <View style={styles.miniRing} />
+            </View>
+          </View>
+          <View style={styles.floatingCard}>
+            <View style={styles.panel}>
+              <Text style={styles.statLabel}>Memory</Text>
+              <Text style={styles.statValue}>{memDisplay}</Text>
+              <View style={styles.miniRing} />
+            </View>
+          </View>
         </View>
-      </SurfaceCard>
+
+        <View style={styles.floatingCard}>
+          <View style={styles.panel}>
+            <Text style={styles.panelTitle}>Systems + Focus</Text>
+            <View style={styles.systemStrip}>
+              {(snapshot?.systems && snapshot.systems.length
+                ? snapshot.systems.slice(0, 5).map((item) => item.label || item.key || 'System')
+                : ['Runtime', 'Preview', 'Deploy', 'Signals', 'Vault']
+              ).map((item) => (
+                  <View key={String(item)} style={styles.systemNode}>
+                    <View style={styles.systemDot} />
+                    <Text style={styles.systemLabel}>{String(item)}</Text>
+                  </View>
+                ))}
+            </View>
+            <View style={styles.focusPanel}>
+              <Text style={styles.focusTitle}>{focusName}</Text>
+              <Text style={styles.focusSub}>
+                {snapshot?.axon?.armed ? 'Voice loop armed.' : 'Voice loop ready.'} Awaiting command.
+              </Text>
+            </View>
+          </View>
+        </View>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   stack: {
-    gap: 14,
+    width: '100%',
+    gap: 6,
+  },
+  floatingCard: {
+    borderRadius: 18,
+    shadowColor: '#6ee7ff',
+    shadowOpacity: 0.25,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+  },
+  panel: {
+    borderRadius: 18,
+    padding: 12,
+    gap: 8,
+    backgroundColor: 'rgba(8, 16, 30, 0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(110, 231, 255, 0.14)',
+  },
+  panelTitle: {
+    color: '#cfe6ff',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0.6,
   },
   hudRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
+    gap: 8,
   },
   hudChip: {
-    borderRadius: 14,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(110, 231, 255, 0.35)',
-    backgroundColor: 'rgba(14, 24, 40, 0.8)',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderColor: 'rgba(110, 231, 255, 0.22)',
+    backgroundColor: 'rgba(10, 18, 32, 0.6)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
@@ -99,99 +163,108 @@ const styles = StyleSheet.create({
   },
   hudChipText: {
     color: '#d8ecff',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
   },
+  hudChipValue: {
+    color: '#7f93ad',
+    fontSize: 10,
+    fontWeight: '600',
+  },
   hero: {
-    minHeight: 320,
     borderRadius: 24,
-    borderWidth: 1,
-    borderColor: 'rgba(110, 231, 255, 0.2)',
-    backgroundColor: '#070f1b',
+    borderWidth: 0,
+    backgroundColor: 'rgba(7, 15, 27, 0.5)',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
+    shadowColor: '#6ee7ff',
+    shadowOpacity: 0.35,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 8 },
   },
   heroGlow: {
     position: 'absolute',
-    width: 320,
-    height: 320,
-    borderRadius: 160,
     borderWidth: 1,
-    borderColor: 'rgba(110, 231, 255, 0.12)',
-    opacity: 0.6,
+    borderColor: 'rgba(110, 231, 255, 0.16)',
+    opacity: 0.8,
   },
-  heroRingOuter: {
+  heroHalo: {
+    position: 'absolute',
     width: 220,
     height: 220,
     borderRadius: 110,
-    borderWidth: 2,
-    borderColor: 'rgba(110, 231, 255, 0.35)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  heroRingMid: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
     borderWidth: 1,
+    borderColor: 'rgba(110, 231, 255, 0.25)',
+    opacity: 0.6,
+  },
+  heroRingOuter: {
+    borderWidth: 2,
     borderColor: 'rgba(110, 231, 255, 0.45)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  heroRingInner: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
+  heroRingMid: {
     borderWidth: 1,
-    borderColor: 'rgba(110, 231, 255, 0.6)',
+    borderColor: 'rgba(110, 231, 255, 0.65)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroRingInner: {
+    borderWidth: 1,
+    borderColor: 'rgba(110, 231, 255, 0.85)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   heroCore: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
     backgroundColor: '#6ee7ff',
     opacity: 0.6,
   },
+  heroSweep: {
+    position: 'absolute',
+    width: 6,
+    height: '120%',
+    backgroundColor: 'rgba(110, 231, 255, 0.12)',
+    transform: [{ rotate: '20deg' }],
+    right: '35%',
+  },
   heroTitle: {
-    marginTop: 18,
+    marginTop: 12,
     color: '#dff4ff',
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '800',
     letterSpacing: 2,
   },
   heroSub: {
-    marginTop: 6,
+    marginTop: 4,
     color: '#7f93ad',
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '600',
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
-  statsRow: {
+  metricsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
   },
   statLabel: {
     color: '#7f93ad',
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
     letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
   statValue: {
     color: '#e5eefb',
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '800',
   },
   miniRing: {
-    marginTop: 8,
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+    marginTop: 6,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     borderWidth: 3,
     borderColor: '#6ee7ff',
     alignSelf: 'flex-start',
@@ -199,7 +272,7 @@ const styles = StyleSheet.create({
   systemStrip: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 12,
+    gap: 10,
   },
   systemNode: {
     alignItems: 'center',
@@ -215,25 +288,25 @@ const styles = StyleSheet.create({
   },
   systemLabel: {
     color: '#a9bdd6',
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '600',
   },
   focusPanel: {
     borderWidth: 1,
-    borderColor: '#22304a',
+    borderColor: 'rgba(110, 231, 255, 0.18)',
     borderRadius: 16,
-    padding: 12,
-    backgroundColor: '#0b1627',
+    padding: 10,
+    backgroundColor: 'rgba(8, 16, 30, 0.6)',
   },
   focusTitle: {
     color: '#e5eefb',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '800',
   },
   focusSub: {
-    marginTop: 6,
+    marginTop: 4,
     color: '#7f93ad',
-    fontSize: 13,
-    lineHeight: 18,
+    fontSize: 12,
+    lineHeight: 16,
   },
 });

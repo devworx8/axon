@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 
+from . import pdf_fallback
+
 
 @dataclass
 class PdfSection:
@@ -98,6 +100,8 @@ def build_pdf(spec: PdfSpec) -> Path:
         from reportlab.lib.units import mm
         from reportlab.platypus import ListFlowable, ListItem, Paragraph, SimpleDocTemplate, Spacer
     except Exception as exc:  # pragma: no cover - dependency check
+        if isinstance(exc, ModuleNotFoundError):
+            return pdf_fallback.build_fallback_pdf(spec, safe_output_path=_safe_output_path)
         raise RuntimeError("reportlab is required for PDF generation") from exc
 
     out = _safe_output_path(spec.title, spec.output_path)

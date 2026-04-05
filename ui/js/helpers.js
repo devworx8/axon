@@ -4,6 +4,7 @@
 
 function axonHelpersMixin() {
   const LOCAL_PATH_TOKEN_RE = /(^|[\s(])((?:~\/|\/|\.{1,2}\/|[A-Za-z0-9._-]+\/)[^\s<>\]]*[A-Za-z0-9_/-]\.[A-Za-z0-9]{1,10}|[A-Za-z0-9._-]+\.(?:pptx|pdf|png|jpg|jpeg|gif|svg|webp|md|txt|csv|json|yml|yaml|html|css|js|ts|py|sh|log|zip|tar|gz))(?=$|[\s),.!?;:])/g;
+  const LOCAL_PATH_LINE_SUFFIX_RE = /#L\d+(?:C\d+)?$/i;
 
   return {
 
@@ -44,6 +45,8 @@ function axonHelpersMixin() {
             if (!/^(https?:|mailto:|#|\/)/i.test(value)) {
               node.removeAttribute(attr.name);
             } else {
+              const resolvedHref = this.authenticatedRouteHref(value);
+              node.setAttribute('href', resolvedHref);
               if (/^(https?:|mailto:|\/)/i.test(value)) {
                 node.setAttribute('target', '_blank');
                 node.setAttribute('rel', 'noopener noreferrer');
@@ -64,9 +67,46 @@ function axonHelpersMixin() {
     },
 
     fileOpenHref(path = '') {
-      const value = String(path || '').trim();
+      const value = this.normalizedLocalPath(path);
       if (!value) return '';
-      return `/api/files/open?path=${encodeURIComponent(value)}`;
+      return this.authenticatedRouteHref(`/api/files/open?path=${encodeURIComponent(value)}`);
+    },
+
+    normalizedLocalPath(path = '') {
+      return String(path || '').trim().replace(LOCAL_PATH_LINE_SUFFIX_RE, '');
+    },
+
+    isProtectedRouteHref(href = '') {
+      const value = String(href || '').trim();
+      if (!value) return false;
+      try {
+        const url = new URL(value, window.location.origin);
+        if (url.origin !== window.location.origin) return false;
+        return (
+          url.pathname === '/api/files/open'
+          || url.pathname === '/api/generate/pdf/download'
+          || url.pathname === '/api/generate/pptx/download'
+        );
+      } catch (_) {
+        return false;
+      }
+    },
+
+    authenticatedRouteHref(href = '') {
+      const value = String(href || '').trim();
+      if (!value || !this.authToken || !this.isProtectedRouteHref(value)) return value;
+      try {
+        const url = new URL(value, window.location.origin);
+        if (!url.searchParams.get('token')) {
+          url.searchParams.set('token', this.authToken);
+        }
+        if (value.startsWith('/')) {
+          return `${url.pathname}${url.search}${url.hash}`;
+        }
+        return url.toString();
+      } catch (_) {
+        return value;
+      }
     },
 
     isLikelyLocalPath(value = '', { allowBare = false } = {}) {
@@ -122,7 +162,7 @@ function axonHelpersMixin() {
     openMessagePrimaryFile(message = null) {
       const href = this.messagePrimaryFileHref(message);
       if (!href) return;
-      const popup = window.open(href, '_blank', 'noopener,noreferrer');
+      const popup = window.open(this.authenticatedRouteHref(href), '_blank', 'noopener,noreferrer');
       if (!popup) {
         this.showToast?.('Popup blocked. Use the inline file link instead.');
       }

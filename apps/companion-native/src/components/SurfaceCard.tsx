@@ -22,8 +22,10 @@ const styles = StyleSheet.create({
   card: {
     borderWidth: 1,
     borderRadius: 18,
-    padding: 16,
-    gap: 12,
+    padding: 14,
+    gap: 10,
+    backgroundColor: 'rgba(10, 18, 32, 0.55)',
+    borderColor: 'rgba(110, 231, 255, 0.18)',
   },
   header: {
     gap: 4,
@@ -37,4 +39,3 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 });
-

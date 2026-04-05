@@ -196,6 +196,34 @@ button, [role="button"], a {
   color: #e2e8f0;
 }
 
+[x-show="showComposerMenu"] {
+  position: relative;
+  isolation: isolate;
+  background:
+    linear-gradient(180deg, rgba(2, 6, 23, 0.985), rgba(15, 23, 42, 0.97)) !important;
+  backdrop-filter: blur(24px) saturate(1.08);
+  box-shadow:
+    0 24px 70px rgba(2, 6, 23, 0.58),
+    0 0 0 1px rgba(148, 163, 184, 0.04) inset;
+}
+
+[x-show="showComposerMenu"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(circle at top left, rgba(56, 189, 248, 0.08), transparent 34%),
+    radial-gradient(circle at top right, rgba(168, 85, 247, 0.08), transparent 30%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+[x-show="showComposerMenu"] > * {
+  position: relative;
+  z-index: 1;
+}
+
 .dashboard-page {
   position: relative;
   background:
@@ -674,18 +702,27 @@ button, [role="button"], a {
   align-items: center;
 }
 .console-followup-chip {
-  border: 1px solid rgba(51, 65, 85, 0.82);
-  background: rgba(15, 23, 42, 0.84);
-  box-shadow: inset 0 1px 0 rgba(148, 163, 184, 0.04);
+  position: relative;
+  isolation: isolate;
+  border: 1px solid rgba(51, 65, 85, 0.9);
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(2, 6, 23, 0.94));
+  box-shadow:
+    0 10px 24px rgba(2, 6, 23, 0.28),
+    inset 0 1px 0 rgba(248, 250, 252, 0.04);
+  backdrop-filter: blur(16px) saturate(1.04);
 }
 .console-followup-chip-command {
-  border-color: rgba(59, 130, 246, 0.24);
-  background: rgba(30, 64, 175, 0.14);
+  border-color: rgba(59, 130, 246, 0.38);
+  background:
+    linear-gradient(180deg, rgba(29, 78, 216, 0.28), rgba(15, 23, 42, 0.94)),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(2, 6, 23, 0.94));
   color: #bfdbfe;
 }
 .console-followup-chip-continue {
-  border-color: rgba(245, 158, 11, 0.28);
-  background: rgba(120, 53, 15, 0.2);
+  border-color: rgba(245, 158, 11, 0.4);
+  background:
+    linear-gradient(180deg, rgba(180, 83, 9, 0.26), rgba(15, 23, 42, 0.94)),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(2, 6, 23, 0.94));
   color: #fde68a;
 }
 

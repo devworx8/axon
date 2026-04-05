@@ -1,6 +1,9 @@
 """AI runtime selection helpers extracted from server.py."""
 from __future__ import annotations
 
+import sys
+from typing import Any, Callable
+
 from fastapi import HTTPException
 
 from axon_api.services import composer_runtime
@@ -110,6 +113,16 @@ def model_call_kwargs(ai: dict) -> dict:
     return {key: value for key, value in dict(ai or {}).items() if key in allowed_keys}
 
 
+def _resolve_current_callable(fn: Callable[..., Any]) -> Callable[..., Any]:
+    module_name = getattr(fn, "__module__", "")
+    attr_name = getattr(fn, "__name__", "")
+    if not module_name or not attr_name:
+        return fn
+    module = sys.modules.get(module_name)
+    current = getattr(module, attr_name, None) if module else None
+    return current if callable(current) else fn
+
+
 async def effective_ai_params(
     settings: dict,
     composer_options: dict,
@@ -130,8 +143,11 @@ async def effective_ai_params(
     cli_session_persistence_enabled,
     ai_params_fn=None,
 ) -> dict:
-    if ai_params_fn is not None:
-        resolved_ai = await ai_params_fn(
+    ai_params_impl = _resolve_current_callable(ai_params_fn) if ai_params_fn is not None else None
+    runtime_truth_impl = _resolve_current_callable(runtime_truth_for_settings)
+
+    if ai_params_impl is not None:
+        resolved_ai = await ai_params_impl(
             settings,
             conn,
             allow_degraded_api=True,
@@ -175,7 +191,7 @@ async def effective_ai_params(
                     }
                 )
 
-    runtime_truth, runtime_status = await runtime_truth_for_settings(
+    runtime_truth, runtime_status = await runtime_truth_impl(
         settings,
         conn,
         backend_override=str(ai.get("backend") or ""),

@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import server
+from axon_api.routes import file_links
 
 
 class PromptTaskRouteExtractionTests(unittest.IsolatedAsyncioTestCase):
@@ -188,6 +189,26 @@ class RouterRegistrationTests(unittest.TestCase):
     def test_server_app_registers_voice_status_router(self):
         paths = {route.path for route in server.app.routes}
         self.assertIn("/api/voice/status", paths)
+
+
+class FileLinkRouteTests(unittest.TestCase):
+    def test_safe_local_path_allows_temp_files(self):
+        with tempfile.NamedTemporaryFile(suffix=".png") as handle:
+            resolved = file_links._safe_local_path(handle.name)
+
+        self.assertEqual(resolved, Path(handle.name).resolve())
+
+    def test_safe_local_path_strips_line_anchor_suffix(self):
+        with tempfile.NamedTemporaryFile(suffix=".py") as handle:
+            resolved = file_links._safe_local_path(f"{handle.name}#L321")
+
+        self.assertEqual(resolved, Path(handle.name).resolve())
+
+    def test_safe_local_path_rejects_outside_allowed_roots(self):
+        with self.assertRaises(server.HTTPException) as ctx:
+            file_links._safe_local_path("/etc/passwd")
+
+        self.assertEqual(ctx.exception.status_code, 403)
 
 
 class TerminalRouteExtractionTests(unittest.IsolatedAsyncioTestCase):
