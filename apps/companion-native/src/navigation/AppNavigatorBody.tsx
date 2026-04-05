@@ -1,8 +1,6 @@
 import React from 'react';
-import { Text } from 'react-native';
-import { SurfaceCard } from '@/components/SurfaceCard';
 import { AttentionScreen } from '@/features/attention/AttentionScreen';
-import { AuthScreen } from '@/features/auth/AuthScreen';
+import { CompanionSessionGate } from '@/features/auth/CompanionSessionGate';
 import { MissionControlScreen } from '@/features/mission/MissionControlScreen';
 import { ProjectsScreen } from '@/features/projects/ProjectsScreen';
 import { SessionScreen } from '@/features/session/SessionScreen';
@@ -22,16 +20,34 @@ import type { CompanionSettings } from '@/features/settings/useSettings';
 
 type TabKey = 'mission' | 'voice' | 'attention' | 'projects' | 'sessions' | 'settings';
 
-const EMPTY_INBOX = {
-  now: [],
-  waiting_on_me: [],
-  watch: [],
-};
+function sessionGateCopy(activeTab: TabKey) {
+  if (activeTab === 'voice') {
+    return {
+      title: 'Reconnect Axon voice',
+      subtitle: 'Voice capture and Axon mode need a verified companion session before this phone can call protected routes.',
+      detail: 'If the saved session expired or this device was revoked, pair again and Voice will resume from the same mobile shell.',
+    };
+  }
+  return {
+    title: 'Pair your mobile operator',
+    subtitle: 'Link this device to live Axon first, then your phone can act like a real command center.',
+    detail: 'Protected routes stay locked until Axon verifies the saved mobile session.',
+  };
+}
+
+function activeGateError(config: CompanionConfig, authError?: string | null, bootstrapError?: string | null) {
+  if (authError) {
+    return authError;
+  }
+  if (!config.accessToken) {
+    return null;
+  }
+  return bootstrapError || null;
+}
 
 export function AppNavigatorBody({
   activeTab,
   config,
-  colors,
   authError,
   authPairing,
   bootstrapError,
@@ -87,6 +103,7 @@ export function AppNavigatorBody({
   onExpoPublishUpdate,
   onRefreshMission,
   setActiveTab,
+  authChecking,
   verifiedPairing,
   axon,
   axonError,
@@ -97,7 +114,6 @@ export function AppNavigatorBody({
 }: {
   activeTab: TabKey;
   config: CompanionConfig;
-  colors: Record<string, string>;
   authError?: string | null;
   authPairing?: boolean;
   bootstrapError?: string | null;
@@ -153,6 +169,7 @@ export function AppNavigatorBody({
   onExpoPublishUpdate: (workspaceId: number | null) => void;
   onRefreshMission: () => void;
   setActiveTab: (tab: TabKey) => void;
+  authChecking?: boolean;
   verifiedPairing: boolean;
   axon: { status: AxonModeStatus | null; busy: boolean };
   axonError?: string | null;
@@ -161,6 +178,48 @@ export function AppNavigatorBody({
   onResumeSession?: () => void;
   onStopSession?: () => void;
 }) {
+  if (activeTab !== 'settings') {
+    const gateCopy = sessionGateCopy(activeTab);
+    const gateError = activeGateError(config, authError, bootstrapError);
+    if (authChecking && config.accessToken) {
+      return (
+        <CompanionSessionGate
+          title={gateCopy.title}
+          subtitle={gateCopy.subtitle}
+          detail={gateCopy.detail}
+          busy
+          apiBaseUrl={config.apiBaseUrl || ''}
+          onChangeApiBaseUrl={onChangeApiBaseUrl}
+          deviceName={deviceName}
+          onChangeDeviceName={onChangeDeviceName}
+          pairingPin={pairingPin}
+          onChangePairingPin={onChangePairingPin}
+          onPair={onPair}
+          pairing={authPairing}
+          error={gateError}
+        />
+      );
+    }
+    if (!config.accessToken || !verifiedPairing) {
+      return (
+        <CompanionSessionGate
+          title={gateCopy.title}
+          subtitle={gateCopy.subtitle}
+          detail={gateCopy.detail}
+          apiBaseUrl={config.apiBaseUrl || ''}
+          onChangeApiBaseUrl={onChangeApiBaseUrl}
+          deviceName={deviceName}
+          onChangeDeviceName={onChangeDeviceName}
+          pairingPin={pairingPin}
+          onChangePairingPin={onChangePairingPin}
+          onPair={onPair}
+          pairing={authPairing}
+          error={gateError}
+        />
+      );
+    }
+  }
+
   switch (activeTab) {
     case 'attention':
       return (
@@ -280,28 +339,6 @@ export function AppNavigatorBody({
       );
     case 'mission':
     default:
-      if (!config.accessToken) {
-        return (
-          <>
-            <SurfaceCard>
-              <Text style={{ fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 1.1, color: colors.accent }}>Axon Online</Text>
-              <Text style={{ fontSize: 24, fontWeight: '800', color: colors.text }}>Pair your mobile operator</Text>
-              <Text style={{ marginTop: 8, fontSize: 14, lineHeight: 20, color: colors.muted }}>Link this device to live Axon first, then your phone can act like a real command center.</Text>
-            </SurfaceCard>
-            <AuthScreen
-              apiBaseUrl={config.apiBaseUrl || ''}
-              onChangeApiBaseUrl={onChangeApiBaseUrl}
-              deviceName={deviceName}
-              onChangeDeviceName={onChangeDeviceName}
-              pairingPin={pairingPin}
-              onChangePairingPin={onChangePairingPin}
-              onPair={onPair}
-              pairing={authPairing}
-              error={authError || bootstrapError}
-            />
-          </>
-        );
-      }
       return (
         <MissionControlScreen
           snapshot={mission.snapshot}

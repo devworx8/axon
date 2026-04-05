@@ -1,4 +1,8 @@
 import { CompanionConfig, CompanionTokenPair } from '@/types/companion';
+import {
+  COMPANION_SESSION_EXPIRED_MESSAGE,
+  isCompanionAuthErrorMessage,
+} from '@/features/auth/sessionState';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:7734';
 
@@ -12,6 +16,31 @@ export function getApiBaseUrl(config?: CompanionConfig): string {
     return configured;
   }
   return normalizeBaseUrl(process.env.EXPO_PUBLIC_AXON_API_BASE_URL || DEFAULT_BASE_URL);
+}
+
+function extractApiErrorMessage(status: number, rawBody: string): string {
+  const trimmed = String(rawBody || '').trim();
+  let detail = trimmed;
+
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+      const candidate = parsed.detail ?? parsed.message ?? parsed.error;
+      if (typeof candidate === 'string' && candidate.trim()) {
+        detail = candidate.trim();
+      }
+    } catch {
+      detail = trimmed;
+    }
+  }
+
+  if (!detail) {
+    return `Axon request failed: ${status}`;
+  }
+  if (status === 401 && isCompanionAuthErrorMessage(detail)) {
+    return COMPANION_SESSION_EXPIRED_MESSAGE;
+  }
+  return detail;
 }
 
 export async function axonRequest<T>(
@@ -43,7 +72,7 @@ export async function axonRequest<T>(
     });
     if (!response.ok) {
       const body = await response.text().catch(() => '');
-      throw new Error(body || `Axon request failed: ${response.status}`);
+      throw new Error(extractApiErrorMessage(response.status, body));
     }
     return response.json() as Promise<T>;
   } finally {

@@ -8,7 +8,7 @@ import type { VoiceTurnResponse } from '@/types/companion-core';
 import { useAxonMode } from './useAxonMode';
 import { useAxonSpeech } from './useAxonSpeech';
 
-type AppTab = 'home' | 'voice' | 'sessions' | 'mission' | 'settings';
+type AppTab = 'voice' | 'sessions' | 'mission';
 
 export function useAxonMobileRuntime({
   config,

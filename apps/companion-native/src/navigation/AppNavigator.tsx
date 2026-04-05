@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { fetchCompanionIdentity } from '@/api/companion';
 import {
   fetchMobileVaultProviderKeys,
   fetchMobileVaultStatus,
@@ -11,12 +10,13 @@ import {
 } from '@/api/vault';
 import { AppTabBar } from '@/components/AppTabBar';
 import { useAxonMobileRuntime } from '@/features/axon/useAxonMobileRuntime';
+import { useCompanionBootstrap } from '@/features/auth/useCompanionBootstrap';
+import { useStoredCompanionConfig } from '@/features/auth/useStoredCompanionConfig';
 import { useAuth } from '@/features/auth/useAuth';
 import { useMobileControl } from '@/features/control/useMobileControl';
 import { useMissionControl } from '@/features/mission/useMissionControl';
 import { usePresence } from '@/features/presence/usePresence';
 import { RiskChallengeSheet } from '@/features/session/RiskChallengeSheet';
-import { loadCompanionConfig, saveCompanionConfig } from '@/features/settings/configStore';
 import { useSettings } from '@/features/settings/useSettings';
 import { useVoice } from '@/features/voice/useVoice';
 import { verifyLocalBiometric } from '@/lib/localBiometric';
@@ -45,11 +45,8 @@ export function AppNavigator() {
   const { colors } = useTheme();
   const [activeTab, setActiveTab] = useState<TabKey>('mission');
   const [config, setConfig] = useState<CompanionConfig>({ apiBaseUrl: '', workspaceId: null, sessionId: null, deviceId: null });
-  const [configReady, setConfigReady] = useState(false);
   const [deviceName, setDeviceName] = useState('Axon phone');
   const [pairingPin, setPairingPin] = useState('');
-  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
-  const [verifiedPairing, setVerifiedPairing] = useState(false);
   const [selectedChallenge, setSelectedChallenge] = useState<RiskChallenge | null>(null);
   const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
   const [vaultProviderKeys, setVaultProviderKeys] = useState<VaultProviderKeys | null>(null);
@@ -72,100 +69,18 @@ export function AppNavigator() {
     }));
   });
 
-  useEffect(() => {
-    let cancelled = false;
-    loadCompanionConfig()
-      .then((stored) => {
-        if (cancelled) return;
-        setConfig({
-          apiBaseUrl: stored.apiBaseUrl || '',
-          workspaceId: stored.workspaceId ?? null,
-          sessionId: stored.sessionId ?? null,
-          deviceId: stored.deviceId ?? null,
-          deviceKey: stored.deviceKey || '',
-          deviceName: stored.deviceName || '',
-          accessToken: stored.accessToken || '',
-          tokenPair: stored.tokenPair,
-        });
-        if (stored.deviceName) {
-          setDeviceName(stored.deviceName);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setConfigReady(true);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!configReady) return;
-    saveCompanionConfig(config).catch(() => undefined);
-  }, [config, configReady]);
-
-  useEffect(() => {
-    if (!config.accessToken) return;
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const identity = await fetchCompanionIdentity(config);
-        if (!identity.device || !identity.auth_session) {
-          throw new Error('Axon Online pairing expired. Pair this device again.');
-        }
-        if (cancelled) return;
-        setVerifiedPairing(true);
-        setBootstrapError(null);
-        const nextDevice = identity.device || null;
-        const nextSession = (identity.sessions || [])[0] || null;
-        setConfig((current) => ({
-          ...current,
-          deviceId: nextDevice?.id ?? current.deviceId ?? null,
-          deviceKey: nextDevice?.device_key || current.deviceKey || '',
-          deviceName: nextDevice?.name || current.deviceName || '',
-          sessionId: nextSession?.id ?? current.sessionId ?? null,
-          workspaceId: nextSession?.workspace_id ?? current.workspaceId ?? null,
-          apiBaseUrl: current.apiBaseUrl || '',
-        }));
-        if (nextDevice?.name) {
-          setDeviceName(nextDevice.name);
-        }
-        if (identity.presence) {
-          presence.setPresence(identity.presence);
-        }
-        const settled = await Promise.allSettled([
-          mission.refresh(nextSession?.workspace_id ?? config.workspaceId ?? null, nextSession?.id ?? config.sessionId ?? null),
-          control.refresh(),
-          (async () => {
-            const [status, providerKeys] = await Promise.all([
-              fetchMobileVaultStatus(config),
-              fetchMobileVaultProviderKeys(config),
-            ]);
-            if (cancelled) return;
-            setVaultStatus(status);
-            setVaultProviderKeys(providerKeys);
-          })(),
-        ]);
-        if (cancelled) return;
-        const failed = settled.find((item) => item.status === 'rejected') as PromiseRejectedResult | undefined;
-        if (failed?.reason) {
-          setBootstrapError(failed.reason instanceof Error ? failed.reason.message : 'Axon Online could not load Mission Control.');
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setVerifiedPairing(false);
-          setBootstrapError(err instanceof Error ? err.message : 'Unable to reach live Axon.');
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [config.accessToken, config.apiBaseUrl]);
+  useStoredCompanionConfig(config, setConfig, setDeviceName);
+  const { bootstrapError, verifiedPairing, verifyingPairing } = useCompanionBootstrap({
+    config,
+    setConfig,
+    setDeviceName,
+    restoreSession: auth.restoreSession,
+    refreshMission: mission.refresh,
+    refreshControl: control.refresh,
+    setPresence: presence.setPresence,
+    setVaultStatus,
+    setVaultProviderKeys,
+  });
 
   useEffect(() => {
     const focusWorkspace = mission.snapshot?.focus?.workspace?.id ?? config.workspaceId ?? null;
@@ -445,7 +360,6 @@ export function AppNavigator() {
     <AppNavigatorBody
       activeTab={activeTab}
       config={config}
-      colors={colors}
       authError={auth.error}
       authPairing={auth.pairing}
       bootstrapError={bootstrapError}
@@ -501,6 +415,7 @@ export function AppNavigator() {
       onExpoPublishUpdate={(workspaceId) => workspaceActions.expoPublishUpdate(workspaceId).catch(() => undefined)}
       onRefreshMission={() => syncMission().catch(() => undefined)}
       setActiveTab={setActiveTab}
+      authChecking={Boolean(config.accessToken) && verifyingPairing}
       verifiedPairing={verifiedPairing}
       axon={{ status: axonMode.status, busy: axonMode.busy }}
       axonError={axonMode.error}
@@ -511,10 +426,14 @@ export function AppNavigator() {
     />
   );
 
-  const statusLabel = verifiedPairing
+  const statusLabel = Boolean(config.accessToken) && verifyingPairing
+    ? 'Checking link'
+    : verifiedPairing
     ? String(mission.snapshot?.posture || 'healthy').replace('_', ' ')
-    : (config.accessToken ? 'Saved locally' : 'Not paired');
-  const statusColor = verifiedPairing
+    : (config.accessToken ? 'Re-pair required' : 'Not paired');
+  const statusColor = Boolean(config.accessToken) && verifyingPairing
+    ? colors.warning
+    : verifiedPairing
     ? (mission.snapshot?.posture === 'urgent' ? colors.danger : mission.snapshot?.posture === 'degraded' ? colors.warning : colors.success)
     : (config.accessToken ? colors.warning : colors.muted);
 
