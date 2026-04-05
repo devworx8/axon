@@ -1,0 +1,129 @@
+          <section x-show="settingsSection === 'workspace'" class="space-y-4">
+            <div class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-5 shadow-[0_22px_70px_rgba(2,6,23,0.45)]">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-[11px] uppercase tracking-[0.28em] text-slate-500">Workspace Fabric</div>
+                  <div class="mt-2 text-lg font-semibold text-white">Scan roots, cadence, and storage posture</div>
+                  <div class="mt-1 text-sm text-slate-400">Everything Axon scans, stores, and surfaces for operator work starts here.</div>
+                </div>
+                <button @click="runScan()" :disabled="scanning"
+                        class="rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-200 transition hover:bg-amber-500/15 disabled:opacity-40">
+                  <span x-text="scanning ? 'Scanning…' : 'Run scan now'"></span>
+                </button>
+              </div>
+
+              <div class="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Workspaces root</label>
+                  <input x-model="settingsForm.projects_root"
+                         placeholder="~/Desktop, ~/Documents/projects"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-cyan-500 transition" />
+                  <p class="mt-1 text-[10px] text-slate-500">Comma-separated roots. Tilde expansion is supported.</p>
+                </div>
+                <div class="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Scan interval (hours)</label>
+                    <input x-model="settingsForm.scan_interval_hours" type="number" min="1" max="24"
+                           class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 focus:border-cyan-500 transition" />
+                    <div class="mt-1 text-[10px] text-slate-500" x-text="latestAutoScanAt() ? 'Last auto-scan ' + timeAgo(latestAutoScanAt()) : 'No auto-scan recorded yet'"></div>
+                  </div>
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Morning brief hour</label>
+                    <input x-model="settingsForm.morning_digest_hour" type="number" min="0" max="23"
+                           class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 focus:border-cyan-500 transition" />
+                    <div class="mt-1 text-[10px] text-slate-500">Daily mission brief in local time.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+              <div class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-5 shadow-[0_22px_70px_rgba(2,6,23,0.45)] space-y-4">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-[11px] uppercase tracking-[0.28em] text-slate-500">Resource Bank</div>
+                    <div class="mt-2 text-lg font-semibold text-white">Local documents and imports</div>
+                    <div class="mt-1 text-sm text-slate-400">Resources remain local until you explicitly attach them to a run.</div>
+                  </div>
+                  <span class="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-[10px] uppercase tracking-[0.18em] text-slate-300"
+                        x-text="`${runtimeStatus.resource_bank?.count || resources.length} ready`"></span>
+                </div>
+
+                <div class="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Storage path</label>
+                    <input x-model="settingsForm.resource_storage_path"
+                           placeholder="~/.devbrain/resources"
+                           class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-cyan-500 transition font-mono" />
+                  </div>
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Upload cap (MB)</label>
+                    <input x-model="settingsForm.resource_upload_max_mb" type="number" min="1" max="200"
+                           class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 focus:border-cyan-500 transition" />
+                  </div>
+                </div>
+
+                <label class="flex items-center gap-2 text-[11px] text-slate-300">
+                  <input type="checkbox"
+                         :checked="!!settingsForm.resource_url_import_enabled"
+                         @change="settingsForm.resource_url_import_enabled = $event.target.checked"
+                         class="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500">
+                  <span>Allow user-provided URL imports</span>
+                </label>
+
+                <div class="rounded-2xl border border-slate-800 bg-slate-900/55 p-4">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Fetch proxy</div>
+                  <input x-model="settingsForm.resource_fetch_proxy" type="text"
+                         placeholder="socks5://127.0.0.1:1080 or http://proxy:8080"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:border-cyan-500 transition" />
+                  <div class="mt-1 text-[10px] text-slate-500">Optional proxy for resource fetches and browser bridge traffic.</div>
+                </div>
+
+                <div class="flex flex-wrap gap-2 text-[10px] text-slate-500">
+                  <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1" x-text="`Stored in ${runtimeStatus.resource_bank?.storage_path || settingsForm.resource_storage_path}`"></span>
+                  <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1" x-text="runtimeStatus.resource_bank?.url_import_enabled ? 'URL import enabled' : 'URL import disabled'"></span>
+                  <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1" x-text="`Upload cap ${runtimeStatus.resource_bank?.upload_max_mb || settingsForm.resource_upload_max_mb}MB`"></span>
+                </div>
+              </div>
+
+              <div class="space-y-4">
+                <div class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-5 shadow-[0_22px_70px_rgba(2,6,23,0.45)]">
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <div class="text-[11px] uppercase tracking-[0.28em] text-slate-500">Vision Route</div>
+                      <div class="mt-2 text-lg font-semibold text-white">Image reasoning posture</div>
+                      <div class="mt-1 text-sm text-slate-400">Images can be attached immediately; vision reasoning activates only when a route is configured.</div>
+                    </div>
+                    <span class="rounded-full border px-3 py-1 text-[10px]"
+                          :class="runtimeStatus.vision_status?.ready ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
+                          x-text="runtimeStatus.vision_status?.ready ? 'Ready' : 'Pending'"></span>
+                  </div>
+                  <div class="mt-4 rounded-2xl border border-slate-800 bg-slate-900/55 px-4 py-3">
+                    <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Current route</div>
+                    <div class="mt-1 text-sm font-medium text-white" x-text="runtimeStatus.vision_status?.model || settingsForm.vision_model || 'No vision model selected yet'"></div>
+                    <div class="mt-1 text-[11px] text-slate-500" x-text="runtimeStatus.vision_status?.runtime_label || 'Vision route is not configured'"></div>
+                  </div>
+                </div>
+
+                <div class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-5 shadow-[0_22px_70px_rgba(2,6,23,0.45)]">
+                  <div class="text-[11px] uppercase tracking-[0.28em] text-slate-500">Notification Surface</div>
+                  <div class="mt-2 text-lg font-semibold text-white">Permission + desktop cues</div>
+                  <div class="mt-1 text-sm text-slate-400">Keep alerts active for stale workspaces, morning briefs, and manual intervention prompts.</div>
+                  <div class="mt-4 flex flex-wrap gap-2">
+                    <button @click="requestNotificationPermission().then(ok => showToast(ok ? 'Notifications enabled ✓' : 'Permission denied'))"
+                            class="rounded-2xl border px-4 py-2 text-xs font-medium transition"
+                            :class="'Notification' in window && Notification.permission === 'granted'
+                              ? 'border-emerald-500/40 bg-emerald-600/10 text-emerald-300'
+                              : 'border-slate-700 text-slate-300 hover:border-cyan-500 hover:text-cyan-200'">
+                      <span x-text="'Notification' in window && Notification.permission === 'granted' ? 'Notifications Enabled' : 'Enable Notifications'"></span>
+                    </button>
+                    <label class="flex items-center gap-2 rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-2 text-xs text-slate-300 cursor-pointer">
+                      <input type="checkbox" x-model="_notifSoundEnabled"
+                             class="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500/30" />
+                      Sound effects
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>

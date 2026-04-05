@@ -14,8 +14,9 @@
           <span class="rounded-full border px-2.5 py-1"
                 :class="liveFeed.connected ? 'border-emerald-500/25 text-emerald-400' : 'border-slate-700 text-slate-500'"
                 x-text="liveFeed.connected ? '⬤ Live' : '◯ Idle'"></span>
-        </div>
-      </div>
+    </div>
+  </div>
+  <script src="/js/dashboard_preview.js"></script>
       <div class="flex-1 overflow-y-auto page-content">
         <div x-show="dashLoading" class="w-full max-w-[1600px] mx-auto px-4 py-4 md:px-6 md:py-6 xl:px-8 2xl:px-10 space-y-3">
           <template x-for="i in 3" :key="`dash-skeleton-${i}`">

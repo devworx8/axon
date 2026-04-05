@@ -4,6 +4,63 @@
 
 function axonSettingsMixin() {
   return {
+    currentRuntimeBackend() {
+      const explicit = String(this.settingsForm?.ai_backend || '').trim().toLowerCase();
+      if (explicit) return explicit;
+      const label = String(this.runtimeStatus?.runtime_label || '').toLowerCase();
+      if (label.includes('cli') || label.includes('codex') || label.includes('claude')) return 'cli';
+      if (label.includes('ollama') || label.includes('local')) return 'ollama';
+      if (this.runtimeStatus?.cli_runtime || this.runtimeStatus?.cli_model) return 'cli';
+      if (this.runtimeStatus?.ollama_runtime_mode) return 'ollama';
+      return 'api';
+    },
+
+    currentBackendSupportsAgent() {
+      const backend = this.currentRuntimeBackend?.() || '';
+      return backend === 'ollama' || backend === 'cli';
+    },
+
+    usesOllamaBackend() {
+      const backend = this.currentRuntimeBackend?.() || '';
+      return backend === 'ollama' || backend === 'cli';
+    },
+
+    activeChatModel() {
+      const backend = this.currentRuntimeBackend?.() || '';
+      if (backend === 'cli') {
+        return String(
+          this.settingsForm?.cli_runtime_model
+          || this.runtimeStatus?.cli_model
+          || this.runtimeStatus?.active_model
+          || ''
+        ).trim();
+      }
+      if (backend === 'api') {
+        return String(this.selectedApiProviderModel?.() || this.runtimeStatus?.active_model || '').trim();
+      }
+      return String(
+        this.selectedChatModel
+        || this.settingsForm?.code_model
+        || this.settingsForm?.ollama_model
+        || ''
+      ).trim();
+    },
+
+    assistantRuntimeLabel() {
+      const backend = this.currentRuntimeBackend?.() || '';
+      if (backend === 'cli') {
+        return this.activeChatModel?.() || 'CLI Agent';
+      }
+      if (backend === 'ollama') {
+        return this.activeChatModel?.() || 'Local model';
+      }
+      if (backend === 'api') {
+        const provider = this.selectedApiProviderLabel?.() || '';
+        const model = this.selectedApiProviderModel?.() || '';
+        return model ? `${provider} · ${model}` : provider || 'Cloud';
+      }
+      return this.activeChatModel?.() || 'Runtime';
+    },
 
     async loadSettings() {
       try {
@@ -28,6 +85,7 @@ function axonSettingsMixin() {
           reasoning_model: s.reasoning_model || '',
           embeddings_model: s.embeddings_model || '',
           vision_model: s.vision_model || '',
+          resource_fetch_proxy: s.resource_fetch_proxy || '',
           resource_storage_path: s.resource_storage_path || '~/.devbrain/resources',
           resource_upload_max_mb: s.resource_upload_max_mb || '20',
           resource_url_import_enabled: this.settingEnabled(s.resource_url_import_enabled ?? true),
@@ -148,6 +206,7 @@ function axonSettingsMixin() {
       payload.reasoning_model = this.settingsForm.reasoning_model || '';
       payload.embeddings_model = this.settingsForm.embeddings_model || '';
       payload.vision_model = this.settingsForm.vision_model || '';
+      payload.resource_fetch_proxy = this.settingsForm.resource_fetch_proxy || '';
       payload.resource_storage_path = this.settingsForm.resource_storage_path || '~/.devbrain/resources';
       payload.resource_upload_max_mb = String(this.settingsForm.resource_upload_max_mb || '20');
       payload.resource_url_import_enabled = !!this.settingsForm.resource_url_import_enabled;

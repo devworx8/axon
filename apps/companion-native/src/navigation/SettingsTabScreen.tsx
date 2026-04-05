@@ -2,6 +2,7 @@ import React from 'react';
 
 import { SettingsScreen } from '@/features/settings/SettingsScreen';
 import type { CompanionConfig, VaultStatus, VaultProviderKeys } from '@/types/companion-core';
+import type { AxonModeStatus } from '@/types/axon';
 import type { CompanionSettings } from '@/features/settings/useSettings';
 
 type SettingsHook = {
@@ -27,6 +28,7 @@ export function SettingsTabScreen({
   onUnlockVault,
   onUnlockVaultWithBiometrics,
   onLockVault,
+  axonStatus,
 }: {
   settings: SettingsHook;
   config: CompanionConfig;
@@ -44,6 +46,7 @@ export function SettingsTabScreen({
   onUnlockVault: () => void;
   onUnlockVaultWithBiometrics: () => void;
   onLockVault: () => void;
+  axonStatus?: AxonModeStatus | null;
 }) {
   return (
     <SettingsScreen
@@ -73,6 +76,7 @@ export function SettingsTabScreen({
       onUnlockVault={onUnlockVault}
       onUnlockVaultWithBiometrics={onUnlockVaultWithBiometrics}
       onLockVault={onLockVault}
+      axonStatus={axonStatus}
     />
   );
 }

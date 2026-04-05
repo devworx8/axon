@@ -53,6 +53,12 @@ export function AuthScreen({ apiBaseUrl, onChangeApiBaseUrl, deviceName, onChang
         placeholder="Axon PIN"
         placeholderTextColor={colors.muted}
         secureTextEntry
+        keyboardType="number-pad"
+        inputMode="numeric"
+        textContentType="oneTimeCode"
+        returnKeyType="done"
+        blurOnSubmit
+        maxLength={6}
         style={[styles.input, { borderColor: colors.border, color: colors.text, backgroundColor: '#0b1627' }]}
       />
       <Pressable onPress={onPair} style={({ pressed }) => [styles.button, { opacity: pressed ? 0.8 : 1 }]}>

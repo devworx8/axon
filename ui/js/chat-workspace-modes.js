@@ -24,6 +24,58 @@ function axonChatWorkspaceModesMixin() {
       return VALID_CONVERSATION_MODES.has(value) ? value : 'ask';
     },
 
+    currentRuntimeBackend() {
+      const backend = this.settingsForm?.ai_backend || this.runtimeStatus?.backend || '';
+      return String(backend || '').trim().toLowerCase() || 'api';
+    },
+
+    currentBackendSupportsAgent() {
+      const backend = this.currentRuntimeBackend();
+      return backend === 'ollama' || backend === 'cli';
+    },
+
+    usesOllamaBackend() {
+      const backend = this.currentRuntimeBackend();
+      return backend === 'ollama' || backend === 'cli';
+    },
+
+    activeChatModel() {
+      const backend = this.currentRuntimeBackend();
+      if (backend === 'cli') {
+        return String(
+          this.settingsForm?.cli_runtime_model
+          || this.runtimeStatus?.cli_model
+          || this.runtimeStatus?.active_model
+          || ''
+        ).trim();
+      }
+      if (backend === 'api') {
+        return String(this.selectedApiProviderModel?.() || this.runtimeStatus?.active_model || '').trim();
+      }
+      return String(
+        this.selectedChatModel
+        || this.settingsForm?.code_model
+        || this.settingsForm?.ollama_model
+        || ''
+      ).trim();
+    },
+
+    assistantRuntimeLabel() {
+      const backend = this.currentRuntimeBackend();
+      if (backend === 'cli') {
+        return this.activeChatModel() || 'CLI Agent';
+      }
+      if (backend === 'ollama') {
+        return this.activeChatModel() || 'Local model';
+      }
+      if (backend === 'api') {
+        const provider = this.selectedApiProviderLabel?.() || '';
+        const model = this.selectedApiProviderModel?.() || '';
+        return model ? `${provider} · ${model}` : provider || 'Cloud';
+      }
+      return this.activeChatModel() || 'Runtime';
+    },
+
     readWorkspaceConversationModeMap() {
       try {
         const raw = String(this.readWindowPref?.('workspaceConversationModes', '{}') || '{}').trim();
@@ -208,7 +260,7 @@ function axonChatWorkspaceModesMixin() {
     setConversationModeAgent(options = {}) {
       this.resetPrimaryConversationModes();
       this.agentMode = true;
-      if (this.usesOllamaBackend?.() && (this.ollamaModels || []).length === 0) {
+      if (this.currentRuntimeBackend?.() === 'ollama' && (this.ollamaModels || []).length === 0) {
         this.loadOllamaModels?.();
       }
       if (options.persist === true) this.persistConversationModePreference({ mode: 'agent' });

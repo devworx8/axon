@@ -33,6 +33,9 @@ export function QuickActionsCard({
   onOpenSessions: () => void;
 }) {
   const capabilityMap = new Map((capabilities || []).map((item) => [item.action_type, item]));
+  const suggested = (quickActions || [])
+    .filter((item) => item.available !== false)
+    .slice(0, 3);
   const builtIns = [
     { key: 'talk', label: 'Talk to Axon', tone: 'accent' as const, onPress: onOpenVoice },
     { key: 'approve', label: 'Approve pending', tone: 'warn' as const, onPress: onApprovePending || onOpenSessions },
@@ -43,7 +46,7 @@ export function QuickActionsCard({
 
   return (
     <SurfaceCard>
-      <SurfaceHeader title="Quick actions" subtitle="Issue platform actions without hunting through separate screens." />
+      <SurfaceHeader title="Quick actions" subtitle="Start Axon fast, then jump into the deeper screens only when needed." />
       <View style={styles.row}>
         {builtIns.map((item) => (
           <Pressable key={item.key} onPress={item.onPress} style={styles.primaryAction}>
@@ -51,31 +54,37 @@ export function QuickActionsCard({
           </Pressable>
         ))}
       </View>
-      <View style={styles.row}>
-        {(quickActions || []).map((action) => {
-          const capability = capabilityMap.get(action.action_type);
-          const available = action.available !== false && capability?.available !== false;
-          const planned = Boolean(action.planned);
-          const busy = isBusy(busyActionType || null, action.action_type);
-          return (
-            <Pressable
-              key={action.action_type}
-              onPress={() => onExecuteAction(action.action_type)}
-              disabled={!available || busy}
-              style={[
-                styles.actionChip,
-                (!available || busy) ? styles.actionChipDisabled : null,
-              ]}
-            >
-              <Text style={styles.actionChipText}>{busy ? 'Working…' : (action.label || action.action_type)}</Text>
-              <View style={styles.metaRow}>
-                {action.risk_tier ? <StatusPill label={String(action.risk_tier)} tone={action.risk_tier === 'destructive' ? 'danger' : 'neutral'} /> : null}
-                {planned ? <StatusPill label="Planned" tone="warn" /> : null}
-              </View>
-            </Pressable>
-          );
-        })}
-      </View>
+      {suggested.length ? (
+        <View style={styles.suggested}>
+          <Text style={styles.suggestedTitle}>Suggested next moves</Text>
+          {suggested.map((action) => {
+            const capability = capabilityMap.get(action.action_type);
+            const available = action.available !== false && capability?.available !== false;
+            const planned = Boolean(action.planned);
+            const busy = isBusy(busyActionType || null, action.action_type);
+            return (
+              <Pressable
+                key={action.action_type}
+                onPress={() => onExecuteAction(action.action_type)}
+                disabled={!available || busy}
+                style={[
+                  styles.suggestedRow,
+                  (!available || busy) ? styles.actionChipDisabled : null,
+                ]}
+              >
+                <View style={styles.suggestedText}>
+                  <Text style={styles.actionChipText}>{busy ? 'Working…' : (action.label || action.action_type)}</Text>
+                  <Text style={styles.actionChipSub}>Tap to run in the active workspace.</Text>
+                </View>
+                <View style={styles.metaRow}>
+                  {action.risk_tier ? <StatusPill label={String(action.risk_tier)} tone={action.risk_tier === 'destructive' ? 'danger' : 'neutral'} /> : null}
+                  {planned ? <StatusPill label="Planned" tone="warn" /> : null}
+                </View>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
     </SurfaceCard>
   );
 }
@@ -96,15 +105,27 @@ const styles = StyleSheet.create({
     color: '#08111f',
     fontWeight: '800',
   },
-  actionChip: {
-    minWidth: 150,
-    flexGrow: 1,
+  suggested: {
+    marginTop: 14,
+    gap: 8,
+  },
+  suggestedTitle: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  suggestedRow: {
     borderWidth: 1,
     borderColor: '#22304a',
     borderRadius: 16,
     padding: 12,
-    gap: 8,
+    gap: 10,
     backgroundColor: '#0b1627',
+  },
+  suggestedText: {
+    gap: 4,
   },
   actionChipDisabled: {
     opacity: 0.6,
@@ -113,6 +134,11 @@ const styles = StyleSheet.create({
     color: '#e5eefb',
     fontSize: 13,
     fontWeight: '800',
+  },
+  actionChipSub: {
+    color: '#7f93ad',
+    fontSize: 12,
+    lineHeight: 17,
   },
   metaRow: {
     flexDirection: 'row',

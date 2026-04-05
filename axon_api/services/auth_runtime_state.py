@@ -5,7 +5,7 @@ import logging
 import hashlib
 import os
 import secrets as _secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 
@@ -149,7 +149,12 @@ async def valid_session_async(
         expires_at = str(companion_session.get("expires_at") or "").strip()
         if expires_at:
             expires = datetime_cls.fromisoformat(expires_at.replace("Z", "+00:00"))
-            if utc_now_fn() > expires:
+            now = utc_now_fn()
+            if expires.tzinfo is not None and getattr(now, "tzinfo", None) is None:
+                now = now.replace(tzinfo=timezone.utc)
+            elif expires.tzinfo is None and getattr(now, "tzinfo", None) is not None:
+                expires = expires.replace(tzinfo=now.tzinfo)
+            if now > expires:
                 return False
         return True
     except Exception:
@@ -179,11 +184,11 @@ async def auth_middleware(
     if path in exempt or path.startswith(exempt_prefixes):
         return await call_next(request)
 
-    if dev_local_auth_bypass_active_fn(request):
-        return await call_next(request)
-
     async with db_module.get_db() as conn:
         pin_hash = await db_module.get_setting(conn, "auth_pin_hash")
+
+    if not pin_hash and dev_local_auth_bypass_active_fn(request):
+        return await call_next(request)
 
     if not pin_hash:
         return await call_next(request)

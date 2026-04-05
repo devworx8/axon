@@ -28,7 +28,9 @@
       "bundleIdentifier": "za.org.edudashpro.axononline"
     },
     "android": {
-      "package": "za.org.edudashpro.axononline"
+      "package": "za.org.edudashpro.axononline",
+      "usesCleartextTraffic": true,
+      "softwareKeyboardLayoutMode": "resize"
     },
     "extra": {
       "apiBaseUrl": "http://127.0.0.1:7734",

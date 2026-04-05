@@ -19,8 +19,11 @@ from axon_api.routes.companion_models import (
     CompanionSessionTouchRequest,
     CompanionVoiceTurnRequest,
 )
+import ipaddress
+
 from axon_api.services.companion_status_summary import build_latest_presence_payload
 from axon_api.services import (
+    auth_runtime_state as auth_runtime_state_service,
     companion_auth as companion_auth_service,
     companion_live as companion_live_service,
     companion_presence as companion_presence_service,
@@ -93,6 +96,21 @@ def _parse_seen_at(value: str) -> datetime | None:
         except Exception:
             continue
     return None
+
+
+def _client_ip(request: Request) -> str:
+    return str(getattr(getattr(request, "client", None), "host", "") or "").strip()
+
+
+def _client_is_private(request: Request) -> bool:
+    raw = _client_ip(request)
+    if not raw:
+        return False
+    try:
+        ip = ipaddress.ip_address(raw)
+        return ip.is_private or ip.is_loopback
+    except ValueError:
+        return False
 
 
 async def _companion_auth_context(request: Request) -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
@@ -283,10 +301,11 @@ async def companion_pair(body: CompanionPairRequest, request: Request):
                 "client_ip": getattr(getattr(request, "client", None), "host", "") or "",
             },
         )
+        ttl_seconds = int(body.ttl_seconds or 0) or (60 * 60 * 24 * 30)
         session = await companion_auth_service.issue_companion_auth_session(
             db,
             device_id=int(device["id"]),
-            ttl_seconds=max(60, int(body.ttl_seconds or 0) or 60),
+            ttl_seconds=max(60, ttl_seconds),
             meta={"paired_from": "companion_auth_pair"},
         )
     return {"device": device, **session}
@@ -295,10 +314,11 @@ async def companion_pair(body: CompanionPairRequest, request: Request):
 @router.post("/auth/refresh")
 async def companion_refresh(body: CompanionRefreshRequest):
     async with get_db() as db:
+        ttl_seconds = int(body.ttl_seconds or 0) or (60 * 60 * 24 * 30)
         session = await companion_auth_service.refresh_companion_auth_session(
             db,
             refresh_token=body.refresh_token,
-            ttl_seconds=max(60, int(body.ttl_seconds or 0) or 60),
+            ttl_seconds=max(60, ttl_seconds),
         )
     if not session:
         raise HTTPException(401, "Invalid refresh token")

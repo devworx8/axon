@@ -41,12 +41,12 @@ class ChatFollowUpSuggestionTests(unittest.TestCase):
             "If you want that, reply with `use CLI fallback` and I will continue."
         )
 
-        self.assertEqual(suggestions, ["use CLI fallback", "What should I do next?"])
+        self.assertEqual(suggestions, ["use CLI fallback", "Inspect related files", "Check blockers"])
 
     def test_recognizes_standalone_continue_response(self):
         suggestions = _build_followups("Continue.")
 
-        self.assertEqual(suggestions, ["→ Continue", "What should I do next?"])
+        self.assertEqual(suggestions, ["→ Continue", "Inspect related files", "Check blockers"])
 
 
 if __name__ == "__main__":

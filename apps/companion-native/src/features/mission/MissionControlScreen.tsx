@@ -1,12 +1,10 @@
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { SurfaceCard, SurfaceHeader } from '@/components/SurfaceCard';
 import { AxonModeCard } from '@/features/axon/AxonModeCard';
-import { ExpoControlCard } from '@/features/expo/ExpoControlCard';
 import { MissionHeroCard } from './MissionHeroCard';
 import { QuickActionsCard } from './QuickActionsCard';
-import { SystemStatusCard } from './SystemStatusCard';
 import { VoiceCommandComposer } from '@/features/voice/VoiceCommandComposer';
 import { VoiceOutcomeCard } from '@/features/voice/VoiceOutcomeCard';
 import { ControlCapability, ExpoProjectStatus, PlatformSnapshot, TypedActionResult } from '@/types/companion';
@@ -82,113 +80,58 @@ export function MissionControlScreen({
   onOpenProjects: () => void;
   onOpenSessions: () => void;
 }) {
-  const projects = snapshot?.projects || [];
   const latestOutcomeSummary = lastAction?.receipt?.summary || snapshot?.latest_command_outcome?.summary;
 
   return (
     <View style={styles.stack}>
-      <View style={styles.splitGroup}>
-        <View style={styles.splitColumn}>
-          <MissionHeroCard snapshot={snapshot} digest={digest} loading={loading} onRefresh={onRefresh} />
-          <QuickActionsCard
-            quickActions={snapshot?.quick_actions}
-            capabilities={capabilities}
-            busyActionType={controlBusyActionType}
-            onExecuteAction={onExecuteAction}
-            onApprovePending={onApprovePending}
-            onOpenVoice={onOpenVoice}
-            onOpenProjects={onOpenProjects}
-            onOpenAttention={onOpenAttention}
-            onOpenSessions={onOpenSessions}
-          />
-        </View>
-        <View style={styles.splitColumn}>
-          <SurfaceCard>
-            <SurfaceHeader title="Voice control" subtitle="Push-to-talk or live listening stays ready in the cockpit." />
-            <VoiceCommandComposer
-              onSubmit={onSubmitCommand}
-              sending={sending}
-              voiceMode={voiceMode}
-              workspaceLabel={currentWorkspaceLabel}
-              placeholder="Tell Axon what needs to happen across the platform."
-              prompts={[
-                'What needs attention right now?',
-                'Inspect the focused workspace.',
-                'Sync all connector signals.',
-              ]}
-            />
-          </SurfaceCard>
-          <VoiceOutcomeCard
-            transcript={transcript}
-            response={responseText || latestOutcomeSummary}
-            backend={backend || (lastAction?.result ? 'action' : undefined)}
-            tokensUsed={tokensUsed}
-            approval={approval}
-            error={voiceError || controlError}
-            onOpenSession={onOpenSessions}
-            speaking={speakingReply}
-            onSpeak={onSpeakLatestReply}
-            onStopSpeaking={onStopSpeaking}
-          />
-          <AxonModeCard
-            axon={snapshot?.axon}
-            wakePhrase={axonWakePhrase}
-            onChangeWakePhrase={onChangeAxonWakePhrase}
-            busy={axonBusy}
-            error={axonError}
-            onArm={onArmAxon}
-            onDisarm={onDisarmAxon}
-          />
-        </View>
-      </View>
-      <ExpoControlCard
-        expo={expoProject}
-        workspaceId={snapshot?.focus?.workspace_id ?? snapshot?.focus?.workspace?.id ?? null}
+      <MissionHeroCard snapshot={snapshot} digest={digest} loading={loading} onRefresh={onRefresh} />
+      <QuickActionsCard
+        quickActions={snapshot?.quick_actions}
         capabilities={capabilities}
         busyActionType={controlBusyActionType}
         onExecuteAction={onExecuteAction}
+        onApprovePending={onApprovePending}
+        onOpenVoice={onOpenVoice}
+        onOpenProjects={onOpenProjects}
+        onOpenAttention={onOpenAttention}
+        onOpenSessions={onOpenSessions}
       />
-      <SystemStatusCard systems={snapshot?.systems} />
       <SurfaceCard>
-        <SurfaceHeader title="MCP control plane" subtitle="Axon-managed servers and capability sessions stay visible from the mobile cockpit." />
-        <Text style={styles.projectMeta}>
-          {(snapshot?.mcp?.server_count || 0)} servers · {(snapshot?.mcp?.session_count || 0)} sessions
-        </Text>
-        <View style={styles.projectStack}>
-          {(snapshot?.mcp?.servers || []).slice(0, 4).map((server) => (
-            <View key={String(server.id)} style={styles.projectCard}>
-              <Text style={styles.projectTitle}>{server.name}</Text>
-              <Text style={styles.projectMeta}>
-                {server.transport || 'adapter'} · {server.scope || 'global'} · {server.risk_tier || 'observe'}
-              </Text>
-            </View>
-          ))}
-        </View>
+        <SurfaceHeader title="Voice control" subtitle="Push-to-talk or live listening stays ready in the cockpit." />
+        <VoiceCommandComposer
+          onSubmit={onSubmitCommand}
+          sending={sending}
+          voiceMode={voiceMode}
+          workspaceLabel={currentWorkspaceLabel}
+          placeholder="Tell Axon what needs to happen across the platform."
+          prompts={[
+            'What needs attention right now?',
+            'Inspect the focused workspace.',
+            'Sync all connector signals.',
+          ]}
+        />
       </SurfaceCard>
-      <SurfaceCard>
-        <SurfaceHeader title="Projects at a glance" subtitle="Keep the most important workspaces and linked systems visible on the home surface." />
-        <View style={styles.projectStack}>
-          {projects.slice(0, 4).map((project) => (
-            <Pressable
-              key={String(project.workspace?.id || project.workspace?.name || Math.random())}
-              onPress={onOpenProjects}
-              style={styles.projectCard}
-            >
-              <Text style={styles.projectTitle}>{project.workspace?.name || 'Workspace'}</Text>
-              <Text style={styles.projectPath}>{project.workspace?.path || 'No path recorded'}</Text>
-              <Text style={styles.projectMeta}>
-                {(project.relationships || []).length} linked systems · {project.attention?.counts?.now || 0} urgent
-              </Text>
-              {project.preview?.status ? (
-                <Text style={styles.projectMeta}>
-                  Preview {String(project.preview.status).replace('_', ' ')}
-                  {project.preview?.url ? ` · ${String(project.preview.url)}` : ''}
-                </Text>
-              ) : null}
-            </Pressable>
-          ))}
-        </View>
-      </SurfaceCard>
+      <VoiceOutcomeCard
+        transcript={transcript}
+        response={responseText || latestOutcomeSummary}
+        backend={backend || (lastAction?.result ? 'action' : undefined)}
+        tokensUsed={tokensUsed}
+        approval={approval}
+        error={voiceError || controlError}
+        onOpenSession={onOpenSessions}
+        speaking={speakingReply}
+        onSpeak={onSpeakLatestReply}
+        onStopSpeaking={onStopSpeaking}
+      />
+      <AxonModeCard
+        axon={snapshot?.axon}
+        wakePhrase={axonWakePhrase}
+        onChangeWakePhrase={onChangeAxonWakePhrase}
+        busy={axonBusy}
+        error={axonError}
+        onArm={onArmAxon}
+        onDisarm={onDisarmAxon}
+      />
     </View>
   );
 }
@@ -202,31 +145,5 @@ const styles = StyleSheet.create({
   },
   splitColumn: {
     gap: 14,
-  },
-  projectStack: {
-    gap: 10,
-  },
-  projectCard: {
-    borderWidth: 1,
-    borderColor: '#22304a',
-    borderRadius: 16,
-    padding: 12,
-    gap: 4,
-    backgroundColor: '#0b1627',
-  },
-  projectTitle: {
-    color: '#e5eefb',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  projectPath: {
-    color: '#7f93ad',
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  projectMeta: {
-    color: '#94a3b8',
-    fontSize: 12,
-    fontWeight: '600',
   },
 });

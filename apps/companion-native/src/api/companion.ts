@@ -35,6 +35,7 @@ export async function pairCompanionDevice(
         platform: payload.platform || 'expo',
         model: payload.model || '',
         os_version: payload.osVersion || '',
+        ttl_seconds: 60 * 60 * 24 * 30,
       }),
     },
     config,
@@ -46,7 +47,7 @@ export async function refreshCompanionSession(refresh_token: string, config?: Co
     '/api/companion/auth/refresh',
     {
       method: 'POST',
-      body: JSON.stringify({ refresh_token }),
+      body: JSON.stringify({ refresh_token, ttl_seconds: 60 * 60 * 24 * 30 }),
     },
     config,
   );

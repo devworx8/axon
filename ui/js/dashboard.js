@@ -3,7 +3,7 @@
    ══════════════════════════════════════════════════════════════ */
 
 function axonDashboardMixin() {
-  return {
+  return Object.assign(axonDashboardPreviewMixin(), {
 
     async loadCurrentUser() {
       try {
@@ -84,6 +84,7 @@ function axonDashboardMixin() {
         console.error('Dashboard load error:', e);
       } finally {
         this.dashLoading = false;
+        this.syncDesktopPreviewStream(true);
       }
     },
 
@@ -1196,58 +1197,6 @@ function axonDashboardMixin() {
       };
     },
 
-    async refreshDesktopPreview(force = false) {
-      if (!this.desktopPreview.enabled && !force) return;
-      this.desktopPreview.loading = true;
-      this.desktopPreview.error = '';
-      try {
-        const resp = await fetch('/api/desktop/preview?w=960&h=540', {
-          headers: this.authHeaders(),
-          cache: 'no-store',
-        });
-        if (resp.status === 401) {
-          this.handleAuthRequired();
-          throw new Error('Session expired');
-        }
-        // Handle structured JSON error responses (no_display / capture_failed)
-        const ct = resp.headers.get('content-type') || '';
-        if (ct.includes('application/json')) {
-          const body = await resp.json();
-          const msg = body.message || body.detail || 'Desktop preview unavailable';
-          throw new Error(body.status === 'no_display'
-            ? '🖥️ Screen capture unavailable in this environment'
-            : msg);
-        }
-        if (!resp.ok) {
-          const detail = await resp.text().catch(() => '');
-          throw new Error(detail || 'Desktop preview unavailable');
-        }
-        const blob = await resp.blob();
-        if (this.desktopPreview.url && this.desktopPreview.url.startsWith('blob:')) {
-          URL.revokeObjectURL(this.desktopPreview.url);
-        }
-        this.desktopPreview.url = URL.createObjectURL(blob);
-        this.desktopPreview.lastUpdated = new Date().toISOString();
-      } catch (e) {
-        this.desktopPreview.error = e.message || 'Desktop preview unavailable';
-      }
-      this.desktopPreview.loading = false;
-    },
-
-    scheduleDesktopPreview() {
-      if (this.desktopPreview.timer) clearTimeout(this.desktopPreview.timer);
-      if (!this.desktopPreview.enabled || !(this.chatLoading || this.liveOperator.active)) return;
-      this.desktopPreview.timer = setTimeout(async () => {
-        await this.refreshDesktopPreview();
-        this.scheduleDesktopPreview();
-      }, this.desktopPreview.intervalMs || 8000);
-    },
-
-    stopDesktopPreview() {
-      if (this.desktopPreview.timer) clearTimeout(this.desktopPreview.timer);
-      this.desktopPreview.timer = null;
-    },
-
     setAgentStage(phase) {
       if (this.agentLifecycle.includes(phase)) this.agentProgressState = phase;
     },
@@ -1345,18 +1294,6 @@ function axonDashboardMixin() {
       if (!enabled) return;
       await this.loadTerminalSessions();
       await this.ensureTerminalSession();
-    },
-
-    toggleLiveDesktopFeed(force = null) {
-      const enabled = typeof force === 'boolean' ? force : !this.composerOptions.live_desktop_feed;
-      this.composerOptions.live_desktop_feed = enabled;
-      this.desktopPreview.enabled = enabled;
-      if (enabled) {
-        this.refreshDesktopPreview(true);
-        this.scheduleDesktopPreview();
-      } else {
-        this.stopDesktopPreview();
-      }
     },
 
     currentTerminalSession() {
@@ -1994,7 +1931,7 @@ function axonDashboardMixin() {
       this.clearLiveOperator(this.liveOperator.phase === 'recover' ? 4200 : 1400);
     },
 
-  };
+  });
 }
 
 window.axonDashboardMixin = axonDashboardMixin;

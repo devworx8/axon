@@ -1,5 +1,6 @@
 import { Dispatch, SetStateAction, useEffect, useState } from 'react';
 
+import { getSuggestedApiBaseUrl } from '@/api/client';
 import { loadCompanionConfig, saveCompanionConfig } from '@/features/settings/configStore';
 import type { CompanionConfig } from '@/types/companion';
 
@@ -15,15 +16,28 @@ export function useStoredCompanionConfig(
     loadCompanionConfig()
       .then((stored) => {
         if (cancelled) return;
-        setConfig({
-          apiBaseUrl: stored.apiBaseUrl || '',
-          workspaceId: stored.workspaceId ?? null,
-          sessionId: stored.sessionId ?? null,
-          deviceId: stored.deviceId ?? null,
-          deviceKey: stored.deviceKey || '',
-          deviceName: stored.deviceName || '',
-          accessToken: stored.accessToken || '',
-          tokenPair: stored.tokenPair,
+        const suggestedBaseUrl = getSuggestedApiBaseUrl();
+        const storedBaseUrl = String(stored.apiBaseUrl || '').trim();
+        const loopbackPattern = /(127\.0\.0\.1|localhost|\[::1\])/i;
+        const nextBaseUrl = storedBaseUrl
+          ? (!loopbackPattern.test(storedBaseUrl) || !suggestedBaseUrl ? storedBaseUrl : suggestedBaseUrl)
+          : suggestedBaseUrl;
+        setConfig((current) => {
+          const currentToken = current.accessToken || current.tokenPair?.access_token || '';
+          const storedToken = stored.accessToken || stored.tokenPair?.access_token || '';
+          const keepCurrentToken = Boolean(currentToken) && !storedToken;
+          const tokenPair = keepCurrentToken ? current.tokenPair : stored.tokenPair;
+          const accessToken = keepCurrentToken ? current.accessToken : (stored.accessToken || current.accessToken || '');
+          return {
+            apiBaseUrl: nextBaseUrl || current.apiBaseUrl || '',
+            workspaceId: stored.workspaceId ?? current.workspaceId ?? null,
+            sessionId: stored.sessionId ?? current.sessionId ?? null,
+            deviceId: stored.deviceId ?? current.deviceId ?? null,
+            deviceKey: stored.deviceKey || current.deviceKey || '',
+            deviceName: stored.deviceName || current.deviceName || '',
+            accessToken,
+            tokenPair,
+          };
         });
         if (stored.deviceName) {
           setDeviceName(stored.deviceName);

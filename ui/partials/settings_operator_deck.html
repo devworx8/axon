@@ -1,0 +1,282 @@
+          <section x-show="settingsSection === 'operator'" class="space-y-4">
+            <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+              <div class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-5 shadow-[0_22px_70px_rgba(2,6,23,0.45)] space-y-4">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-[11px] uppercase tracking-[0.28em] text-slate-500">Terminal Discipline</div>
+                    <div class="mt-2 text-lg font-semibold text-white">Live Feed + Terminal</div>
+                    <div class="mt-1 text-sm text-slate-400">Control whether mobile awareness stays connected and how guarded terminal sessions begin.</div>
+                  </div>
+                  <span class="rounded-full border px-3 py-1 text-[10px]"
+                        :class="settingsForm.live_feed_enabled ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
+                        x-text="settingsForm.live_feed_enabled ? 'Feed on' : 'Feed paused'"></span>
+                </div>
+
+                <label class="flex items-center gap-2 text-[11px] text-slate-300">
+                  <input type="checkbox"
+                         :checked="!!settingsForm.live_feed_enabled"
+                         @change="settingsForm.live_feed_enabled = $event.target.checked"
+                         class="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500">
+                  <span>Enable the live desktop and operator feed for mobile awareness</span>
+                </label>
+
+                <div class="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Default terminal mode</label>
+                    <select x-model="settingsForm.terminal_default_mode"
+                            class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 focus:border-cyan-500 transition">
+                      <option value="read_only">Read-only</option>
+                      <option value="approval_required">Approval required</option>
+                      <option value="simulation">Simulation mode</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Command timeout (seconds)</label>
+                    <input x-model="settingsForm.terminal_command_timeout_seconds"
+                           type="number" min="5" max="300"
+                           class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 focus:border-cyan-500 transition" />
+                  </div>
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Max agent iterations</label>
+                    <input x-model="settingsForm.max_agent_iterations"
+                           type="number" min="10" max="200"
+                           class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 focus:border-cyan-500 transition" />
+                  </div>
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Context compaction</label>
+                    <label class="flex items-center gap-2 rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-3 text-[11px] text-slate-300">
+                      <input type="checkbox"
+                             :checked="!!settingsForm.context_compact_enabled"
+                             @change="settingsForm.context_compact_enabled = $event.target.checked"
+                             class="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500">
+                      Auto-compact before token overflow
+                    </label>
+                  </div>
+                </div>
+
+                <div class="flex flex-wrap gap-2 text-[10px] text-slate-500">
+                  <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1"
+                        x-text="connectionStatusBadges().map(item => item.label).join(' · ') || 'Local only'"></span>
+                  <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1"
+                        x-text="`Terminal starts in ${String(settingsForm.terminal_default_mode || 'read_only').replace(/_/g, ' ')}`"></span>
+                </div>
+              </div>
+
+              <div class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-5 shadow-[0_22px_70px_rgba(2,6,23,0.45)] space-y-4">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-[11px] uppercase tracking-[0.28em] text-slate-500">Autonomy</div>
+                    <div class="mt-2 text-lg font-semibold text-white">Autonomy + Memory</div>
+                    <div class="mt-1 text-sm text-slate-400">Control unattended behavior, cache policy, and how much history Axon keeps in the active path.</div>
+                  </div>
+                  <span class="rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1 text-[10px] uppercase tracking-[0.18em] text-blue-300"
+                        x-text="String(settingsForm.autonomy_profile || 'workspace_auto').replace(/_/g, ' ')"></span>
+                </div>
+
+                <div class="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Autonomy profile</label>
+                    <select x-model="settingsForm.autonomy_profile"
+                            class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 focus:border-cyan-500 transition">
+                      <option value="manual">Manual</option>
+                      <option value="workspace_auto">Workspace auto</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">External fetch policy</label>
+                    <select x-model="settingsForm.external_fetch_policy"
+                            class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 focus:border-cyan-500 transition">
+                      <option value="cache_first">Cache first</option>
+                      <option value="live_first">Live first</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Quick model</label>
+                    <input x-model="settingsForm.quick_model" placeholder="Use current runtime default"
+                           class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-cyan-500 transition" />
+                  </div>
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Standard model</label>
+                    <input x-model="settingsForm.standard_model" placeholder="Use current runtime default"
+                           class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-cyan-500 transition" />
+                  </div>
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Deep model</label>
+                    <input x-model="settingsForm.deep_model" placeholder="Use current runtime default"
+                           class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-cyan-500 transition" />
+                  </div>
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Max history turns</label>
+                    <input x-model="settingsForm.max_history_turns" type="number" min="6" max="60"
+                           class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 focus:border-cyan-500 transition" />
+                  </div>
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Workspace snapshot TTL (s)</label>
+                    <input x-model="settingsForm.workspace_snapshot_ttl_seconds" type="number" min="10" max="3600"
+                           class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 focus:border-cyan-500 transition" />
+                  </div>
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Memory query cache TTL (s)</label>
+                    <input x-model="settingsForm.memory_query_cache_ttl_seconds" type="number" min="5" max="600"
+                           class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 focus:border-cyan-500 transition" />
+                  </div>
+                  <div class="md:col-span-2">
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">External fetch cache TTL (s)</label>
+                    <input x-model="settingsForm.external_fetch_cache_ttl_seconds" type="number" min="60" max="86400"
+                           class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 focus:border-cyan-500 transition" />
+                  </div>
+                </div>
+
+                <label class="flex items-center gap-2 text-[11px] text-slate-300">
+                  <input type="checkbox"
+                         :checked="!!settingsForm.memory_first_enabled"
+                         @change="settingsForm.memory_first_enabled = $event.target.checked"
+                         class="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500">
+                  <span>Prefer workspace memory, snapshots, and cache before external tools</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-5 shadow-[0_22px_70px_rgba(2,6,23,0.45)]">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-[11px] uppercase tracking-[0.28em] text-slate-500">Permission Envelope</div>
+                  <div class="mt-2 text-lg font-semibold text-white">Runtime permissions preset</div>
+                  <div class="mt-1 text-sm text-slate-400">Switch between default guardrails, ask-first safety, or fully unsandboxed access.</div>
+                </div>
+                <span class="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-[10px] uppercase tracking-[0.18em] text-slate-300"
+                      x-text="permissionPresetLabel()"></span>
+              </div>
+
+              <div class="mt-4 grid gap-2 md:grid-cols-3">
+                <template x-for="option in permissionPresetOptions()" :key="option.id">
+                  <button @click="setPermissionPreset(option.id)"
+                          class="rounded-2xl border px-4 py-4 text-left transition"
+                          :class="permissionPresetOptionClass(option)">
+                    <div class="flex items-start justify-between gap-3">
+                      <div>
+                        <div class="text-sm font-semibold" x-text="option.label"></div>
+                        <div class="mt-1 text-[11px] leading-5 opacity-80" x-text="option.detail"></div>
+                      </div>
+                      <span class="text-[10px] uppercase tracking-[0.18em]" x-text="permissionPresetKey() === option.id ? 'Active' : 'Select'"></span>
+                    </div>
+                  </button>
+                </template>
+              </div>
+
+              <div class="mt-4 rounded-2xl border border-slate-800 bg-slate-900/55 px-4 py-3">
+                <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Current posture</div>
+                <div class="mt-1 text-sm font-medium text-white" x-text="permissionPresetLabel()"></div>
+                <div class="mt-1 text-[11px] text-slate-500" x-text="permissionPresetMeta()"></div>
+              </div>
+            </div>
+
+            <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.85fr)]">
+              <div class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-5 shadow-[0_22px_70px_rgba(2,6,23,0.45)] space-y-4">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-[11px] uppercase tracking-[0.28em] text-slate-500">Cloud Adapters</div>
+                    <div class="mt-2 text-lg font-semibold text-white">External specialists</div>
+                    <div class="mt-1 text-sm text-slate-400">Adapters stay off until you explicitly enable them. They do not interfere with local-only workflows by default.</div>
+                  </div>
+                  <label class="inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-slate-300">
+                    <input type="checkbox"
+                           :checked="!!settingsForm.cloud_agents_enabled"
+                           @change="settingsForm.cloud_agents_enabled = $event.target.checked"
+                           class="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500">
+                    Enabled
+                  </label>
+                </div>
+
+                <div class="grid gap-3">
+                  <template x-for="adapter in (runtimeStatus.cloud_agents || [])" :key="adapter.id">
+                    <div class="rounded-2xl border border-slate-800 bg-slate-900/55 p-4">
+                      <div class="flex items-start justify-between gap-3">
+                        <div>
+                          <div class="flex items-center gap-2">
+                            <div class="text-sm font-medium text-white" x-text="adapter.label"></div>
+                            <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-slate-400">External</span>
+                          </div>
+                          <div class="mt-1 text-[11px] text-slate-500" x-text="adapter.description"></div>
+                        </div>
+                        <label class="inline-flex items-center gap-2 text-[11px] text-slate-300">
+                          <input type="checkbox"
+                                 :checked="!!settingsForm[cloudAdapterKey(adapter.id)]"
+                                 @change="settingsForm[cloudAdapterKey(adapter.id)] = $event.target.checked"
+                                 :disabled="!settingsForm.cloud_agents_enabled"
+                                 class="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500 disabled:opacity-40">
+                          <span x-text="settingsForm[cloudAdapterKey(adapter.id)] ? 'On' : 'Off'"></span>
+                        </label>
+                      </div>
+
+                      <div class="mt-3 grid gap-3 md:grid-cols-2">
+                        <div>
+                          <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Base URL</label>
+                          <input :value="providerValue(adapter.id, 'base_url')"
+                                 @input="setProviderValue(adapter.id, 'base_url', $event.target.value)"
+                                 :placeholder="adapter.default_base_url || 'https://api.example.com/v1'"
+                                 :disabled="!settingsForm.cloud_agents_enabled"
+                                 class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-cyan-500 transition font-mono disabled:opacity-50" />
+                        </div>
+                        <div>
+                          <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Model</label>
+                          <input :value="providerValue(adapter.id, 'model')"
+                                 @input="setProviderValue(adapter.id, 'model', $event.target.value)"
+                                 :placeholder="adapter.model_placeholder || adapter.default_model || 'model-name'"
+                                 :disabled="!settingsForm.cloud_agents_enabled"
+                                 class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-cyan-500 transition font-mono disabled:opacity-50" />
+                        </div>
+                      </div>
+
+                      <div class="mt-3">
+                        <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">API Key</label>
+                        <div class="flex flex-col gap-2 sm:flex-row">
+                          <div class="flex-1 relative">
+                            <input :value="providerValue(adapter.id, 'api_key')"
+                                   @input="setProviderValue(adapter.id, 'api_key', $event.target.value)"
+                                   :placeholder="vaultProviderKeys[adapter.id] ? 'Vault key attached' : providerKeyPlaceholder(adapter.id)"
+                                   type="password"
+                                   :disabled="!settingsForm.cloud_agents_enabled || !!vaultProviderKeys[adapter.id]"
+                                   class="w-full bg-slate-800 border rounded-2xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-cyan-500 transition font-mono disabled:opacity-50"
+                                   :class="vaultProviderKeys[adapter.id] ? 'border-emerald-600/50' : 'border-slate-700'" />
+                            <span x-show="vaultProviderKeys[adapter.id]" class="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-400 text-xs">Vault</span>
+                          </div>
+                          <button @click="testCloudProvider(adapter.id)"
+                                  :disabled="!settingsForm.cloud_agents_enabled"
+                                  class="w-full sm:w-auto rounded-2xl border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500 disabled:opacity-40">
+                            Test
+                          </button>
+                        </div>
+                        <p x-show="cloudProviderTests[adapter.id]?.message"
+                           :class="cloudProviderTests[adapter.id]?.ok ? 'text-emerald-400' : 'text-amber-300'"
+                           class="mt-1 text-[10px]"
+                           x-text="cloudProviderTests[adapter.id]?.message"></p>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
+              <div class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-5 shadow-[0_22px_70px_rgba(2,6,23,0.45)]">
+                <div class="text-[11px] uppercase tracking-[0.28em] text-slate-500">Agent Engine</div>
+                <div class="mt-2 text-lg font-semibold text-white">Operator roles in view</div>
+                <div class="mt-1 text-sm text-slate-400">Planning, review, scanning, and repair roles stay visible while the orchestration engine evolves.</div>
+                <div class="mt-4 grid gap-2">
+                  <template x-for="agent in (runtimeStatus.agents || [])" :key="agent.role">
+                    <div class="rounded-2xl border border-slate-800 bg-slate-900/55 p-3">
+                      <div class="flex items-center justify-between gap-3">
+                        <div>
+                          <div class="text-sm font-medium text-white" x-text="agent.label"></div>
+                          <div class="mt-1 text-[11px] text-slate-500" x-text="agent.description"></div>
+                        </div>
+                        <div class="text-right">
+                          <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Preferred role</div>
+                          <div class="text-xs text-slate-300 font-mono" x-text="agent.preferred_model_role"></div>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </section>

@@ -72,9 +72,28 @@ function axonResponseRequestsContinuation(response) {
   return lines.some((line) => line === '→ Continue');
 }
 
+function axonOperationalFallbackSuggestions(response) {
+  const lower = String(response || '').toLowerCase();
+  if (/```[\s\S]{20,}```/.test(response)) {
+    return ['Inspect related files', 'Generate patch plan', 'Check blockers'];
+  }
+  if (/\b(api|endpoint|route|handler)\b/i.test(lower)) {
+    return ['Inspect the route handler', 'Show example request', 'Check blockers'];
+  }
+  if (/\b(error|bug|issue|fix|failed|failure|crash)\b/i.test(lower)) {
+    return ['Inspect failing path', 'Check blockers', 'Show active runs'];
+  }
+  if (/\b(plan|roadmap|strategy|steps?)\b/i.test(lower)) {
+    return ['Turn this into missions', 'Inspect related files', 'Check blockers'];
+  }
+  if (/\b(branch|repo|repository|git|commit)\b/i.test(lower)) {
+    return ['Show git status', 'Inspect related files', 'Check blockers'];
+  }
+  return ['Inspect related files', 'Check blockers', 'Show active runs'];
+}
+
 function axonBuildFollowUpSuggestions(response, userMessage) {
   const suggestions = axonExtractExplicitFollowUpPrompts(response);
-  const lower = String(response || '').toLowerCase();
 
   if (axonResponseRequestsContinuation(response)) {
     suggestions.push('→ Continue');
@@ -85,25 +104,14 @@ function axonBuildFollowUpSuggestions(response, userMessage) {
   if (/\b(created|saved|added)\b.{0,30}\b(playbook|prompt)/i.test(response)) {
     suggestions.push('Open playbooks');
   }
-  if (/```[\s\S]{20,}```/.test(response)) {
-    suggestions.push('Explain this code');
-    suggestions.push('Optimize this code');
-  }
-  if (/\b(plan|roadmap|strategy|steps?)\b/i.test(response) && suggestions.length < 3) {
-    suggestions.push('Turn this into missions');
-  }
-  if (/\b(error|bug|issue|fix)\b/i.test(lower) && suggestions.length < 3) {
-    suggestions.push('How do I debug this?');
-  }
-  if (/\b(api|endpoint|route)\b/i.test(lower) && suggestions.length < 3) {
-    suggestions.push('Show example request');
-  }
 
   const deduped = axonDeduplicateFollowUpSuggestions(suggestions);
-  if (deduped.length === 0) {
-    deduped.push('Tell me more', 'What should I do next?');
-  } else if (deduped.length === 1) {
-    deduped.push('What should I do next?');
+  const fallbacks = axonOperationalFallbackSuggestions(response);
+  for (const suggestion of fallbacks) {
+    if (deduped.length >= 3) break;
+    if (!deduped.some((item) => item.toLowerCase() === suggestion.toLowerCase())) {
+      deduped.push(suggestion);
+    }
   }
   return deduped.slice(0, 3);
 }
@@ -119,3 +127,59 @@ function axonUseFollowUpSuggestion(text) {
   this.chatInput = message;
   this.$nextTick(() => this.sendChat());
 }
+
+function axonChatFollowUpsMixin() {
+  return {
+    followUpSuggestions: [],
+    _followUpSourceMessageId: null,
+
+    clearFollowUpSuggestions() {
+      this.followUpSuggestions = [];
+      this._followUpSourceMessageId = null;
+    },
+
+    applyFollowUpSuggestions(response, userMessage, messageId = null) {
+      axonApplyFollowUpSuggestions.call(this, response, userMessage);
+      this._followUpSourceMessageId = messageId;
+    },
+
+    syncFollowUpSuggestions() {
+      if (this.chatLoading) {
+        this.clearFollowUpSuggestions();
+        return;
+      }
+
+      const messages = Array.isArray(this.chatMessages) ? this.chatMessages : [];
+      const assistantIndex = [...messages]
+        .map((message, index) => ({ message, index }))
+        .reverse()
+        .find(({ message }) => message?.role === 'assistant' && !message.streaming && !message.error)?.index;
+
+      if (typeof assistantIndex !== 'number') {
+        this.clearFollowUpSuggestions();
+        return;
+      }
+
+      const assistantMessage = messages[assistantIndex];
+      if (assistantMessage?.id === this._followUpSourceMessageId && this.followUpSuggestions.length) {
+        return;
+      }
+
+      const userMessage = [...messages.slice(0, assistantIndex)]
+        .reverse()
+        .find((message) => message?.role === 'user');
+
+      this.applyFollowUpSuggestions(
+        assistantMessage?.content || '',
+        userMessage?.content || '',
+        assistantMessage?.id ?? null,
+      );
+    },
+
+    useSuggestion(text) {
+      axonUseFollowUpSuggestion.call(this, text);
+    },
+  };
+}
+
+window.axonChatFollowUpsMixin = axonChatFollowUpsMixin;

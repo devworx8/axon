@@ -8,7 +8,7 @@ import {
   unlockMobileVault,
   unlockMobileVaultWithBiometric,
 } from '@/api/vault';
-import { AppTabBar } from '@/components/AppTabBar';
+import { AppSideBar } from '@/components/AppSideBar';
 import { useAxonMobileRuntime } from '@/features/axon/useAxonMobileRuntime';
 import { useCompanionBootstrap } from '@/features/auth/useCompanionBootstrap';
 import { useStoredCompanionConfig } from '@/features/auth/useStoredCompanionConfig';
@@ -349,12 +349,12 @@ export function AppNavigator() {
   }, [control.lastAction?.challenge, selectedChallenge]);
 
   const tabs = useMemo(() => ([
-    ['mission', 'Mission Control'],
-    ['voice', 'Voice'],
-    ['attention', 'Attention'],
-    ['projects', 'Projects'],
-    ['sessions', 'Sessions'],
-    ['settings', 'Settings'],
+    ['mission', 'Mission Control', 'Primary cockpit status and commands.'],
+    ['voice', 'Voice', 'Capture and route voice commands.'],
+    ['attention', 'Attention', 'Triage now, waiting, and watch.'],
+    ['projects', 'Projects', 'Workspace focus and linked systems.'],
+    ['sessions', 'Sessions', 'Approvals, challenges, and active runs.'],
+    ['settings', 'Settings', 'Device, vault, and voice tuning.'],
   ] as const), []);
   const body = (
     <AppNavigatorBody
@@ -415,7 +415,7 @@ export function AppNavigator() {
       onExpoPublishUpdate={(workspaceId) => workspaceActions.expoPublishUpdate(workspaceId).catch(() => undefined)}
       onRefreshMission={() => syncMission().catch(() => undefined)}
       setActiveTab={setActiveTab}
-      authChecking={Boolean(config.accessToken) && verifyingPairing}
+      authChecking={Boolean(config.accessToken) && verifyingPairing && !verifiedPairing}
       verifiedPairing={verifiedPairing}
       axon={{ status: axonMode.status, busy: axonMode.busy }}
       axonError={axonMode.error}
@@ -426,43 +426,49 @@ export function AppNavigator() {
     />
   );
 
-  const statusLabel = Boolean(config.accessToken) && verifyingPairing
+  const statusLabel = Boolean(config.accessToken) && verifyingPairing && !verifiedPairing
     ? 'Checking link'
     : verifiedPairing
     ? String(mission.snapshot?.posture || 'healthy').replace('_', ' ')
     : (config.accessToken ? 'Re-pair required' : 'Not paired');
-  const statusColor = Boolean(config.accessToken) && verifyingPairing
+  const statusColor = Boolean(config.accessToken) && verifyingPairing && !verifiedPairing
     ? colors.warning
     : verifiedPairing
     ? (mission.snapshot?.posture === 'urgent' ? colors.danger : mission.snapshot?.posture === 'degraded' ? colors.warning : colors.success)
     : (config.accessToken ? colors.warning : colors.muted);
 
+  const activeTabMeta = tabs.find(([key]) => key === activeTab);
+
   return (
     <KeyboardAvoidingView
       style={styles.shell}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
     >
-      <View style={styles.topBar}>
-        <View style={styles.topBarText}>
-          <Text style={[styles.brand, { color: colors.text }]}>Axon</Text>
-          <Text style={[styles.subbrand, { color: colors.muted }]}>Online</Text>
-        </View>
-        <View style={[styles.statusBadge, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-          <Text style={[styles.statusText, { color: statusColor }]}>{statusLabel}</Text>
-        </View>
-      </View>
-
-      <View style={styles.tabRail}>
-        <AppTabBar
-          tabs={tabs.map(([key, label]) => ({ key, label }))}
+      <View style={styles.main}>
+        <AppSideBar
+          items={tabs.map(([key, label, hint]) => ({ key, label, hint }))}
           activeKey={activeTab}
+          statusLabel={statusLabel}
+          statusColor={statusColor}
           onChange={(key) => setActiveTab(key as TabKey)}
         />
+        <View style={styles.contentShell}>
+          <View style={styles.sectionHeader}>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>{activeTabMeta?.[1] || 'Mission Control'}</Text>
+            <Text style={[styles.sectionSubtitle, { color: colors.muted }]}>{activeTabMeta?.[2] || ''}</Text>
+          </View>
+          <ScrollView
+            contentContainerStyle={[styles.content, styles.contentGrow]}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            contentInsetAdjustmentBehavior={Platform.OS === 'ios' ? 'always' : undefined}
+          >
+            <View style={styles.stack}>{body}</View>
+          </ScrollView>
+        </View>
       </View>
-
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.stack}>{body}</View>
-      </ScrollView>
       <RiskChallengeSheet
         challenge={selectedChallenge}
         visible={Boolean(selectedChallenge)}
@@ -479,50 +485,33 @@ const styles = StyleSheet.create({
   shell: {
     flex: 1,
   },
-  topBar: {
+  main: {
+    flex: 1,
+    flexDirection: 'row',
+  },
+  contentShell: {
+    flex: 1,
+  },
+  sectionHeader: {
     paddingHorizontal: 18,
-    paddingTop: 12,
-    paddingBottom: 4,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
+    paddingTop: 18,
+    paddingBottom: 6,
+    gap: 4,
   },
-  topBarText: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 8,
-  },
-  statusBadge: {
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  brand: {
-    fontSize: 26,
+  sectionTitle: {
+    fontSize: 22,
     fontWeight: '800',
-    letterSpacing: -0.4,
   },
-  subbrand: {
-    fontSize: 13,
+  sectionSubtitle: {
+    fontSize: 12,
     fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 1.2,
-  },
-  statusText: {
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  tabRail: {
-    paddingHorizontal: 16,
-    paddingBottom: 8,
   },
   content: {
     paddingHorizontal: 16,
-    paddingBottom: 28,
+    paddingBottom: 140,
+  },
+  contentGrow: {
+    flexGrow: 1,
   },
   stack: {
     gap: 14,

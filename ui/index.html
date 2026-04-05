@@ -118,7 +118,7 @@
         <div class="flex-1 flex justify-center">
           <div class="relative" x-data>
             <button @click="toggleRuntimePicker()"
-                    class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 hover:border-slate-500/80 transition group select-none">
+                    class="console-runtime-trigger flex items-center gap-2 px-3 py-1.5 rounded-lg border transition group select-none">
               <div class="w-1.5 h-1.5 rounded-full shrink-0"
                    :class="settingsForm.ai_backend === 'ollama' ? 'bg-green-400' : settingsForm.ai_backend === 'api' ? 'bg-blue-400' : 'bg-slate-500'"></div>
               <span class="text-sm font-medium text-slate-200"
@@ -129,7 +129,7 @@
             <!-- Dropdown -->
             <div x-show="chatModelOpen" @click.away="chatModelOpen=false"
                  x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 -translate-y-1" x-transition:enter-end="opacity-100 translate-y-0"
-                 class="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl z-50 min-w-[240px] py-1 overflow-hidden">
+                 class="console-runtime-popover absolute top-full left-1/2 -translate-x-1/2 mt-1.5 rounded-xl z-50 min-w-[240px] py-1 overflow-hidden">
               <div x-show="settingsForm.ai_backend === 'ollama'">
                 <div class="px-3 py-1.5 text-[10px] text-slate-500 uppercase tracking-wider border-b border-slate-800/80 flex items-center justify-between">
                   <span>Ollama models</span>
@@ -199,28 +199,7 @@
           </div>
         </div>
 
-        <!-- Right: project filter + clear -->
-        <div class="flex items-center gap-2 min-w-0">
-          <select x-model="chatProjectId" @change="updateChatProject()"
-                  class="bg-slate-800/60 border border-slate-700/60 text-slate-400 text-xs rounded-lg px-2 py-1.5 hover:border-slate-600 transition max-w-[140px] truncate">
-            <option value="">All workspaces</option>
-            <template x-for="p in projects" :key="p.id"><option :value="p.id" x-text="p.name"></option></template>
-          </select>
-          <button @click="clearHistory()" class="p-1.5 text-slate-600 hover:text-slate-300 hover:bg-slate-800 rounded-lg transition" title="Clear history">
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-          </button>
-        </div>
-      </div>
-
-      <!-- Mobile: project context pill -->
-      <div x-show="activeTab === 'chat'" class="console-mobile-return md:hidden flex items-center gap-2 px-4 py-2 border-b shrink-0">
-        <button @click="returnFromConsole()" class="console-mobile-back shrink-0">Control Room</button>
-        <div class="min-w-0 flex-1">
-          <div class="console-mobile-kicker" x-text="consoleOriginKicker()"></div>
-          <div class="console-mobile-title" x-text="chatProject?.name || 'Axon Console'"></div>
-        </div>
-        <button x-show="chatProject" @click="chatProjectId=''; updateChatProject()" class="text-[10px] text-slate-500 hover:text-slate-300">✕ Clear</button>
-      </div>
+      <!-- @include partials/chat_workspace_toolbar.html -->
 
       <!-- Desktop: side-by-side | Mobile: stacked -->
       <div class="flex-1 flex flex-col md:flex-row min-h-0">
@@ -228,146 +207,10 @@
       <!-- Canvas: messages + input bar -->
       <div class="flex-1 flex flex-col min-w-0 min-h-0 relative" :class="{ 'agent-canvas-glow': agentMode && chatLoading }">
       <div class="flex-1 overflow-y-auto page-content px-3 md:px-5 py-4 space-y-3" id="chat-messages">
-        <!-- Empty state -->
-        <div x-show="chatMessages.length === 0" class="flex flex-col items-center justify-center h-full text-center px-4">
-          <!-- Axon ORB -->
-          <div @click="toggleVoiceMode()" class="axon-orb mb-4 cursor-pointer" :class="orbState()" title="Click to toggle voice mode">
-            <div class="axon-orb-inner">✦</div>
-          </div>
-          <div class="text-white font-semibold text-lg mb-1">Axon Console</div>
-          <div x-show="voiceMode" class="voice-mode-badge text-[10px] text-red-300 mb-1">Voice Mode Active</div>
-          <div class="text-slate-400 text-sm mb-6 max-w-xs">Local operator console for your workspaces, missions, files, and runtime. Give Axon a goal and let it observe, plan, execute, verify, and recover.</div>
-          <div class="grid grid-cols-1 gap-2 w-full max-w-xs">
-            <template x-for="hint in chatHints" :key="hint">
-              <button @click="chatInput = hint; sendChat()"
-                      class="text-sm bg-slate-800/80 border border-slate-700/60 text-slate-300 rounded-2xl px-4 py-3 text-left press-scale">
-                <span x-text="hint"></span>
-              </button>
-            </template>
-          </div>
-        </div>
-
-        <template x-for="msg in chatMessages" :key="msg.id">
-          <div class="flex gap-2" :class="msg.role === 'user' ? 'justify-end' : 'justify-start items-end'">
-            <!-- Brain avatar (assistant only) -->
-            <div x-show="msg.role === 'assistant'"
-                 :class="msg.mode === 'agent' || (msg.agentEvents && msg.agentEvents.length) ? 'from-amber-400 via-orange-400 to-cyan-300 text-slate-950 next-gen-icon-glow' : 'from-blue-500 to-blue-700 text-white'"
-                 class="w-8 h-8 rounded-2xl bg-gradient-to-br flex items-center justify-center text-sm shrink-0 shadow-md mb-0.5 overflow-hidden">
-              <template x-if="msg.mode === 'agent' || (msg.agentEvents && msg.agentEvents.length)">
-                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-label="#NEXT-GEN">
-                  <path d="M8 4L6.7 20"/>
-                  <path d="M15 4L13.7 20"/>
-                  <path d="M4 9h15"/>
-                  <path d="M3.3 15h15"/>
-                  <path d="M18.6 4.8l.8 1.8 1.8.8-1.8.8-.8 1.8-.8-1.8-1.8-.8 1.8-.8.8-1.8z" fill="currentColor" stroke="none"/>
-                </svg>
-              </template>
-              <template x-if="!(msg.mode === 'agent' || (msg.agentEvents && msg.agentEvents.length))">
-                <span>🧠</span>
-              </template>
-            </div>
-            <div class="chat-bubble" style="max-width:85%">
-              <div x-show="msg.role === 'assistant'" class="mb-2 flex flex-wrap items-center gap-2">
-                <span class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px]"
-                      :class="providerIdentityTone(messageProviderIdentity(msg).providerId)">
-                  <span class="w-3.5 h-3.5" x-html="providerIdentityIcon(messageProviderIdentity(msg).providerId)"></span>
-                  <span x-text="messageProviderIdentity(msg).providerLabel || 'Runtime'"></span>
-                </span>
-                <span class="max-w-[180px] truncate rounded-full border border-slate-700/70 bg-slate-900/70 px-2.5 py-1 text-[10px] text-slate-300"
-                      x-text="messageProviderIdentity(msg).modelLabel || 'Saved default'"></span>
-                <span class="rounded-full border border-slate-800 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-500"
-                      x-text="messageProviderIdentity(msg).transportLabel || 'Runtime'"></span>
-              </div>
-
-              <div x-show="msg.thinkingBlocks && msg.thinkingBlocks.length" class="mb-2 space-y-2">
-                <template x-for="block in (msg.thinkingBlocks || [])" :key="block.id">
-                  <div class="rounded-2xl border border-violet-500/20 bg-violet-500/8 px-3 py-2.5">
-                    <div class="flex items-center gap-2">
-                      <span class="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] text-violet-200"
-                            x-text="block.title || 'Thinking'"></span>
-                      <span class="text-[10px] text-slate-500" x-text="block.updatedAt ? timeAgo(block.updatedAt) : ''"></span>
-                    </div>
-                    <div class="mt-2 text-[12px] leading-5 text-violet-50/90 whitespace-pre-wrap" x-text="block.content"></div>
-                  </div>
-                </template>
-              </div>
-
-              <div x-show="msg.workingBlocks && msg.workingBlocks.length" class="mb-2 space-y-2">
-                <template x-for="block in (msg.workingBlocks || [])" :key="block.id">
-                  <div class="rounded-2xl border px-3 py-2.5"
-                       :class="block.status === 'running' ? 'border-amber-500/20 bg-amber-500/10' : 'border-slate-700/60 bg-slate-900/60'">
-                    <div class="flex items-center gap-2">
-                      <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.16em]"
-                            :class="block.status === 'running' ? 'border-amber-500/20 bg-amber-500/10 text-amber-200' : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200'"
-                            x-text="block.status === 'running' ? 'Working' : 'Worked'"></span>
-                      <span class="text-[11px] font-medium text-slate-100" x-text="block.title"></span>
-                      <span class="ml-auto text-[10px] text-slate-500" x-text="block.updatedAt ? timeAgo(block.updatedAt) : ''"></span>
-                    </div>
-                    <div x-show="Object.keys(block.args || {}).length" class="mt-2 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 font-mono text-[10px] text-slate-400 break-all"
-                         x-text="JSON.stringify(block.args)"></div>
-                    <div x-show="block.result" class="mt-2 text-[11px] leading-5 text-slate-400 whitespace-pre-wrap" x-text="block.result.slice(0, 240)"></div>
-                  </div>
-                </template>
-              </div>
-
-              <div x-show="msg.agentEvents && msg.agentEvents.length && !(msg.workingBlocks && msg.workingBlocks.length)" class="mb-2 space-y-1">
-                <template x-for="(ev, idx) in (msg.agentEvents || [])" :key="idx">
-                  <div :class="ev.type === 'tool_call' ? 'border-amber-700/40 bg-amber-900/20 text-amber-300' : 'border-slate-700/40 bg-slate-800/50 text-slate-400'"
-                       class="rounded-lg border px-3 py-1.5 text-[11px] font-mono">
-                    <span x-show="ev.type === 'tool_call'">🔧 <span x-text="ev.name"></span>(<span x-text="JSON.stringify(ev.args).slice(0,80)"></span>)</span>
-                    <span x-show="ev.type === 'tool_result'" class="text-slate-400">→ <span x-text="(ev.result || '').slice(0,120)"></span></span>
-                  </div>
-                </template>
-              </div>
-              <!-- Bubble -->
-              <div :class="msg.role === 'user'
-                ? 'bg-blue-600 text-white px-4 py-2.5 rounded-[20px] rounded-tr-[6px] text-sm shadow-md shadow-blue-500/20'
-                : ((msg.mode === 'agent' || (msg.agentEvents && msg.agentEvents.length))
-                  ? 'bg-slate-800/95 border border-amber-500/20 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm'
-                  : 'bg-slate-800/90 border border-slate-700/50 px-4 py-3 rounded-[20px] rounded-tl-[6px] text-sm shadow-sm')">
-                <div x-show="msg.role === 'assistant'" class="prose-dark text-sm">
-                  <div x-html="renderMd(msg.content)"></div>
-                  <!-- Streaming cursor -->
-                  <span x-show="msg.streaming" class="inline-block w-2 h-4 bg-blue-400 ml-0.5 animate-pulse rounded-sm align-middle"></span>
-                </div>
-                <div x-show="msg.role === 'user'" class="whitespace-pre-wrap leading-relaxed" x-text="msg.content"></div>
-                <div x-show="msg.resources?.length" class="mt-2 flex flex-wrap gap-1.5">
-                  <template x-for="resource in (msg.resources || [])" :key="resource.id">
-                    <span class="inline-flex items-center gap-1 rounded-full border border-sky-500/20 bg-sky-500/10 px-2 py-1 text-[10px] text-sky-200">
-                      <span>📎</span>
-                      <span class="max-w-[180px] truncate" x-text="resourceChipLabel(resource)"></span>
-                    </span>
-                  </template>
-                </div>
-              </div>
-              <!-- Meta row -->
-              <div class="flex items-center gap-2 mt-1 px-1"
-                   :class="msg.role === 'user' ? 'justify-end' : 'justify-start'">
-                <span class="text-[10px] text-slate-600" x-text="formatTime(msg.created_at)"></span>
-                <span x-show="msg.role === 'assistant' && msg.mode === 'agent'"
-                      class="text-[10px] px-2 py-0.5 rounded-full border border-amber-500/20 bg-amber-500/10 text-amber-300">#NEXT-GEN</span>
-                <span x-show="msg.role === 'assistant' && msg.modelLabel"
-                      class="max-w-[140px] truncate text-[10px] px-2 py-0.5 rounded-full border border-slate-700/70 bg-slate-900/70 text-slate-400"
-                      x-text="msg.modelLabel"></span>
-                <button x-show="msg.role === 'assistant' && voiceOutputAvailable() && !msg.streaming"
-                  @click="speakMessage(msg.content)"
-                  class="px-2 py-1 rounded-lg text-[10px] text-slate-600 hover:text-blue-400 hover:bg-slate-800/70 transition" title="Read aloud">🔊</button>
-                <button x-show="msg.role === 'assistant' && !msg.streaming"
-                        @click="openCanvas(msg)"
-                  class="px-2 py-1 rounded-lg text-[10px] text-slate-600 hover:text-sky-300 hover:bg-slate-800/70 transition" title="Open document canvas">Canvas</button>
-                <button x-show="msg.role === 'assistant' && !msg.streaming"
-                        @click="copyToClipboard(msg.content, 'Markdown')"
-                  class="px-2 py-1 rounded-lg text-[10px] text-slate-600 hover:text-slate-300 hover:bg-slate-800/70 transition" title="Copy markdown">Copy</button>
-                <button x-show="msg.error"
-                        @click="retryChat(msg)"
-                  class="px-2 py-1 bg-amber-600/30 hover:bg-amber-600/50 text-amber-300 rounded-lg transition" title="Retry this message">🔄 Retry</button>
-              </div>
-            </div>
-          </div>
-        </template>
-
+        <!-- @include partials/chat_empty_state.html -->
+        <!-- @include partials/chat_message_thread.html -->
       <!-- Typing indicator — only show when loading AND no streaming placeholder exists yet -->
-      <div x-show="chatLoading && !chatMessages.some(m => m.streaming)" class="flex justify-start items-end gap-2">
+        <div x-show="chatLoading && !chatMessages.some(m => m.streaming)" class="flex justify-start items-end gap-2">
           <div :class="agentMode ? 'from-amber-400 via-orange-400 to-cyan-300 text-slate-950 next-gen-icon-glow' : 'from-blue-500 to-blue-700 text-white'"
                class="w-8 h-8 rounded-2xl bg-gradient-to-br flex items-center justify-center text-sm shrink-0 overflow-hidden">
             <template x-if="agentMode">
@@ -392,7 +235,7 @@
           </div>
         </div>
       </div>
-
+      <!-- @include partials/chat_follow_up_chips.html -->
       <!-- Input bar (bottom of canvas) -->
       <div class="shrink-0 px-3 md:px-5 py-2.5 border-t border-slate-800 bg-slate-950/80 backdrop-blur">
         <div x-show="consoleHasImageAttachmentWithoutVision()" class="mb-2 rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2.5">
@@ -501,6 +344,8 @@
                 x-ref="chatComposer"
                 x-model="chatInput"
                 @keydown.enter="handleComposerEnter($event)"
+                @keydown.arrow-up="handleComposerHistoryKey($event, 'up')"
+                @keydown.arrow-down="handleComposerHistoryKey($event, 'down')"
                 @focus="scrollChat()"
                 x-init="resetChatComposerHeight()"
                 :placeholder="chatComposerPlaceholder()"
@@ -538,6 +383,15 @@
         </div>
         <!-- Desktop: full status -->
         <div class="hidden md:flex items-center gap-1.5 px-1 pt-1.5 text-[10px] text-slate-500">
+          <span class="rounded-full border px-2 py-0.5"
+                :class="chatProjectId ? 'border-emerald-500/20 bg-emerald-500/8 text-emerald-200' : 'border-amber-500/20 bg-amber-500/8 text-amber-200'"
+                x-text="chatProject?.name || 'All workspaces'"></span>
+          <span x-show="shouldShowWorkspaceBranch()"
+                class="max-w-[180px] truncate rounded-full border border-emerald-500/20 bg-emerald-500/8 px-2 py-0.5 text-emerald-200"
+                :title="workspaceBranchTitle()">
+            branch <span x-text="currentWorkspaceBranchName()"></span>
+          </span>
+          <span>·</span>
           <span x-text="runtimeStatus.runtime_label || 'Local-first'"></span>
           <span>·</span>
           <span x-text="activeChatModel() || runtimeStatus.active_model || 'Saved default'"></span>
@@ -550,8 +404,14 @@
       </div>
       </div><!-- /canvas -->
 
+      <div class="console-resize-handle hidden md:flex shrink-0"
+           @pointerdown="startConsoleResize($event)"
+           title="Resize console sidebar"
+           aria-hidden="true"></div>
+
       <!-- Composer sidebar — controls panel -->
-      <div class="md:w-[380px] lg:w-[420px] md:border-l md:border-t-0 border-t border-slate-800 bg-slate-900/40 shrink-0 md:overflow-y-auto max-h-[35vh] md:max-h-full">
+      <div :style="consoleSidebarStyle()"
+           class="md:border-l md:border-t-0 border-t border-slate-800 bg-slate-900/40 shrink-0 md:overflow-y-auto max-h-[35vh] md:max-h-full">
       <div class="px-3 py-3" :class="isMobile && !showConsoleDetails ? 'hidden' : ''">
         <div class="space-y-3">
           <div class="md:hidden flex items-center justify-between gap-3 border-b border-slate-800/70 px-0.5 pb-2">
@@ -565,10 +425,10 @@
             </button>
           </div>
           <div class="flex flex-col gap-1.5 px-0.5 pb-2 border-b border-slate-800/70 md:gap-2 md:flex-row md:items-center">
-            <button @click="toggleAgentMode()"
-                    :class="agentMode ? 'border-amber-400/40 bg-amber-500/12 text-amber-200' : 'border-slate-700/80 bg-slate-900/70 text-slate-300 hover:border-slate-500'"
+            <button @click="toggleAutonomousConsoleMode()"
+                    :class="consoleAutonomyCard().cardClass"
                     class="inline-flex min-w-0 items-center gap-2 rounded-2xl border px-2 py-1.5 transition press-scale md:px-2.5 md:py-2">
-              <span :class="agentMode ? 'from-amber-400 via-orange-400 to-cyan-300 text-slate-950 next-gen-icon-glow' : 'from-slate-700 to-slate-800 text-slate-200'"
+              <span :class="autonomousConsoleActive() ? 'from-amber-400 via-orange-400 to-cyan-300 text-slate-950 next-gen-icon-glow' : 'from-slate-700 to-slate-800 text-slate-200'"
                     class="w-7 h-7 md:w-8 md:h-8 rounded-2xl bg-gradient-to-br flex items-center justify-center overflow-hidden shrink-0">
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-label="#NEXT-GEN">
                   <path d="M8 4L6.7 20"/>
@@ -579,11 +439,12 @@
                 </svg>
               </span>
               <span class="flex min-w-0 flex-1 flex-col items-start leading-tight">
-                <span class="text-[11px] font-semibold truncate" x-text="agentMode ? (isMobile ? '#NEXT-GEN' : '#NEXT-GEN Agent') : 'Console mode'"></span>
-                <span class="hidden md:block text-[10px] text-slate-500" x-text="agentMode ? 'Acts for you with local tools' : 'Auto-acts when the task is actionable'"></span>
+                <span class="text-[11px] font-semibold truncate" x-text="consoleAutonomyCard().title"></span>
+                <span class="hidden md:block text-[10px] text-slate-500" x-text="consoleAutonomyCard().detail"></span>
               </span>
-              <span class="md:hidden shrink-0 rounded-full border border-slate-700/70 bg-slate-950/70 px-2 py-0.5 text-[9px] text-slate-400"
-                    x-text="agentMode ? 'Tools' : 'Smart'"></span>
+              <span class="md:hidden shrink-0 rounded-full border px-2 py-0.5 text-[9px]"
+                    :class="consoleAutonomyCard().badgeClass"
+                    x-text="consoleAutonomyCard().badge"></span>
             </button>
 
             <div class="flex min-w-0 items-center gap-1.5 w-full md:ml-auto md:w-auto md:gap-2">
@@ -659,7 +520,7 @@
                 </div>
               </div>
               <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] text-slate-400"
-                    x-text="agentMode ? 'Agent' : 'Chat'"></span>
+                    x-text="activePrimaryConversationMode() === 'auto' ? 'Autonomous' : activePrimaryConversationMode()"></span>
             </div>
           </div>
 
@@ -668,13 +529,13 @@
             <button @click="panelStepsOpen = !panelStepsOpen" class="flex items-center gap-1.5 px-1 w-full text-left group">
               <span class="text-[9px] text-slate-600 transition" :class="panelStepsOpen ? 'rotate-0' : '-rotate-90'" style="display:inline-block">▾</span>
               <span class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 group-hover:text-slate-300 transition">Agent Steps</span>
-              <span class="ml-auto rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.14em] shrink-0"
+                <span class="console-phase-chip ml-auto rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.14em] shrink-0"
                     :class="phaseChipClass(liveOperator.phase || agentProgressState || 'observe')"
                     x-text="phaseLabel(liveOperator.phase || agentProgressState || 'observe')"></span>
             </button>
             <div x-show="panelStepsOpen" x-transition class="flex flex-wrap items-center gap-2 px-1 pt-1.5">
               <template x-for="phase in agentLifecycle" :key="phase">
-                <span class="rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] cursor-default"
+                <span class="console-phase-chip rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] cursor-default"
                       :class="phaseChipClass(phase)"
                       x-text="phase"
                       :title="phase === 'observe' ? 'Gather context and understand the task' : phase === 'plan' ? 'Break down approach into steps' : phase === 'execute' ? 'Carry out the plan' : phase === 'verify' ? 'Check results for correctness' : 'Handle errors and retry'"></span>
@@ -736,7 +597,7 @@
               <div class="flex items-center gap-2 px-3 py-2.5 border-b border-slate-800/60">
                 <span class="h-2 w-2 rounded-full animate-pulse shrink-0"
                       :class="liveOperator.phase === 'recover' ? 'bg-amber-400' : 'bg-emerald-400'"></span>
-                <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] shrink-0"
+                <span class="console-phase-chip rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] shrink-0"
                       :class="phaseChipClass(liveOperator.phase || agentProgressState)"
                       x-text="phaseLabel(liveOperator.phase || agentProgressState)"></span>
                 <span class="flex-1 truncate text-[11px] font-semibold text-slate-100"
@@ -757,7 +618,7 @@
               <div x-show="liveOperatorFeed.length" class="border-t border-slate-800/60 px-3 py-2 max-h-32 overflow-y-auto space-y-1.5 no-scrollbar">
                 <template x-for="entry in [...liveOperatorFeed].slice(-5).reverse()" :key="entry.id">
                   <div class="flex items-start gap-2">
-                    <span class="mt-0.5 rounded-full border px-1.5 py-0.5 text-[8px] uppercase tracking-[0.14em] shrink-0"
+                    <span class="console-phase-chip mt-0.5 rounded-full border px-1.5 py-0.5 text-[8px] uppercase tracking-[0.14em] shrink-0"
                           :class="phaseChipClass(entry.phase)"
                           x-text="phaseLabel(entry.phase)"></span>
                     <div class="min-w-0 flex-1">
@@ -775,7 +636,7 @@
             <div class="mobile-live-strip rounded-2xl px-3 py-2">
               <div class="flex items-center gap-2">
                 <span class="h-2 w-2 rounded-full animate-pulse" :class="liveOperator.phase === 'recover' ? 'bg-amber-400' : 'bg-emerald-400'"></span>
-                <span class="rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em]"
+                <span class="console-phase-chip rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.18em]"
                       :class="phaseChipClass(liveOperator.phase || agentProgressState)"
                       x-text="phaseLabel(liveOperator.phase || agentProgressState)"></span>
                 <span class="min-w-0 flex-1 truncate text-[11px] font-medium text-slate-100" x-text="liveOperator.title || 'Axon is working…'"></span>
@@ -1253,41 +1114,7 @@
             </div>
           </div>
 
-          <!-- Mode strip -->
-          <div class="flex flex-wrap items-center gap-2 px-1 pb-2 border-b border-slate-800/70">
-            <button
-              @click="businessMode = false; agentMode = false"
-              class="rounded-full px-3 py-1.5 text-[11px] transition"
-              :class="!businessMode && !agentMode ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'">
-              Ask
-            </button>
-
-            <button
-              @click="toggleAgentMode(true); businessMode = false"
-              class="rounded-full px-3 py-1.5 text-[11px] transition"
-              :class="agentMode && !businessMode ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'">
-              Agent
-            </button>
-
-            <button
-              @click="businessMode = false; composerOptions.action_mode = 'generate'; composerOptions.intelligence_mode = 'analyze'"
-              class="rounded-full px-3 py-1.5 text-[11px] transition bg-slate-800 text-slate-300 hover:bg-slate-700">
-              Code
-            </button>
-
-            <button
-              @click="toggleBusinessMode(true)"
-              class="rounded-full px-3 py-1.5 text-[11px] transition"
-              :class="businessMode ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'">
-              &#x1F4BC; Business
-            </button>
-
-            <button
-              @click="businessMode = false; composerOptions.intelligence_mode = 'deep_research'"
-              class="rounded-full px-3 py-1.5 text-[11px] transition bg-slate-800 text-slate-300 hover:bg-slate-700">
-              Research
-            </button>
-          </div>
+          <!-- @include partials/chat_mode_strip.html -->
 
           <!-- Business panel -->
           <div x-show="businessMode" class="mt-2 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-3">
@@ -2914,14 +2741,14 @@
     <div class="flex items-center gap-1.5 shrink-0">
       <div x-show="activeTab === 'chat'" class="relative" x-data>
         <button @click="toggleRuntimePicker()"
-                class="flex max-w-[138px] items-center gap-1.5 rounded-xl border border-slate-700/60 bg-slate-900/80 px-2.5 py-2 text-[10px] text-slate-200">
+                class="console-runtime-trigger flex max-w-[138px] items-center gap-1.5 rounded-xl border px-2.5 py-2 text-[10px] text-slate-200">
           <span class="w-3.5 h-3.5 shrink-0" x-html="providerIdentityIcon(consoleProviderIdentity().providerId)"></span>
           <span class="truncate" x-text="consoleProviderIdentity().modelLabel"></span>
           <svg class="w-3 h-3 shrink-0 text-slate-500" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
         </button>
         <div x-show="chatModelOpen" @click.away="chatModelOpen = false"
              x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 -translate-y-1" x-transition:enter-end="opacity-100 translate-y-0"
-             class="absolute right-0 top-full mt-1.5 w-[260px] overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-900 shadow-2xl z-50">
+             class="console-runtime-popover absolute right-0 top-full mt-1.5 w-[260px] overflow-hidden rounded-2xl z-50">
           <div class="border-b border-slate-800/80 px-3 py-2">
             <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Runtime</div>
             <div class="mt-1 flex items-center gap-2">
@@ -3124,10 +2951,13 @@
 <script src="/js/attention.js"></script>
 <script src="/js/companion.js"></script>
 <script src="/js/workspace-runs.js"></script>
+<script src="/js/console-state.js"></script>
 <script src="/js/chat-workspace-modes.js"></script>
 <script src="/js/chat-workspace-status.js"></script>
+<script src="/js/chat-console-guidance.js"></script>
 <script src="/js/chat-auto-stream.js"></script>
 <script src="/js/chat-console-commands.js"></script>
+<script src="/js/chat-followups.js"></script>
 <script src="/js/chat-browser-surface.js"></script>
 <script src="/js/chat-resume.js"></script>
 <script src="/js/chat.js"></script>
@@ -3265,12 +3095,6 @@ function devbrain() {
       live_desktop_feed: false,
     },
     chatModelOpen: false,
-    chatHints: [
-      'Create an invoice for Khanyisa with a discount and final total',
-      'Draft a quote for a website and backend integration project',
-      'Write a client payment follow-up email',
-      'Summarize outstanding business tasks for today',
-    ],
     businessMode: false,
     businessExpanded: false,
     businessView: 'invoice',
@@ -3601,12 +3425,14 @@ function devbrain() {
         this.viewportSyncBound = true;
       }
       this.isMobile = window.innerWidth < 768;
+      this.initConsoleWindowScope?.();
       this.loadUiPrefs();
       await this.loadSettings();
       await this.loadProjects();
       this.loadTasks();
       this.loadLatestDigest();
       await this.loadRuntimeStatus();
+      this.restoreConsoleWindowState?.();
       this.connectLiveFeed();
       this.pollUsage();
       this.checkGithub();
@@ -3679,6 +3505,8 @@ function devbrain() {
     axonAttentionMixin(),
     axonCompanionMixin(),
     axonWorkspaceRunsMixin(),
+    axonConsoleStateMixin(),
+    axonConsoleGuidanceMixin(),
     axonChatMixin(),
     axonVoiceMixin(),
     axonSettingsMixin(),

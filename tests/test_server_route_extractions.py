@@ -118,6 +118,32 @@ class ChatRouteExtractionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload[0]["tokens_used"], 3)
 
 
+class AgentRouteExtractionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_agent_endpoint_alias_uses_extracted_handler(self):
+        request = object()
+        expected = {"status": "streaming"}
+        route = next(
+            route for route in server.app.routes
+            if getattr(route, "path", "") == "/api/agent" and "POST" in getattr(route, "methods", set())
+        )
+
+        with patch.object(
+            server._agent_route_handlers,
+            "agent_endpoint",
+            AsyncMock(return_value=expected),
+        ) as agent_endpoint:
+            payload = await route.endpoint(
+                server.AgentRequest(message="Check status", project_id=2),
+                request,
+            )
+
+        agent_endpoint.assert_awaited_once()
+        self.assertEqual(agent_endpoint.await_args.args[0].message, "Check status")
+        self.assertEqual(agent_endpoint.await_args.args[0].project_id, 2)
+        self.assertIs(agent_endpoint.await_args.args[1], request)
+        self.assertEqual(payload, expected)
+
+
 class AuthRuntimeExtractionTests(unittest.IsolatedAsyncioTestCase):
     async def test_valid_session_async_uses_server_valid_session_wrapper(self):
         with patch.object(server, "_valid_session", return_value=True) as valid_session, \

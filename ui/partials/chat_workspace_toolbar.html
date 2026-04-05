@@ -48,7 +48,7 @@
         :title="workspaceBranchTitle()">
     branch <span x-text="currentWorkspaceBranchName()"></span>
   </span>
-  <button @click="chatProjectId=''; updateChatProject()" x-show="chatProject" class="text-[10px] text-slate-500 hover:text-slate-300">✕ Clear</button>
+  <button @click="clearConsoleWorkspaceSelection()" x-show="chatProject" class="text-[10px] text-slate-500 hover:text-slate-300">✕ Clear</button>
 </div>
 
 <div x-show="activeTab === 'chat'"

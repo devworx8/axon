@@ -631,6 +631,7 @@ function axonChatMixin() {
         return;
       }
       this.setAgentStage(mode === 'agent' ? 'observe' : 'observe');
+      this.rememberComposerHistory?.(msg);
 
       this.chatInput = '';
       if (!this.composerOptions.pin_context) {
@@ -774,11 +775,11 @@ function axonChatMixin() {
       if (diff < 86400000) return Math.floor(diff/3600000) + 'h ago';
       return d.toLocaleDateString();
     },
-
   };
 
   const composed = [baseMixin];
   const optionalMixins = [
+    typeof axonChatFollowUpsMixin === 'function' ? axonChatFollowUpsMixin : null,
     typeof axonChatWorkspaceModesMixin === 'function' ? axonChatWorkspaceModesMixin : null,
     typeof axonChatWorkspaceStatusMixin === 'function' ? axonChatWorkspaceStatusMixin : null,
     typeof axonChatAutoStreamMixin === 'function' ? axonChatAutoStreamMixin : null,

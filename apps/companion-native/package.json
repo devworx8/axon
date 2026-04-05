@@ -20,6 +20,7 @@
     "@expo/metro-runtime": "~6.1.2",
     "expo": "^54.0.0",
     "expo-audio": "~1.1.1",
+    "expo-constants": "~18.0.13",
     "expo-dev-client": "~6.0.16",
     "expo-local-authentication": "~17.0.8",
     "expo-secure-store": "~15.0.8",

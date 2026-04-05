@@ -52,6 +52,8 @@ class ChatWorkspaceModesTests(unittest.TestCase):
               chatProjectId: '1',
               businessMode: false,
               agentMode: false,
+              settingsForm: { ai_backend: 'cli' },
+              runtimeStatus: { backend: 'cli' },
               composerOptions: {
                 intelligence_mode: 'ask',
                 action_mode: '',
@@ -61,8 +63,6 @@ class ChatWorkspaceModesTests(unittest.TestCase):
                 external_mode: '',
               },
               autoSessions: [{ session_id: 'auto-2', workspace_id: 2, status: 'running' }],
-              currentBackendSupportsAgent() { return true; },
-              usesOllamaBackend() { return false; },
               readWindowPref(key, fallback = '') {
                 return Object.prototype.hasOwnProperty.call(this._prefs, key) ? this._prefs[key] : fallback;
               },

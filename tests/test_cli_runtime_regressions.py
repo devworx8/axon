@@ -2922,6 +2922,49 @@ class BrainAgentWrapperFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen["backend"], "cli")
         self.assertTrue(any(event.get("type") == "text" and "cooling down after a rate limit" in str(event.get("chunk", "")).lower() for event in events))
 
+    async def test_extracted_core_accepts_external_fetch_policy(self):
+        async def fake_stream_cli(messages, **kwargs):
+            yield "ANSWER: done"
+
+        async def fake_stream_api_chat(**kwargs):
+            if False:
+                yield ""
+
+        async def fake_stream_ollama_chat(**kwargs):
+            if False:
+                yield ""
+
+        deps = AgentRuntimeDeps(
+            tool_registry={},
+            normalize_tool_args=lambda name, args: args,
+            stream_cli=fake_stream_cli,
+            stream_api_chat=fake_stream_api_chat,
+            stream_ollama_chat=fake_stream_ollama_chat,
+            ollama_execution_profile_sync=lambda *args, **kwargs: {"model": "dummy"},
+            ollama_message_with_images=lambda text, images: {"role": "user", "content": text},
+            api_message_with_images=lambda text, images: {"role": "user", "content": text},
+            cli_message_with_images=lambda text, images: {"role": "user", "content": text},
+            find_cli=lambda path: "/tmp/codex",
+            ollama_default_model="dummy",
+            ollama_agent_model="dummy",
+            db_path=Path(tempfile.gettempdir()) / "axon-agent-external-fetch.db",
+        )
+
+        events = [
+            event async for event in core_agent.run_agent(
+                "inspect the repo",
+                [],
+                deps=deps,
+                backend="cli",
+                cli_path="/tmp/codex",
+                cli_model="gpt-5.4",
+                workspace_path="/tmp/axon-workspace",
+                external_fetch_policy="cache_first",
+            )
+        ]
+
+        self.assertTrue(any(event.get("type") == "done" for event in events))
+
 
 class AgentAutonomyRegressionTests(unittest.IsolatedAsyncioTestCase):
     async def test_codex_mutating_requests_use_direct_file_shortcuts(self):

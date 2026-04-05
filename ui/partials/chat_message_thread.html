@@ -1,0 +1,132 @@
+        <template x-for="msg in chatMessages" :key="msg.id">
+          <div class="flex gap-2" :class="msg.role === 'user' ? 'justify-end' : 'justify-start items-end'">
+            <div x-show="msg.role === 'assistant'"
+                 :class="msg.mode === 'agent' || (msg.agentEvents && msg.agentEvents.length) ? 'from-amber-400 via-orange-400 to-cyan-300 text-slate-950 next-gen-icon-glow' : 'from-blue-500 to-blue-700 text-white'"
+                 class="w-8 h-8 rounded-2xl bg-gradient-to-br flex items-center justify-center text-sm shrink-0 shadow-md mb-0.5 overflow-hidden">
+              <template x-if="msg.mode === 'agent' || (msg.agentEvents && msg.agentEvents.length)">
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-label="#NEXT-GEN">
+                  <path d="M8 4L6.7 20"/>
+                  <path d="M15 4L13.7 20"/>
+                  <path d="M4 9h15"/>
+                  <path d="M3.3 15h15"/>
+                  <path d="M18.6 4.8l.8 1.8 1.8.8-1.8.8-.8 1.8-.8-1.8-1.8-.8 1.8-.8.8-1.8z" fill="currentColor" stroke="none"/>
+                </svg>
+              </template>
+              <template x-if="!(msg.mode === 'agent' || (msg.agentEvents && msg.agentEvents.length))">
+                <span>🧠</span>
+              </template>
+            </div>
+            <div class="chat-bubble console-message-stack">
+              <div x-show="msg.role === 'assistant'" class="console-provider-rail mb-2 flex flex-wrap items-center gap-2">
+                <span class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px]"
+                      :class="providerIdentityTone(messageProviderIdentity(msg).providerId)">
+                  <span class="w-3.5 h-3.5" x-html="providerIdentityIcon(messageProviderIdentity(msg).providerId)"></span>
+                  <span x-text="messageProviderIdentity(msg).providerLabel || 'Runtime'"></span>
+                </span>
+                <span class="console-provider-model max-w-[180px] truncate rounded-full border px-2.5 py-1 text-[10px]"
+                      x-text="messageProviderIdentity(msg).modelLabel || 'Saved default'"></span>
+                <span class="console-provider-transport rounded-full border px-2.5 py-1 text-[10px]"
+                      x-text="messageProviderIdentity(msg).transportLabel || 'Runtime'"></span>
+              </div>
+
+              <div x-show="msg.thinkingBlocks && msg.thinkingBlocks.length" class="console-thinking-stack mb-2 space-y-2">
+                <template x-for="block in (msg.thinkingBlocks || [])" :key="block.id">
+                  <div class="console-thinking-block rounded-2xl px-3 py-2.5">
+                    <div class="flex items-center gap-2">
+                      <span class="console-thinking-chip rounded-full px-2 py-0.5 text-[9px] uppercase tracking-[0.16em]"
+                            x-text="block.title || 'Thinking'"></span>
+                      <span class="text-[10px] text-slate-500" x-text="block.updatedAt ? timeAgo(block.updatedAt) : ''"></span>
+                    </div>
+                    <div class="console-thinking-copy mt-2 whitespace-pre-wrap" x-text="block.content"></div>
+                  </div>
+                </template>
+              </div>
+
+              <div x-show="msg.workingBlocks && msg.workingBlocks.length" class="console-working-stack mb-2 space-y-2">
+                <template x-for="block in (msg.workingBlocks || [])" :key="block.id">
+                  <div :class="block.status === 'running' ? 'console-working-block console-working-block-running' : 'console-working-block console-working-block-done'"
+                       class="rounded-2xl px-3 py-2.5">
+                    <div class="flex items-center gap-2">
+                      <span :class="block.status === 'running' ? 'console-working-chip console-working-chip-running' : 'console-working-chip console-working-chip-done'"
+                            class="rounded-full px-2 py-0.5 text-[9px] uppercase tracking-[0.16em]"
+                            x-text="block.status === 'running' ? 'Working' : 'Worked'"></span>
+                      <span class="text-[11px] font-medium text-slate-100" x-text="block.title"></span>
+                      <span class="ml-auto text-[10px] text-slate-500" x-text="block.updatedAt ? timeAgo(block.updatedAt) : ''"></span>
+                    </div>
+                    <div x-show="Object.keys(block.args || {}).length"
+                         class="console-working-args mt-2 rounded-xl px-3 py-2 font-mono text-[10px] break-all"
+                         x-text="JSON.stringify(block.args)"></div>
+                    <div x-show="block.result"
+                         class="console-working-result mt-2 whitespace-pre-wrap"
+                         x-text="block.result.slice(0, 240)"></div>
+                  </div>
+                </template>
+              </div>
+
+              <div x-show="msg.agentEvents && msg.agentEvents.length && !(msg.workingBlocks && msg.workingBlocks.length)"
+                   class="console-event-stack mb-2 space-y-1">
+                <template x-for="(ev, idx) in (msg.agentEvents || [])" :key="idx">
+                  <div :class="ev.type === 'tool_call' ? 'console-event-block console-event-block-call' : 'console-event-block console-event-block-result'"
+                       class="rounded-xl px-3 py-2 text-[11px] font-mono">
+                    <span x-show="ev.type === 'tool_call'">Tool <span x-text="ev.name"></span>(<span x-text="JSON.stringify(ev.args).slice(0, 80)"></span>)</span>
+                    <span x-show="ev.type === 'tool_result'">Result <span x-text="(ev.result || '').slice(0, 120)"></span></span>
+                  </div>
+                </template>
+              </div>
+
+              <div :class="msg.role === 'user'
+                ? 'console-response-bubble console-response-user'
+                : ((msg.mode === 'agent' || (msg.agentEvents && msg.agentEvents.length))
+                  ? 'console-response-bubble console-response-agent'
+                  : 'console-response-bubble console-response-assistant')">
+                <div x-show="msg.role === 'assistant'" class="console-response-markdown prose-dark text-sm">
+                  <div x-html="renderMd(msg.content)"></div>
+                  <span x-show="msg.streaming" class="inline-block w-2 h-4 bg-blue-400 ml-0.5 animate-pulse rounded-sm align-middle"></span>
+                </div>
+                <div x-show="msg.role === 'user'" class="whitespace-pre-wrap leading-relaxed" x-text="msg.content"></div>
+                <div x-show="msg.resources?.length" class="mt-2 flex flex-wrap gap-1.5">
+                  <template x-for="resource in (msg.resources || [])" :key="resource.id">
+                    <span class="console-resource-chip inline-flex items-center gap-1 px-2 py-1 text-[10px]">
+                      <span>📎</span>
+                      <span class="max-w-[180px] truncate" x-text="resourceChipLabel(resource)"></span>
+                    </span>
+                  </template>
+                </div>
+              </div>
+
+              <div class="console-message-meta flex items-center gap-2 mt-1 px-1"
+                   :class="msg.role === 'user' ? 'justify-end' : 'justify-start'">
+                <button x-show="msg.role === 'user'"
+                        @click="editUserMessage(msg)"
+                        class="console-meta-action"
+                        title="Edit and resend">Edit</button>
+                <button x-show="msg.role === 'user'"
+                        @click="copyChatMessage(msg)"
+                        class="console-meta-action"
+                        title="Copy message">Copy</button>
+                <span class="text-[10px] text-slate-600" x-text="formatTime(msg.created_at)"></span>
+                <span x-show="msg.role === 'assistant' && msg.mode === 'agent'"
+                      class="console-agent-tag text-[10px] px-2 py-0.5 rounded-full">#NEXT-GEN</span>
+                <span x-show="msg.role === 'assistant' && msg.modelLabel"
+                      class="console-model-tag max-w-[140px] truncate text-[10px] px-2 py-0.5 rounded-full"
+                      x-text="msg.modelLabel"></span>
+                <button x-show="msg.role === 'assistant' && voiceOutputAvailable() && !msg.streaming"
+                        @click="speakMessage(msg.content)"
+                        class="console-meta-action"
+                        title="Read aloud">Voice</button>
+                <button x-show="msg.role === 'assistant' && !msg.streaming"
+                        @click="openCanvas(msg)"
+                        class="console-meta-action"
+                        title="Open document canvas">Canvas</button>
+                <button x-show="msg.role === 'assistant' && !msg.streaming"
+                        @click="copyToClipboard(msg.content, 'Markdown')"
+                        class="console-meta-action"
+                        title="Copy markdown">Copy</button>
+                <button x-show="msg.error"
+                        @click="retryChat(msg)"
+                        class="console-meta-action console-meta-action-warn"
+                        title="Retry this message">Retry</button>
+              </div>
+            </div>
+          </div>
+        </template>

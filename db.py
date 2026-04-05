@@ -12,8 +12,13 @@ from typing import Optional
 from axon_data.memory import search_memory_items as _search_memory_items
 from axon_data.memory import touch_memory_items as _touch_memory_items
 from axon_data.projects import delete_project as _delete_project
+from axon_data.runtime_state import compute_workspace_revision as _compute_workspace_revision
 from axon_data.runtime_state import get_external_fetch_cache as _get_external_fetch_cache
+from axon_data.runtime_state import get_thread_summary as _get_thread_summary
+from axon_data.runtime_state import get_workspace_snapshot as _get_workspace_snapshot
 from axon_data.runtime_state import search_memory_items_fts as _search_memory_items_fts
+from axon_data.runtime_state import upsert_thread_summary as _upsert_thread_summary
+from axon_data.runtime_state import upsert_workspace_snapshot as _upsert_workspace_snapshot
 
 DB_PATH = Path.home() / ".devbrain" / "devbrain.db"
 
@@ -34,6 +39,65 @@ class _DevBrainDB:
 def get_db():
     """Return an aiosqlite context manager. Use as: async with devdb.get_db() as conn:"""
     return _DevBrainDB()
+
+
+async def compute_workspace_revision(db: aiosqlite.Connection, workspace_id: int | None) -> str:
+    return await _compute_workspace_revision(db, workspace_id)
+
+
+async def get_workspace_snapshot(
+    db: aiosqlite.Connection,
+    *,
+    workspace_id: int,
+    snapshot_key: str,
+):
+    return await _get_workspace_snapshot(db, workspace_id=workspace_id, snapshot_key=snapshot_key)
+
+
+async def get_thread_summary(db: aiosqlite.Connection, thread_key: str):
+    return await _get_thread_summary(db, thread_key)
+
+
+async def upsert_workspace_snapshot(
+    db: aiosqlite.Connection,
+    *,
+    workspace_id: int,
+    snapshot_key: str,
+    revision: str,
+    context_block: str,
+    data_json: str,
+    commit: bool = True,
+):
+    return await _upsert_workspace_snapshot(
+        db,
+        workspace_id=workspace_id,
+        snapshot_key=snapshot_key,
+        revision=revision,
+        context_block=context_block,
+        data_json=data_json,
+        commit=commit,
+    )
+
+
+async def upsert_thread_summary(
+    db: aiosqlite.Connection,
+    *,
+    thread_key: str,
+    workspace_id: int | None,
+    revision: str,
+    summary: str,
+    message_count: int,
+    commit: bool = True,
+):
+    return await _upsert_thread_summary(
+        db,
+        thread_key=thread_key,
+        workspace_id=workspace_id,
+        revision=revision,
+        summary=summary,
+        message_count=message_count,
+        commit=commit,
+    )
 
 
 async def init_db():
@@ -413,22 +477,37 @@ async def get_external_fetch_cache(db: aiosqlite.Connection, url: str):
     return await _get_external_fetch_cache(db, url)
 
 
-async def search_memory_items(db: aiosqlite.Connection, query: str, limit: int = 8):
-    return await _search_memory_items(db, query=query, limit=limit)
+async def search_memory_items(
+    db: aiosqlite.Connection,
+    *,
+    query: str,
+    workspace_id: Optional[int] = None,
+    layers: Optional[list[str]] = None,
+    limit: int = 8,
+):
+    return await _search_memory_items(
+        db,
+        query=query,
+        workspace_id=workspace_id,
+        layers=layers,
+        limit=limit,
+    )
 
 
 async def search_memory_items_fts(
     db: aiosqlite.Connection,
-    query: str,
     *,
+    query: str,
     limit: int = 8,
     workspace_id: Optional[int] = None,
+    layers: Optional[list[str]] = None,
 ):
     return await _search_memory_items_fts(
         db,
-        query,
+        query=query,
         limit=limit,
         workspace_id=workspace_id,
+        layers=layers,
     )
 
 

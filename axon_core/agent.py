@@ -281,6 +281,7 @@ async def run_agent(
     resume_session_id: str = "",
     resume_reason: str = "",
     continue_task: str = "",
+    external_fetch_policy: str = "",
 ) -> AsyncGenerator[dict[str, Any], None]:
     """
     Async generator yielding agent events (ReAct-style, streaming-compatible):

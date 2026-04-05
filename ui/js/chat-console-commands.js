@@ -43,6 +43,7 @@ function axonChatConsoleCommandsMixin() {
       if (!spec) return false;
 
       const now = new Date().toISOString();
+      this.rememberComposerHistory?.(spec.message || message);
       this.chatInput = '';
       this.followUpSuggestions = [];
       this._userScrolled = false;

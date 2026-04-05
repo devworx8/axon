@@ -1,0 +1,72 @@
+          <aside class="space-y-4 xl:sticky xl:top-4 self-start">
+            <div class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-4 shadow-[0_22px_70px_rgba(2,6,23,0.45)]">
+              <div class="text-[10px] uppercase tracking-[0.3em] text-slate-500">Live Rail</div>
+              <div class="mt-2 text-sm font-semibold text-white">Current control posture</div>
+              <div class="mt-3 space-y-2">
+                <div class="rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-3">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Backend</div>
+                  <div class="mt-1 text-sm font-medium text-white" x-text="runtimeStatus.runtime_label || backendBadge()"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-3">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Model</div>
+                  <div class="mt-1 text-sm font-medium text-white" x-text="runtimeStatus.active_model || selectedApiProviderModel() || settingsForm.ollama_model || 'Pending'"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-3">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Public reach</div>
+                  <div class="mt-1 text-sm font-medium text-white"
+                       x-text="connectionState.stable_domain_status === 'active' ? 'Stable domain live' : (connectionState.tunnel_active ? 'Tunnel active' : 'Local-only path')"></div>
+                  <div class="mt-1 text-[11px] text-slate-500" x-text="connectionState.stable_domain || connectionState.tunnel_url || 'No public URL'"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-3">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Voice readiness</div>
+                  <div class="mt-1 text-sm font-medium text-white"
+                       x-text="voice.server?.transcription_available || voice.server?.synthesis_available ? 'Local voice present' : 'Voice pending'"></div>
+                  <div class="mt-1 text-[11px] text-slate-500" x-text="voice.server?.detail || 'No local voice telemetry yet.'"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-4 shadow-[0_22px_70px_rgba(2,6,23,0.45)]">
+              <div class="text-[10px] uppercase tracking-[0.3em] text-slate-500">Quick Actions</div>
+              <div class="mt-2 space-y-2">
+                <button @click="saveSettings()" :disabled="settingsSaving"
+                        class="w-full rounded-2xl border border-cyan-400/30 bg-cyan-400/12 px-3 py-2 text-left text-xs font-medium text-cyan-100 transition hover:bg-cyan-400/18 disabled:opacity-40">
+                  <span x-text="settingsSaving ? 'Saving configuration…' : 'Save current draft'"></span>
+                </button>
+                <button @click="loadSettings(); loadRuntimeStatus(); loadSystemActions(); refreshVaultProviderKeys(); loadVoiceStatus(true)"
+                        class="w-full rounded-2xl border border-slate-700 bg-slate-900/70 px-3 py-2 text-left text-xs font-medium text-slate-300 transition hover:border-slate-500 hover:text-white">
+                  Refresh all telemetry
+                </button>
+                <button @click="runScan()" :disabled="scanning"
+                        class="w-full rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-left text-xs font-medium text-amber-200 transition hover:bg-amber-500/15 disabled:opacity-40">
+                  <span x-text="scanning ? 'Scanning workspace fabric…' : 'Run workspace scan'"></span>
+                </button>
+                <button @click="settingsSection = 'security'; loadSystemActions()"
+                        class="w-full rounded-2xl border border-slate-700 bg-slate-900/70 px-3 py-2 text-left text-xs font-medium text-slate-300 transition hover:border-slate-500 hover:text-white">
+                  Review system actions
+                </button>
+              </div>
+              <div class="mt-3 text-[10px] text-slate-500" x-text="settingsSaved ? 'Last save committed successfully.' : 'Unsaved changes remain in this browser session until you commit them.'"></div>
+            </div>
+
+            <div class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-4 shadow-[0_22px_70px_rgba(2,6,23,0.45)]">
+              <div class="text-[10px] uppercase tracking-[0.3em] text-slate-500">Operational Footprint</div>
+              <div class="mt-3 grid gap-2">
+                <div class="rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-3">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Resources</div>
+                  <div class="mt-1 text-sm font-medium text-white" x-text="`${runtimeStatus.resource_bank?.count || resources.length} items`"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-3">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Memory layers</div>
+                  <div class="mt-1 text-sm font-medium text-white" x-text="runtimeStatus.memory_overview?.total || 0"></div>
+                  <div class="mt-1 text-[11px] text-slate-500"
+                       x-text="Object.entries(runtimeStatus.memory_overview?.layers || {}).map(([key, value]) => `${key}:${value}`).join(' · ') || 'No memory telemetry yet'"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-3">
+                  <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Terminal posture</div>
+                  <div class="mt-1 text-sm font-medium text-white" x-text="String(settingsForm.terminal_default_mode || 'read_only').replace(/_/g, ' ')"></div>
+                  <div class="mt-1 text-[11px] text-slate-500" x-text="`Timeout ${settingsForm.terminal_command_timeout_seconds || '25'}s · max ${settingsForm.max_agent_iterations || '75'} iterations`"></div>
+                </div>
+              </div>
+            </div>
+          </aside>

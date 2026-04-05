@@ -47,14 +47,14 @@ class AuthRouteHandlers:
         self._revoke_companion_device_id = revoke_companion_device_id
 
     async def auth_status(self, request: Request):
-        if self._dev_local_auth_bypass_active(request):
+        async with self._db.get_db() as conn:
+            pin_hash = await self._db.get_setting(conn, "auth_pin_hash")
+        if not pin_hash and self._dev_local_auth_bypass_active(request):
             return {
                 "auth_enabled": False,
                 "session_valid": True,
                 "dev_bypass": True,
             }
-        async with self._db.get_db() as conn:
-            pin_hash = await self._db.get_setting(conn, "auth_pin_hash")
         token = self._extract_session_token(request)
         return {
             "auth_enabled": bool(pin_hash),

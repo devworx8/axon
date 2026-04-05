@@ -1,0 +1,43 @@
+          <div class="console-mode-strip flex flex-wrap items-center gap-2 px-1 pb-2 border-b border-slate-800/70">
+            <button
+              @click="chooseConversationModeAsk()"
+              class="console-mode-chip"
+              :class="activePrimaryConversationMode() === 'ask' ? 'console-mode-chip-active console-mode-chip-ask' : 'console-mode-chip-idle'">
+              Ask
+            </button>
+
+            <button
+              @click="chooseConversationModeAuto()"
+              class="console-mode-chip"
+              :class="activePrimaryConversationMode() === 'auto' ? 'console-mode-chip-active console-mode-chip-auto' : 'console-mode-chip-idle'">
+              Autonomous
+            </button>
+
+            <button
+              @click="chooseConversationModeAgent()"
+              class="console-mode-chip"
+              :class="activePrimaryConversationMode() === 'agent' ? 'console-mode-chip-active console-mode-chip-agent' : 'console-mode-chip-idle'">
+              Agent
+            </button>
+
+            <button
+              @click="chooseConversationModeCode()"
+              class="console-mode-chip"
+              :class="activePrimaryConversationMode() === 'code' ? 'console-mode-chip-active console-mode-chip-code' : 'console-mode-chip-idle'">
+              Code
+            </button>
+
+            <button
+              @click="toggleBusinessMode(true)"
+              class="console-mode-chip"
+              :class="activePrimaryConversationMode() === 'business' ? 'console-mode-chip-active console-mode-chip-business' : 'console-mode-chip-idle'">
+              Business
+            </button>
+
+            <button
+              @click="chooseConversationModeResearch()"
+              class="console-mode-chip"
+              :class="activePrimaryConversationMode() === 'research' ? 'console-mode-chip-active console-mode-chip-research' : 'console-mode-chip-idle'">
+              Research
+            </button>
+          </div>

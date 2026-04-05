@@ -1,0 +1,487 @@
+          <section x-show="settingsSection === 'runtime'" class="space-y-4">
+            <div class="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+              <div class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-5 shadow-[0_22px_70px_rgba(2,6,23,0.45)]">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-[11px] uppercase tracking-[0.28em] text-slate-500">Runtime Core</div>
+                    <div class="mt-2 text-lg font-semibold text-white">Choose Axon’s primary execution lane</div>
+                    <div class="mt-1 text-sm text-slate-400">Local Ollama, Codex/CLI, or external providers. The selected lane drives chat, orchestration, and model routing.</div>
+                  </div>
+                  <span class="rounded-full border border-slate-700 bg-slate-950/70 px-3 py-1 text-[10px] uppercase tracking-[0.18em] text-slate-300"
+                        x-text="settingsForm.ai_backend || 'runtime'"></span>
+                </div>
+
+                <div class="mt-5 rounded-2xl border border-slate-800 bg-slate-900/50 p-4">
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <div class="text-xs font-semibold text-slate-300">UI Text Size</div>
+                      <div class="text-[11px] text-slate-500">Scale console bubbles, panels, metadata, and code blocks without leaving this deck.</div>
+                    </div>
+                    <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 text-[9px] uppercase tracking-[0.18em] text-slate-400">Global</span>
+                  </div>
+                  <div class="mt-3 flex items-center justify-between gap-3 rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-3">
+                    <div class="text-[11px] text-slate-500">Shortcuts: <span class="font-mono text-slate-400">Ctrl/Cmd +/-</span> and <span class="font-mono text-slate-400">0</span></div>
+                    <div class="inline-flex items-center gap-1 rounded-xl border border-slate-800 bg-slate-900/70 px-1.5 py-1 text-[10px] text-slate-300 shrink-0">
+                      <button @click="adjustConsoleZoom(-0.05)" class="rounded-lg px-2 py-1 hover:bg-slate-800 transition" title="Zoom out">A-</button>
+                      <button @click="resetConsoleZoom()" class="rounded-lg px-2 py-1 text-slate-400 hover:bg-slate-800 hover:text-white transition" :title="'Reset console zoom (' + consoleZoomPercent() + ')'"><span x-text="consoleZoomPercent()"></span></button>
+                      <button @click="adjustConsoleZoom(0.05)" class="rounded-lg px-2 py-1 hover:bg-slate-800 transition" title="Zoom in">A+</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="mt-4">
+                  <label class="block text-[10px] uppercase tracking-[0.2em] text-slate-500 mb-2">Primary Runtime</label>
+                  <div class="grid gap-2" :class="runtimeStatus.local_models_enabled ? 'md:grid-cols-3' : 'md:grid-cols-2'">
+                    <button x-show="runtimeStatus.local_models_enabled" @click="settingsForm.ai_backend = 'ollama'; checkOllamaStatus(); loadOllamaModels()"
+                            :class="settingsForm.ai_backend === 'ollama' ? 'border-cyan-400/35 bg-cyan-400/12 text-cyan-100' : 'border-slate-800 bg-slate-900/60 text-slate-400 hover:border-slate-600 hover:text-white'"
+                            class="rounded-2xl border px-4 py-4 text-left transition">
+                      <div class="text-sm font-semibold">Local Ollama</div>
+                      <div class="mt-1 text-[11px] text-inherit/80">Self-hosted local lane with zero external calls.</div>
+                    </button>
+                    <button @click="settingsForm.ai_backend = 'cli'"
+                            :class="settingsForm.ai_backend === 'cli' ? 'border-emerald-400/35 bg-emerald-400/12 text-emerald-100' : 'border-slate-800 bg-slate-900/60 text-slate-400 hover:border-slate-600 hover:text-white'"
+                            class="rounded-2xl border px-4 py-4 text-left transition">
+                      <div class="text-sm font-semibold">CLI Agent</div>
+                      <div class="mt-1 text-[11px] text-inherit/80">Codex or Claude CLI bridge for local operator work.</div>
+                    </button>
+                    <button @click="settingsForm.ai_backend = 'api'"
+                            :class="settingsForm.ai_backend === 'api' ? 'border-blue-400/35 bg-blue-400/12 text-blue-100' : 'border-slate-800 bg-slate-900/60 text-slate-400 hover:border-slate-600 hover:text-white'"
+                            class="rounded-2xl border px-4 py-4 text-left transition">
+                      <div class="text-sm font-semibold">API Models</div>
+                      <div class="mt-1 text-[11px] text-inherit/80">External providers for premium reasoning or fallback lanes.</div>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-5 shadow-[0_22px_70px_rgba(2,6,23,0.45)]">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-[11px] uppercase tracking-[0.28em] text-slate-500">Telemetry</div>
+                    <div class="mt-2 text-lg font-semibold text-white">Live runtime posture</div>
+                    <div class="mt-1 text-sm text-slate-400">This is the actual state the runtime is exposing right now, not only the saved preference.</div>
+                  </div>
+                  <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 text-[9px] uppercase tracking-[0.18em] text-slate-400">Truth</span>
+                </div>
+
+                <div class="mt-4 grid gap-2 sm:grid-cols-2">
+                  <div class="rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-3">
+                    <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Runtime label</div>
+                    <div class="mt-1 text-sm font-medium text-white" x-text="runtimeStatus.runtime_label || backendBadge()"></div>
+                  </div>
+                  <div class="rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-3">
+                    <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Active model</div>
+                    <div class="mt-1 text-sm font-medium text-white" x-text="runtimeStatus.active_model || selectedApiProviderModel() || settingsForm.ollama_model || 'Unresolved'"></div>
+                  </div>
+                  <div class="rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-3">
+                    <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Vault state</div>
+                    <div class="mt-1 text-sm font-medium text-white" x-text="runtimeStatus.vault_state || (vaultUnlocked ? 'Unlocked' : 'Locked')"></div>
+                  </div>
+                  <div class="rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-3">
+                    <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Memory state</div>
+                    <div class="mt-1 text-sm font-medium text-white" x-text="runtimeStatus.memory_state || 'Pending'"></div>
+                  </div>
+                  <div class="rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-3">
+                    <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Active agents</div>
+                    <div class="mt-1 text-sm font-medium text-white" x-text="runtimeStatus.active_agents_count || 0"></div>
+                  </div>
+                  <div class="rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-3">
+                    <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">GPU guard</div>
+                    <div class="mt-1 text-sm font-medium text-white" x-text="runtimeStatus.gpu_guard?.warning ? 'Guard active' : 'Normal'"></div>
+                  </div>
+                </div>
+
+                <div class="mt-3 rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-3 text-[11px] text-slate-400"
+                     x-text="runtimeStatus.gpu_guard?.warning || runtimeStatus.connection?.stable_domain_detail || 'No active cooldown or runtime fallback warning detected.'"></div>
+              </div>
+            </div>
+
+            <div x-show="settingsForm.ai_backend === 'api' || settingsForm.cloud_agents_enabled" class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-5 shadow-[0_22px_70px_rgba(2,6,23,0.45)] space-y-4">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-[11px] uppercase tracking-[0.28em] text-slate-500">External Provider</div>
+                  <div class="mt-2 text-lg font-semibold text-white">API Runtime Provider</div>
+                  <div class="mt-1 text-sm text-slate-400">DeepSeek stays the default. Claude and Gemini can remain configured but dormant until you switch or enable them.</div>
+                </div>
+                <span class="rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1 text-[10px] uppercase tracking-[0.18em] text-blue-200">External</span>
+              </div>
+
+              <div class="grid gap-4 lg:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Runtime provider</label>
+                  <select x-model="settingsForm.api_provider"
+                          class="dark-select w-full border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 focus:border-blue-500 transition">
+                    <template x-for="provider in (runtimeStatus.api_providers || [])" :key="provider.id">
+                      <option :value="provider.id" x-text="provider.label"></option>
+                    </template>
+                  </select>
+                </div>
+
+                <div x-show="activeApiProviderCard()" class="rounded-2xl border border-slate-800 bg-slate-900/55 px-4 py-3">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-sm font-medium text-white" x-text="activeApiProviderCard()?.label || 'External API'"></div>
+                      <div class="mt-1 text-[11px] text-slate-500" x-text="activeApiProviderCard()?.description || ''"></div>
+                    </div>
+                    <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-300"
+                          x-text="selectedApiProviderTransportLabel()"></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="grid gap-3 md:grid-cols-2">
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Base URL</label>
+                  <input :value="providerValue(settingsForm.api_provider, 'base_url')"
+                         @input="setProviderValue(settingsForm.api_provider, 'base_url', $event.target.value)"
+                         :placeholder="activeApiProviderCard()?.default_base_url || 'https://api.example.com/v1'"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono" />
+                </div>
+                <div>
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Model</label>
+                  <input :value="providerValue(settingsForm.api_provider, 'model')"
+                         @input="setProviderValue(settingsForm.api_provider, 'model', $event.target.value)"
+                         :placeholder="activeApiProviderCard()?.model_placeholder || activeApiProviderCard()?.default_model || 'model-name'"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono" />
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">API Key</label>
+                <div class="flex flex-col gap-2 sm:flex-row">
+                  <div class="flex-1 relative">
+                    <input :value="providerValue(settingsForm.api_provider, 'api_key')"
+                           @input="setProviderValue(settingsForm.api_provider, 'api_key', $event.target.value)"
+                           :placeholder="vaultProviderKeys[settingsForm.api_provider] ? 'Vault key attached' : providerKeyPlaceholder(settingsForm.api_provider)"
+                           type="password"
+                           :disabled="!!vaultProviderKeys[settingsForm.api_provider]"
+                           class="w-full bg-slate-800 border rounded-2xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 transition font-mono"
+                           :class="vaultProviderKeys[settingsForm.api_provider] ? 'border-emerald-600/50 opacity-60' : 'border-slate-700'" />
+                    <span x-show="vaultProviderKeys[settingsForm.api_provider]" class="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-400 text-xs">Vault</span>
+                  </div>
+                  <button @click="testCloudProvider(settingsForm.api_provider)"
+                          class="w-full sm:w-auto rounded-2xl border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500">
+                    Test provider
+                  </button>
+                </div>
+                <p x-show="vaultProviderKeys[settingsForm.api_provider]" class="mt-1 text-[10px] text-emerald-400">
+                  Key resolved from Secure Vault. Manage secrets in the <button @click="activeTab='vault'" class="underline hover:text-emerald-300">Vault</button>.
+                </p>
+                <p x-show="!vaultProviderKeys[settingsForm.api_provider] && vaultUnlocked" class="mt-1 text-[10px] text-amber-400">
+                  Vault is unlocked, but no matching key was found for this provider.
+                </p>
+                <p x-show="cloudProviderTests[settingsForm.api_provider]?.message"
+                   :class="cloudProviderTests[settingsForm.api_provider]?.ok ? 'text-emerald-400' : 'text-amber-300'"
+                   class="mt-1 text-[10px]"
+                   x-text="cloudProviderTests[settingsForm.api_provider]?.message"></p>
+              </div>
+            </div>
+
+            <div x-show="settingsForm.ai_backend === 'cli'" class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-5 shadow-[0_22px_70px_rgba(2,6,23,0.45)] space-y-4">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-[11px] uppercase tracking-[0.28em] text-slate-500">CLI Bridge</div>
+                  <div class="mt-2 text-lg font-semibold text-white">Local runtime extensions</div>
+                  <div class="mt-1 text-sm text-slate-400">Inspect local CLI bridges honestly. Axon will tell you what is installed, which binary is selected, and which command to run when manual setup is required.</div>
+                </div>
+                <button @click="loadRuntimeStatus()"
+                        class="rounded-2xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs font-medium text-slate-300 transition hover:border-slate-500 hover:text-white">
+                  Refresh runtime
+                </button>
+              </div>
+
+              <div class="grid gap-3 xl:grid-cols-2">
+                <template x-for="ext in (runtimeStatus.local_extensions || [])" :key="ext.id">
+                  <div class="rounded-2xl border border-slate-800 bg-slate-900/55 p-4">
+                    <div class="flex items-start justify-between gap-3">
+                      <div>
+                        <div class="text-sm font-semibold text-white" x-text="ext.label"></div>
+                        <div class="mt-1 text-[11px] text-slate-500" x-text="ext.description"></div>
+                      </div>
+                      <span class="rounded-full border px-2.5 py-1 text-[9px] uppercase tracking-[0.18em]"
+                            :class="ext.runtime?.installed ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200' : 'border-amber-500/25 bg-amber-500/10 text-amber-200'"
+                            x-text="ext.runtime?.installed ? 'Installed' : 'Missing'"></span>
+                    </div>
+
+                    <div class="mt-3 grid gap-2 sm:grid-cols-3">
+                      <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                        <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Binary</div>
+                        <div class="mt-1 text-xs font-medium text-slate-100 truncate" x-text="ext.runtime?.binary_name || ext.runtime?.runtime_id || 'unknown'"></div>
+                      </div>
+                      <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                        <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Version</div>
+                        <div class="mt-1 text-xs font-medium text-slate-100 truncate" x-text="ext.runtime?.version || 'Not installed'"></div>
+                      </div>
+                      <div class="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                        <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Auth</div>
+                        <div class="mt-1 text-xs font-medium"
+                             :class="ext.runtime?.auth?.logged_in ? 'text-emerald-200' : 'text-amber-200'"
+                             x-text="ext.runtime?.auth?.message || (ext.runtime?.auth?.logged_in ? 'Ready' : 'Needs sign-in')"></div>
+                      </div>
+                    </div>
+
+                    <div class="mt-3 flex flex-wrap gap-2">
+                      <button @click="navigator.clipboard?.writeText(ext.runtime?.install_command || ''); showToast('Install command copied')"
+                              :disabled="!ext.runtime?.install_command"
+                              class="rounded-xl border border-cyan-500/25 bg-cyan-500/10 px-3 py-2 text-xs font-medium text-cyan-200 transition hover:bg-cyan-500/15 disabled:opacity-40">
+                        Copy install command
+                      </button>
+                      <button @click="navigator.clipboard?.writeText(ext.runtime?.login_command || ''); showToast('Login command copied')"
+                              :disabled="!ext.runtime?.login_command"
+                              class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500 disabled:opacity-40">
+                        Copy login command
+                      </button>
+                      <button @click="navigator.clipboard?.writeText(ext.runtime?.status_command || ''); showToast('Status command copied')"
+                              :disabled="!ext.runtime?.status_command"
+                              class="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500 disabled:opacity-40">
+                        Copy status command
+                      </button>
+                    </div>
+
+                    <div class="mt-3 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-[11px] text-slate-400">
+                      <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Selected environment</div>
+                      <div class="mt-1 font-mono break-all text-slate-300" x-text="ext.runtime?.selected_environment?.path || ext.runtime?.binary || 'Auto-discovery only'"></div>
+                    </div>
+                  </div>
+                </template>
+              </div>
+
+              <label class="flex items-start gap-3 rounded-2xl border border-slate-800 bg-slate-900/55 px-4 py-4 cursor-pointer">
+                <input x-model="settingsForm.claude_cli_session_persistence_enabled"
+                       type="checkbox"
+                       class="mt-0.5 rounded border-slate-700 bg-slate-900 text-emerald-400 focus:ring-emerald-500/40" />
+                <span>
+                  <span class="block text-xs font-semibold text-slate-300">Reuse Claude Code sessions</span>
+                  <span class="mt-1 block text-[11px] leading-5 text-slate-500">Keep Claude CLI conversational state between turns so Axon behaves more like the editor workflow while still routing actual shell and file actions through Axon.</span>
+                </span>
+              </label>
+
+              <div class="rounded-2xl border border-slate-800 bg-slate-900/55 p-4">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-xs font-semibold text-slate-300">Manual runtime override</div>
+                    <div class="mt-1 text-[11px] text-slate-500">Leave blank for auto-discovery. Only pin a path if you deliberately want Axon to follow one exact binary.</div>
+                  </div>
+                  <button x-show="settingsForm.cli_runtime_path"
+                          @click="settingsForm.cli_runtime_path = ''"
+                          class="rounded-xl border border-slate-700 px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-slate-300 transition hover:border-slate-500 hover:text-white">
+                    Clear override
+                  </button>
+                </div>
+                <div class="mt-3 grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">CLI runtime path</label>
+                    <input x-model="settingsForm.cli_runtime_path"
+                           placeholder="Leave blank to auto-detect"
+                           class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-cyan-500 transition font-mono" />
+                  </div>
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">CLI runtime model</label>
+                    <select x-model="settingsForm.cli_runtime_model"
+                            class="dark-select w-full border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 focus:border-cyan-500 transition">
+                      <template x-for="model in (runtimeStatus.cli_models || [])" :key="model.id">
+                        <option :value="model.id" x-text="model.label"></option>
+                      </template>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div x-show="runtimeStatus.local_models_enabled && settingsForm.ai_backend === 'ollama'" class="space-y-4">
+              <div class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-5 shadow-[0_22px_70px_rgba(2,6,23,0.45)]" x-init="$watch('settingsForm.ai_backend', v => { if(v==='ollama') loadOllamaModels(); })">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-[11px] uppercase tracking-[0.28em] text-slate-500">Local Ollama</div>
+                    <div class="mt-2 text-lg font-semibold text-white">Model lane + execution mode</div>
+                    <div class="mt-1 text-sm text-slate-400">Manage the local endpoint, current execution lane, installed models, and fast GPU safety mode switching.</div>
+                  </div>
+                  <button @click="checkOllamaStatus(); loadOllamaModels()"
+                          class="rounded-2xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs font-medium text-slate-300 transition hover:border-slate-500 hover:text-white">
+                    Refresh
+                  </button>
+                </div>
+
+                <div class="mt-4 flex items-center gap-2">
+                  <div class="w-2 h-2 rounded-full" :class="ollamaStatus.running ? 'bg-emerald-400' : 'bg-rose-400'"></div>
+                  <span class="text-xs" :class="ollamaStatus.running ? 'text-emerald-300' : 'text-rose-300'" x-text="ollamaStatusLabel()"></span>
+                </div>
+
+                <div x-show="runtimeStatus.gpu_guard?.warning" class="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/8 px-3 py-2 text-[11px] text-amber-200">
+                  <div class="font-medium text-amber-300 mb-0.5">GPU safety note</div>
+                  <div x-text="runtimeStatus.gpu_guard.warning"></div>
+                </div>
+
+                <div class="mt-4 rounded-2xl border border-slate-800 bg-slate-900/55 p-4">
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <div class="text-xs font-semibold text-slate-300">Execution lane</div>
+                      <div class="mt-1 text-[11px] text-slate-500">CPU Safe stays conservative. GPU Default is faster when NVIDIA health is clean.</div>
+                    </div>
+                    <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-slate-300" x-text="ollamaRuntimeModeLabel()"></span>
+                  </div>
+                  <div class="mt-3 grid grid-cols-2 gap-2">
+                    <button @click="switchOllamaRuntimeMode('cpu_safe')"
+                            :disabled="ollamaRuntimeSwitching"
+                            :class="ollamaRuntimeModeLabel() === 'CPU Safe' ? 'border-emerald-500/35 bg-emerald-500/12 text-emerald-200' : 'border-slate-700 text-slate-400 hover:border-slate-500'"
+                            class="rounded-xl border px-3 py-2 text-xs font-medium transition disabled:opacity-50">
+                      CPU Safe
+                    </button>
+                    <button @click="switchOllamaRuntimeMode('gpu_default')"
+                            :disabled="ollamaRuntimeSwitching"
+                            :class="ollamaRuntimeModeLabel() === 'GPU Default' ? 'border-cyan-500/35 bg-cyan-500/12 text-cyan-200' : 'border-slate-700 text-slate-400 hover:border-slate-500'"
+                            class="rounded-xl border px-3 py-2 text-xs font-medium transition disabled:opacity-50">
+                      GPU Default
+                    </button>
+                  </div>
+                  <div class="mt-2 text-[10px] text-slate-500" x-text="ollamaRuntimeSwitching ? 'Switching runtime lane…' : (ollamaStatus.service_detail || 'Axon will reconnect to the selected Ollama lane.')"></div>
+                </div>
+
+                <div class="mt-4 grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Ollama URL</label>
+                    <input x-model="settingsForm.ollama_url"
+                           placeholder="http://localhost:11434"
+                           class="w-full bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-cyan-500 transition font-mono" />
+                  </div>
+                  <div>
+                    <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Default console model</label>
+                    <select x-model="settingsForm.ollama_model"
+                            class="dark-select w-full border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 focus:border-cyan-500 transition">
+                      <option value="">Auto-select from local routing</option>
+                      <template x-for="m in ollamaModels" :key="m.name">
+                        <option :value="m.name" x-text="m.name + ' — ' + m.size_gb + 'GB'"></option>
+                      </template>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                  <div>
+                    <div class="mb-2 flex items-center justify-between">
+                      <span class="text-xs font-medium text-slate-400">Installed models</span>
+                      <span class="text-[10px] text-slate-500" x-text="`${ollamaModels.length} model(s)`"></span>
+                    </div>
+                    <div x-show="modelsLoading" class="text-[11px] text-slate-500 py-2">Loading…</div>
+                    <div class="space-y-1" x-show="!modelsLoading">
+                      <template x-for="m in ollamaModels" :key="m.name">
+                        <div class="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/55 px-3 py-2 text-xs">
+                          <span class="text-slate-200 font-mono" x-text="m.name"></span>
+                          <div class="flex items-center gap-2">
+                            <span class="text-slate-500" x-text="m.size_gb + 'GB'"></span>
+                            <button @click="deleteModel(m.name)" class="text-rose-400/70 hover:text-rose-300 text-[10px]">Remove</button>
+                          </div>
+                        </div>
+                      </template>
+                      <div x-show="ollamaModels.length === 0" class="text-[11px] text-slate-600 py-1">No local models installed.</div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div class="mb-2 text-xs font-medium text-slate-400">Recommended models</div>
+                    <div class="space-y-2">
+                      <template x-for="m in ollamaRecommended" :key="m.name">
+                        <div class="rounded-xl border border-slate-800 bg-slate-900/55 px-3 py-3 text-xs">
+                          <div class="flex items-center justify-between gap-2">
+                            <div class="min-w-0">
+                              <div class="flex items-center gap-2">
+                                <div class="text-slate-200 font-mono" x-text="m.name"></div>
+                                <span x-show="m.risky" class="rounded-full border border-amber-500/35 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-amber-300">Risky</span>
+                              </div>
+                              <div class="mt-1 text-[10px] text-slate-500" x-text="m.desc"></div>
+                            </div>
+                            <div class="text-[10px] text-slate-500" x-text="m.size_gb + 'GB'"></div>
+                          </div>
+                          <div x-show="m.warning" class="mt-1 text-[10px] text-amber-300/90" x-text="m.warning"></div>
+                          <div class="mt-2 flex items-center gap-2">
+                            <div x-show="m.installed" class="text-emerald-400 text-[10px]">Installed ✓</div>
+                            <button x-show="!m.installed && !modelPullProgress[m.name]"
+                                    @click="pullModel(m.name)"
+                                    class="rounded-lg bg-cyan-500/15 px-2.5 py-1 text-[10px] text-cyan-200 transition hover:bg-cyan-500/20">
+                              Pull
+                            </button>
+                            <div x-show="modelPullProgress[m.name]" class="text-[10px] text-cyan-300" x-text="modelPullProgress[m.name]?.label || '…'"></div>
+                          </div>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="mt-4">
+                  <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Pull any Ollama model</label>
+                  <div class="flex gap-2">
+                    <input x-model="customModelName"
+                           placeholder="e.g. deepseek-r1:7b"
+                           class="flex-1 bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-cyan-500 transition font-mono" />
+                    <button @click="pullCustomModel()" :disabled="!customModelName.trim()"
+                            class="rounded-2xl bg-cyan-500/15 px-4 py-2 text-xs font-medium text-cyan-200 transition hover:bg-cyan-500/20 disabled:opacity-40">
+                      Pull
+                    </button>
+                  </div>
+                  <p class="mt-1 text-[10px] text-slate-500">Any valid Ollama tag can be pulled, not only the recommended set.</p>
+                </div>
+              </div>
+
+              <div class="rounded-[28px] border border-slate-800/90 bg-slate-950/90 p-5 shadow-[0_22px_70px_rgba(2,6,23,0.45)]">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-[11px] uppercase tracking-[0.28em] text-slate-500">Role Routing</div>
+                    <div class="mt-2 text-lg font-semibold text-white">Local model routes by role</div>
+                    <div class="mt-1 text-sm text-slate-400">Each route can stay auto-discovered or be pinned to one installed model family.</div>
+                  </div>
+                  <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-slate-400"
+                        x-text="`${runtimeStatus.local_models?.length || 0} route(s)`"></span>
+                </div>
+
+                <div class="mt-4 grid gap-3">
+                  <template x-for="model in (runtimeStatus.local_models || [])" :key="model.role">
+                    <div class="rounded-2xl border border-slate-800 bg-slate-900/55 p-4">
+                      <div class="flex items-center justify-between gap-3">
+                        <div>
+                          <div class="text-sm font-medium text-white" x-text="model.label"></div>
+                          <div class="mt-1 text-[11px] text-slate-500" x-text="model.description"></div>
+                        </div>
+                        <div class="text-right">
+                          <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500" x-text="model.role"></div>
+                          <div class="text-xs text-slate-300 font-mono" x-text="model.resolved_model || model.default_family"></div>
+                        </div>
+                      </div>
+                      <div class="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+                        <div>
+                          <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Preferred family</div>
+                          <div class="text-xs text-slate-300 font-mono" x-text="model.default_family"></div>
+                          <div class="mt-2 flex flex-wrap gap-1">
+                            <template x-for="fallback in (model.fallbacks || [])" :key="fallback">
+                              <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400" x-text="fallback"></span>
+                            </template>
+                          </div>
+                        </div>
+                        <div>
+                          <label class="block text-[10px] uppercase tracking-[0.16em] text-slate-500 mb-1">Route model</label>
+                          <select :value="settingsForm[roleSettingKey(model.role)] || ''"
+                                  @change="settingsForm[roleSettingKey(model.role)] = $event.target.value"
+                                  class="dark-select w-full border border-slate-700 rounded-2xl px-3 py-2 text-sm text-slate-100 focus:border-cyan-500 transition">
+                            <option value="">Auto-discover</option>
+                            <template x-for="choice in modelOptionsForRole(model)" :key="choice.value">
+                              <option :value="choice.value" x-text="choice.label"></option>
+                            </template>
+                          </select>
+                        </div>
+                      </div>
+                      <div class="mt-2 flex flex-wrap gap-1.5">
+                        <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-300" x-text="model.status_label || 'Pending'"></span>
+                        <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400" x-text="`Route: ${model.route_source || 'default'}`"></span>
+                        <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400" x-text="`${model.match_count || 0} local match${(model.match_count || 0) === 1 ? '' : 'es'}`"></span>
+                      </div>
+                      <div class="mt-2 text-[10px] text-slate-500" x-text="routePreviewText(model)"></div>
+                      <div x-show="model.family_matches?.length" class="mt-2 text-[10px] text-slate-500">
+                        Installed matches:
+                        <span class="font-mono text-slate-400" x-text="(model.family_matches || []).join(', ')"></span>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </section>

@@ -1,0 +1,20 @@
+        <div x-show="chatMessages.length === 0" class="console-empty-shell flex flex-col items-center justify-center h-full text-center px-4">
+          <div class="relative mb-4">
+            <div @click="toggleVoiceMode()" class="axon-orb cursor-pointer" :class="orbState()" title="Click to toggle voice mode">
+              <div class="axon-orb-inner">✦</div>
+            </div>
+            <div x-show="voiceMode" class="voice-mode-badge" title="Voice mode active"></div>
+          </div>
+          <div class="console-empty-kicker" x-text="consolePrimaryModeMeta().kicker"></div>
+          <div class="console-empty-title">Axon Console</div>
+          <div class="console-empty-copy" x-text="consolePrimaryModeMeta().summary"></div>
+          <div class="console-quickstart-grid">
+            <template x-for="hint in consoleQuickStartHints()" :key="hint.prompt">
+              <button @click="chatInput = hint.prompt; sendChat()"
+                      class="console-quickstart-chip text-left press-scale">
+                <span class="console-quickstart-label" x-text="hint.label"></span>
+                <span class="console-quickstart-detail" x-text="hint.detail"></span>
+              </button>
+            </template>
+          </div>
+        </div>

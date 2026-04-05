@@ -335,6 +335,7 @@ export function AppNavigatorBody({
           onUnlockVault={onUnlockVault}
           onUnlockVaultWithBiometrics={onUnlockVaultWithBiometrics}
           onLockVault={onLockVault}
+          axonStatus={mission?.snapshot?.axon || null}
         />
       );
     case 'mission':

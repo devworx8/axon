@@ -1,3 +1,5 @@
+import Constants from 'expo-constants';
+
 import { CompanionConfig, CompanionTokenPair } from '@/types/companion';
 import {
   COMPANION_SESSION_EXPIRED_MESSAGE,
@@ -5,9 +7,74 @@ import {
 } from '@/features/auth/sessionState';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:7734';
+const DEFAULT_AXON_PORT = '7734';
 
 function normalizeBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, '');
+}
+
+function readExpoExtraApiBaseUrl(): string {
+  const expoConfig = (Constants as { expoConfig?: Record<string, unknown> } | null | undefined)?.expoConfig;
+  const manifest = (Constants as { manifest?: Record<string, unknown> } | null | undefined)?.manifest;
+  const manifest2 = (Constants as { manifest2?: Record<string, unknown> } | null | undefined)?.manifest2;
+  const configExtra = (expoConfig as { extra?: Record<string, unknown> } | null | undefined)?.extra;
+  const manifestExtra = (manifest as { extra?: Record<string, unknown> } | null | undefined)?.extra;
+  const manifest2Extra = (manifest2 as { extra?: Record<string, unknown> } | null | undefined)?.extra;
+  const candidate = (
+    configExtra?.apiBaseUrl
+    || manifestExtra?.apiBaseUrl
+    || manifest2Extra?.apiBaseUrl
+  );
+  return typeof candidate === 'string' ? normalizeBaseUrl(candidate) : '';
+}
+
+function readExpoHostUri(): string {
+  const config = (Constants as { expoConfig?: Record<string, unknown> } | null | undefined)?.expoConfig;
+  const manifest = (Constants as { manifest?: Record<string, unknown> } | null | undefined)?.manifest;
+  const manifest2 = (Constants as { manifest2?: Record<string, unknown> } | null | undefined)?.manifest2;
+  const hostCandidate = (
+    config?.hostUri
+    || config?.debuggerHost
+    || manifest?.hostUri
+    || manifest?.debuggerHost
+    || (manifest2?.extra as Record<string, unknown> | null | undefined)?.expoClient?.hostUri
+    || (manifest2?.extra as Record<string, unknown> | null | undefined)?.expoClient?.debuggerHost
+    || manifest2?.hostUri
+    || manifest2?.debuggerHost
+  );
+  return typeof hostCandidate === 'string' ? hostCandidate : '';
+}
+
+function deriveBaseUrlFromHostUri(hostUri: string): string {
+  const trimmed = String(hostUri || '').trim();
+  if (!trimmed) return '';
+  let host = trimmed.replace(/^exp:\/\//i, '').replace(/^https?:\/\//i, '');
+  host = host.split('/')[0];
+  const hostname = host.split(':')[0];
+  if (!hostname) return '';
+  return `http://${hostname}:${DEFAULT_AXON_PORT}`;
+}
+
+function isLoopbackBaseUrl(value: string): boolean {
+  const normalized = normalizeBaseUrl(value);
+  return (
+    normalized.includes('127.0.0.1')
+    || normalized.includes('localhost')
+    || normalized.includes('[::1]')
+  );
+}
+
+export function getSuggestedApiBaseUrl(): string {
+  const explicit = normalizeBaseUrl(
+    readExpoExtraApiBaseUrl()
+    || process.env.EXPO_PUBLIC_AXON_API_BASE_URL
+    || '',
+  );
+  const derived = normalizeBaseUrl(deriveBaseUrlFromHostUri(readExpoHostUri()));
+  const suggested = explicit
+    ? (isLoopbackBaseUrl(explicit) && derived ? derived : explicit)
+    : (derived || DEFAULT_BASE_URL);
+  return suggested;
 }
 
 export function getApiBaseUrl(config?: CompanionConfig): string {
@@ -15,7 +82,7 @@ export function getApiBaseUrl(config?: CompanionConfig): string {
   if (configured) {
     return configured;
   }
-  return normalizeBaseUrl(process.env.EXPO_PUBLIC_AXON_API_BASE_URL || DEFAULT_BASE_URL);
+  return getSuggestedApiBaseUrl();
 }
 
 function extractApiErrorMessage(status: number, rawBody: string): string {
