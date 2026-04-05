@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from axon_api.routes.chat_route_compat import install_server_chat_stream_compat_shim
 from axon_api.services.chat_special_intents import ChatIntentContext, ChatSpecialIntentService
 
 
@@ -18,7 +19,6 @@ class ChatMessage(BaseModel):
     model: Optional[str] = None
     resource_ids: Optional[list[int]] = None
     composer_options: Optional[dict] = None
-
 
 class ChatRouteHandlers:
     def __init__(
@@ -77,6 +77,7 @@ class ChatRouteHandlers:
             set_live_operator=set_live_operator,
             stored_chat_message=stored_chat_message,
         )
+        install_server_chat_stream_compat_shim()
 
     async def _project_scope(self, conn: Any, project_id: int | None) -> tuple[str | None, str]:
         if not project_id:
@@ -293,7 +294,6 @@ class ChatRouteHandlers:
                         context["history"],
                         context["merged_context_block"],
                         project_name=context["project_name"],
-                        workspace_path=context["workspace_path"],
                         resource_context=context["resource_bundle"]["context_block"],
                         resource_image_paths=context["resource_bundle"]["image_paths"],
                         vision_model=context["resource_bundle"]["vision_model"],

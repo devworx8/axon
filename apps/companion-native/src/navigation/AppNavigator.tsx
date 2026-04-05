@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
+import { Clipboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   fetchMobileVaultProviderKeys,
@@ -15,6 +16,7 @@ import { useAuth } from '@/features/auth/useAuth';
 import { useMobileControl } from '@/features/control/useMobileControl';
 import { useMissionControl } from '@/features/mission/useMissionControl';
 import { usePresence } from '@/features/presence/usePresence';
+import { clearCompanionSession } from '@/features/auth/sessionState';
 import { RiskChallengeSheet } from '@/features/session/RiskChallengeSheet';
 import { useSettings } from '@/features/settings/useSettings';
 import { useVoice } from '@/features/voice/useVoice';
@@ -42,7 +44,9 @@ const EMPTY_INBOX = {
 
 export function AppNavigator() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<TabKey>('mission');
+  const [autoNavEnabled, setAutoNavEnabled] = useState(true);
   const [config, setConfig] = useState<CompanionConfig>({ apiBaseUrl: '', workspaceId: null, sessionId: null, deviceId: null });
   const [deviceName, setDeviceName] = useState('Axon phone');
   const [pairingPin, setPairingPin] = useState('');
@@ -60,6 +64,7 @@ export function AppNavigator() {
   const presence = usePresence(config);
   const mission = useMissionControl(config);
   const control = useMobileControl(config);
+  const lastAutoNavRef = useRef(0);
   const voice = useVoice(config, (nextSession) => {
     setConfig((current) => ({
       ...current,
@@ -134,6 +139,26 @@ export function AppNavigator() {
     return projects[0] || null;
   }, [currentWorkspaceId, mission.snapshot?.projects]);
   const expoProject = focusedProject?.expo || null;
+  const autoNavTarget = useMemo(() => {
+    if (!verifiedPairing || !config.accessToken) return null;
+    if ((control.challenges?.length || 0) > 0 || voice.lastResult?.approval_required) {
+      return 'sessions' as TabKey;
+    }
+    if (Number(attentionSummary.counts?.now || 0) > 0) {
+      return 'attention' as TabKey;
+    }
+    return null;
+  }, [attentionSummary.counts?.now, config.accessToken, control.challenges, verifiedPairing, voice.lastResult?.approval_required]);
+
+  useEffect(() => {
+    if (!autoNavEnabled) return;
+    if (activeTab !== 'mission') return;
+    if (!autoNavTarget) return;
+    const now = Date.now();
+    if (now - lastAutoNavRef.current < 6000) return;
+    lastAutoNavRef.current = now;
+    setActiveTab(autoNavTarget);
+  }, [activeTab, autoNavEnabled, autoNavTarget]);
 
   const syncMission = React.useCallback(async () => {
     await Promise.allSettled([
@@ -263,6 +288,17 @@ export function AppNavigator() {
       setVaultBusy(false);
     }
   }, [config, refreshVault, syncMission]);
+
+  const handleRePair = React.useCallback(() => {
+    setConfig((current) => ({
+      ...clearCompanionSession(current),
+      deviceId: null,
+      sessionId: null,
+      workspaceId: null,
+    }));
+    setPairingPin('');
+    setActiveTab('mission');
+  }, []);
 
   useEffect(() => {
     if (!config.accessToken) return;
@@ -404,12 +440,25 @@ export function AppNavigator() {
       onUnlockVault={() => handleUnlockVault().catch(() => undefined)}
       onUnlockVaultWithBiometrics={() => handleUnlockVaultWithBiometrics().catch(() => undefined)}
       onLockVault={() => handleLockVault().catch(() => undefined)}
+      onCopyAccessToken={
+        __DEV__
+          ? () => {
+            const token = config.accessToken || config.tokenPair?.access_token || '';
+            if (token) {
+              Clipboard.setString(token);
+            }
+          }
+          : undefined
+      }
+      onRePair={handleRePair}
       onSubmitCommand={handleVoiceSubmit}
       onExecuteAction={(actionType, payload) => handleExecuteAction(actionType, payload).catch(() => undefined)}
       onApprovePending={() => handleApprovePending().catch(() => undefined)}
       onConfirmChallenge={(challenge) => handleConfirmChallenge(challenge).catch(() => undefined)}
       onRejectChallenge={(challengeId) => handleRejectChallenge(challengeId).catch(() => undefined)}
       onOpenChallenge={setSelectedChallenge}
+      autoNavEnabled={autoNavEnabled}
+      onToggleAutoNav={() => setAutoNavEnabled((current) => !current)}
       onFocusWorkspace={(workspaceId) => workspaceActions.focusWorkspace(workspaceId).catch(() => undefined)}
       onInspectWorkspace={(workspaceId) => workspaceActions.inspectWorkspace(workspaceId).catch(() => undefined)}
       onRestartPreview={(workspaceId) => workspaceActions.restartPreview(workspaceId).catch(() => undefined)}
@@ -453,8 +502,17 @@ export function AppNavigator() {
     >
       <View style={styles.main}>
         <View style={styles.contentShell}>
-          <View style={[styles.fullBleed, { backgroundColor: colors.background }]}>
+          <View style={[styles.fullBleed, { backgroundColor: colors.background }]}> 
             {body}
+            {(verifiedPairing || config.accessToken) && activeTab !== 'mission' && (
+              <View style={[styles.navOverlay, { top: insets.top + 8 }]}> 
+                <View style={styles.navRow}>
+                  <Pressable style={styles.navButton} onPress={() => setActiveTab('mission')}>
+                    <Text style={styles.navButtonText}>Back</Text>
+                  </Pressable>
+                </View>
+              </View>
+            )}
           </View>
         </View>
       </View>
@@ -483,6 +541,35 @@ const styles = StyleSheet.create({
   },
   fullBleed: {
     flex: 1,
+  },
+  navOverlay: {
+    position: 'absolute',
+    right: 12,
+    gap: 6,
+  },
+  navRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 6,
+  },
+  navButton: {
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: 'rgba(8, 16, 30, 0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(110, 231, 255, 0.2)',
+  },
+  navButtonActive: {
+    backgroundColor: 'rgba(12, 34, 60, 0.75)',
+    borderColor: 'rgba(110, 231, 255, 0.5)',
+  },
+  navButtonText: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    color: '#dff4ff',
+    textTransform: 'uppercase',
   },
   heroKicker: {
     fontSize: 11,

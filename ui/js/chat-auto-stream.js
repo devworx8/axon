@@ -153,7 +153,7 @@ function axonChatAutoStreamMixin() {
       if (!this._autoPreviewAutostarted) this._autoPreviewAutostarted = {};
       if (this._autoPreviewAutostarted[key]) return;
       this._autoPreviewAutostarted[key] = true;
-      queueMicrotask(() => this.ensureWorkspacePreview?.({ openExternal: false, attachBrowser: false, silent: true }));
+      queueMicrotask(() => this.ensureWorkspacePreview?.({ openExternal: false, attachBrowser: true, silent: true }));
     },
 
     autoSessionThreadMode(session = null) {
@@ -187,6 +187,8 @@ function axonChatAutoStreamMixin() {
       }
       this.autoSessions = this.sortAutoSessions?.([...byId.values()]) || [...byId.values()];
       this.syncAutoSessionNoticeForCurrentWorkspace?.();
+      const current = this.currentWorkspaceAutoSession?.() || null;
+      if (current) this.maybeStartAutoWorkspacePreview?.(current);
     },
 
     async startAutoSessionFromChat(message, resourceIds = [], composerOptions = {}, options = {}) {

@@ -95,8 +95,8 @@ class AgentControlRouteHandlers:
         self,
         body: ApproveActionBody,
         *,
-        approval_workspace_root: Callable[[object], Awaitable[str]],
-        normalize_exact_approval_action: Callable[..., dict[str, Any]],
+        approval_workspace_root: Callable[[object], Awaitable[str]] | None = None,
+        normalize_exact_approval_action: Callable[..., dict[str, Any]] | None = None,
     ):
         action = dict(body.action or {})
         scope = str(body.scope or "once").strip().lower()
@@ -104,8 +104,10 @@ class AgentControlRouteHandlers:
             raise HTTPException(400, "Invalid approval scope")
         if not action.get("action_fingerprint"):
             raise HTTPException(400, "approval action fingerprint is required")
-        workspace_root = await approval_workspace_root(action.get("workspace_id"))
-        canonical_action = normalize_exact_approval_action(action, workspace_root=workspace_root)
+        resolve_workspace_root = approval_workspace_root or self.approval_workspace_root
+        normalize_action = normalize_exact_approval_action or self.normalize_exact_approval_action
+        workspace_root = await resolve_workspace_root(action.get("workspace_id"))
+        canonical_action = normalize_action(action, workspace_root=workspace_root)
         if not canonical_action:
             raise HTTPException(400, "approval action could not be validated")
         if canonical_action.get("action_fingerprint") != action.get("action_fingerprint"):
@@ -205,6 +207,7 @@ class AgentControlRouteHandlers:
 def build_agent_control_router(**deps: Any) -> tuple[APIRouter, AgentControlRouteHandlers]:
     handlers = AgentControlRouteHandlers(**deps)
     router = APIRouter(tags=["agent-control"])
+    router.add_api_route("/api/agent/approve-action", handlers.approve_agent_action, methods=["POST"])
     router.add_api_route("/api/agent/allow-command", handlers.allow_agent_command, methods=["POST"])
     router.add_api_route("/api/agent/sessions/interrupted", handlers.get_interrupted_session, methods=["GET"])
     router.add_api_route("/api/agent/allow-edit", handlers.allow_agent_edit, methods=["POST"])

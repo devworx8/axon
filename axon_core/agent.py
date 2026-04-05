@@ -61,6 +61,11 @@ from .agent_toolspecs import (
     _canonical_tool_name,
     _execute_tool,
 )
+from .agent_browser_tools import (
+    is_screenshot_result,
+    extract_screenshot_path,
+    build_vision_tool_message,
+)
 
 
 def _tool_evidence_source(tool_name: str, result: str = "") -> str:
@@ -962,17 +967,25 @@ async def run_agent(
                 return
 
             messages.append({"role": "assistant", "content": full_text})
-            messages.append(
-                {
-                    "role": "user",
-                    "content": _tool_followup_message(
-                        tool_name,
-                        result,
-                        active_tool_names=active_tool_names,
-                        workspace_path=workspace_path,
-                    ),
-                }
+            followup_text = _tool_followup_message(
+                tool_name,
+                result,
+                active_tool_names=active_tool_names,
+                workspace_path=workspace_path,
             )
+            # Inject screenshot image into vision context for the LLM
+            screenshot_path = extract_screenshot_path(str(result)) if is_screenshot_result(str(result)) else None
+            if screenshot_path:
+                messages.append(
+                    build_vision_tool_message(
+                        followup_text,
+                        screenshot_path,
+                        use_api=use_api,
+                        use_cli=use_cli,
+                    )
+                )
+            else:
+                messages.append({"role": "user", "content": followup_text})
 
             _ctx_chars = sum(len(str(message.get("content", ""))) for message in messages)
             _ctx_limit = 128_000

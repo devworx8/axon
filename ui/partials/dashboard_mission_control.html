@@ -51,6 +51,7 @@
       <div class="mission-focus-card">
         <div class="mission-focus-header">
           <span class="mission-focus-label">Live Operator</span>
+          <span class="stark-heartbeat" :class="liveOperator.active ? '' : 'idle'" style="margin-right: 4px;"></span>
           <span class="mission-focus-dot" :class="liveOperator.active ? 'active' : ''"></span>
         </div>
         <div class="mission-focus-title" x-text="liveOperator.title || lastOperatorOutcome.title || 'Standing by'"></div>

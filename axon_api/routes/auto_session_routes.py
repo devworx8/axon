@@ -42,6 +42,7 @@ class AutoSessionHandlers:
         auto_runtime_summary: Callable[[dict], dict],
         normalized_autonomy_profile: Callable[..., str],
         normalized_runtime_permissions_mode: Callable[..., str],
+        effective_agent_runtime_permissions_mode: Callable[..., str],
         normalized_external_fetch_policy: Callable[[str], str],
         auto_tool_command: Callable[[str, dict], tuple[str, str, str]],
         auto_receipt_summary: Callable[[str], str],
@@ -70,6 +71,7 @@ class AutoSessionHandlers:
         self._auto_runtime_summary = auto_runtime_summary
         self._normalized_autonomy_profile = normalized_autonomy_profile
         self._normalized_runtime_permissions_mode = normalized_runtime_permissions_mode
+        self._effective_agent_runtime_permissions_mode = effective_agent_runtime_permissions_mode
         self._normalized_external_fetch_policy = normalized_external_fetch_policy
         self._auto_tool_command = auto_tool_command
         self._auto_receipt_summary = auto_receipt_summary
@@ -158,6 +160,14 @@ class AutoSessionHandlers:
                 if image_warnings:
                     resource_bundle["warnings"].extend(image_warnings)
                 settings = {**settings, "ai_backend": ai.get("backend", settings.get("ai_backend", "api"))}
+                autonomy_profile = self._normalized_autonomy_profile(settings.get("autonomy_profile") or "branch_auto")
+                runtime_permissions_mode = self._effective_agent_runtime_permissions_mode(
+                    settings,
+                    backend=ai.get("backend", settings.get("ai_backend", "api")),
+                    cli_path=ai.get("cli_path", ""),
+                    autonomy_profile=autonomy_profile,
+                    isolated_workspace=True,
+                )
                 memory_bundle = await self._memory_bundle(
                     conn,
                     user_message=start_prompt,
@@ -237,11 +247,8 @@ class AutoSessionHandlers:
                 cli_session_persistence=bool(ai.get("cli_session_persistence", False)),
                 backend=ai.get("backend", ""),
                 workspace_id=workspace_id,
-                autonomy_profile=self._normalized_autonomy_profile(settings.get("autonomy_profile") or "workspace_auto"),
-                runtime_permissions_mode=self._normalized_runtime_permissions_mode(
-                    settings.get("runtime_permissions_mode") or "",
-                    fallback="ask_first" if self._normalized_autonomy_profile(settings.get("autonomy_profile") or "workspace_auto") == "manual" else "default",
-                ),
+                autonomy_profile=autonomy_profile,
+                runtime_permissions_mode=runtime_permissions_mode,
                 external_fetch_policy=self._normalized_external_fetch_policy(settings.get("external_fetch_policy") or "cache_first"),
                 external_fetch_cache_ttl_seconds=str(settings.get("external_fetch_cache_ttl_seconds") or "21600"),
             ):
@@ -375,6 +382,17 @@ class AutoSessionHandlers:
             current = self._auto_session_runs.get(target_id)
             if current and not current.done():
                 return {"started": False, "already_running": True, "session": self._serialize_auto_session(session_meta, include_report=True)}
+            session_meta = self._auto_session_service.write_auto_session(
+                {
+                    **dict(session_meta or {}),
+                    "status": "running",
+                    "detail": resume_message[:300] or str(session_meta.get("detail") or "")[:300],
+                    "last_error": "",
+                    "last_run_started_at": self._now_iso(),
+                    "runtime_override": runtime_override,
+                    "composer_options": dict(normalized_options),
+                }
+            )
         else:
             if existing and str(existing.get("status") or "") not in {"applied", "discarded"}:
                 current = self._auto_session_runs.get(str(existing.get("session_id") or ""))
@@ -388,7 +406,13 @@ class AutoSessionHandlers:
                 runtime_override=runtime_override,
                 start_prompt=str(body.message or "").strip(),
                 mode="auto",
-                metadata={"resource_ids": list(body.resource_ids or []), "composer_options": dict(normalized_options), "status": "ready"},
+                metadata={
+                    "resource_ids": list(body.resource_ids or []),
+                    "composer_options": dict(normalized_options),
+                    "status": "running",
+                    "last_error": "",
+                    "last_run_started_at": self._now_iso(),
+                },
             )
 
         run_task = asyncio.create_task(

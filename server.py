@@ -1929,8 +1929,8 @@ async def chat_stream(body: ChatMessage, request: Request):
                 summary=body.message[:120],
                 workspace_id=body.project_id,
             )
-            async def _err():
-                yield {"data": _json.dumps({"error": str(exc)})}
+            async def _err(_exc=exc):
+                yield {"data": _json.dumps({"error": str(_exc)})}
             return EventSourceResponse(_err())
 
     # Ollama: true streaming
@@ -4208,6 +4208,16 @@ async def serve_styles():
         return Response("/* not found */", media_type="text/css", status_code=404)
     return FileResponse(css_path, media_type="text/css", headers={"Cache-Control": "public, max-age=60"})
 
+@app.get("/css/{filename:path}")
+async def serve_css(filename: str):
+    import re as _re
+    if not _re.match(r'^[a-zA-Z0-9_\-]+\.css$', filename):
+        return Response("/* not found */", media_type="text/css", status_code=404)
+    css_path = UI_DIR / "css" / filename
+    if not css_path.exists():
+        return Response("/* not found */", media_type="text/css", status_code=404)
+    return FileResponse(css_path, media_type="text/css", headers={"Cache-Control": "public, max-age=60"})
+
 @app.get("/js/{filename:path}")
 async def serve_js(filename: str):
     import re as _re
@@ -4984,6 +4994,7 @@ _auto_session_router, _auto_session_handlers = auto_session_routes.build_auto_se
     auto_runtime_summary=_auto_runtime_summary,
     normalized_autonomy_profile=composer_runtime.normalized_autonomy_profile,
     normalized_runtime_permissions_mode=composer_runtime.normalized_runtime_permissions_mode,
+    effective_agent_runtime_permissions_mode=_effective_agent_runtime_permissions_mode,
     normalized_external_fetch_policy=composer_runtime.normalized_external_fetch_policy,
     auto_tool_command=_auto_tool_command,
     auto_receipt_summary=_auto_receipt_summary,
@@ -5016,6 +5027,7 @@ def _sync_auto_session_handler_dependencies() -> None:
     _auto_session_handlers._auto_runtime_summary = _auto_runtime_summary
     _auto_session_handlers._normalized_autonomy_profile = composer_runtime.normalized_autonomy_profile
     _auto_session_handlers._normalized_runtime_permissions_mode = composer_runtime.normalized_runtime_permissions_mode
+    _auto_session_handlers._effective_agent_runtime_permissions_mode = _effective_agent_runtime_permissions_mode
     _auto_session_handlers._normalized_external_fetch_policy = composer_runtime.normalized_external_fetch_policy
     _auto_session_handlers._auto_tool_command = _auto_tool_command
     _auto_session_handlers._auto_receipt_summary = _auto_receipt_summary
@@ -5113,10 +5125,8 @@ route_registry.register_core_routers(
 ApproveActionBody = agent_control.ApproveActionBody
 AllowCommandBody = agent_control.AllowCommandBody
 AllowEditBody = agent_control.AllowEditBody
-
 _approval_workspace_root = _agent_control_handlers.approval_workspace_root
 _normalize_exact_approval_action = _agent_control_handlers.normalize_exact_approval_action
-
 
 async def approve_agent_action(body: ApproveActionBody):
     return await _agent_control_handlers.approve_agent_action(

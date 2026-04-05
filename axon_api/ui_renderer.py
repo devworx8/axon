@@ -102,6 +102,20 @@ def render_styles(ui_dir: Path) -> Response:
     )
 
 
+def render_css(ui_dir: Path, filename: str) -> Response:
+    """Serve CSS files from ui/css/ subfolder."""
+    if not re.match(r"^[a-zA-Z0-9_\-]+\.css$", filename):
+        return Response("/* not found */", media_type="text/css", status_code=404)
+    css_path = ui_dir / "css" / filename
+    if not css_path.exists():
+        return Response("/* not found */", media_type="text/css", status_code=404)
+    return FileResponse(
+        css_path,
+        media_type="text/css",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
 def render_js(ui_dir: Path, filename: str) -> Response:
     if not re.match(r"^[a-zA-Z0-9_\-]+\.js$", filename):
         return Response(

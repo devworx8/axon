@@ -528,7 +528,7 @@ function axonChatWorkspaceModesMixin() {
         return this.quickResume?.();
       }
       if (nextAction === 'start_live_page') {
-        return this.ensureWorkspacePreview?.({ openExternal: false, attachBrowser: false });
+        return this.ensureWorkspacePreview?.({ openExternal: false, attachBrowser: true });
       }
       const prompt = String(action?.prompt || '').trim();
       if (!prompt) return null;

@@ -36,6 +36,8 @@ export function SettingsScreen({
   onUnlockVault,
   onUnlockVaultWithBiometrics,
   onLockVault,
+  onCopyAccessToken,
+  onRePair,
   axonStatus,
 }: {
   settings: CompanionSettings;
@@ -64,6 +66,8 @@ export function SettingsScreen({
   onUnlockVault: () => void;
   onUnlockVaultWithBiometrics: () => void;
   onLockVault: () => void;
+  onCopyAccessToken?: () => void;
+  onRePair?: () => void;
   axonStatus?: AxonModeStatus | null;
 }) {
   const providerCount = Object.keys(vaultProviderKeys?.resolved || {}).length;
@@ -117,8 +121,25 @@ export function SettingsScreen({
           <Pressable style={styles.ghostButton}>
             <Text style={styles.ghostText}>Desktop manages providers</Text>
           </Pressable>
+          {onRePair ? (
+            <Pressable style={[styles.button, styles.dangerButton]} onPress={onRePair}>
+              <Text style={[styles.buttonText, styles.dangerText]}>Re-pair device</Text>
+            </Pressable>
+          ) : null}
         </View>
       </SurfaceCard>
+
+      {__DEV__ && onCopyAccessToken ? (
+        <SurfaceCard>
+          <SurfaceHeader title="Debug access" subtitle="Temporary tools for local development builds." />
+          <Text style={styles.helper}>
+            Use this to copy the companion access token for local command testing. Remove before production builds.
+          </Text>
+          <Pressable style={styles.button} onPress={onCopyAccessToken}>
+            <Text style={styles.buttonText}>Copy access token</Text>
+          </Pressable>
+        </SurfaceCard>
+      ) : null}
 
       <AxonVoiceSettingsCard
         settings={settings}
@@ -208,6 +229,13 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
     fontSize: 11,
     fontWeight: '600',
+  },
+  dangerButton: {
+    borderColor: 'rgba(248, 113, 113, 0.35)',
+    backgroundColor: 'rgba(88, 28, 28, 0.35)',
+  },
+  dangerText: {
+    color: '#fecaca',
   },
   helper: {
     marginTop: 10,

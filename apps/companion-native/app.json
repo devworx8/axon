@@ -28,6 +28,14 @@
         {
           "microphonePermission": "Allow Axon Online to capture your voice so it can transcribe and run mobile commands."
         }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
       ]
     ],
     "ios": {
@@ -35,7 +43,6 @@
     },
     "android": {
       "package": "za.org.edudashpro.axononline",
-      "usesCleartextTraffic": true,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "../../ui/icons/icon-512.png",

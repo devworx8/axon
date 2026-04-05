@@ -90,6 +90,26 @@ TOOL_ALIAS_MAP: dict[str, str] = {
     "memory_read": "memory_read",
     "recall_memory": "memory_read",
     "load_memory": "memory_read",
+    # ── Browser automation ──
+    "browser_navigate": "browser_navigate",
+    "navigate": "browser_navigate",
+    "browse": "browser_navigate",
+    "open_url": "browser_navigate",
+    "browser_screenshot": "browser_screenshot",
+    "screenshot": "browser_screenshot",
+    "capture": "browser_screenshot",
+    "browser_inspect": "browser_inspect",
+    "inspect_page": "browser_inspect",
+    "dom_inspect": "browser_inspect",
+    "browser_click": "browser_click",
+    "click": "browser_click",
+    "browser_type": "browser_type",
+    "type_text": "browser_type",
+    "browser_scroll": "browser_scroll",
+    "scroll": "browser_scroll",
+    "browser_evaluate": "browser_evaluate",
+    "browser_eval": "browser_evaluate",
+    "js_eval": "browser_evaluate",
 }
 
 
@@ -111,6 +131,13 @@ TOOL_ARG_EXAMPLES: dict[str, str] = {
     "remember": '{"key": "db_url", "value": "postgres://localhost/mydb"}',
     "recall": '{"query": "database"}',
     "glob_files": '{"pattern": "**/*.tsx", "path": "~/project"}',
+    "browser_navigate": '{"url": "http://localhost:3000"}',
+    "browser_screenshot": '{}',
+    "browser_inspect": '{}',
+    "browser_click": '{"selector": "button.submit"}',
+    "browser_type": '{"selector": "input#email", "text": "hello@example.com"}',
+    "browser_scroll": '{"direction": "down", "pixels": 500}',
+    "browser_evaluate": '{"expression": "document.querySelector(\'.header\').getBoundingClientRect()"}',
 }
 
 

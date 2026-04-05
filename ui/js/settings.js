@@ -116,6 +116,9 @@ function axonSettingsMixin() {
           azure_speech_key: '',  // never pre-fill secrets
           azure_speech_region: s.azure_speech_region || 'eastus',
           azure_voice: s.azure_voice || 'en-ZA-LeahNeural',
+          voice_speech_rate: s.voice_speech_rate || '0.92',
+          voice_attention_enabled: this.settingEnabled(s.voice_attention_enabled ?? true),
+          voice_attention_autowake: this.settingEnabled(s.voice_attention_autowake ?? true),
           local_stt_model: s.local_stt_model || 'base',
           local_stt_language: s.local_stt_language || 'en',
           local_tts_model_path: s.local_tts_model_path || '',
@@ -125,7 +128,7 @@ function axonSettingsMixin() {
           _deepseekKeyHint: '',
           max_agent_iterations: s.max_agent_iterations || '75',
           context_compact_enabled: this.settingEnabled(s.context_compact_enabled ?? true),
-          autonomy_profile: ['manual', 'workspace_auto'].includes(String(s.autonomy_profile || '').trim())
+          autonomy_profile: ['manual', 'workspace_auto', 'branch_auto', 'pr_auto'].includes(String(s.autonomy_profile || '').trim())
             ? s.autonomy_profile
             : 'workspace_auto',
           runtime_permissions_mode: ['default', 'ask_first', 'full_access'].includes(String(s.runtime_permissions_mode || '').trim())
@@ -220,7 +223,9 @@ function axonSettingsMixin() {
       payload.terminal_command_timeout_seconds = String(this.settingsForm.terminal_command_timeout_seconds || '25');
       payload.max_agent_iterations = String(this.settingsForm.max_agent_iterations || '75');
       payload.context_compact_enabled = !!this.settingsForm.context_compact_enabled;
-      payload.autonomy_profile = (this.settingsForm.autonomy_profile === 'manual') ? 'manual' : 'workspace_auto';
+      payload.autonomy_profile = ['manual', 'workspace_auto', 'branch_auto', 'pr_auto'].includes(this.settingsForm.autonomy_profile)
+        ? this.settingsForm.autonomy_profile
+        : 'workspace_auto';
       payload.runtime_permissions_mode = ['default', 'ask_first', 'full_access'].includes(String(this.settingsForm.runtime_permissions_mode || '').trim())
         ? this.settingsForm.runtime_permissions_mode
         : 'default';
@@ -252,6 +257,9 @@ function axonSettingsMixin() {
       if (this.settingsForm.azure_speech_key) payload.azure_speech_key = this.settingsForm.azure_speech_key;
       payload.azure_speech_region = this.settingsForm.azure_speech_region || 'eastus';
       payload.azure_voice = this.settingsForm.azure_voice || 'en-ZA-LeahNeural';
+      payload.voice_speech_rate = String(this.settingsForm.voice_speech_rate || '0.92');
+      payload.voice_attention_enabled = !!this.settingsForm.voice_attention_enabled;
+      payload.voice_attention_autowake = !!this.settingsForm.voice_attention_autowake;
       payload.local_stt_model = this.settingsForm.local_stt_model || 'base';
       payload.local_stt_language = this.settingsForm.local_stt_language || 'en';
       payload.local_tts_model_path = this.settingsForm.local_tts_model_path || '';

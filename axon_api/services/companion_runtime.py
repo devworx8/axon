@@ -297,7 +297,6 @@ async def process_companion_voice_turn(
                 history=history,
                 context_block=context_block,
                 project_name=str(project.get("name") or "").strip() or None,
-                workspace_path=workspace_path,
                 backend=str(ai.get("backend") or "cli"),
                 api_key=str(ai.get("api_key") or "").strip(),
                 api_provider=str(ai.get("api_provider") or "").strip(),

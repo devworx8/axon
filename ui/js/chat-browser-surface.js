@@ -11,8 +11,59 @@ function axonChatBrowserSurfaceMixin() {
     workspace_name: scope?.workspace_name || '',
     auto_session_id: String(scope?.auto_session_id || '').trim(),
   });
+  const approvalModeValue = (ctx) => String(
+    ctx.browserSession?.()?.mode
+    || ctx.browserActions?.approval_mode
+    || ctx.browserActions?.session?.mode
+    || 'approval_required'
+  ).trim().toLowerCase();
 
   return {
+    browserPendingProposalCount() {
+      const explicit = Number(this.browserActions?.pending_count || 0);
+      const proposals = Array.isArray(this.browserActions?.proposals) ? this.browserActions.proposals.length : 0;
+      return Math.max(explicit, proposals);
+    },
+
+    browserPendingProposalLabel() {
+      const count = this.browserPendingProposalCount?.() || 0;
+      return count ? `${count} pending` : 'Approval queue clear';
+    },
+
+    browserOwnershipLabel() {
+      const session = this.browserSession?.() || {};
+      const owner = String(session?.control_owner || '').trim().toLowerCase();
+      if (owner === 'axon') return 'Axon-owned';
+      if (owner === 'manual') return 'Manual';
+      if (session?.connected) return 'Attached';
+      if (this.browserFrameUrl?.()) return 'Preview';
+      return 'Detached';
+    },
+
+    browserOwnershipTone() {
+      const label = this.browserOwnershipLabel?.();
+      if (label === 'Axon-owned') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
+      if (label === 'Manual') return 'border-slate-700 bg-slate-950/70 text-slate-300';
+      if (label === 'Attached' || label === 'Preview') return 'border-sky-500/20 bg-sky-500/10 text-sky-200';
+      return 'border-slate-700 bg-slate-950/70 text-slate-400';
+    },
+
+    browserControlModeLabel() {
+      const mode = approvalModeValue(this);
+      if (mode === 'inspect_auto') return 'Inspect auto';
+      if (mode === 'approval_required') return 'Approval-first';
+      if (mode === 'manual') return 'Manual';
+      return mode ? mode.replace(/_/g, ' ') : 'Approval-first';
+    },
+
+    browserControlModeTone() {
+      const mode = approvalModeValue(this);
+      if (mode === 'inspect_auto') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
+      if (mode === 'approval_required') return 'border-amber-500/20 bg-amber-500/10 text-amber-200';
+      if (mode === 'manual') return 'border-slate-700 bg-slate-950/70 text-slate-300';
+      return 'border-slate-700 bg-slate-950/70 text-slate-400';
+    },
+
     currentPreviewScope() {
       const projectId = parseInt(String(this.chatProjectId || 0), 10) || 0;
       const auto = this.currentWorkspaceAutoSession?.() || null;
@@ -248,6 +299,69 @@ function axonChatBrowserSurfaceMixin() {
         || this.browserSession()?.title
         || 'Attach a live page so Axon can inspect, verify, and propose browser actions here.'
       ).trim();
+    },
+
+    browserPrimaryActionLabel() {
+      if (this.currentWorkspacePreviewLoading?.()) return 'Starting Live Page';
+      const preview = this.currentWorkspacePreview?.() || {};
+      const status = String(preview?.status || '').trim().toLowerCase();
+      if (this.currentWorkspacePreviewError?.() || status === 'error' || status === 'stopped') {
+        return 'Restart Live Page';
+      }
+      if (this.browserFrameUrl?.()) return 'Show Live Page';
+      return 'Start Live Page';
+    },
+
+    async browserPrimaryAction() {
+      if (this.currentWorkspacePreviewLoading?.()) return null;
+      const preview = this.currentWorkspacePreview?.() || {};
+      const status = String(preview?.status || '').trim().toLowerCase();
+      if (this.currentWorkspacePreviewError?.() || status === 'error' || status === 'stopped') {
+        return this.restartWorkspacePreview?.();
+      }
+      if (this.browserFrameUrl?.()) {
+        this.panelBrowserOpen = true;
+        this.ensureWorkspacePreviewLayout?.(true);
+        this.$nextTick?.(() => {
+          const frame = this.$refs?.devPreviewFrame || null;
+          const url = this.browserFrameUrl?.() || '';
+          if (frame && url) frame.src = url;
+        });
+        return this.browserFrameUrl?.() || null;
+      }
+      return this.ensureWorkspacePreview?.({ openExternal: false, attachBrowser: true });
+    },
+
+    ensureWorkspacePreviewLayout(forceWide = false) {
+      this.panelRuntimeOpen = true;
+      this.panelBrowserOpen = true;
+      if (this.isMobile) return;
+      const viewport = Number(window?.innerWidth || 0) || 1440;
+      const targetWidth = forceWide
+        ? Math.round(Math.max(420, Math.min(760, viewport * 0.5)))
+        : Math.round(Math.max(Number(this.consoleSidebarWidth || 0) || 420, Math.min(560, viewport * 0.4)));
+      if (typeof this.setConsoleSidebarWidth === 'function') {
+        this.setConsoleSidebarWidth(targetWidth);
+      } else {
+        this.consoleSidebarWidth = targetWidth;
+      }
+    },
+
+    snapPreviewPanelHalf() {
+      this.panelBrowserOpen = true;
+      this.ensureWorkspacePreviewLayout?.(true);
+    },
+
+    maybeFollowWorkspacePreview(options = {}) {
+      const targetWorkspaceId = String(options?.workspaceId || this.chatProjectId || '').trim();
+      const activeWorkspaceId = String(this.chatProjectId || '').trim();
+      const mode = String(options?.mode || '').trim().toLowerCase();
+      if (this.isMobile || !targetWorkspaceId || targetWorkspaceId !== activeWorkspaceId) return;
+      if (mode && mode !== 'agent') return;
+      this.panelBrowserOpen = true;
+      this.ensureWorkspacePreviewLayout?.(false);
+      if (this.currentWorkspacePreviewLoading?.() || this.browserFrameUrl?.()) return;
+      queueMicrotask(() => this.loadWorkspacePreview?.());
     },
 
     composerCompactMode() {
@@ -501,6 +615,7 @@ function axonChatBrowserSurfaceMixin() {
         if (url) {
           this.rememberScopedDevPreview(url, { scope });
           this.panelBrowserOpen = true;
+          this.ensureWorkspacePreviewLayout?.(true);
         }
       } catch (_) {}
     },

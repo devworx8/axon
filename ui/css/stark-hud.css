@@ -1,0 +1,758 @@
+/* ══════════════════════════════════════════════════════════════
+   Axon — Stark-Tech HUD Design System
+   Iron Man cinematic overlay for the Axon Operator Console
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Stark-Tech Design Tokens ────────────────────────────────── */
+:root {
+  --stark-arc-blue:     #00d4ff;
+  --stark-arc-core:     #00b8ff;
+  --stark-holo-cyan:    #22e5ff;
+  --stark-holo-gold:    #ffc857;
+  --stark-holo-amber:   #ff9f1c;
+  --stark-glass-bg:     rgba(0, 14, 28, 0.78);
+  --stark-glass-border: rgba(0, 212, 255, 0.18);
+  --stark-glass-hover:  rgba(0, 212, 255, 0.32);
+  --stark-panel-bg:     rgba(0, 18, 36, 0.88);
+  --stark-scanline:     rgba(0, 212, 255, 0.06);
+  --stark-text-bright:  #e8f4ff;
+  --stark-text-mid:     #7eb8d4;
+  --stark-text-dim:     #3a6a8a;
+  --stark-danger:       #ff3d3d;
+  --stark-success:      #00ff88;
+  --stark-warning:      #ffaa00;
+  --stark-radius:       16px;
+  --stark-transition:   all 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ── Animated Scanline Overlay (Holographic feel) ────────────── */
+@keyframes stark-scanline {
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+@keyframes stark-flicker {
+  0%, 97%, 100% { opacity: 1; }
+  98%           { opacity: 0.92; }
+  99%           { opacity: 0.97; }
+}
+
+@keyframes stark-boot-in {
+  0%   { opacity: 0; transform: scale(0.96) translateY(8px); filter: blur(4px); }
+  60%  { opacity: 1; filter: blur(0); }
+  100% { transform: scale(1) translateY(0); }
+}
+
+@keyframes stark-hud-draw {
+  0%   { clip-path: inset(0 100% 0 0); opacity: 0; }
+  100% { clip-path: inset(0 0 0 0); opacity: 1; }
+}
+
+@keyframes stark-arc-pulse {
+  0%, 100% { box-shadow: 0 0 12px rgba(0, 212, 255, 0.2), inset 0 0 12px rgba(0, 212, 255, 0.05); }
+  50%      { box-shadow: 0 0 28px rgba(0, 212, 255, 0.45), inset 0 0 20px rgba(0, 212, 255, 0.12); }
+}
+
+@keyframes stark-arc-spin {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes stark-data-stream {
+  0%   { background-position: 0% 0%; }
+  100% { background-position: 100% 100%; }
+}
+
+@keyframes stark-hex-pulse {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
+}
+
+/* ── HUD Holographic Grid Background ────────────────────────── */
+.stark-hud-bg {
+  position: relative;
+  background:
+    radial-gradient(ellipse at 20% 0%, rgba(0, 212, 255, 0.14), transparent 45%),
+    radial-gradient(ellipse at 80% 100%, rgba(255, 159, 28, 0.08), transparent 40%),
+    radial-gradient(ellipse at 50% 50%, rgba(0, 100, 180, 0.06), transparent 70%),
+    linear-gradient(175deg, #000c1e 0%, #001428 40%, #000a14 100%);
+}
+
+.stark-hud-bg::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(0, 212, 255, 0.06) 0px,
+      transparent 1px,
+      transparent 2px
+    );
+  animation: stark-scanline 6s linear infinite;
+  opacity: 1;
+  z-index: 9990;
+  mix-blend-mode: screen;
+}
+
+.stark-hud-bg::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(90deg, rgba(0, 212, 255, 0.05) 0 1px, transparent 1px 60px),
+    repeating-linear-gradient(0deg,  rgba(0, 212, 255, 0.04) 0 1px, transparent 1px 60px);
+  z-index: 9990;
+  mix-blend-mode: screen;
+  animation: stark-hex-pulse 4s ease-in-out infinite;
+}
+
+/* ── Glass Panel (Stark HUD Window) ──────────────────────────── */
+.stark-panel {
+  background: var(--stark-glass-bg);
+  border: 1px solid var(--stark-glass-border);
+  border-radius: var(--stark-radius);
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  box-shadow:
+    0 0 1px rgba(0, 212, 255, 0.3),
+    0 8px 32px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(0, 212, 255, 0.08);
+  transition: var(--stark-transition);
+  animation: stark-boot-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.stark-panel:hover {
+  border-color: var(--stark-glass-hover);
+  box-shadow:
+    0 0 2px rgba(0, 212, 255, 0.5),
+    0 12px 40px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(0, 212, 255, 0.12);
+}
+
+/* ── Arc Reactor Badge (status indicator) ────────────────────── */
+.stark-arc-badge {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 40%, #80ecff, var(--stark-arc-blue));
+  animation: stark-arc-pulse 2.5s ease-in-out infinite;
+  box-shadow: 0 0 8px rgba(0, 212, 255, 0.5);
+}
+
+.stark-arc-badge.warning {
+  background: radial-gradient(circle at 40% 40%, #ffe080, var(--stark-warning));
+  animation: stark-arc-pulse 1.8s ease-in-out infinite;
+  box-shadow: 0 0 8px rgba(255, 170, 0, 0.5);
+}
+
+.stark-arc-badge.critical {
+  background: radial-gradient(circle at 40% 40%, #ff8080, var(--stark-danger));
+  animation: stark-arc-pulse 1.2s ease-in-out infinite;
+  box-shadow: 0 0 8px rgba(255, 61, 61, 0.5);
+}
+
+.stark-arc-badge.nominal {
+  background: radial-gradient(circle at 40% 40%, #80ffbb, var(--stark-success));
+  box-shadow: 0 0 8px rgba(0, 255, 136, 0.4);
+}
+
+/* ── HUD Section Header ─────────────────────────────────────── */
+.stark-section-label {
+  font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--stark-arc-blue);
+  opacity: 0.7;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.1);
+}
+
+/* ── HUD Data Readout ────────────────────────────────────────── */
+.stark-readout {
+  font-family: 'SF Mono', 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--stark-text-mid);
+  letter-spacing: 0.04em;
+}
+
+.stark-readout-value {
+  color: var(--stark-text-bright);
+  font-weight: 600;
+}
+
+/* ── Chat Message Bubbles — Stark Style ──────────────────────── */
+.stark-msg-user {
+  background:
+    linear-gradient(135deg, rgba(0, 184, 255, 0.14), rgba(0, 120, 200, 0.08));
+  border: 1px solid rgba(0, 212, 255, 0.25);
+  border-radius: 20px 20px 6px 20px;
+  padding: 12px 16px;
+  color: var(--stark-text-bright);
+  box-shadow:
+    0 2px 16px rgba(0, 0, 0, 0.4),
+    0 0 20px rgba(0, 212, 255, 0.08),
+    inset 0 1px 0 rgba(0, 212, 255, 0.1);
+}
+
+.stark-msg-assistant {
+  background:
+    linear-gradient(135deg, rgba(0, 212, 255, 0.04), transparent 40%),
+    var(--stark-panel-bg);
+  border: 1px solid rgba(0, 212, 255, 0.14);
+  border-radius: 20px 20px 20px 6px;
+  padding: 12px 16px;
+  color: var(--stark-text-bright);
+  box-shadow:
+    0 2px 12px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(0, 212, 255, 0.04);
+}
+
+.stark-msg-agent {
+  background:
+    linear-gradient(135deg, rgba(255, 159, 28, 0.12), rgba(0, 212, 255, 0.06));
+  border: 1px solid rgba(255, 200, 87, 0.22);
+  border-radius: 20px 20px 20px 6px;
+  padding: 12px 16px;
+  color: var(--stark-text-bright);
+  box-shadow:
+    0 2px 16px rgba(0, 0, 0, 0.4),
+    0 0 24px rgba(255, 159, 28, 0.10),
+    inset 0 1px 0 rgba(255, 200, 87, 0.08);
+}
+
+/* ── Commander Input Bar ─────────────────────────────────────── */
+.stark-commander-bar {
+  background:
+    linear-gradient(90deg, rgba(0, 212, 255, 0.06), transparent 30%, transparent 70%, rgba(255, 159, 28, 0.05)),
+    rgba(0, 12, 24, 0.92);
+  border-top: 1px solid rgba(0, 212, 255, 0.12);
+  box-shadow:
+    0 -4px 24px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(0, 212, 255, 0.06);
+}
+
+.stark-commander-input {
+  background: rgba(0, 18, 36, 0.8);
+  border: 1px solid rgba(0, 212, 255, 0.15);
+  border-radius: 14px;
+  color: var(--stark-text-bright);
+  transition: var(--stark-transition);
+}
+
+.stark-commander-input:focus {
+  border-color: rgba(0, 212, 255, 0.4);
+  box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.1), 0 0 20px rgba(0, 212, 255, 0.08);
+  outline: none;
+}
+
+.stark-commander-input::placeholder {
+  color: var(--stark-text-dim);
+  font-style: italic;
+}
+
+/* ── Stark Send Button ───────────────────────────────────────── */
+.stark-send-btn {
+  background: linear-gradient(135deg, var(--stark-arc-blue), #0090cc);
+  border: 1px solid rgba(0, 212, 255, 0.3);
+  border-radius: 12px;
+  color: #001824;
+  font-weight: 700;
+  transition: var(--stark-transition);
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.25);
+}
+
+.stark-send-btn:hover {
+  background: linear-gradient(135deg, #22e5ff, #00b8ff);
+  box-shadow: 0 0 24px rgba(0, 212, 255, 0.45);
+  transform: scale(1.04);
+}
+
+.stark-send-btn:active {
+  transform: scale(0.96);
+}
+
+/* ── Image Viewer — HUD Lightbox ─────────────────────────────── */
+.stark-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 6, 12, 0.92);
+  backdrop-filter: blur(12px);
+  animation: stark-boot-in 0.3s ease both;
+}
+
+.stark-lightbox-frame {
+  position: relative;
+  max-width: 90vw;
+  max-height: 85vh;
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 0 60px rgba(0, 212, 255, 0.12), 0 24px 80px rgba(0, 0, 0, 0.6);
+}
+
+.stark-lightbox-frame::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 18px;
+  border: 1px solid transparent;
+  background: linear-gradient(135deg, rgba(0, 212, 255, 0.3), transparent 40%, transparent 60%, rgba(255, 200, 87, 0.2)) border-box;
+  -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.stark-lightbox img {
+  display: block;
+  max-width: 90vw;
+  max-height: 85vh;
+  object-fit: contain;
+  border-radius: 16px;
+}
+
+.stark-lightbox-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(0, 12, 24, 0.8);
+  border: 1px solid rgba(0, 212, 255, 0.25);
+  color: var(--stark-arc-blue);
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: var(--stark-transition);
+  z-index: 10;
+}
+
+.stark-lightbox-close:hover {
+  background: rgba(0, 212, 255, 0.15);
+  border-color: var(--stark-arc-blue);
+}
+
+.stark-lightbox-hud {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 12px 16px;
+  background: linear-gradient(transparent, rgba(0, 6, 12, 0.9));
+  color: var(--stark-text-mid);
+  font-family: 'SF Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+/* ── Chat Image Thumbnails ───────────────────────────────────── */
+.stark-chat-image {
+  border-radius: 12px;
+  border: 1px solid rgba(0, 212, 255, 0.12);
+  overflow: hidden;
+  cursor: pointer;
+  transition: var(--stark-transition);
+  position: relative;
+  max-width: 320px;
+}
+
+.stark-chat-image:hover {
+  border-color: rgba(0, 212, 255, 0.35);
+  box-shadow: 0 0 20px rgba(0, 212, 255, 0.15);
+  transform: scale(1.02);
+}
+
+.stark-chat-image img {
+  display: block;
+  width: 100%;
+  max-height: 280px;
+  object-fit: cover;
+  border-radius: 11px;
+}
+
+.stark-chat-image::after {
+  content: '⊕ EXPAND';
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  font-family: 'SF Mono', monospace;
+  font-size: 8px;
+  letter-spacing: 0.2em;
+  color: var(--stark-arc-blue);
+  background: rgba(0, 12, 24, 0.8);
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.stark-chat-image:hover::after {
+  opacity: 1;
+}
+
+/* ── Image Upload/Paste Drop Zone ────────────────────────────── */
+.stark-dropzone {
+  border: 2px dashed rgba(0, 212, 255, 0.25);
+  border-radius: 16px;
+  background: rgba(0, 18, 36, 0.5);
+  padding: 24px;
+  text-align: center;
+  transition: var(--stark-transition);
+}
+
+.stark-dropzone.active {
+  border-color: var(--stark-arc-blue);
+  background: rgba(0, 212, 255, 0.06);
+  box-shadow: 0 0 30px rgba(0, 212, 255, 0.1);
+}
+
+.stark-dropzone-label {
+  font-family: 'SF Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--stark-text-dim);
+}
+
+/* ── Image Attachment Preview (above composer) ───────────────── */
+.stark-image-preview {
+  position: relative;
+  display: inline-block;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.stark-image-preview img {
+  display: block;
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 11px;
+}
+
+.stark-image-preview-remove {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(255, 61, 61, 0.9);
+  color: white;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+  transition: var(--stark-transition);
+}
+
+.stark-image-preview-remove:hover {
+  background: #ff3d3d;
+  transform: scale(1.15);
+}
+
+/* ── Blocker Suggestion Cards ────────────────────────────────── */
+.stark-blocker-card {
+  background:
+    linear-gradient(135deg, rgba(255, 61, 61, 0.06), rgba(0, 212, 255, 0.04));
+  border: 1px solid rgba(255, 61, 61, 0.18);
+  border-radius: 14px;
+  padding: 12px 16px;
+  transition: var(--stark-transition);
+}
+
+.stark-blocker-card:hover {
+  border-color: rgba(255, 61, 61, 0.35);
+  box-shadow: 0 0 16px rgba(255, 61, 61, 0.08);
+}
+
+.stark-fix-suggestion {
+  background:
+    linear-gradient(135deg, rgba(0, 255, 136, 0.06), rgba(0, 212, 255, 0.04));
+  border: 1px solid rgba(0, 255, 136, 0.18);
+  border-radius: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: var(--stark-transition);
+}
+
+.stark-fix-suggestion:hover {
+  border-color: rgba(0, 255, 136, 0.4);
+  box-shadow: 0 0 16px rgba(0, 255, 136, 0.08);
+  transform: translateX(4px);
+}
+
+.stark-fix-label {
+  font-family: 'SF Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--stark-success);
+}
+
+/* ── HUD Chip Overrides ──────────────────────────────────────── */
+.stark-chip {
+  font-family: 'SF Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 4px 10px;
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  background: rgba(0, 18, 36, 0.7);
+  color: var(--stark-arc-blue);
+  transition: var(--stark-transition);
+}
+
+.stark-chip:hover {
+  border-color: rgba(0, 212, 255, 0.45);
+  background: rgba(0, 212, 255, 0.08);
+}
+
+.stark-chip-active {
+  border-color: rgba(0, 212, 255, 0.45);
+  background: rgba(0, 212, 255, 0.1);
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.15);
+}
+
+.stark-chip-amber {
+  border-color: rgba(255, 200, 87, 0.3);
+  color: var(--stark-holo-gold);
+}
+
+.stark-chip-amber.stark-chip-active {
+  background: rgba(255, 159, 28, 0.1);
+  box-shadow: 0 0 12px rgba(255, 159, 28, 0.15);
+}
+
+/* ── Utility ─────────────────────────────────────────────────── */
+.stark-mono {
+  font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+.stark-boot-animation {
+  animation: stark-boot-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.stark-draw-animation {
+  animation: stark-hud-draw 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.stark-flicker {
+  animation: stark-flicker 4s infinite;
+}
+
+/* ── HUD Edge Frame — Corner Brackets ────────────────────────── */
+.stark-hud-frame {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9989;
+}
+
+.stark-hud-frame::before,
+.stark-hud-frame::after {
+  content: '';
+  position: absolute;
+  border: 1px solid rgba(0, 212, 255, 0.18);
+}
+
+/* Top-left + bottom-right corner brackets */
+.stark-hud-frame::before {
+  top: 8px; left: 8px;
+  width: 40px; height: 40px;
+  border-right: none; border-bottom: none;
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.15);
+}
+
+.stark-hud-frame::after {
+  bottom: 8px; right: 8px;
+  width: 40px; height: 40px;
+  border-left: none; border-top: none;
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.15);
+}
+
+/* ── HUD Edge Lines (top + bottom) ───────────────────────────── */
+.stark-hud-edge-top,
+.stark-hud-edge-bottom {
+  position: fixed;
+  left: 48px;
+  right: 48px;
+  height: 1px;
+  pointer-events: none;
+  z-index: 9989;
+  background: linear-gradient(90deg,
+    transparent,
+    rgba(0, 212, 255, 0.25) 20%,
+    rgba(0, 212, 255, 0.12) 50%,
+    rgba(0, 212, 255, 0.25) 80%,
+    transparent
+  );
+}
+
+.stark-hud-edge-top { top: 8px; }
+.stark-hud-edge-bottom { bottom: 60px; }
+
+/* ── Stark Vignette (edge darkening for depth) ───────────────── */
+.stark-vignette {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9988;
+  background: radial-gradient(ellipse at 50% 50%, transparent 50%, rgba(0, 6, 14, 0.45) 100%);
+}
+
+/* ── HUD Status Bar Label ────────────────────────────────────── */
+.stark-hud-label {
+  position: fixed;
+  pointer-events: none;
+  z-index: 9989;
+  font-family: 'SF Mono', 'JetBrains Mono', monospace;
+  font-size: 8px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: rgba(0, 212, 255, 0.35);
+  animation: stark-flicker 4s infinite;
+}
+
+.stark-hud-label-tl { top: 16px; left: 16px; }
+.stark-hud-label-br { bottom: 68px; right: 16px; }
+
+/* ── Arc Reactor Spinner (for loading states) ────────────────── */
+.stark-arc-spinner {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid rgba(0, 212, 255, 0.15);
+  border-top-color: var(--stark-arc-blue);
+  animation: stark-arc-spin 1s linear infinite;
+  box-shadow: 0 0 16px rgba(0, 212, 255, 0.2);
+}
+
+/* ── Glowing Divider Line ────────────────────────────────────── */
+.stark-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0, 212, 255, 0.20) 30%, rgba(0, 212, 255, 0.20) 70%, transparent);
+  box-shadow: 0 0 8px rgba(0, 212, 255, 0.1);
+}
+
+/* ── Console input bar glow border ───────────────────────────── */
+.stark-commander-bar {
+  border-top: 1px solid rgba(0, 212, 255, 0.15) !important;
+  box-shadow: 0 -2px 20px rgba(0, 212, 255, 0.06) !important;
+}
+
+/* ── Floating Panel (dropdowns, popovers) ────────────────────── */
+.axon-floating-panel {
+  background: var(--stark-panel-bg) !important;
+  backdrop-filter: blur(24px) saturate(1.3);
+  -webkit-backdrop-filter: blur(24px) saturate(1.3);
+  border: 1px solid var(--stark-glass-border) !important;
+  box-shadow:
+    0 0 1px rgba(0, 212, 255, 0.25),
+    0 12px 48px rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 rgba(0, 212, 255, 0.06) !important;
+}
+
+.axon-floating-panel button:hover {
+  background: rgba(0, 212, 255, 0.06) !important;
+}
+
+/* ── Dashboard Stark Panels ──────────────────────────────────── */
+.stark-dash-panel {
+  background: var(--stark-glass-bg);
+  border: 1px solid var(--stark-glass-border);
+  border-radius: 20px;
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  box-shadow:
+    0 0 1px rgba(0, 212, 255, 0.2),
+    0 10px 40px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(0, 212, 255, 0.06);
+  transition: var(--stark-transition);
+}
+
+.stark-dash-panel:hover {
+  border-color: rgba(0, 212, 255, 0.22);
+  box-shadow:
+    0 0 2px rgba(0, 212, 255, 0.35),
+    0 14px 48px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(0, 212, 255, 0.1);
+}
+
+.stark-dash-header {
+  font-family: 'SF Mono', 'JetBrains Mono', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--stark-arc-blue);
+  opacity: 0.75;
+}
+
+/* ── Heartbeat Pulse Indicator ───────────────────────────────── */
+@keyframes stark-heartbeat {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  14% { transform: scale(1.25); opacity: 1; }
+  28% { transform: scale(1); opacity: 0.7; }
+  42% { transform: scale(1.15); opacity: 0.95; }
+  56% { transform: scale(1); opacity: 0.6; }
+}
+
+.stark-heartbeat {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--stark-arc-blue);
+  box-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
+  animation: stark-heartbeat 1.8s ease-in-out infinite;
+}
+
+.stark-heartbeat.idle {
+  background: var(--stark-text-dim);
+  box-shadow: 0 0 6px rgba(58, 106, 138, 0.3);
+  animation: none;
+}
+
+/* ── Quick Command Bar (dashboard) ───────────────────────────── */
+.stark-quick-cmd {
+  background: var(--stark-glass-bg);
+  border: 1px solid var(--stark-glass-border);
+  border-radius: 14px;
+  backdrop-filter: blur(12px);
+  transition: var(--stark-transition);
+}
+
+.stark-quick-cmd:focus-within {
+  border-color: var(--stark-arc-blue);
+  box-shadow:
+    0 0 2px rgba(0, 212, 255, 0.4),
+    0 0 24px rgba(0, 212, 255, 0.08);
+}
+
+.stark-quick-cmd input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--stark-text-bright);
+  font-size: 13px;
+}

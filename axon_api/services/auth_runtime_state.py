@@ -30,7 +30,7 @@ DEV_LOCAL_AUTH_BYPASS = env_flag(
 DEV_LOCAL_VAULT_BYPASS = env_flag("AXON_DEV_LOCAL_VAULT_BYPASS", "0")
 
 AUTH_EXEMPT = {"/", "/sw.js", "/manifest.json", "/manual", "/manual.html", "/api/health", "/api/tunnel/status"}
-AUTH_EXEMPT_PREFIXES = ("/api/auth/", "/api/companion/auth/", "/icons/", "/js/", "/styles.css", "/ws/")
+AUTH_EXEMPT_PREFIXES = ("/api/auth/", "/api/companion/auth/", "/icons/", "/js/", "/css/", "/styles.css", "/ws/")
 COMPANION_SAFE_PREFIXES = (
     "/api/companion/",
     "/api/attention/",
@@ -57,6 +57,18 @@ def extract_bearer_token(request) -> str:
     if auth.lower().startswith("bearer "):
         return auth[7:].strip()
     return ""
+
+
+def _expires_at_passed(raw: str) -> bool:
+    if not raw:
+        return False
+    try:
+        expiry = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) > expiry
+    except Exception:
+        return False
 
 
 def hash_pin(pin: str) -> str:
@@ -194,9 +206,19 @@ async def auth_middleware(
         return await call_next(request)
 
     token = extract_session_token_fn(request)
-    if not token and path.startswith(COMPANION_SAFE_PREFIXES):
-        token = extract_bearer_token(request)
-    if not token or not await valid_session_async_fn(token):
-        return json_response_cls({"detail": "Authentication required"}, status_code=401)
+    companion_token = ""
+    if path.startswith(COMPANION_SAFE_PREFIXES):
+        companion_token = extract_bearer_token(request) or token
+        if not token:
+            token = companion_token
+    if token and await valid_session_async_fn(token):
+        return await call_next(request)
+    if companion_token:
+        from axon_api.services import companion_auth as companion_auth_service
+        async with db_module.get_db() as conn:
+            auth_row = await companion_auth_service.resolve_companion_auth_session(conn, access_token=companion_token)
+        if auth_row and not _expires_at_passed(str(auth_row.get("expires_at") or "")):
+            return await call_next(request)
+    return json_response_cls({"detail": "Authentication required"}, status_code=401)
 
     return await call_next(request)

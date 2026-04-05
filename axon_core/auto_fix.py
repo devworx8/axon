@@ -117,7 +117,6 @@ async def _run_chat_fix(prompt: str, error: dict) -> dict[str, Any]:
             history=[],
             context_block="",
             project_name=error.get("project_name", ""),
-            workspace_path="",
             **runtime,
         )
         content = result.get("content", "")

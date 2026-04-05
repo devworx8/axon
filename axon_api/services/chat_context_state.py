@@ -328,6 +328,27 @@ def format_cached_web_fast_answer(row, *, url: str) -> str:
     return f"Cached answer from {title}:\n\n{detail}".strip()
 
 
+def looks_like_task_snapshot_question(message: str) -> bool:
+    lowered = str(message or "").strip().lower()
+    if not lowered:
+        return False
+    return bool(
+        re.search(
+            r"\b("
+            r"what(?:'s| is)?(?:\s+(?:my|the|open|active|pending|current))?\s+(?:tasks?|missions?)"
+            r"|show(?:\s+me)?(?:\s+(?:my|the|open|active|pending|current))?\s+(?:tasks?|missions?)"
+            r"|list(?:\s+(?:my|the|open|active|pending|current))?\s+(?:tasks?|missions?)"
+            r"|check(?:\s+(?:my|the|open|active|pending|current))?\s+(?:tasks?|missions?)"
+            r"|review(?:\s+(?:my|the|open|active|pending|current))?\s+(?:tasks?|missions?)"
+            r"|summarize(?:\s+(?:my|the|open|active|pending|current))?\s+(?:tasks?|missions?)"
+            r"|any\s+(?:open|active|pending|current)?\s*(?:tasks?|missions?)"
+            r"|(?:open|active|pending|current)\s+(?:tasks?|missions?)"
+            r")\b",
+            lowered,
+        )
+    )
+
+
 def workspace_snapshot_fast_answer(message: str, snapshot_bundle: dict) -> str:
     data = snapshot_bundle.get("data") if isinstance(snapshot_bundle, dict) else {}
     lowered = str(message or "").strip().lower()
@@ -344,7 +365,7 @@ def workspace_snapshot_fast_answer(message: str, snapshot_bundle: dict) -> str:
             if path:
                 parts.append(f"Path: {path}")
             return "\n".join(parts)
-    if "task" in lowered or "mission" in lowered:
+    if looks_like_task_snapshot_question(lowered):
         tasks = data.get("tasks") if isinstance(data.get("tasks"), list) else []
         if tasks:
             lines = ["Open missions:"]
@@ -368,6 +389,38 @@ def memory_fast_answer(message: str, memory_bundle_payload: dict) -> str:
         if summary:
             return f"From memory: {title}\n\n{summary}"
     return ""
+
+
+def capability_orchestration_fast_answer(message: str, settings: dict) -> str:
+    lowered = str(message or "").strip().lower()
+    if not lowered:
+        return ""
+    if not re.search(r"\b(gpts?|gems?|agents?|workers?|models?)\b", lowered):
+        return ""
+    if not re.search(r"\b(connect|use|monitor|manage|orchestrate|delegate|supervise|watch)\b", lowered):
+        return ""
+
+    openai_enabled = str(settings.get("openai_gpts_enabled") or "").strip().lower() in {"1", "true", "yes", "on"}
+    gemini_enabled = str(settings.get("gemini_gems_enabled") or "").strip().lower() in {"1", "true", "yes", "on"}
+    cloud_enabled = str(settings.get("cloud_agents_enabled") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    enabled_labels = []
+    if openai_enabled:
+        enabled_labels.append("OpenAI GPT routing")
+    if gemini_enabled:
+        enabled_labels.append("Gemini Gem routing")
+    if cloud_enabled:
+        enabled_labels.append("cloud agents")
+    enabled_text = ", ".join(enabled_labels) if enabled_labels else "none of the external worker bridges"
+
+    lines = [
+        "Partly.",
+        f"Enabled in this Axon session: {enabled_text}.",
+        "I can coordinate Axon's own agent runs plus installed tools like GitHub, Linear, and Vercel.",
+        "I cannot yet supervise arbitrary external ChatGPT GPTs or Gems as a persistent worker fleet unless a dedicated connector or control API is wired in.",
+        "Concrete upgrades: provider task adapters, worker heartbeats, shared task state, and voice alerts when a delegated run needs attention.",
+    ]
+    return "\n".join(lines)
 
 
 async def maybe_local_fast_chat_response(
@@ -418,6 +471,16 @@ async def maybe_local_fast_chat_response(
             "tokens": 0,
             "evidence_source": "memory",
             "model_label": "Memory fast path",
+            "fast_path": True,
+        }
+
+    capability_answer = capability_orchestration_fast_answer(text, settings)
+    if capability_answer:
+        return {
+            "content": capability_answer,
+            "tokens": 0,
+            "evidence_source": "capabilities",
+            "model_label": "Capability fast path",
             "fast_path": True,
         }
     return None

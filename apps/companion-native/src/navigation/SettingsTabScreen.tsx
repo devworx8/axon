@@ -28,6 +28,8 @@ export function SettingsTabScreen({
   onUnlockVault,
   onUnlockVaultWithBiometrics,
   onLockVault,
+  onCopyAccessToken,
+  onRePair,
   axonStatus,
 }: {
   settings: SettingsHook;
@@ -46,6 +48,8 @@ export function SettingsTabScreen({
   onUnlockVault: () => void;
   onUnlockVaultWithBiometrics: () => void;
   onLockVault: () => void;
+  onCopyAccessToken?: () => void;
+  onRePair?: () => void;
   axonStatus?: AxonModeStatus | null;
 }) {
   return (
@@ -76,6 +80,8 @@ export function SettingsTabScreen({
       onUnlockVault={onUnlockVault}
       onUnlockVaultWithBiometrics={onUnlockVaultWithBiometrics}
       onLockVault={onLockVault}
+      onCopyAccessToken={onCopyAccessToken}
+      onRePair={onRePair}
       axonStatus={axonStatus}
     />
   );

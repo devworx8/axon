@@ -27,3 +27,6 @@ node_modules/
 apps/companion-native/node_modules/
 .cache/
 brain.db
+.claude/
+BKK_Operating_Fundraising_Team_Deck_fixed.pptx
+tmp_probe.txt

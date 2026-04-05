@@ -276,6 +276,10 @@ def _action_is_allowed(action: dict[str, Any]) -> bool:
             return approval_actions.autonomy_profile_allows(current, _current_autonomy_profile())
         return False
 
+    if _current_runtime_permissions_mode() != "ask_first":
+        if approval_actions.autonomy_profile_allows(current, _current_autonomy_profile()):
+            return True
+
     command_preview = str(current.get("command_preview") or "").strip()
     if command_preview:
         try:
@@ -1770,6 +1774,7 @@ async def chat(
     cli_model: str = "",
     ollama_url: str = "",
     ollama_model: str = "",
+    workspace_path: str = "",
 ) -> dict:
     """
     Send a chat message and return {"content": str, "tokens": int}.

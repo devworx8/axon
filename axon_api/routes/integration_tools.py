@@ -4,6 +4,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Optional
+from xml.sax.saxutils import escape
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
@@ -13,6 +14,7 @@ from pydantic import BaseModel
 class TTSRequest(BaseModel):
     text: str
     voice: str = "en-ZA-LeahNeural"
+    rate: float = 0.92
 
 
 class VoiceSpeakRequest(BaseModel):
@@ -32,6 +34,20 @@ class WebhookTestRequest(BaseModel):
 class FileWriteBody(BaseModel):
     path: str
     content: str
+
+
+def _normalized_voice_rate(value: float | int | str | None) -> float:
+    try:
+        rate = float(value)
+    except (TypeError, ValueError):
+        rate = 0.92
+    return max(0.72, min(1.15, rate))
+
+
+def _azure_voice_rate_attr(value: float | int | str | None) -> str:
+    rate = _normalized_voice_rate(value)
+    delta = int(round((rate - 1.0) * 100))
+    return f"{delta:+d}%"
 
 
 class IntegrationToolsRouteHandlers:
@@ -74,8 +90,11 @@ class IntegrationToolsRouteHandlers:
         if not key:
             raise HTTPException(400, "Azure Speech key not set in Settings")
 
+        safe_voice = escape(body.voice, {"'": "&apos;", '"': "&quot;"})
+        safe_text = escape(body.text[:900])
+        rate_attr = _azure_voice_rate_attr(body.rate)
         ssml = f"""<speak version='1.0' xml:lang='en-ZA'>
-        <voice name='{body.voice}'>{body.text[:500]}</voice>
+        <voice name='{safe_voice}'><prosody rate='{rate_attr}'>{safe_text}</prosody></voice>
     </speak>"""
         tts_url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
 

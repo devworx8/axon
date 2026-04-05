@@ -222,6 +222,50 @@ class ChatAutoResumeScopeTests(unittest.TestCase):
         self.assertEqual(payload["streamCalled"]["mode"], "agent")
         self.assertEqual(payload["streamCalled"]["workspaceId"], "2")
 
+    def test_send_chat_silent_appends_user_request_before_assistant_placeholder(self):
+        payload = _run_chat_script(
+            """
+            (async () => {
+              const mixin = ctx.window.axonChatMixin();
+              const app = {
+                chatProjectId: '2',
+                chatMessages: [],
+                autoSessions: [],
+                currentWorkspaceRunActive() { return false; },
+                effectiveChatMode() { return 'agent'; },
+                currentBackendSupportsAgent() { return true; },
+                setWorkspaceRunLoading() {},
+                autonomousConsoleActive() { return false; },
+                scrollChat() {},
+                _processQueue() {},
+              };
+              Object.assign(app, mixin);
+              app.beginLiveOperator = () => {};
+              app.$nextTick = (callback) => {
+                if (callback) callback();
+              };
+              app.scrollChat = () => {};
+              app.createAssistantPlaceholder = (respId, mode) => ({ id: respId, role: 'assistant', mode, content: '', streaming: true });
+              app.streamChatMessage = async () => {};
+              await app.sendChatSilent('please inspect the workspace', 'agent', {});
+              console.log(JSON.stringify(app.chatMessages.map(message => ({
+                role: message.role,
+                content: message.content,
+                mode: message.mode,
+              }))));
+            })().catch(error => {
+              console.error(error);
+              process.exit(1);
+            });
+            """
+        )
+
+        self.assertEqual(len(payload), 2)
+        self.assertEqual(payload[0]["role"], "user")
+        self.assertEqual(payload[0]["content"], "please inspect the workspace")
+        self.assertEqual(payload[1]["role"], "assistant")
+        self.assertEqual(payload[1]["mode"], "agent")
+
     def test_workspace_quick_actions_are_operator_focused(self):
         payload = _run_chat_script(
             """

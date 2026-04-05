@@ -122,6 +122,28 @@ class SettingsPayloadTests(unittest.TestCase):
 
         self.assertEqual(mode, "default")
 
+    def test_effective_agent_runtime_permissions_mode_promotes_isolated_codex_worktree(self):
+        mode = server._effective_agent_runtime_permissions_mode(
+            {"runtime_permissions_mode": "default", "autonomy_profile": "workspace_auto"},
+            backend="cli",
+            cli_path="/tmp/codex",
+            autonomy_profile="workspace_auto",
+            isolated_workspace=True,
+        )
+
+        self.assertEqual(mode, "full_access")
+
+    def test_effective_agent_runtime_permissions_mode_keeps_explicit_ask_first_in_isolated_worktree(self):
+        mode = server._effective_agent_runtime_permissions_mode(
+            {"runtime_permissions_mode": "ask_first", "autonomy_profile": "workspace_auto"},
+            backend="cli",
+            cli_path="/tmp/codex",
+            autonomy_profile="workspace_auto",
+            isolated_workspace=True,
+        )
+
+        self.assertEqual(mode, "ask_first")
+
 
 class AgentRuntimeStateTests(unittest.TestCase):
     def tearDown(self):
@@ -3045,7 +3067,10 @@ class AgentAutonomyRegressionTests(unittest.IsolatedAsyncioTestCase):
                 yield ""
 
         deps = AgentRuntimeDeps(
-            tool_registry={"create_file": brain._tool_create_file, "write_file": brain._tool_write_file},
+            tool_registry={
+                "create_file": brain._TOOL_REGISTRY["create_file"],
+                "write_file": brain._TOOL_REGISTRY["write_file"],
+            },
             normalize_tool_args=lambda name, args: args,
             stream_cli=fake_stream_cli,
             stream_api_chat=fake_stream_api_chat,
@@ -3680,12 +3705,47 @@ class GitCommandApprovalGateTests(unittest.TestCase):
             with _writable_tempdir() as tmpdir:
                 subprocess.run(["git", "init"], cwd=tmpdir, check=True, capture_output=True, text=True)
 
-                status_result = brain._tool_shell_cmd("git status --short", cwd=tmpdir, timeout=15)
-                commit_result = brain._tool_shell_cmd('git commit -m "test"', cwd=tmpdir, timeout=15)
+                status_result = brain._TOOL_REGISTRY["shell_cmd"]("git status --short", cwd=tmpdir, timeout=15)
+                commit_result = brain._TOOL_REGISTRY["shell_cmd"]('git commit -m "test"', cwd=tmpdir, timeout=15)
 
             self.assertFalse(status_result.startswith("BLOCKED_CMD:"))
             self.assertTrue(commit_result.startswith('BLOCKED_CMD:git:git commit -m "test"'))
         finally:
+            brain.agent_restore_permission_state(snapshot)
+
+    def test_tool_shell_cmd_consumes_workspace_scoped_exact_approval(self):
+        snapshot = brain.agent_capture_permission_state()
+        token = brain._ACTIVE_AGENT_RUNTIME_CONTEXT.set(
+            {
+                "runtime_permissions_mode": "default",
+                "autonomy_profile": "workspace_auto",
+                "agent_session_id": "session-shell-approval",
+                "workspace_id": 7,
+            }
+        )
+        try:
+            with _writable_tempdir() as tmpdir:
+                subprocess.run(["git", "init"], cwd=tmpdir, check=True, capture_output=True, text=True)
+                Path(tmpdir, "README.md").write_text("workspace scoped approval\n", encoding="utf-8")
+                workspace_token = agent_runtime_state.set_active_workspace_path(tmpdir)
+                try:
+                    action = approval_actions.build_command_approval_action(
+                        "git add -A",
+                        cwd=tmpdir,
+                        workspace_id=7,
+                        session_id="session-shell-approval",
+                    )
+                    brain.agent_allow_action(action, scope="once", session_id="session-shell-approval")
+
+                    add_result = brain._TOOL_REGISTRY["shell_cmd"]("git add -A", cwd=tmpdir, timeout=15)
+                    status_result = brain._TOOL_REGISTRY["shell_cmd"]("git status --short", cwd=tmpdir, timeout=15)
+                finally:
+                    agent_runtime_state.reset_active_workspace_path(workspace_token)
+
+            self.assertFalse(add_result.startswith("BLOCKED_CMD:"))
+            self.assertIn("A  README.md", status_result)
+        finally:
+            brain._ACTIVE_AGENT_RUNTIME_CONTEXT.reset(token)
             brain.agent_restore_permission_state(snapshot)
 
     def test_exact_action_approval_is_consumed_once(self):
@@ -3820,11 +3880,50 @@ class FileApprovalGateTests(unittest.TestCase):
             with _writable_tempdir() as tmpdir:
                 workspace_token = agent_runtime_state.set_active_workspace_path(tmpdir)
                 try:
-                    result = brain._tool_write_file(str(target), "DEFAULT_BLOCK")
+                    result = brain._TOOL_REGISTRY["write_file"](str(target), "DEFAULT_BLOCK")
                     self.assertTrue(result.startswith(f"BLOCKED_EDIT:write:{target}"))
                     self.assertFalse(target.exists())
                 finally:
                     agent_runtime_state.reset_active_workspace_path(workspace_token)
+        finally:
+            if target.exists():
+                target.unlink()
+            brain._ACTIVE_AGENT_RUNTIME_CONTEXT.reset(token)
+            brain.agent_restore_permission_state(snapshot)
+
+    def test_tool_write_file_consumes_workspace_scoped_exact_approval(self):
+        snapshot = brain.agent_capture_permission_state()
+        token = brain._ACTIVE_AGENT_RUNTIME_CONTEXT.set(
+            {
+                "runtime_permissions_mode": "default",
+                "autonomy_profile": "workspace_auto",
+                "agent_session_id": "session-write-approval",
+                "workspace_id": 7,
+            }
+        )
+        target = Path(tempfile.gettempdir()) / f"axon-exact-write-{os.getpid()}.txt"
+        try:
+            if target.exists():
+                target.unlink()
+            with _writable_tempdir() as tmpdir:
+                workspace_token = agent_runtime_state.set_active_workspace_path(tmpdir)
+                try:
+                    action = approval_actions.build_edit_approval_action(
+                        "write",
+                        str(target),
+                        workspace_id=7,
+                        session_id="session-write-approval",
+                        workspace_root=tmpdir,
+                    )
+                    brain.agent_allow_action(action, scope="once", session_id="session-write-approval")
+
+                    result = brain._TOOL_REGISTRY["write_file"](str(target), "EXACT_APPROVAL_OK")
+                finally:
+                    agent_runtime_state.reset_active_workspace_path(workspace_token)
+
+            self.assertIn("Written", result)
+            self.assertTrue(target.exists())
+            self.assertEqual(target.read_text(encoding="utf-8"), "EXACT_APPROVAL_OK")
         finally:
             if target.exists():
                 target.unlink()
@@ -3847,7 +3946,7 @@ class FileApprovalGateTests(unittest.TestCase):
             with _writable_tempdir() as tmpdir:
                 workspace_token = agent_runtime_state.set_active_workspace_path(tmpdir)
                 try:
-                    result = brain._tool_write_file(str(target), "FULL_ACCESS_OK")
+                    result = brain._TOOL_REGISTRY["write_file"](str(target), "FULL_ACCESS_OK")
                     self.assertIn("Written", result)
                     self.assertTrue(target.exists())
                     self.assertEqual(target.read_text(encoding="utf-8"), "FULL_ACCESS_OK")
@@ -4304,6 +4403,83 @@ class AutoSessionApiTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result["started"])
         self.assertEqual(captured["kwargs"]["resume_message"], "Create AUTO_RESUME.txt and stop for review.")
+
+    async def test_auto_session_background_uses_full_access_for_isolated_codex_worktree(self):
+        captured = {}
+
+        async def fake_get_all_settings(_conn):
+            return {
+                "max_agent_iterations": "3",
+                "context_compact_enabled": "1",
+                "ai_backend": "cli",
+                "runtime_permissions_mode": "default",
+                "autonomy_profile": "workspace_auto",
+            }
+
+        async def fake_rows(*_args, **_kwargs):
+            return []
+
+        async def fake_resource_bundle(*_args, **_kwargs):
+            return {"context_block": "", "image_paths": [], "vision_model": "", "warnings": []}
+
+        async def fake_memory_bundle(*_args, **_kwargs):
+            return {"context_block": ""}
+
+        async def fake_ai_params(*_args, **_kwargs):
+            return {"backend": "cli", "cli_path": "/tmp/codex", "cli_model": "gpt-5.4", "cli_session_persistence": False}
+
+        async def fake_auto_route(*args, **kwargs):
+            return kwargs.get("ai") or args[1], []
+
+        async def fake_run_agent(*_args, **kwargs):
+            captured["runtime_permissions_mode"] = kwargs.get("runtime_permissions_mode")
+            captured["autonomy_profile"] = kwargs.get("autonomy_profile")
+            yield {"type": "text", "chunk": "looked around"}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            auto_root = Path(tmpdir) / "auto"
+            auto_root.mkdir(parents=True, exist_ok=True)
+            workspace_root = Path(tmpdir) / "workspace"
+            workspace_root.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["git", "init"], cwd=workspace_root, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.name", "Axon Tests"], cwd=workspace_root, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "axon-tests@example.com"], cwd=workspace_root, check=True, capture_output=True, text=True)
+            (workspace_root / "README.md").write_text("demo\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=workspace_root, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=workspace_root, check=True, capture_output=True, text=True)
+            workspace = {"id": 13, "name": "Demo", "path": str(workspace_root)}
+
+            with patch.dict(sandbox_sessions.SANDBOX_ROOTS, {"auto": auto_root}, clear=False):
+                session_meta = auto_session_service.ensure_auto_session(
+                    "auto-13",
+                    workspace,
+                    title="Auto demo",
+                    detail="Run autonomously",
+                    start_prompt="Inspect the repo",
+                    metadata={"status": "ready"},
+                )
+
+                with patch.object(server.devdb, "get_db", self._fake_db), \
+                     patch.object(server.devdb, "get_all_settings", side_effect=fake_get_all_settings), \
+                     patch.object(server.devdb, "get_projects", side_effect=fake_rows), \
+                     patch.object(server.devdb, "get_tasks", side_effect=fake_rows), \
+                     patch.object(server.devdb, "get_prompts", side_effect=fake_rows), \
+                     patch.object(server, "_load_chat_history_rows", side_effect=fake_rows), \
+                     patch.object(server, "_resource_bundle", side_effect=fake_resource_bundle), \
+                     patch.object(server, "_memory_bundle", side_effect=fake_memory_bundle), \
+                     patch.object(server, "_task_sandbox_ai_params", side_effect=fake_ai_params), \
+                     patch.object(server, "auto_route_vision_runtime", side_effect=fake_auto_route), \
+                     patch.object(server, "_auto_route_image_generation_runtime", side_effect=fake_auto_route), \
+                     patch.object(brain, "_build_context_block", return_value=""), \
+                     patch.object(brain, "run_agent", side_effect=fake_run_agent), \
+                     patch.object(brain, "agent_capture_permission_state", return_value={}), \
+                     patch.object(brain, "agent_restore_permission_state"), \
+                     patch.object(brain, "agent_allow_edit"), \
+                     patch.object(brain, "agent_allow_command"):
+                    await server._run_auto_session_background(workspace, session_meta)
+
+        self.assertEqual(captured["autonomy_profile"], "workspace_auto")
+        self.assertEqual(captured["runtime_permissions_mode"], "full_access")
 
     async def test_list_auto_sessions_refreshes_stale_entries(self):
         with patch.object(

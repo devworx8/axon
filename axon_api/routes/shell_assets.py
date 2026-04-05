@@ -26,6 +26,9 @@ class ShellAssetRouteHandlers:
     async def serve_styles(self):
         return self._ui_renderer.render_styles(self._ui_dir)
 
+    async def serve_css(self, filename: str):
+        return self._ui_renderer.render_css(self._ui_dir, filename)
+
     async def serve_js(self, filename: str):
         return self._ui_renderer.render_js(self._ui_dir, filename)
 
@@ -48,6 +51,7 @@ def build_shell_asset_router(*, ui_renderer: Any, ui_dir: Path, sw_cache_version
     router.add_api_route("/manual.html", handlers.serve_manual, methods=["GET"], response_class=HTMLResponse)
     router.add_api_route("/manifest.json", handlers.pwa_manifest, methods=["GET"])
     router.add_api_route("/styles.css", handlers.serve_styles, methods=["GET"])
+    router.add_api_route("/css/{filename:path}", handlers.serve_css, methods=["GET"])
     router.add_api_route("/js/{filename:path}", handlers.serve_js, methods=["GET"])
     router.add_api_route("/icons/{filename}", handlers.serve_icon, methods=["GET"])
     router.add_api_route("/sw.js", handlers.service_worker, methods=["GET"])

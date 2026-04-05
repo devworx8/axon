@@ -1,4 +1,6 @@
 import React from 'react';
+import { ScrollView, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AttentionScreen } from '@/features/attention/AttentionScreen';
 import { CompanionSessionGate } from '@/features/auth/CompanionSessionGate';
 import { MissionControlScreen } from '@/features/mission/MissionControlScreen';
@@ -83,12 +85,16 @@ export function AppNavigatorBody({
   onUnlockVault,
   onUnlockVaultWithBiometrics,
   onLockVault,
+  onCopyAccessToken,
+  onRePair,
   onSubmitCommand,
   onExecuteAction,
   onApprovePending,
   onConfirmChallenge,
   onRejectChallenge,
   onOpenChallenge,
+  onToggleAutoNav,
+  autoNavEnabled,
   onFocusWorkspace,
   onInspectWorkspace,
   onRestartPreview,
@@ -149,12 +155,16 @@ export function AppNavigatorBody({
   onUnlockVault: () => void;
   onUnlockVaultWithBiometrics: () => void;
   onLockVault: () => void;
+  onCopyAccessToken?: () => void;
+  onRePair?: () => void;
   onSubmitCommand: (text: string) => void;
   onExecuteAction: (actionType: string, payload?: Record<string, unknown>) => void;
   onApprovePending: () => void;
   onConfirmChallenge: (challenge: RiskChallenge) => void;
   onRejectChallenge: (challengeId: number) => void;
   onOpenChallenge: (challenge: RiskChallenge | null) => void;
+  onToggleAutoNav?: () => void;
+  autoNavEnabled?: boolean;
   onFocusWorkspace: (workspaceId: number | null) => void;
   onInspectWorkspace: (workspaceId: number | null) => void;
   onRestartPreview: (workspaceId: number | null) => void;
@@ -177,11 +187,26 @@ export function AppNavigatorBody({
   onResumeSession?: () => void;
   onStopSession?: () => void;
 }) {
+  const insets = useSafeAreaInsets();
+  const scrollPadding = {
+    paddingTop: Math.max(20, insets.top + 12),
+    paddingBottom: Math.max(24, insets.bottom + 32),
+    paddingHorizontal: 16,
+  };
+  const wrapScrollable = (content: React.ReactNode) => (
+    <ScrollView
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={[styles.scrollContent, scrollPadding]}
+      keyboardShouldPersistTaps="handled"
+    >
+      {content}
+    </ScrollView>
+  );
   if (activeTab !== 'settings') {
     const gateCopy = sessionGateCopy(activeTab);
     const gateError = activeGateError(config, authError, bootstrapError);
     if (authChecking && config.accessToken) {
-      return (
+      return wrapScrollable(
         <CompanionSessionGate
           title={gateCopy.title}
           subtitle={gateCopy.subtitle}
@@ -200,7 +225,7 @@ export function AppNavigatorBody({
       );
     }
     if (!config.accessToken || !verifiedPairing) {
-      return (
+      return wrapScrollable(
         <CompanionSessionGate
           title={gateCopy.title}
           subtitle={gateCopy.subtitle}
@@ -221,7 +246,7 @@ export function AppNavigatorBody({
 
   switch (activeTab) {
     case 'attention':
-      return (
+      return wrapScrollable(
         <AttentionScreen
           summary={{ counts: attentionSummary.counts || {} }}
           inbox={{
@@ -235,7 +260,7 @@ export function AppNavigatorBody({
         />
       );
     case 'voice':
-      return (
+      return wrapScrollable(
         <VoiceScreen
           onSubmit={onSubmitCommand}
           sending={voice.sending}
@@ -272,7 +297,7 @@ export function AppNavigatorBody({
         />
       );
     case 'projects':
-      return (
+      return wrapScrollable(
         <ProjectsScreen
           projects={mission.snapshot?.projects || []}
           activeWorkspaceId={currentWorkspaceId}
@@ -292,7 +317,7 @@ export function AppNavigatorBody({
         />
       );
     case 'sessions':
-      return (
+      return wrapScrollable(
         <SessionScreen
           sessions={mission.snapshot?.sessions || []}
           session={activeSession}
@@ -316,7 +341,7 @@ export function AppNavigatorBody({
         />
       );
     case 'settings':
-      return (
+      return wrapScrollable(
         <SettingsTabScreen
           settings={settings}
           config={config}
@@ -334,6 +359,8 @@ export function AppNavigatorBody({
           onUnlockVault={onUnlockVault}
           onUnlockVaultWithBiometrics={onUnlockVaultWithBiometrics}
           onLockVault={onLockVault}
+          onCopyAccessToken={onCopyAccessToken}
+          onRePair={onRePair}
           axonStatus={mission?.snapshot?.axon || null}
         />
       );
@@ -342,7 +369,20 @@ export function AppNavigatorBody({
       return (
         <MissionControlScreen
           snapshot={mission.snapshot}
+          onOpenVoice={() => setActiveTab('voice')}
+          onOpenAttention={() => setActiveTab('attention')}
+          onOpenSessions={() => setActiveTab('sessions')}
+          onOpenProjects={() => setActiveTab('projects')}
+          onOpenSettings={() => setActiveTab('settings')}
+          autoNavEnabled={autoNavEnabled}
+          onToggleAutoNav={onToggleAutoNav}
         />
       );
   }
 }
+
+const styles = StyleSheet.create({
+  scrollContent: {
+    gap: 16,
+  },
+});

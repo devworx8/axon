@@ -371,6 +371,7 @@ function axonChatMixin() {
                 this.finalizeThinkingBlocks(this.chatMessages[idx]);
                 if (this.chatMessages[idx].agentEvents?.length) this.setAgentStage('verify');
                 this.chatMessages[idx].content += data.chunk;
+                this._detectDevServerUrl?.(data.chunk || this.chatMessages[idx].content || '');
                 this.updateLiveOperator(mode, data, targetWorkspaceId);
                 this.scrollChat();
               } else if (data.type === 'tool_call' || data.type === 'tool_result') {
@@ -381,7 +382,26 @@ function axonChatMixin() {
                   this.appendWorkingBlock(this.chatMessages[idx], data);
                 } else {
                   this.resolveWorkingBlock(this.chatMessages[idx], data);
+                  this._detectDevServerUrl?.(data.result || '');
                 }
+                this.updateLiveOperator(mode, data, targetWorkspaceId);
+                this.scrollChat();
+              } else if (data.type === 'approval_required') {
+                this.setAgentStage('recover');
+                this.finalizeThinkingBlocks(this.chatMessages[idx]);
+                this.finalizeWorkingBlocks(this.chatMessages[idx]);
+                if (!String(this.chatMessages[idx].content || '').trim()) {
+                  this.chatMessages[idx].content = String(
+                    data.message || 'Approval is required before Axon can continue.'
+                  ).trim();
+                }
+                this.chatMessages[idx].streaming = false;
+                this.chatMessages[idx].approvalRequired = true;
+                this.chatMessages[idx].approval = data;
+                this.syncPendingAgentApproval?.(data, {
+                  session_id: data?.approval_action?.session_id || '',
+                  workspace_id: targetWorkspaceId || data?.workspace_id || '',
+                });
                 this.updateLiveOperator(mode, data, targetWorkspaceId);
                 this.scrollChat();
               } else if (data.type === 'done') {
@@ -389,6 +409,7 @@ function axonChatMixin() {
                 this.finalizeThinkingBlocks(this.chatMessages[idx]);
                 this.finalizeWorkingBlocks(this.chatMessages[idx]);
                 this.chatMessages[idx].streaming = false;
+                this._detectDevServerUrl?.(this.chatMessages[idx].content || '');
                 // Auto-speak response if voice mode is active
                 if (typeof this.autoSpeakResponse === 'function') {
                   this.autoSpeakResponse(this.chatMessages[idx].content);
@@ -407,11 +428,13 @@ function axonChatMixin() {
             } else {
               if (data.chunk) {
                 this.chatMessages[idx].content += data.chunk;
+                this._detectDevServerUrl?.(data.chunk || this.chatMessages[idx].content || '');
                 this.updateLiveOperator(mode, data, targetWorkspaceId);
                 this.scrollChat();
               }
               if (data.done) {
                 this.chatMessages[idx].streaming = false;
+                this._detectDevServerUrl?.(this.chatMessages[idx].content || '');
                 // Auto-speak response if voice mode is active
                 if (typeof this.autoSpeakResponse === 'function') {
                   this.autoSpeakResponse(this.chatMessages[idx].content);
@@ -504,9 +527,11 @@ function axonChatMixin() {
         created_at: new Date().toISOString(),
         mode,
         resources: attachedResources,
+        imageAttachments: [...(this.imageAttachments || [])],
       });
       const workspaceId = String(this.chatProjectId || '').trim();
       this.chatLoading = true;
+      this.clearImageAttachments?.();
       this.beginLiveOperator(mode, msg, workspaceId);
       this.scrollChat();
 
@@ -639,9 +664,11 @@ function axonChatMixin() {
   const composed = [baseMixin];
   const optionalMixins = [
     typeof axonChatFollowUpsMixin === 'function' ? axonChatFollowUpsMixin : null,
+    typeof axonChatApprovalMixin === 'function' ? axonChatApprovalMixin : null,
     typeof axonChatWorkspaceModesMixin === 'function' ? axonChatWorkspaceModesMixin : null,
     typeof axonChatWorkspaceStatusMixin === 'function' ? axonChatWorkspaceStatusMixin : null,
     typeof axonChatAutoStreamMixin === 'function' ? axonChatAutoStreamMixin : null,
+    typeof axonChatSlashCommandsMixin === 'function' ? axonChatSlashCommandsMixin : null,
     typeof axonChatConsoleCommandsMixin === 'function' ? axonChatConsoleCommandsMixin : null,
     typeof axonChatBrowserSurfaceMixin === 'function' ? axonChatBrowserSurfaceMixin : null,
     typeof axonChatResumeMixin === 'function' ? axonChatResumeMixin : null,

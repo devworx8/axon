@@ -85,6 +85,7 @@ class ChatRuntimeFacade:
         backend: str = "",
         cli_path: str = "",
         autonomy_profile: str = "",
+        isolated_workspace: bool = False,
     ) -> str:
         return composer_runtime.effective_agent_runtime_permissions_mode(
             settings,
@@ -92,6 +93,7 @@ class ChatRuntimeFacade:
             backend=backend,
             cli_path=cli_path,
             autonomy_profile=autonomy_profile,
+            isolated_workspace=isolated_workspace,
             cli_runtime_family=self._brain_module._cli_runtime_family,
         )
 

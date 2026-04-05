@@ -93,6 +93,8 @@ class SettingsMemoryRouteHandlers:
                 "alerts_morning_brief",
                 "alerts_tunnel",
                 "dash_bridge_enabled",
+                "voice_attention_enabled",
+                "voice_attention_autowake",
             ):
                 settings[key] = str(settings.get(key, "")).strip().lower() in {"1", "true", "yes", "on"}
             for key_name in (
@@ -142,7 +144,6 @@ class SettingsMemoryRouteHandlers:
             if "autonomy_profile" in data:
                 data["autonomy_profile"] = self._normalized_autonomy_profile(
                     data.get("autonomy_profile") or "workspace_auto",
-                    reject_elevated=True,
                 )
                 if "runtime_permissions_mode" not in data:
                     data["runtime_permissions_mode"] = "ask_first" if data["autonomy_profile"] == "manual" else "default"

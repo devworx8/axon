@@ -38,6 +38,14 @@ def _run_console_state_script(body: str):
             setItem(key, value) {{ sessionStore.set(key, String(value)); }},
             removeItem(key) {{ sessionStore.delete(key); }},
           }},
+          document: {{
+            body: {{
+              classList: {{
+                add() {{}},
+                remove() {{}},
+              }},
+            }},
+          }},
           URL,
           BroadcastChannel: function () {{ return {{ postMessage() {{}}, close() {{}} }}; }},
           console,
@@ -156,6 +164,55 @@ class ConsoleStateTests(unittest.TestCase):
         self.assertEqual(payload["firstRecall"], "second task")
         self.assertEqual(payload["secondRecall"], "first task")
         self.assertEqual(payload["downRecall"], "second task")
+
+    def test_console_sidebar_resize_clamps_and_reset_restores_default(self):
+        payload = _run_console_state_script(
+            """
+            const pointerListeners = {};
+            ctx.window.addEventListener = (type, handler) => { pointerListeners[type] = handler; };
+            ctx.window.removeEventListener = (type, handler) => {
+              if (pointerListeners[type] === handler) delete pointerListeners[type];
+            };
+
+            const mixin = ctx.window.axonConsoleStateMixin();
+            const app = {
+              activeTab: 'chat',
+              chatInput: '',
+              projects: [],
+            };
+            Object.assign(app, mixin);
+            app.initConsoleWindowScope();
+            app.startConsoleResize({
+              button: 0,
+              clientX: 1200,
+              preventDefault() {},
+              stopPropagation() {},
+            });
+            const firstWidth = app.consoleSidebarWidth;
+            pointerListeners.pointermove({ clientX: 200 });
+            const maxWidth = app.consoleSidebarWidth;
+            pointerListeners.pointermove({ clientX: 1400 });
+            const minWidth = app.consoleSidebarWidth;
+            pointerListeners.pointerup();
+            const activeAfterStop = app._consoleSidebarResizeActive;
+            app.resetConsoleSidebarWidth();
+            console.log(JSON.stringify({
+              firstWidth,
+              maxWidth,
+              minWidth,
+              activeAfterStop,
+              resetWidth: app.consoleSidebarWidth,
+              style: app.consoleSidebarStyle(),
+            }));
+            """
+        )
+
+        self.assertEqual(payload["firstWidth"], 280)
+        self.assertEqual(payload["maxWidth"], 760)
+        self.assertEqual(payload["minWidth"], 280)
+        self.assertFalse(payload["activeAfterStop"])
+        self.assertEqual(payload["resetWidth"], 420)
+        self.assertIn("--console-sidebar-width:420px", payload["style"])
 
 
 if __name__ == "__main__":

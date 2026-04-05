@@ -189,7 +189,11 @@ def normalized_autonomy_profile(value: str, *, reject_elevated: bool = False) ->
     profile = str(value or "workspace_auto").strip().lower() or "workspace_auto"
     if profile == "manual":
         return "manual"
-    if profile in {"branch_auto", "pr_auto", "merge_auto", "deploy_auto"}:
+    if profile in {"branch_auto", "pr_auto"}:
+        if reject_elevated:
+            raise HTTPException(400, "Elevated autonomy profiles are disabled in this hardening phase.")
+        return profile
+    if profile in {"merge_auto", "deploy_auto"}:
         if reject_elevated:
             raise HTTPException(400, "Elevated autonomy profiles are disabled in this hardening phase.")
         return "workspace_auto"
@@ -210,6 +214,7 @@ def effective_agent_runtime_permissions_mode(
     backend: str = "",
     cli_path: str = "",
     autonomy_profile: str = "",
+    isolated_workspace: bool = False,
     cli_runtime_family,
 ) -> str:
     normalized_autonomy = normalized_autonomy_profile(
@@ -221,13 +226,17 @@ def effective_agent_runtime_permissions_mode(
         fallback=default_fallback,
     )
     requested_mode = normalized_runtime_permissions_mode(override or "", fallback=current_mode)
-    if requested_mode != "full_access":
-        return requested_mode
-    if str(backend or "").strip().lower() != "cli":
-        return current_mode
-    if cli_runtime_family(str(cli_path or "")) != "codex":
-        return current_mode
-    return "full_access"
+    is_codex_cli = str(backend or "").strip().lower() == "cli" and cli_runtime_family(str(cli_path or "")) == "codex"
+    if requested_mode == "full_access":
+        return "full_access" if is_codex_cli else current_mode
+    if (
+        isolated_workspace
+        and requested_mode == "default"
+        and normalized_autonomy == "workspace_auto"
+        and is_codex_cli
+    ):
+        return "full_access"
+    return requested_mode
 
 
 def normalized_external_fetch_policy(value: str) -> str:

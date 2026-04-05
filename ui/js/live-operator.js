@@ -40,6 +40,9 @@ function axonLiveOperatorMixin() {
         this.refreshDesktopPreview?.(true);
         this.scheduleDesktopPreview?.();
       }
+      if (mode === 'agent') {
+        this.maybeFollowWorkspacePreview?.({ mode, workspaceId: target });
+      }
       return operator;
     },
 

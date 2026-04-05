@@ -67,6 +67,9 @@ class SettingsUpdate(BaseModel):
     azure_speech_key: Optional[str] = None
     azure_speech_region: Optional[str] = None
     azure_voice: Optional[str] = None
+    voice_speech_rate: Optional[str] = None
+    voice_attention_enabled: Optional[bool] = None
+    voice_attention_autowake: Optional[bool] = None
     local_stt_model: Optional[str] = None
     local_stt_language: Optional[str] = None
     local_tts_model_path: Optional[str] = None

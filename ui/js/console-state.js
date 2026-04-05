@@ -4,8 +4,8 @@
 
 function axonConsoleStateMixin() {
   const DEFAULT_SIDEBAR_WIDTH = 420;
-  const MIN_SIDEBAR_WIDTH = 340;
-  const MAX_SIDEBAR_WIDTH = 620;
+  const MIN_SIDEBAR_WIDTH = 280;
+  const MAX_SIDEBAR_WIDTH = 760;
   const MAX_COMPOSER_HISTORY = 40;
 
   const parseJson = (value, fallback) => {
@@ -38,6 +38,7 @@ function axonConsoleStateMixin() {
     consoleWorkspaceTabs: [''],
     workspaceTabMenuOpen: false,
     consoleSidebarWidth: DEFAULT_SIDEBAR_WIDTH,
+    _consoleSidebarResizeActive: false,
     _consoleStateReady: false,
     _consoleStateWatchersBound: false,
     _consoleDraftPersistTimer: null,
@@ -395,7 +396,7 @@ function axonConsoleStateMixin() {
       if (this.isMobile) return '';
       const width = Number(this.consoleSidebarWidth || DEFAULT_SIDEBAR_WIDTH);
       const clamped = Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, width));
-      return `width:${clamped}px;flex-basis:${clamped}px;`;
+      return `--console-sidebar-width:${clamped}px;width:${clamped}px;flex-basis:${clamped}px;`;
     },
 
     setConsoleSidebarWidth(nextWidth) {
@@ -407,9 +408,18 @@ function axonConsoleStateMixin() {
       this.persistConsoleWindowState();
     },
 
+    resetConsoleSidebarWidth() {
+      this.setConsoleSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+    },
+
     startConsoleResize(event) {
       if (this.isMobile) return;
+      if (event?.button != null && event.button !== 0) return;
       event.preventDefault?.();
+      event.stopPropagation?.();
+      const body = globalThis?.document?.body || null;
+      this._consoleSidebarResizeActive = true;
+      body?.classList?.add('console-resizing');
       const onMove = (moveEvent) => {
         this.setConsoleSidebarWidth((window?.innerWidth || 1440) - Number(moveEvent?.clientX || 0));
       };
@@ -417,7 +427,10 @@ function axonConsoleStateMixin() {
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', stop);
         window.removeEventListener('pointercancel', stop);
+        this._consoleSidebarResizeActive = false;
+        body?.classList?.remove('console-resizing');
       };
+      onMove(event);
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', stop);
       window.addEventListener('pointercancel', stop);

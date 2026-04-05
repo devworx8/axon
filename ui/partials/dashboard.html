@@ -4,6 +4,7 @@
     <div x-show="activeTab === 'dashboard'" class="dashboard-page flex flex-col h-full">
       <div class="hidden md:flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/50 desktop-header-glass">
         <div class="flex items-center gap-3">
+          <span class="stark-heartbeat" :class="liveOperator.active ? '' : 'idle'"></span>
           <div class="font-semibold text-white">Dashboard</div>
           <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400 uppercase tracking-wider">Control Room</span>
         </div>
@@ -18,33 +19,35 @@
   </div>
   <script src="/js/dashboard_preview.js"></script>
       <div class="flex-1 overflow-y-auto page-content">
-        <div x-show="dashLoading" class="w-full max-w-[1600px] mx-auto px-4 py-4 md:px-6 md:py-6 xl:px-8 2xl:px-10 space-y-3">
-          <template x-for="i in 3" :key="`dash-skeleton-${i}`">
-            <div class="bg-slate-900 rounded-2xl p-4 border border-slate-800 space-y-3">
-              <div class="flex items-center gap-3">
-                <div class="skeleton w-10 h-10 rounded-xl"></div>
-                <div class="flex-1 space-y-2">
-                  <div class="skeleton skeleton-text-lg w-2/3"></div>
-                  <div class="skeleton skeleton-text w-1/2"></div>
+        <template x-if="dashLoading">
+          <div class="w-full max-w-[1600px] mx-auto px-4 py-4 md:px-6 md:py-6 xl:px-8 2xl:px-10 space-y-3">
+            <template x-for="i in 3" :key="`dash-skeleton-${i}`">
+              <div class="bg-slate-900 rounded-2xl p-4 border border-slate-800 space-y-3">
+                <div class="flex items-center gap-3">
+                  <div class="skeleton w-10 h-10 rounded-xl"></div>
+                  <div class="flex-1 space-y-2">
+                    <div class="skeleton skeleton-text-lg w-2/3"></div>
+                    <div class="skeleton skeleton-text w-1/2"></div>
+                  </div>
+                </div>
+                <div class="skeleton h-2 rounded-full w-full"></div>
+                <div class="flex gap-2">
+                  <div class="skeleton skeleton-btn flex-1"></div>
+                  <div class="skeleton skeleton-btn flex-1"></div>
+                  <div class="skeleton w-11 h-11 rounded-xl"></div>
                 </div>
               </div>
-              <div class="skeleton h-2 rounded-full w-full"></div>
-              <div class="flex gap-2">
-                <div class="skeleton skeleton-btn flex-1"></div>
-                <div class="skeleton skeleton-btn flex-1"></div>
-                <div class="skeleton w-11 h-11 rounded-xl"></div>
-              </div>
-            </div>
-          </template>
-        </div>
+            </template>
+          </div>
+        </template>
         <div x-show="!dashLoading" class="w-full max-w-[1600px] mx-auto px-4 py-4 md:px-6 md:py-6 xl:px-8 2xl:px-10">
           <div class="dashboard-shell-grid">
             <div class="min-w-0 space-y-4 md:space-y-5">
 
-              <section class="xl:hidden rounded-[28px] border border-slate-800 bg-gradient-to-br from-slate-950 via-slate-900/95 to-slate-900/80 p-4 shadow-[0_18px_60px_rgba(15,23,42,0.32)]">
+              <section class="xl:hidden stark-dash-panel p-4">
                 <div class="flex items-start justify-between gap-3">
                   <div class="min-w-0">
-                    <div class="text-[10px] font-semibold uppercase tracking-[0.24em] text-cyan-300/80">Dashboard</div>
+                    <div class="stark-dash-header">Dashboard</div>
                     <h1 class="mt-2 text-2xl font-bold tracking-tight text-white">Control room</h1>
                     <p class="mt-2 text-sm leading-6 text-slate-400">One place to see what Axon is doing, what needs attention, and which workspace needs you next.</p>
                   </div>
@@ -94,10 +97,10 @@
               <!-- @include partials/dashboard_compact_live_rail.html -->
 
               <div class="grid gap-4 lg:grid-cols-[minmax(0,1.12fr)_minmax(320px,0.88fr)]">
-                <section class="rounded-[28px] border border-slate-800 bg-slate-900/45 p-4 md:p-5">
+                <section class="stark-dash-panel p-4 md:p-5">
                   <div class="flex items-center justify-between gap-3">
                     <div>
-                      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Workspace Risk</div>
+                      <div class="stark-dash-header">Workspace Risk</div>
                       <div class="mt-2 text-lg font-semibold text-white">Weakest workspaces first</div>
                     </div>
                     <button @click="switchTab('projects')" class="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-[10px] text-slate-300 transition hover:border-slate-500">Open Workspaces</button>
@@ -127,10 +130,10 @@
                   </div>
                 </section>
 
-                <section class="rounded-[28px] border border-slate-800 bg-slate-900/45 p-4 md:p-5">
+                <section class="stark-dash-panel p-4 md:p-5">
                   <div class="flex items-center justify-between gap-3">
                     <div>
-                      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300/80">Priority Missions</div>
+                      <div class="stark-dash-header" style="color: var(--stark-holo-amber); opacity: 0.85;">Priority Missions</div>
                       <div class="mt-2 text-lg font-semibold text-white">What needs attention next</div>
                     </div>
                     <div class="flex items-center gap-2">
@@ -182,7 +185,7 @@
               <div class="grid gap-3 lg:grid-cols-2" x-data="{ tlOpen: false, rsOpen: false }">
 
                 <!-- Recent Timeline -->
-                <section class="rounded-2xl border border-slate-800 bg-slate-900/45 overflow-hidden">
+                <section class="stark-dash-panel overflow-hidden">
                   <div class="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center">
                     <div class="min-w-0 flex-1">
                       <div class="flex items-center gap-2">
@@ -224,7 +227,7 @@
                 </section>
 
                 <!-- Runtime Signals -->
-                <section class="rounded-2xl border border-slate-800 bg-slate-900/45 overflow-hidden">
+                <section class="stark-dash-panel overflow-hidden">
                   <div class="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center">
                     <div class="min-w-0 flex-1">
                       <div class="flex items-center gap-2">
@@ -276,9 +279,18 @@
                 </section>
               </div>
 
+              <!-- ── Quick Command Bar ──────────────────────── -->
+              <div class="stark-quick-cmd flex items-center gap-3 px-4 py-3" x-data="{ dashCmd: '' }">
+                <span class="stark-heartbeat" :class="liveOperator.active ? '' : 'idle'"></span>
+                <input type="text" x-model="dashCmd" placeholder="Quick command — press Enter to jump to Console…" class="flex-1 py-1 text-sm"
+                       @keydown.enter.prevent="if(dashCmd.trim()) { chatInput = dashCmd.trim(); dashCmd=''; switchTab('chat'); $nextTick(() => sendChat()); }">
+                <button @click="if(dashCmd.trim()) { chatInput = dashCmd.trim(); dashCmd=''; switchTab('chat'); $nextTick(() => sendChat()); }"
+                        class="rounded-lg border border-slate-700/60 bg-slate-800/40 px-3 py-1.5 text-[11px] text-slate-300 transition hover:border-cyan-500/40 hover:text-cyan-200 press-scale shrink-0">Send</button>
+              </div>
+
               <!-- ── Local Tools — compact collapsible ──────── -->
               <section x-data="{ ltOpen: false }"
-                       class="rounded-2xl border border-amber-500/15 bg-slate-900/50 overflow-hidden">
+                       class="stark-dash-panel overflow-hidden" style="border-color: rgba(255, 159, 28, 0.15);">
                 <!-- Header row — always visible -->
                 <div class="flex flex-col gap-3 px-4 py-3 md:flex-row md:items-center">
                   <div class="min-w-0 flex-1">
@@ -286,7 +298,15 @@
                       <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300/70 shrink-0">Local Tools</span>
                       <span class="text-slate-700 shrink-0">·</span>
                       <span class="text-[11px] font-medium text-slate-300 truncate">Machine Access</span>
-                      <span class="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[9px] text-emerald-400 shrink-0">Sandboxed</span>
+                      <span class="rounded-full px-2 py-0.5 text-[9px] shrink-0"
+                            :class="settingsForm?.runtime_permissions_mode === 'full_access'
+                              ? 'border border-red-500/20 bg-red-500/10 text-red-400'
+                              : (settingsForm?.autonomy_profile === 'branch_auto' || settingsForm?.autonomy_profile === 'pr_auto')
+                                ? 'border border-cyan-500/20 bg-cyan-500/10 text-cyan-400'
+                                : 'border border-emerald-500/20 bg-emerald-500/10 text-emerald-400'"
+                            x-text="settingsForm?.runtime_permissions_mode === 'full_access'
+                              ? 'Full Access'
+                              : (settingsForm?.autonomy_profile || 'workspace_auto').replace(/_/g, ' ')"></span>
                       <span class="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[9px] text-amber-400 shrink-0"
                             x-text="(settingsForm.terminal_default_mode || 'read_only').replace(/_/g,' ')"></span>
                     </div>

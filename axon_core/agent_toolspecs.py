@@ -6,6 +6,11 @@ from typing import Any, AsyncGenerator, Callable, Optional
 import re as _re
 
 from .agent_tool_metadata import TOOL_ALIAS_MAP, TOOL_ARG_EXAMPLES
+from .agent_browser_tools import (
+    BROWSER_TOOL_DEFS,
+    BROWSER_TOOL_NAMES,
+    execute_browser_tool,
+)
 from .agent_paths import DEFAULT_DEVBRAIN_DB_PATH
 
 
@@ -546,6 +551,9 @@ AGENT_TOOL_DEFS: list[dict[str, Any]] = [
     },
 ]
 
+# ── Browser automation tools (bounded module) ────────────────────────────────
+AGENT_TOOL_DEFS.extend(BROWSER_TOOL_DEFS)
+
 
 def _canonical_tool_name(name: str, args: dict[str, Any] | None = None) -> str:
     raw = str(name or "").strip().lower()
@@ -555,9 +563,15 @@ def _canonical_tool_name(name: str, args: dict[str, Any] | None = None) -> str:
     return TOOL_ALIAS_MAP.get(normalized, normalized)
 
 
-def _execute_tool(name: str, args: dict[str, Any], deps: AgentRuntimeDeps) -> str:
-    """Execute a tool by name with the given arguments."""
+def _execute_tool(name: str, args: dict[str, Any], deps: AgentRuntimeDeps):
+    """Execute a tool by name with the given arguments.
+
+    Returns str for sync tools or a coroutine for async browser tools.
+    The caller (run_sync_agent_call) awaits coroutines transparently.
+    """
     canonical_name = _canonical_tool_name(name, args)
+    if canonical_name in BROWSER_TOOL_NAMES:
+        return execute_browser_tool(canonical_name, args)
     fn = deps.tool_registry.get(canonical_name)
     if not fn:
         return f"ERROR: Unknown tool '{name}'"

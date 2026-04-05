@@ -23,6 +23,45 @@ def _run_node(script_body: str):
 
 
 class ChatBrowserSurfaceTests(unittest.TestCase):
+    def test_layout_helper_opens_browser_panel_and_widens_sidebar(self):
+        payload = _run_node(
+            f"""
+            const fs = require('fs');
+            const vm = require('vm');
+
+            const code = fs.readFileSync({json.dumps(str(CHAT_BROWSER_SURFACE_JS))}, 'utf8');
+            const ctx = {{
+              window: {{ innerWidth: 1440 }},
+              console,
+              queueMicrotask: (fn) => fn(),
+            }};
+            vm.createContext(ctx);
+            vm.runInContext(code, ctx);
+
+            const mixin = ctx.window.axonChatBrowserSurfaceMixin();
+            const app = {{
+              panelBrowserOpen: false,
+              panelRuntimeOpen: false,
+              consoleSidebarWidth: 420,
+              setConsoleSidebarWidth(nextWidth) {{
+                this.consoleSidebarWidth = nextWidth;
+              }},
+            }};
+            Object.assign(app, mixin);
+            app.ensureWorkspacePreviewLayout(true);
+
+            console.log(JSON.stringify({{
+              panelBrowserOpen: app.panelBrowserOpen,
+              panelRuntimeOpen: app.panelRuntimeOpen,
+              consoleSidebarWidth: app.consoleSidebarWidth,
+            }}));
+            """
+        )
+
+        self.assertTrue(payload["panelBrowserOpen"])
+        self.assertTrue(payload["panelRuntimeOpen"])
+        self.assertGreaterEqual(payload["consoleSidebarWidth"], 700)
+
     def test_other_workspace_preview_does_not_bleed_into_current_workspace(self):
         payload = _run_node(
             f"""

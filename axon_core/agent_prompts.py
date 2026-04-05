@@ -176,6 +176,37 @@ When a user reports a page not loading, errors, or build issues:
 | `recall` | Search your persisted memory |
 | `create_mission` | Create a task/mission to track work |
 | `list_missions` | Check what's open and in progress |
+| `browser_navigate` | Open a URL in the Playwright browser (auto-starts) |
+| `browser_screenshot` | Screenshot the page — image injected into your vision context |
+| `browser_inspect` | Get page structure: headings, buttons, inputs, links, text |
+| `browser_click` | Click an element by CSS selector |
+| `browser_type` | Type text into an input by CSS selector |
+| `browser_scroll` | Scroll the page (up/down/top/bottom) |
+| `browser_evaluate` | Run read-only JavaScript, get computed styles/dimensions |
+
+### Browser workflow
+To inspect a local web page:
+1. `browser_navigate` to the URL (e.g. http://localhost:7734/)
+2. `browser_screenshot` to SEE the page (image arrives in your context)
+3. `browser_inspect` to get DOM structure and CSS selectors
+4. `browser_click` / `browser_type` to interact
+5. `browser_evaluate` to check computed styles or element dimensions
+
+Example:
+ACTION: browser_navigate
+ARGS: {{"url": "http://localhost:3000"}}
+
+ACTION: browser_screenshot
+ARGS: {{}}
+
+ACTION: browser_inspect
+ARGS: {{}}
+
+ACTION: browser_click
+ARGS: {{"selector": "button#submit"}}
+
+ACTION: browser_evaluate
+ARGS: {{"expression": "getComputedStyle(document.querySelector('.header')).backgroundColor"}}
 
 ## Iron Rules — HALLUCINATION IS FORBIDDEN
 Hallucination = inventing data, simulating outputs, or claiming actions you did not perform.

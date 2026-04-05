@@ -332,6 +332,12 @@ function axonCompanionMixin() {
       const hasWorkspace = !!this.missionWorkspaceId();
       const previewReady = this.previewReadyForCurrentWorkspace?.();
       const waitingCount = Number(this.attentionBucketCount?.('waiting_on_me') || 0);
+      const deployLaneReady = hasWorkspace && !!this.vercelDeployLaneReady?.();
+      const deployMeta = !hasWorkspace
+        ? 'Select workspace'
+        : deployLaneReady
+        ? 'Agent + CLI + Full access'
+        : 'Arm Agent + CLI + Full access';
       return [
         {
           id: 'mission-resume',
@@ -361,21 +367,21 @@ function axonCompanionMixin() {
         },
         {
           id: 'mission-deploy',
-          label: 'Deploy',
-          action: 'vercel.deploy.promote',
+          label: deployLaneReady ? 'Deploy via Axon' : 'Prepare deploy lane',
+          action: 'prompt_vercel_deploy',
           icon: 'DEP',
           disabled: !hasWorkspace,
-          meta: 'Challenge required',
-          tone: 'danger',
+          meta: deployMeta,
+          tone: deployLaneReady ? 'danger' : 'warn',
         },
         {
           id: 'mission-rollback',
-          label: 'Rollback',
-          action: 'vercel.deploy.rollback',
+          label: deployLaneReady ? 'Rollback via Axon' : 'Prepare rollback lane',
+          action: 'prompt_vercel_rollback',
           icon: 'RB',
           disabled: !hasWorkspace,
-          meta: 'Challenge required',
-          tone: 'danger',
+          meta: deployMeta,
+          tone: deployLaneReady ? 'danger' : 'warn',
         },
         {
           id: 'mission-runtime-restart',
@@ -438,11 +444,23 @@ function axonCompanionMixin() {
       if (action === 'preview') {
         return this.ensureWorkspacePreview?.({ openExternal: true, attachBrowser: false });
       }
-      if (action === 'vercel.deploy.promote') {
-        return this.executeMobileAction('vercel.deploy.promote', { workspace_id: this.missionWorkspaceId() });
+      if (action === 'prompt_vercel_deploy') {
+        if (!this.vercelDeployLaneReady?.()) {
+          return this.prepareVercelDeployLane?.({ workspaceId: this.missionWorkspaceId(), kind: 'deploy' });
+        }
+        return this.runChatQuickAction?.({
+          action,
+          prompt: this.vercelDeployPrompt?.('deploy'),
+        });
       }
-      if (action === 'vercel.deploy.rollback') {
-        return this.executeMobileAction('vercel.deploy.rollback', { workspace_id: this.missionWorkspaceId() });
+      if (action === 'prompt_vercel_rollback') {
+        if (!this.vercelDeployLaneReady?.()) {
+          return this.prepareVercelDeployLane?.({ workspaceId: this.missionWorkspaceId(), kind: 'rollback' });
+        }
+        return this.runChatQuickAction?.({
+          action,
+          prompt: this.vercelDeployPrompt?.('rollback'),
+        });
       }
       if (action === 'runtime.restart') {
         return this.executeMobileAction('runtime.restart', {});

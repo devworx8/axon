@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   RecordingPresets,
   requestRecordingPermissionsAsync,
@@ -38,6 +38,7 @@ export function useLiveVoiceCapture(
   const [error, setError] = useState<string | null>(null);
   const [lastTranscript, setLastTranscript] = useState('');
   const [lastEngine, setLastEngine] = useState('');
+  const startingRef = useRef(false);
 
   const refreshVoiceStatus = useCallback(async () => {
     setCheckingStatus(true);
@@ -71,6 +72,7 @@ export function useLiveVoiceCapture(
   }, [recorderState.durationMillis]);
 
   const startRecording = useCallback(async () => {
+    if (startingRef.current) return;
     setError(null);
     const status = voiceStatus || await refreshVoiceStatus();
     if (!enabled) {
@@ -83,15 +85,28 @@ export function useLiveVoiceCapture(
     if (!permission.granted) {
       throw new Error('Microphone permission was denied.');
     }
-    await setAudioModeAsync({
-      allowsRecording: true,
-      playsInSilentMode: true,
-    });
-    await recorder.prepareToRecordAsync();
-    recorder.record();
-  }, [enabled, recorder, refreshVoiceStatus, voiceStatus]);
+    if (recorderState.isRecording) {
+      return;
+    }
+    startingRef.current = true;
+    try {
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+      });
+      if (!recorderState.canRecord) {
+        await recorder.prepareToRecordAsync();
+      }
+      recorder.record();
+    } finally {
+      startingRef.current = false;
+    }
+  }, [enabled, recorder, recorderState.canRecord, recorderState.isRecording, refreshVoiceStatus, voiceStatus]);
 
   const stopRecordingToTranscript = useCallback(async () => {
+    if (!recorderState.isRecording) {
+      throw new Error('No live recording is active to stop.');
+    }
     await recorder.stop();
     await setAudioModeAsync({
       allowsRecording: false,

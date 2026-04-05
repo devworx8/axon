@@ -120,6 +120,15 @@ def build_tool_registry(
     db_path: Path,
     spawn_subagent_fn: Callable[[str, str], str] | None = None,
 ) -> dict[str, Callable[..., str]]:
+    def _runtime_workspace_id() -> int | None:
+        candidate = current_agent_runtime_context_fn().get("workspace_id")
+        if candidate is None:
+            return None
+        try:
+            return int(candidate)
+        except (TypeError, ValueError):
+            return None
+
     def _tool_read_file(path: str, max_kb: int = 32) -> str:
         resolved = os.path.realpath(os.path.expanduser(path))
         if not tool_path_allowed_fn(resolved):
@@ -192,6 +201,7 @@ def build_tool_registry(
             approval_action = build_command_approval_action(
                 normalized,
                 cwd=work_dir,
+                workspace_id=_runtime_workspace_id(),
                 session_id=str(current_agent_runtime_context_fn().get("agent_session_id") or ""),
             )
             if not action_is_allowed_fn(approval_action):
@@ -246,6 +256,7 @@ def build_tool_registry(
         approval_action = build_edit_approval_action(
             "write",
             resolved,
+            workspace_id=_runtime_workspace_id(),
             session_id=str(current_agent_runtime_context_fn().get("agent_session_id") or ""),
             workspace_root=active_workspace_root_fn(),
         )
@@ -266,6 +277,7 @@ def build_tool_registry(
         approval_action = build_edit_approval_action(
             "create",
             resolved,
+            workspace_id=_runtime_workspace_id(),
             session_id=str(current_agent_runtime_context_fn().get("agent_session_id") or ""),
             workspace_root=active_workspace_root_fn(),
         )

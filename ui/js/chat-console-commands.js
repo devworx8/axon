@@ -200,6 +200,8 @@ function axonChatConsoleCommandsMixin() {
         ? this.currentWorkspaceRunActive()
         : !!this.chatLoading;
       if (!msg || workspaceBusy) return;
+      if (await this.maybeHandleInteractiveConsoleCommand?.(msg)) return;
+      if (await this.maybeHandleSlashCommand?.(msg)) return;
 
       const mode = this.resolveChatMode?.(msg) || 'chat';
       const researchPack = this.currentResearchPack?.();
@@ -224,6 +226,8 @@ function axonChatConsoleCommandsMixin() {
       const msg = String(message || '').trim();
       if (!msg) return;
       const workspaceId = String(this.chatProjectId || '').trim();
+      const now = new Date().toISOString();
+      const userMessageId = Date.now();
       const started = Date.now();
       while (this.currentWorkspaceRunActive?.() && (Date.now() - started) < 5000) {
         await new Promise(resolve => setTimeout(resolve, 120));
@@ -245,9 +249,19 @@ function axonChatConsoleCommandsMixin() {
       if (autoResumeSession?.session_id && this.currentBackendSupportsAgent?.()) {
         this.setConversationModeAuto?.({ persist: false });
       }
+      this.chatMessages = Array.isArray(this.chatMessages) ? this.chatMessages : [];
+      this.chatMessages.push({
+        id: userMessageId,
+        role: 'user',
+        content: msg,
+        created_at: now,
+        mode,
+        resources: [],
+      });
       this.setWorkspaceRunLoading?.(workspaceId, true);
       if (typeof this.setWorkspaceRunLoading !== 'function') this.chatLoading = true;
       this.beginLiveOperator?.(mode, msg, workspaceId);
+      this.scrollChat?.();
 
       const finishRun = () => {
         this.setWorkspaceRunLoading?.(workspaceId, false);
@@ -310,7 +324,7 @@ function axonChatConsoleCommandsMixin() {
         return;
       }
 
-      const respId = Date.now() + 1;
+      const respId = userMessageId + 1;
       const placeholder = this.createAssistantPlaceholder
         ? this.createAssistantPlaceholder(respId, mode, [])
         : {

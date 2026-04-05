@@ -33,6 +33,8 @@ class UiRendererTests(unittest.TestCase):
         self.assertIn("handleComposerHistoryKey($event, 'up')", body)
         self.assertIn('editUserMessage(msg)', body)
         self.assertIn('openWorkspaceInNewWindow(projectId)', body)
+        self.assertIn('Axon Browser', body)
+        self.assertIn('preview-frame-shell', body)
 
 
 if __name__ == "__main__":

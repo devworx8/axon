@@ -161,6 +161,10 @@ class AuthRuntimeExtractionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RouterRegistrationTests(unittest.TestCase):
+    def test_server_app_registers_agent_approval_router(self):
+        paths = {route.path for route in server.app.routes}
+        self.assertIn("/api/agent/approve-action", paths)
+
     def test_server_app_registers_connectors_router(self):
         paths = {route.path for route in server.app.routes}
         self.assertIn("/api/connectors/overview", paths)
