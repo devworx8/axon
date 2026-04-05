@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from axon_data import get_companion_presence, list_companion_presence, upsert_companion_presence
@@ -28,7 +29,7 @@ async def heartbeat_companion_presence(
         voice_state=voice_state,
         app_state=app_state,
         active_route=active_route,
-        meta_json="{}" if meta is None else __import__("json").dumps(meta, sort_keys=True, ensure_ascii=True),
+        meta_json="{}" if meta is None else json.dumps(meta, sort_keys=True, ensure_ascii=True),
     )
     return dict(row) if row else {"device_id": device_id, "workspace_id": workspace_id}
 

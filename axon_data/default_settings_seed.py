@@ -53,6 +53,9 @@ DEFAULT_SETTINGS = (
     ("mobile_break_glass_enabled", "0"),
     ("mobile_total_control_enabled", "1"),
     ("mcp_servers_json", "[]"),
+    ("jarvis_mode", "false"),
+    ("jarvis_operator_title", "sir"),
+    ("jarvis_voice_identity", "en-GB-RyanNeural"),
 )
 
 

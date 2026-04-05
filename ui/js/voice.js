@@ -22,9 +22,9 @@ function axonVoiceMixin() {
     },
 
     speechLocale() {
-      const voice = this.settingsForm.azure_voice || 'en-ZA-LeahNeural';
+      const voice = this.settingsForm.azure_voice || 'en-GB-RyanNeural';
       const match = String(voice).match(/^[a-z]{2}-[A-Z]{2}/);
-      return match ? match[0] : 'en-ZA';
+      return match ? match[0] : 'en-GB';
     },
 
     refreshVoiceCapability() {
@@ -334,7 +334,7 @@ function axonVoiceMixin() {
             headers: this.authHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
               text: clean,
-              voice: this.settingsForm.azure_voice || 'en-ZA-LeahNeural',
+              voice: this.settingsForm.azure_voice || 'en-GB-RyanNeural',
               region: this.settingsForm.azure_speech_region,
             }),
           });
@@ -352,7 +352,7 @@ function axonVoiceMixin() {
       // Browser TTS fallback
       if (!window.speechSynthesis) return;
       const utt = new SpeechSynthesisUtterance(clean);
-      utt.lang = 'en-ZA';
+      utt.lang = 'en-GB';
       utt.rate = 1.05;
       window.speechSynthesis.speak(utt);
     },

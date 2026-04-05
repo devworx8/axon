@@ -30,6 +30,7 @@ from axon_core import agent as core_agent
 from axon_core import agent_runtime_state, approval_actions
 from axon_core import cli_runtime_catalog
 from axon_core.cli_pacing import current_cli_cooldown, wait_for_cli_slot
+from axon_data.jarvis_personality import build_jarvis_system_message
 
 # ─── Session usage tracker ───────────────────────────────────────────────────
 
@@ -637,10 +638,18 @@ async def stream_chat(
     ollama_url: str = "",
     ollama_model: str = "",
     usage_sink: Optional[dict[str, Any]] = None,
+    settings: Optional[dict[str, Any]] = None,
 ) -> AsyncGenerator[str, None]:
     """Public async generator — yields chat response chunks for Ollama, CLI, or API backends."""
     del workspace_path
     system = SYSTEM_PROMPT_OLLAMA if backend == "ollama" else SYSTEM_PROMPT
+
+    # If jarvis_mode enabled, prepend JARVIS personality to system prompt
+    jarvis_mode = settings.get("jarvis_mode") if settings else False
+    if jarvis_mode and str(jarvis_mode).lower() not in ("0", "false", ""):
+        operator_title = (settings.get("jarvis_operator_title") or "sir") if settings else "sir"
+        jarvis_prompt = build_jarvis_system_message(operator_title=operator_title)
+        system = jarvis_prompt + "\n\n" + system
     if _is_general_planning_request(user_message):
         history = _filtered_general_history(history)
         system += (

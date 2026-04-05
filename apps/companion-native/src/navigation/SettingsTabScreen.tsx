@@ -1,6 +1,14 @@
 import React from 'react';
 
 import { SettingsScreen } from '@/features/settings/SettingsScreen';
+import type { CompanionConfig, VaultStatus, VaultProviderKeys } from '@/types/companion-core';
+import type { CompanionSettings } from '@/features/settings/useSettings';
+
+type SettingsHook = {
+  settings: CompanionSettings;
+  setSettings: React.Dispatch<React.SetStateAction<CompanionSettings>>;
+  setApiBaseUrl: (url: string) => void;
+};
 
 export function SettingsTabScreen({
   settings,
@@ -20,10 +28,10 @@ export function SettingsTabScreen({
   onUnlockVaultWithBiometrics,
   onLockVault,
 }: {
-  settings: any;
-  config: any;
-  vaultStatus: any;
-  vaultProviderKeys: any;
+  settings: SettingsHook;
+  config: CompanionConfig;
+  vaultStatus: VaultStatus | null;
+  vaultProviderKeys: VaultProviderKeys | null;
   vaultBusy: boolean;
   vaultError: string | null;
   vaultMasterPassword: string;
@@ -42,15 +50,15 @@ export function SettingsTabScreen({
       settings={settings.settings}
       apiBaseUrl={config.apiBaseUrl || ''}
       onChangeApiBaseUrl={settings.setApiBaseUrl}
-      onToggleVoice={(value) => settings.setSettings((current: any) => ({ ...current, voiceEnabled: value }))}
-      onToggleListening={(value) => settings.setSettings((current: any) => ({ ...current, alwaysListening: value }))}
-      onToggleSpokenReplies={(value) => settings.setSettings((current: any) => ({ ...current, spokenReplies: value }))}
-      onToggleAxonMode={(value) => settings.setSettings((current: any) => ({ ...current, axonModeEnabled: value }))}
-      onChangeAxonWakePhrase={(value) => settings.setSettings((current: any) => ({ ...current, axonWakePhrase: value }))}
-      onToggleAxonBootSound={(value) => settings.setSettings((current: any) => ({ ...current, axonBootSound: value }))}
-      onToggleContinuousForegroundMonitoring={(value) => settings.setSettings((current: any) => ({ ...current, continuousForegroundMonitoring: value }))}
-      onChangeAxonVoiceProvider={(value) => settings.setSettings((current: any) => ({ ...current, axonVoiceProvider: value }))}
-      onChangeAxonVoiceIdentity={(value) => settings.setSettings((current: any) => ({ ...current, axonVoiceIdentity: value }))}
+      onToggleVoice={(value) => settings.setSettings((current) => ({ ...current, voiceEnabled: value }))}
+      onToggleListening={(value) => settings.setSettings((current) => ({ ...current, alwaysListening: value }))}
+      onToggleSpokenReplies={(value) => settings.setSettings((current) => ({ ...current, spokenReplies: value }))}
+      onToggleAxonMode={(value) => settings.setSettings((current) => ({ ...current, axonModeEnabled: value }))}
+      onChangeAxonWakePhrase={(value) => settings.setSettings((current) => ({ ...current, axonWakePhrase: value }))}
+      onToggleAxonBootSound={(value) => settings.setSettings((current) => ({ ...current, axonBootSound: value }))}
+      onToggleContinuousForegroundMonitoring={(value) => settings.setSettings((current) => ({ ...current, continuousForegroundMonitoring: value }))}
+      onChangeAxonVoiceProvider={(value) => settings.setSettings((current) => ({ ...current, axonVoiceProvider: value }))}
+      onChangeAxonVoiceIdentity={(value) => settings.setSettings((current) => ({ ...current, axonVoiceIdentity: value }))}
       vaultStatus={vaultStatus}
       vaultProviderKeys={vaultProviderKeys}
       vaultBusy={vaultBusy}

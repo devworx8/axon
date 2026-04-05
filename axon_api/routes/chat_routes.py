@@ -443,6 +443,7 @@ class ChatRouteHandlers:
                     ollama_url=context["stream_settings"].get("ollama_url", ""),
                     ollama_model=context["stream_settings"].get("ollama_model", ""),
                     usage_sink=usage_sink,
+                    settings=context.get("settings"),
                 ):
                     if not started_stream:
                         self._set_live_operator(

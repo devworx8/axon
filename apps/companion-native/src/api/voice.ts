@@ -1,16 +1,10 @@
 import { Platform } from 'react-native';
 
-import { getApiBaseUrl } from './client';
+import { axonRequest, getApiBaseUrl } from './client';
 import { CompanionConfig, LocalVoiceStatus } from '@/types/companion';
 
 export async function fetchVoiceStatus(config?: CompanionConfig) {
-  const response = await fetch(`${getApiBaseUrl(config)}/api/voice/status`, {
-    headers: { Accept: 'application/json' },
-  });
-  if (!response.ok) {
-    throw new Error(`Axon voice status failed: ${response.status}`);
-  }
-  return response.json() as Promise<LocalVoiceStatus>;
+  return axonRequest<LocalVoiceStatus>('/api/voice/status', {}, config);
 }
 
 export async function transcribeRecordedAudio(
@@ -39,19 +33,9 @@ export async function transcribeRecordedAudio(
     } as unknown as Blob);
   }
 
-  const response = await fetch(
-    `${getApiBaseUrl(config)}/api/voice/transcribe?language=${encodeURIComponent(language)}`,
-    {
-      method: 'POST',
-      body: formData,
-      headers: {
-        Accept: 'application/json',
-      },
-    },
+  return axonRequest<{ text: string; engine: string; language: string }>(
+    `/api/voice/transcribe?language=${encodeURIComponent(language)}`,
+    { method: 'POST', body: formData },
+    config,
   );
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new Error(body || `Axon voice transcription failed: ${response.status}`);
-  }
-  return response.json() as Promise<{ text: string; engine: string; language: string }>;
 }

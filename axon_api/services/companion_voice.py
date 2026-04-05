@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from axon_data import get_companion_voice_turn, list_companion_voice_turns, log_companion_voice_turn
@@ -40,7 +41,7 @@ async def record_companion_voice_turn(
         duration_ms=duration_ms,
         tokens_used=tokens_used,
         status=status,
-        meta_json="{}" if meta is None else __import__("json").dumps(meta, sort_keys=True, ensure_ascii=True),
+        meta_json="{}" if meta is None else json.dumps(meta, sort_keys=True, ensure_ascii=True),
     )
     row = await get_companion_voice_turn(db, turn_id)
     return dict(row) if row else {"id": turn_id, "session_id": session_id, "role": role}

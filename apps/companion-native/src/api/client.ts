@@ -20,7 +20,8 @@ export async function axonRequest<T>(
   config?: CompanionConfig,
 ): Promise<T> {
   const headers = new Headers(init.headers || {});
-  if (init.body != null && !headers.has('Content-Type')) {
+  const isFormData = init.body instanceof FormData;
+  if (init.body != null && !isFormData && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
   if (!headers.has('Accept')) {
@@ -30,15 +31,24 @@ export async function axonRequest<T>(
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
-  const response = await fetch(`${getApiBaseUrl(config)}${path}`, {
-    ...init,
-    headers,
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new Error(body || `Axon request failed: ${response.status}`);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+
+  try {
+    const response = await fetch(`${getApiBaseUrl(config)}${path}`, {
+      ...init,
+      headers,
+      signal: init.signal || controller.signal,
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new Error(body || `Axon request failed: ${response.status}`);
+    }
+    return response.json() as Promise<T>;
+  } finally {
+    clearTimeout(timeout);
   }
-  return response.json() as Promise<T>;
 }
 
 export function withTokenPair(config: CompanionConfig, tokenPair: CompanionTokenPair): CompanionConfig {

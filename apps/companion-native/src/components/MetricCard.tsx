@@ -21,7 +21,11 @@ export function MetricCard({
   }[accent];
 
   return (
-    <View style={[styles.card, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+    <View
+      style={[styles.card, { borderColor: colors.border, backgroundColor: colors.surface }]}
+      accessibilityRole="summary"
+      accessibilityLabel={`${label}: ${value}`}
+    >
       <Text style={[styles.label, { color: colors.muted }]}>{label}</Text>
       <Text style={[styles.value, { color: accentColor }]}>{value}</Text>
     </View>

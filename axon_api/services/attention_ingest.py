@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import json
 from typing import Any
 
@@ -19,6 +20,7 @@ def _meta_json(meta: Any) -> str:
     try:
         return json.dumps(meta or {}, ensure_ascii=True, sort_keys=True)
     except Exception:
+        logging.getLogger(__name__).warning("Failed to serialize meta JSON", exc_info=True)
         return "{}"
 
 

@@ -260,10 +260,13 @@ async def companion_pair(body: CompanionPairRequest, request: Request):
     async with get_db() as db:
         pin_hash = await get_setting(db, "auth_pin_hash")
         if pin_hash:
+            import hmac
             from hashlib import sha256
 
+            if not body.pin or not body.pin.strip():
+                raise HTTPException(401, "PIN required")
             expected = sha256(f"devbrain-pin-{body.pin.strip()}".encode()).hexdigest()
-            if not body.pin.strip() or expected != pin_hash:
+            if not hmac.compare_digest(expected, pin_hash):
                 raise HTTPException(401, "Wrong PIN")
         device = await companion_auth_service.register_companion_device(
             db,

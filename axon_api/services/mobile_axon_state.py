@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import json
 from typing import Any
 
@@ -37,6 +38,7 @@ def parse_meta(value: Any) -> dict[str, Any]:
     try:
         loaded = json.loads(raw)
     except Exception:
+        logging.getLogger(__name__).warning("Failed to parse meta JSON", exc_info=True)
         return {}
     return dict(loaded) if isinstance(loaded, dict) else {}
 

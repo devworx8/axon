@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from axon_data import (
@@ -45,7 +45,7 @@ class ExpoActionRequest(BaseModel):
 # ── Error events ─────────────────────────────────────────────────────────────
 
 @router.get("/errors")
-async def errors_list(status: str = "", source: str = "", limit: int = 50):
+async def errors_list(status: str = "", source: str = "", limit: int = Query(default=50, ge=1, le=500)):
     async with get_db() as db:
         if status:
             rows = await list_error_events(db, status=status, source=source, limit=limit)

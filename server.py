@@ -493,12 +493,35 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_ALLOWED_ORIGINS = [
+    "http://localhost:7777",
+    "http://127.0.0.1:7777",
+    "http://localhost:7734",
+    "http://127.0.0.1:7734",
+]
+# Allow additional origins via env var (comma-separated)
+_extra = os.environ.get("AXON_CORS_ORIGINS", "")
+if _extra.strip():
+    _ALLOWED_ORIGINS.extend([o.strip() for o in _extra.split(",") if o.strip()])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
+
+import logging
+_logger = logging.getLogger("axon")
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    _logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"error": "internal_error", "detail": "Internal server error"},
+    )
 
 
 # ─── Auth — PIN-based session authentication ─────────────────────────────────

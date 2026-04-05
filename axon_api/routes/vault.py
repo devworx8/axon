@@ -49,14 +49,13 @@ class VaultRouteHandlers:
 
     async def vault_status(self, request: Request):
         if self._dev_local_vault_bypass_active(request):
-            return {"is_setup": False, "is_unlocked": True, "ttl_remaining": 0, "dev_bypass": True}
+            return {"is_setup": False, "is_unlocked": True, "ttl_remaining": 0}
         async with self._db.get_db() as conn:
             is_setup = await self._devvault.vault_is_setup(conn)
         return {
             "is_setup": is_setup,
             "is_unlocked": self._devvault.VaultSession.is_unlocked(),
             "ttl_remaining": self._devvault.VaultSession.ttl_remaining(),
-            "dev_bypass": False,
         }
 
     async def vault_provider_keys(self, request: Request):
@@ -92,7 +91,7 @@ class VaultRouteHandlers:
 
     async def list_vault_secrets(self):
         if not self._devvault.VaultSession.is_unlocked():
-            raise HTTPException(403, "Vault is locked")
+            raise HTTPException(423, "Vault is locked")
         async with self._db.get_db() as conn:
             secrets = await self._devvault.vault_list_secrets(conn)
         return secrets
@@ -100,7 +99,7 @@ class VaultRouteHandlers:
     async def get_vault_secret(self, secret_id: int):
         key = self._devvault.VaultSession.get_key()
         if not key:
-            raise HTTPException(403, "Vault is locked")
+            raise HTTPException(423, "Vault is locked")
         async with self._db.get_db() as conn:
             secret = await self._devvault.vault_get_secret(conn, secret_id, key)
         if not secret:
@@ -110,7 +109,7 @@ class VaultRouteHandlers:
     async def create_vault_secret(self, body: VaultSecretCreate):
         key = self._devvault.VaultSession.get_key()
         if not key:
-            raise HTTPException(403, "Vault is locked")
+            raise HTTPException(423, "Vault is locked")
         async with self._db.get_db() as conn:
             secret_id = await self._devvault.vault_add_secret(
                 conn,
@@ -128,7 +127,7 @@ class VaultRouteHandlers:
     async def update_vault_secret(self, secret_id: int, body: VaultSecretUpdate):
         key = self._devvault.VaultSession.get_key()
         if not key:
-            raise HTTPException(403, "Vault is locked")
+            raise HTTPException(423, "Vault is locked")
         async with self._db.get_db() as conn:
             await self._devvault.vault_update_secret(
                 conn,
@@ -146,7 +145,7 @@ class VaultRouteHandlers:
 
     async def delete_vault_secret(self, secret_id: int):
         if not self._devvault.VaultSession.is_unlocked():
-            raise HTTPException(403, "Vault is locked")
+            raise HTTPException(423, "Vault is locked")
         async with self._db.get_db() as conn:
             await self._devvault.vault_delete_secret(conn, secret_id)
         return {"deleted": True}

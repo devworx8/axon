@@ -4,9 +4,12 @@ Runs periodic background jobs alongside the FastAPI server.
 """
 
 import asyncio
+import os
 import subprocess
 from datetime import datetime
 from typing import Optional
+
+_TIMEZONE = os.environ.get("AXON_TIMEZONE", "Africa/Johannesburg")
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -19,7 +22,7 @@ scheduler: Optional[AsyncIOScheduler] = None
 def get_scheduler() -> AsyncIOScheduler:
     global scheduler
     if scheduler is None:
-        scheduler = AsyncIOScheduler(timezone="Africa/Johannesburg")
+        scheduler = AsyncIOScheduler(timezone=_TIMEZONE)
     return scheduler
 
 

@@ -1,11 +1,14 @@
 """Local voice dependency discovery helpers extracted from server.py."""
 from __future__ import annotations
 
+import logging
+
 
 def python_module_available(name: str, *, importlib_util_module) -> bool:
     try:
         return importlib_util_module.find_spec(name) is not None
     except Exception:
+        logging.getLogger(__name__).warning("Module availability check failed for %s", name, exc_info=True)
         return False
 
 
@@ -26,6 +29,7 @@ def resolve_ffmpeg_path(
             if bundled_path and pathlib_path_cls(bundled_path).exists():
                 return bundled_path
         except Exception:
+            logging.getLogger(__name__).warning("Failed to resolve ffmpeg via imageio_ffmpeg", exc_info=True)
             return ""
     return ""
 

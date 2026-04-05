@@ -1,6 +1,7 @@
 """Authentication session state and middleware helpers extracted from server.py."""
 from __future__ import annotations
 
+import logging
 import hashlib
 import os
 import secrets as _secrets
@@ -35,6 +36,7 @@ COMPANION_SAFE_PREFIXES = (
     "/api/attention/",
     "/api/mobile/",
     "/api/mcp/",
+    "/api/voice/",
     "/api/connectors/overview",
     "/api/connectors/workspaces/",
 )
@@ -151,6 +153,7 @@ async def valid_session_async(
                 return False
         return True
     except Exception:
+        logging.getLogger(__name__).warning("Session validation failed", exc_info=True)
         return False
 
 

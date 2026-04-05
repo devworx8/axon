@@ -79,7 +79,7 @@ async def issue_companion_auth_session(
         access_token_hash=_hash_token(access_token),
         refresh_token_hash=_hash_token(refresh_token),
         expires_at=expires_at,
-        meta_json="{}" if meta is None else __import__("json").dumps(meta, sort_keys=True, ensure_ascii=True),
+        meta_json="{}" if meta is None else json.dumps(meta, sort_keys=True, ensure_ascii=True),
     )
     row = await get_companion_auth_session(db, session_id)
     return {

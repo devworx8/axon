@@ -175,15 +175,15 @@ class TerminalRouteHandlers:
         return {"status": "closed", "message": "Session closed."}
 
     async def pty_websocket(self, websocket: WebSocket, session_id: str):
-        await websocket.accept()
+        # Authenticate BEFORE accepting the WebSocket connection
         async with self._db.get_db() as conn:
             pin_hash = await self._db.get_setting(conn, "auth_pin_hash")
         if pin_hash:
             token = websocket.query_params.get("token", "")
             if not token or not self._valid_session(token):
-                await websocket.send_json({"type": "error", "message": "Authentication required"})
-                await websocket.close()
+                await websocket.close(code=4001, reason="Authentication required")
                 return
+        await websocket.accept()
 
         try:
             from ptyprocess import PtyProcess

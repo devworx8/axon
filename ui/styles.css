@@ -33,6 +33,23 @@
   --color-text-primary: #f1f5f9;
   --color-text-secondary: #94a3b8;
   --color-text-meta: #64748b;
+
+  /* ── JARVIS Cockpit Design System ──────────────────────────────── */
+  --axon-bg-primary: #0a0e17;
+  --axon-bg-glass: rgba(15, 23, 42, 0.85);
+  --axon-bg-glass-hover: rgba(15, 23, 42, 0.95);
+  --axon-border-glass: rgba(56, 189, 248, 0.15);
+  --axon-border-glass-active: rgba(56, 189, 248, 0.4);
+  --axon-accent-cyan: #38bdf8;
+  --axon-accent-amber: #f59e0b;
+  --axon-accent-red: #ef4444;
+  --axon-accent-green: #22c55e;
+  --axon-text-primary: #e2e8f0;
+  --axon-text-muted: #64748b;
+  --axon-glow-cyan: 0 0 20px rgba(56, 189, 248, 0.3);
+  --axon-glow-amber: 0 0 20px rgba(245, 158, 11, 0.3);
+  --axon-glow-red: 0 0 20px rgba(239, 68, 68, 0.3);
+  --axon-transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* ── Base ── */
@@ -1069,3 +1086,42 @@ textarea:focus, input:focus { outline: none; }
   border: 2px solid #0f172a;
   animation: pulseDot 1.2s infinite;
 }
+
+/* ── JARVIS Animations ─────────────────────────────────────────── */
+@keyframes axon-pulse-cyan {
+  0%, 100% { box-shadow: 0 0 8px rgba(56, 189, 248, 0.2); }
+  50% { box-shadow: 0 0 24px rgba(56, 189, 248, 0.5); }
+}
+
+@keyframes axon-pulse-amber {
+  0%, 100% { box-shadow: 0 0 8px rgba(245, 158, 11, 0.2); }
+  50% { box-shadow: 0 0 24px rgba(245, 158, 11, 0.5); }
+}
+
+@keyframes axon-pulse-red {
+  0%, 100% { box-shadow: 0 0 8px rgba(239, 68, 68, 0.2); }
+  50% { box-shadow: 0 0 24px rgba(239, 68, 68, 0.5); }
+}
+
+@keyframes axon-glow-ring {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.axon-glass {
+  background: var(--axon-bg-glass);
+  border: 1px solid var(--axon-border-glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: var(--axon-transition);
+}
+
+.axon-glass:hover {
+  background: var(--axon-bg-glass-hover);
+  border-color: var(--axon-border-glass-active);
+}
+
+.axon-status-nominal { color: var(--axon-accent-green); }
+.axon-status-warning { color: var(--axon-accent-amber); animation: axon-pulse-amber 2s infinite; }
+.axon-status-critical { color: var(--axon-accent-red); animation: axon-pulse-red 1.5s infinite; }
+.axon-status-active { color: var(--axon-accent-cyan); animation: axon-pulse-cyan 2s infinite; }

@@ -1,8 +1,14 @@
 import React from 'react';
 
 import { useLiveVoiceCapture } from '@/features/voice/useLiveVoiceCapture';
+import type { CompanionConfig } from '@/types/companion-core';
+import type { CompanionSettings } from '@/features/settings/useSettings';
+import type { AxonModeStatus } from '@/types/axon';
+import type { VoiceTurnResponse } from '@/types/companion-core';
 import { useAxonMode } from './useAxonMode';
 import { useAxonSpeech } from './useAxonSpeech';
+
+type AppTab = 'home' | 'voice' | 'sessions' | 'mission' | 'settings';
 
 export function useAxonMobileRuntime({
   config,
@@ -12,12 +18,12 @@ export function useAxonMobileRuntime({
   syncMission,
   setActiveTab,
 }: {
-  config: any;
-  settings: any;
-  missionAxonSnapshot: any;
-  voice: { submitVoiceTurn: (content: string, transcript?: string, voiceMode?: string) => Promise<any> };
+  config: CompanionConfig;
+  settings: CompanionSettings;
+  missionAxonSnapshot: AxonModeStatus | null;
+  voice: { submitVoiceTurn: (content: string, transcript?: string, voiceMode?: string) => Promise<VoiceTurnResponse> };
   syncMission: () => Promise<unknown>;
-  setActiveTab: (tab: any) => void;
+  setActiveTab: (tab: AppTab) => void;
 }) {
   const speech = useAxonSpeech(Boolean(settings.voiceEnabled && settings.spokenReplies), config, {
     axonVoiceProvider: settings.axonVoiceProvider,
@@ -38,7 +44,8 @@ export function useAxonMobileRuntime({
         return;
       }
       setActiveTab('mission');
-    } catch {
+    } catch (err) {
+      console.error('[Axon] Voice submission failed:', err);
       setActiveTab('voice');
     }
   }, [setActiveTab, settings.alwaysListening, syncMission, voice]);

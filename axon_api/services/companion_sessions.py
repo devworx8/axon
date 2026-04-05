@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from axon_data import (
@@ -46,7 +47,7 @@ async def ensure_companion_session(
         current_view=current_view,
         active_task=active_task,
         summary=summary,
-        meta_json="{}" if meta is None else __import__("json").dumps(meta, sort_keys=True, ensure_ascii=True),
+        meta_json="{}" if meta is None else json.dumps(meta, sort_keys=True, ensure_ascii=True),
     )
     row = await get_companion_session(db, session_id)
     return dict(row) if row else {"id": session_id, "session_key": session_key}

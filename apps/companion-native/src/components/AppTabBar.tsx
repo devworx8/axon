@@ -32,6 +32,9 @@ export function AppTabBar({
             <Pressable
               key={tab.key}
               onPress={() => onChange(tab.key)}
+              accessibilityRole="tab"
+              accessibilityLabel={tab.label}
+              accessibilityState={{ selected: active }}
               style={[
                 styles.tab,
                 {
