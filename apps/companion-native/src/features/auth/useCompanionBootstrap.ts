@@ -50,7 +50,7 @@ export function useCompanionBootstrap({
   setConfig: Dispatch<SetStateAction<CompanionConfig>>;
   setDeviceName: (value: string) => void;
   restoreSession: RestoreSession;
-  refreshMission: (workspaceId?: number | null, sessionId?: number | null) => Promise<unknown>;
+  refreshMission: (workspaceId?: number | null, sessionId?: number | null, options?: { silent?: boolean }) => Promise<unknown>;
   refreshControl: () => Promise<unknown>;
   setPresence: (presence: CompanionPresence | null) => void;
   setVaultStatus: (status: VaultStatus | null) => void;
@@ -103,15 +103,32 @@ export function useCompanionBootstrap({
         setBootstrapError(null);
         const nextDevice = identity.device || null;
         const nextSession = (identity.sessions || [])[0] || null;
-        setConfig((current) => ({
-          ...current,
-          deviceId: nextDevice?.id ?? current.deviceId ?? null,
-          deviceKey: nextDevice?.device_key || current.deviceKey || '',
-          deviceName: nextDevice?.name || current.deviceName || '',
-          sessionId: nextSession?.id ?? current.sessionId ?? null,
-          workspaceId: nextSession?.workspace_id ?? current.workspaceId ?? null,
-          apiBaseUrl: current.apiBaseUrl || '',
-        }));
+        setConfig((current) => {
+          const nextDeviceId = nextDevice?.id ?? current.deviceId ?? null;
+          const nextDeviceKey = nextDevice?.device_key || current.deviceKey || '';
+          const nextDeviceName = nextDevice?.name || current.deviceName || '';
+          const nextSessionId = nextSession?.id ?? current.sessionId ?? null;
+          const nextWorkspaceId = nextSession?.workspace_id ?? current.workspaceId ?? null;
+          if (
+            current.deviceId === nextDeviceId
+            && current.deviceKey === nextDeviceKey
+            && current.deviceName === nextDeviceName
+            && current.sessionId === nextSessionId
+            && current.workspaceId === nextWorkspaceId
+            && current.apiBaseUrl
+          ) {
+            return current;
+          }
+          return {
+            ...current,
+            deviceId: nextDeviceId,
+            deviceKey: nextDeviceKey,
+            deviceName: nextDeviceName,
+            sessionId: nextSessionId,
+            workspaceId: nextWorkspaceId,
+            apiBaseUrl: current.apiBaseUrl || '',
+          };
+        });
         if (nextDevice?.name) {
           setDeviceName(nextDevice.name);
         }
@@ -120,7 +137,11 @@ export function useCompanionBootstrap({
         }
         void Promise.allSettled([
           withTimeout(
-            refreshMission(nextSession?.workspace_id ?? activeConfig.workspaceId ?? null, nextSession?.id ?? activeConfig.sessionId ?? null),
+            refreshMission(
+              nextSession?.workspace_id ?? activeConfig.workspaceId ?? null,
+              nextSession?.id ?? activeConfig.sessionId ?? null,
+              { silent: true },
+            ),
             BOOTSTRAP_REFRESH_TIMEOUT_MS,
             'Mission Control refresh timed out.',
           ),

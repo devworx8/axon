@@ -14,6 +14,12 @@
       "web"
     ],
     "orientation": "portrait",
+    "icon": "../../ui/icons/icon-512.png",
+    "splash": {
+      "image": "../../ui/icons/icon-512.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#08111f"
+    },
     "plugins": [
       "expo-secure-store",
       "expo-dev-client",
@@ -30,7 +36,11 @@
     "android": {
       "package": "za.org.edudashpro.axononline",
       "usesCleartextTraffic": true,
-      "softwareKeyboardLayoutMode": "resize"
+      "softwareKeyboardLayoutMode": "resize",
+      "adaptiveIcon": {
+        "foregroundImage": "../../ui/icons/icon-512.png",
+        "backgroundColor": "#08111f"
+      }
     },
     "extra": {
       "apiBaseUrl": "http://127.0.0.1:7734",

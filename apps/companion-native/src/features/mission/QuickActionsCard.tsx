@@ -39,8 +39,6 @@ export function QuickActionsCard({
   const builtIns = [
     { key: 'talk', label: 'Talk to Axon', tone: 'accent' as const, onPress: onOpenVoice },
     { key: 'approve', label: 'Approve pending', tone: 'warn' as const, onPress: onApprovePending || onOpenSessions },
-    { key: 'projects', label: 'Open projects', tone: 'neutral' as const, onPress: onOpenProjects },
-    { key: 'attention', label: 'Review attention', tone: 'warn' as const, onPress: onOpenAttention },
     { key: 'sessions', label: 'Open sessions', tone: 'ok' as const, onPress: onOpenSessions },
   ];
 

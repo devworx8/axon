@@ -1,0 +1,60 @@
+{
+  "items": [
+    {
+      "key": "code-review",
+      "title": "Code review",
+      "tags": "review,quality",
+      "group": "engineering-core",
+      "content": "Review the current workspace changes with a code review mindset. Focus on bugs, regressions, risks, and missing tests. List findings first in severity order with file references, then open questions, then a short summary."
+    },
+    {
+      "key": "write-tests",
+      "title": "Write tests",
+      "tags": "tests,quality",
+      "group": "engineering-core",
+      "content": "Inspect the current feature or module and add the smallest high-value automated tests that cover the main behavior, edge cases, and regressions. Keep test style consistent with the repo."
+    },
+    {
+      "key": "summarise-workspace",
+      "title": "Summarise workspace",
+      "tags": "summary,workspace",
+      "group": "engineering-core",
+      "content": "Scan the current workspace and produce a concise technical summary: architecture, key modules, active risks, recent changes, and recommended next steps."
+    },
+    {
+      "key": "execution-playbook",
+      "title": "Execution playbook",
+      "tags": "strategy,operations,docs",
+      "group": "operator-docs",
+      "content": "Turn the user's rough strategy into an executable Markdown playbook. If the workspace has a docs/ area, write the artifact there with a concrete filename and update the nearest docs index or README when it exists. Prefer sections like Objective, Operating model, Offer, Metrics/KPIs, Owners, Cadence, Risks, Assumptions, 30-60-90 day plan, and Next actions. Keep it operational, not inspirational."
+    },
+    {
+      "key": "grounded-brief",
+      "title": "Grounded brief",
+      "tags": "research,compliance,verified",
+      "group": "operator-docs",
+      "content": "Research the topic and produce a grounded brief. For law, grants, tax, labour, procurement, compliance, or public programmes, prioritize official and public-primary sources first. Separate the result into Verified facts, Inferred recommendations, Open questions, and Sources. Never invent citations. If a point is not verified, label it clearly as inference."
+    },
+    {
+      "key": "board-memo",
+      "title": "Board-ready memo",
+      "tags": "board,investor,finance",
+      "group": "operator-docs",
+      "content": "Write a board-ready or investor-ready memo from the current workspace, brief, or strategy note. Lead with the decision or ask, then cover traction and targets, business model, use of funds or resources, operating risks, milestones, and what management needs next. Keep it concise, numeric, and decision-oriented."
+    },
+    {
+      "key": "plan-to-missions",
+      "title": "Plan to missions",
+      "tags": "missions,execution,planning",
+      "group": "operator-docs",
+      "content": "Read the current plan, long answer, or docs artifact and turn it into concrete missions. Each mission should include a title, why it matters, suggested owner, due horizon, dependencies, and proof of done. Keep missions small enough to execute and verify."
+    },
+    {
+      "key": "docs-drop",
+      "title": "Docs drop",
+      "tags": "docs,readme,handoff",
+      "group": "operator-docs",
+      "content": "Take a rough note or strategy draft and turn it into a repo-ready docs drop. Create or update the appropriate docs/*.md file, add a short summary to docs/README.md or the closest docs index if present, and report the exact file path(s) touched plus the follow-on missions implied by the document."
+    }
+  ]
+}

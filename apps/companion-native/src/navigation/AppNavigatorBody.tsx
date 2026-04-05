@@ -12,7 +12,6 @@ import type {
   CompanionSession,
   ExpoProjectStatus,
   RiskChallenge,
-  TypedActionResult,
   VaultProviderKeys,
   VaultStatus,
 } from '@/types/companion';
@@ -343,45 +342,6 @@ export function AppNavigatorBody({
       return (
         <MissionControlScreen
           snapshot={mission.snapshot}
-          digest={mission.digest}
-          loading={mission.loading || control.refreshing}
-          sending={voice.sending}
-          voiceMode={settings.settings.alwaysListening ? 'live' : 'push_to_talk'}
-          currentWorkspaceLabel={currentWorkspaceLabel}
-          transcript={voice.lastTranscript}
-          responseText={voice.responseText}
-          backend={voice.lastResult?.backend}
-          tokensUsed={voice.lastResult?.tokens_used}
-          approval={voice.lastResult?.approval_required}
-          capabilities={control.capabilities}
-          controlBusyActionType={control.actingActionType}
-          lastAction={control.lastAction as TypedActionResult | null}
-          controlError={control.error || mission.error}
-          voiceError={voice.error || bootstrapError}
-          speakingReply={speech.speaking}
-          onRefresh={onRefreshMission}
-          onSubmitCommand={onSubmitCommand}
-          onApprovePending={onApprovePending}
-          onExecuteAction={(actionType) => {
-            if (actionType === 'agent.approve') {
-              onApprovePending();
-              return;
-            }
-            onExecuteAction(actionType);
-          }}
-          onSpeakLatestReply={voice.responseText ? () => speech.speak(voice.responseText) : undefined}
-          onStopSpeaking={speech.stop}
-          onOpenVoice={() => setActiveTab('voice')}
-          onOpenAttention={() => setActiveTab('attention')}
-          onOpenProjects={() => setActiveTab('projects')}
-          onOpenSessions={() => setActiveTab('sessions')}
-          expoProject={expoProject}
-          axonWakePhrase={settings.settings.axonWakePhrase}
-          onChangeAxonWakePhrase={(value) => settings.setSettings(current => ({ ...current, axonWakePhrase: value }))}
-          axonBusy={axon.busy}
-          axonError={axonError}
-          onArmAxon={onArmAxon}
-          onDisarmAxon={onDisarmAxon}
         />
       );
   }

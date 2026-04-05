@@ -2,6 +2,31 @@
    Axon — Resources Module
    ══════════════════════════════════════════════════════════════ */
 
+const AXON_STARTER_PLAYBOOKS_PATH = '/js/playbook-starters.json';
+
+function axonNormalizeStarterPlaybook(item = {}) {
+  const key = String(item?.key || '').trim().toLowerCase();
+  if (!key) return null;
+  const title = String(item?.title || '').trim();
+  const content = String(item?.content || '').trim();
+  if (!title || !content) return null;
+  return {
+    id: `starter:${key}`,
+    title,
+    content,
+    tags: String(item?.tags || '').trim(),
+    project_id: null,
+    project_name: '',
+    pinned: 0,
+    used_count: 0,
+    meta: {
+      starter: true,
+      starter_key: key,
+      starter_group: String(item?.group || 'starter-pack').trim() || 'starter-pack',
+    },
+  };
+}
+
 function axonResourcesMixin() {
   return {
 
@@ -38,6 +63,10 @@ function axonResourcesMixin() {
       return (pr?.meta?.preset_type || '') === 'composer';
     },
 
+    promptIsStarter(pr) {
+      return !!pr?.meta?.starter;
+    },
+
     composerPresetPayload(includeResources = true, includeResearchPack = true) {
       const options = this.normalizedComposerOptions();
       const researchPack = includeResearchPack ? this.currentResearchPack() : null;
@@ -66,25 +95,55 @@ function axonResourcesMixin() {
       this.showToast('Composer setup copied into a new playbook draft');
     },
 
-    seedStarterPlaybook(kind = 'code-review') {
-      const starters = {
-        'code-review': {
-          title: 'Code review',
-          tags: 'review,quality',
-          content: 'Review the current workspace changes with a code review mindset. Focus on bugs, regressions, risks, and missing tests. List findings first in severity order with file references, then open questions, then a short summary.',
-        },
-        'write-tests': {
-          title: 'Write tests',
-          tags: 'tests,quality',
-          content: 'Inspect the current feature or module and add the smallest high-value automated tests that cover the main behavior, edge cases, and regressions. Keep test style consistent with the repo.',
-        },
-        'summarise-workspace': {
-          title: 'Summarise workspace',
-          tags: 'summary,workspace',
-          content: 'Scan the current workspace and produce a concise technical summary: architecture, key modules, active risks, recent changes, and recommended next steps.',
-        },
-      };
-      const preset = starters[kind] || starters['code-review'];
+    async loadStarterPlaybooks(force = false) {
+      if (!force && Array.isArray(this._starterPlaybooksCache) && this._starterPlaybooksCache.length) {
+        return this._starterPlaybooksCache;
+      }
+      try {
+        const response = await fetch(AXON_STARTER_PLAYBOOKS_PATH, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const items = Array.isArray(payload?.items) ? payload.items : [];
+        this._starterPlaybooksCache = items
+          .map(axonNormalizeStarterPlaybook)
+          .filter(Boolean);
+      } catch (_) {
+        this._starterPlaybooksCache = [];
+      }
+      return this._starterPlaybooksCache;
+    },
+
+    mergeStarterPlaybooks(prompts = [], starters = []) {
+      const rows = Array.isArray(prompts) ? prompts : [];
+      const starterRows = Array.isArray(starters) ? starters : [];
+      const existingKeys = new Set(
+        rows
+          .map(prompt => String(prompt?.meta?.starter_key || '').trim().toLowerCase())
+          .filter(Boolean)
+      );
+      const existingTitles = new Set(
+        rows
+          .map(prompt => String(prompt?.title || '').trim().toLowerCase())
+          .filter(Boolean)
+      );
+      const missingStarters = starterRows.filter((starter) => {
+        const key = String(starter?.meta?.starter_key || '').trim().toLowerCase();
+        const title = String(starter?.title || '').trim().toLowerCase();
+        if (key && existingKeys.has(key)) return false;
+        if (title && existingTitles.has(title)) return false;
+        return true;
+      });
+      return [...rows, ...missingStarters];
+    },
+
+    async seedStarterPlaybook(kind = 'code-review') {
+      const starters = await this.loadStarterPlaybooks();
+      const normalizedKind = String(kind || '').trim().toLowerCase();
+      const preset = starters.find(item => item?.meta?.starter_key === normalizedKind) || starters[0];
+      if (!preset) {
+        this.showToast('Starter playbook pack is unavailable');
+        return;
+      }
       this.newPrompt = {
         ...this.newPrompt,
         title: preset.title,
@@ -117,7 +176,11 @@ function axonResourcesMixin() {
 
     async loadPrompts() {
       try {
-        this.prompts = await this.api('GET', '/api/prompts');
+        const [rows, starters] = await Promise.all([
+          this.api('GET', '/api/prompts'),
+          this.loadStarterPlaybooks(),
+        ]);
+        this.prompts = this.mergeStarterPlaybooks(rows || [], starters || []);
       } catch(e) { this.showToast('Failed to load playbooks'); }
     },
 
@@ -160,7 +223,7 @@ function axonResourcesMixin() {
 
     async copyPrompt(pr) {
       await navigator.clipboard.writeText(pr.content);
-      this.api('GET', `/api/prompts`); // increment usage via side effect
+      if (!this.promptIsStarter(pr)) this.api('GET', '/api/prompts');
       this.showToast('Copied to clipboard');
     },
 
@@ -174,6 +237,10 @@ function axonResourcesMixin() {
     },
 
     async deletePrompt(id) {
+      if (String(id || '').startsWith('starter:')) {
+        this.showToast('Starter playbooks stay read-only. Save a copy if you want to customize one.');
+        return;
+      }
       if (!confirm('Delete this playbook?')) return;
       await this.api('DELETE', `/api/prompts/${id}`);
       this.prompts = this.prompts.filter(p => p.id !== id);
@@ -196,6 +263,20 @@ function axonResourcesMixin() {
 
     async savePromptEdit() {
       try {
+        if (this.promptIsStarter(this.promptModal.prompt)) {
+          const created = await this.api('POST', '/api/prompts', {
+            title: this.promptModal.editTitle,
+            content: this.promptModal.editContent,
+            tags: this.promptModal.editTags,
+            project_id: null,
+            meta: {},
+          });
+          await this.loadPrompts();
+          this.promptModal.prompt = created;
+          this.promptModal.editing = false;
+          this.showToast('Starter playbook copied into your library');
+          return;
+        }
         const updated = await this.api('PATCH', `/api/prompts/${this.promptModal.prompt.id}`, {
           title: this.promptModal.editTitle,
           content: this.promptModal.editContent,
@@ -212,6 +293,10 @@ function axonResourcesMixin() {
 
     async togglePin(pr) {
       if (!pr) return;
+      if (this.promptIsStarter(pr)) {
+        this.showToast('Starter playbooks stay read-only. Save a copy first if you want to pin one.');
+        return;
+      }
       const res = await this.api('POST', `/api/prompts/${pr.id}/pin`);
       // Update in list and modal
       const idx = this.prompts.findIndex(p => p.id === pr.id);

@@ -103,6 +103,123 @@ function axonChatConsoleCommandsMixin() {
       return true;
     },
 
+    async runChatComposerMessage(options = {}) {
+      const msg = String(options?.message || '').trim();
+      if (!msg) return false;
+
+      const mode = String(options?.mode || 'chat').trim() || 'chat';
+      const attachedResources = Array.isArray(options?.attachedResources) ? options.attachedResources : [];
+      const attachedResourceIds = Array.isArray(options?.attachedResourceIds) ? options.attachedResourceIds : [];
+      const extraPayload = options?.extraPayload && typeof options.extraPayload === 'object'
+        ? options.extraPayload
+        : {};
+      const workspaceId = String(this.chatProjectId || '').trim();
+
+      this.setAgentStage?.('observe');
+      this.rememberComposerHistory?.(msg);
+
+      this.chatInput = '';
+      if (!this.composerOptions?.pin_context) this.selectedResources = [];
+      this.showResourcePicker = false;
+      this.showComposerMenu = false;
+      this.resetChatComposerHeight?.();
+      this.chatMessages = Array.isArray(this.chatMessages) ? this.chatMessages : [];
+      this.chatMessages.push({
+        id: Date.now(),
+        role: 'user',
+        content: msg,
+        created_at: new Date().toISOString(),
+        mode,
+        resources: attachedResources,
+      });
+      this.setWorkspaceRunLoading?.(workspaceId, true);
+      if (typeof this.setWorkspaceRunLoading !== 'function') this.chatLoading = true;
+      this.beginLiveOperator?.(mode, msg, workspaceId);
+      this.scrollChat?.();
+
+      const respId = Date.now() + 1;
+      const placeholder = this.createAssistantPlaceholder
+        ? this.createAssistantPlaceholder(respId, mode, attachedResourceIds)
+        : {
+            id: respId,
+            role: 'assistant',
+            content: '',
+            streaming: true,
+            created_at: new Date().toISOString(),
+            mode,
+            resources: [],
+          };
+      this.chatMessages.push(placeholder);
+      this.scrollChat?.();
+
+      try {
+        await this.streamChatMessage?.(msg, mode, respId, attachedResourceIds, extraPayload, workspaceId);
+      } catch (e) {
+        if (e?.name === 'AbortError') {
+          this.setWorkspaceRunLoading?.(workspaceId, false);
+          if (typeof this.setWorkspaceRunLoading !== 'function') this.chatLoading = false;
+          this.scrollChat?.();
+          return true;
+        }
+        const idx = this.chatMessages.findIndex(m => m.id === respId);
+        if (idx >= 0) {
+          const isFetch = e?.message === 'Failed to fetch' || String(e?.message || '').includes('NetworkError');
+          this.chatMessages[idx].content = `⚠️ ${mode === 'agent' ? 'Agent error: ' : ''}${isFetch ? 'Connection lost.' : e?.message || e}`;
+          this.chatMessages[idx].streaming = false;
+          this.chatMessages[idx].error = true;
+          this.chatMessages[idx].retryMsg = msg;
+          this.chatMessages[idx].mode = mode;
+          if (isFetch) this.serverConnected = false;
+          this.rememberOperatorOutcome?.(mode, this.chatMessages[idx]);
+        }
+        if (mode === 'agent') this.setAgentStage?.('recover');
+        this.updateLiveOperator?.(mode, {
+          type: 'error',
+          message: e?.message === 'Failed to fetch' || String(e?.message || '').includes('NetworkError')
+            ? 'Connection lost.'
+            : e?.message || String(e || 'Error'),
+        });
+        this.clearLiveOperator?.(4200, workspaceId);
+      }
+
+      this.setWorkspaceRunLoading?.(workspaceId, false);
+      if (typeof this.setWorkspaceRunLoading !== 'function') this.chatLoading = false;
+      this.scrollChat?.();
+      return true;
+    },
+
+    async sendChat() {
+      if (this.businessMode && !this.chatInput?.trim()) {
+        this.chatInput = this.businessComposerPrompt(this.businessView || 'invoice');
+      }
+      if (this.businessMode) {
+        this.agentMode = false;
+      }
+      const msg = String(this.chatInput || '').trim();
+      const workspaceBusy = typeof this.currentWorkspaceRunActive === 'function'
+        ? this.currentWorkspaceRunActive()
+        : !!this.chatLoading;
+      if (!msg || workspaceBusy) return;
+
+      const mode = this.resolveChatMode?.(msg) || 'chat';
+      const researchPack = this.currentResearchPack?.();
+      const packResources = researchPack?.resources || [];
+      const attachedResources = this.mergeUniqueResources?.([...(packResources || []), ...(this.selectedResources || [])])
+        || [...(packResources || []), ...(this.selectedResources || [])];
+      const attachedResourceIds = attachedResources.map(resource => Number(resource.id)).filter(Boolean);
+      if (mode === 'agent' && !this.usesOllamaBackend?.()) {
+        this.showToast?.('Agent mode requires the Ollama backend.');
+        return;
+      }
+
+      await this.runChatComposerMessage?.({
+        message: msg,
+        mode,
+        attachedResources,
+        attachedResourceIds,
+      });
+    },
+
     async sendChatSilent(message, forceMode, extraPayload = {}) {
       const msg = String(message || '').trim();
       if (!msg) return;
@@ -210,7 +327,7 @@ function axonChatConsoleCommandsMixin() {
       this.scrollChat?.();
 
       try {
-        await this.streamChatMessage?.(msg, mode, respId, [], extraPayload);
+        await this.streamChatMessage?.(msg, mode, respId, [], extraPayload, workspaceId);
       } catch (error) {
         if (error?.name === 'AbortError') {
           finishRun();

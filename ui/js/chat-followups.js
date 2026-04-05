@@ -182,4 +182,6 @@ function axonChatFollowUpsMixin() {
   };
 }
 
-window.axonChatFollowUpsMixin = axonChatFollowUpsMixin;
+const axonChatFollowUpsGlobal = typeof window !== 'undefined' ? window : globalThis;
+
+axonChatFollowUpsGlobal.axonChatFollowUpsMixin = axonChatFollowUpsMixin;

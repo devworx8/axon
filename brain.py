@@ -25,6 +25,7 @@ import gpu_guard
 import resource_bank
 from axon_api.services import local_tool_env
 from axon_core.agent_toolspecs import AgentRuntimeDeps
+from axon_core.agent_runtime_tools import build_tool_registry, normalize_tool_args
 from axon_core.cli_command import build_cli_command, build_codex_exec_command
 from axon_core import agent as core_agent
 from axon_core import agent_runtime_state, approval_actions
@@ -740,244 +741,18 @@ def _effective_allowed_cmds() -> set[str]:
     return set(_ALLOWED_CMDS) | set(_ALLOWED_COMMAND_NAMES)
 
 
-def _tool_read_file(path: str, max_kb: int = 32) -> str:
-    """Read a file, sandboxed to home directory."""
-    p = os.path.realpath(os.path.expanduser(path))
-    if not _tool_path_allowed(p):
-        return "ERROR: Access outside the allowed directories is not allowed."
-    if not os.path.exists(p):
-        return f"ERROR: File not found: {p}"
-    if os.path.isdir(p):
-        return f"ERROR: {p} is a directory — use list_dir."
-    size = os.path.getsize(p)
-    if size > max_kb * 1024:
-        return f"ERROR: File too large ({size // 1024}KB > {max_kb}KB limit). Use head/tail or search_code."
-    try:
-        with open(p, encoding="utf-8", errors="replace") as f:
-            content = f.read()
-        return f"=== {p} ({size} bytes) ===\n{content}"
-    except PermissionError:
-        return f"ERROR: Permission denied: {p}"
-
-
-def _tool_list_dir(path: str = "~") -> str:
-    """List directory contents, sandboxed to home."""
-    p = os.path.realpath(os.path.expanduser(path))
-    if not _tool_path_allowed(p):
-        return "ERROR: Access outside the allowed directories is not allowed."
-    if not os.path.exists(p):
-        return f"ERROR: Path not found: {p}"
-    if not os.path.isdir(p):
-        return f"ERROR: {p} is a file — use read_file."
-    try:
-        entries = sorted(os.scandir(p), key=lambda e: (e.is_file(), e.name.lower()))
-        lines = [f"{'DIR ' if e.is_dir() else 'FILE'} {e.name}" for e in entries if not e.name.startswith(".")]
-        return f"=== {p} ===\n" + "\n".join(lines[:100])
-    except PermissionError:
-        return f"ERROR: Permission denied: {p}"
-
-
-def _tool_shell_cmd(cmd: str, cwd: str = "", timeout: int = 15) -> str:
-    """Run a shell command (allowlisted). Returns stdout+stderr, truncated at 4KB."""
-    try:
-        parts = shlex.split(cmd)
-    except ValueError as e:
-        return f"ERROR: Invalid command: {e}"
-    if not parts:
-        return "ERROR: Empty command."
-    base_cmd = os.path.basename(parts[0])
-    allowed_cmds = _effective_allowed_cmds()
-    if base_cmd not in allowed_cmds:
-        return f"ERROR: Command '{base_cmd}' is not in the allowed list. Allowed: {', '.join(sorted(allowed_cmds))}"
-    work_dir = os.path.realpath(os.path.expanduser(cwd)) if cwd else _workspace_root()
-    if not _tool_path_allowed(work_dir):
-        return "ERROR: cwd must be within the allowed directories."
-    normalized = approval_actions.normalize_command_preview(cmd)
-    lowered = normalized.lower()
-    read_only_git_prefixes = (
-        "git status",
-        "git diff",
-        "git log",
-        "git show",
-        "git branch",
-        "git rev-parse",
-        "git remote",
-        "git ls-files",
-    )
-    requires_approval = (
-        (lowered.startswith("git ") and not any(lowered == prefix or lowered.startswith(prefix + " ") for prefix in read_only_git_prefixes))
-        or lowered.startswith("gh ")
-        or base_cmd in {"rm", "chmod", "ln"}
-    )
-    if requires_approval:
-        approval_action = approval_actions.build_command_approval_action(
-            normalized,
-            cwd=work_dir,
-            session_id=str(_current_agent_runtime_context().get("agent_session_id") or ""),
-        )
-        if not _action_is_allowed(approval_action):
-            return f"BLOCKED_CMD:{base_cmd}:{normalized}"
-    try:
-        result = subprocess.run(
-            parts, capture_output=True, text=True,
-            timeout=timeout, cwd=work_dir,
-        )
-        output = (result.stdout + result.stderr).strip()
-        if len(output) > 4096:
-            output = output[:4096] + f"\n... (truncated, total {len(output)} chars)"
-        return output or "(no output)"
-    except subprocess.TimeoutExpired:
-        return f"ERROR: Command timed out after {timeout}s."
-    except FileNotFoundError:
-        return f"ERROR: Command not found: {parts[0]}"
-    except Exception as exc:
-        return f"ERROR: {exc}"
-
-
-def _tool_git_status(path: str = "~") -> str:
-    """Get git status + recent log for a directory."""
-    p = os.path.realpath(os.path.expanduser(path))
-    if not _tool_path_allowed(p):
-        return "ERROR: Access outside the allowed directories."
-    if not os.path.exists(p):
-        return f"ERROR: Path not found: {p}"
-    status = _tool_shell_cmd(f"git status --short", cwd=p)
-    log = _tool_shell_cmd(f"git log --oneline -10", cwd=p)
-    branch = _tool_shell_cmd(f"git branch --show-current", cwd=p)
-    return f"Branch: {branch.strip()}\n\nStatus:\n{status}\n\nRecent commits:\n{log}"
-
-
-def _tool_search_code(pattern: str, path: str = "~", glob: str = "*.py *.ts *.tsx *.js *.jsx") -> str:
-    """Grep for a pattern in source files. Returns matching lines with context."""
-    p = os.path.realpath(os.path.expanduser(path))
-    if not _tool_path_allowed(p):
-        return "ERROR: Access outside the allowed directories."
-    includes = " ".join(f"--include={g}" for g in glob.split())
-    cmd = f"grep -rn --max-count=3 {includes} -l {shlex.quote(pattern)} {shlex.quote(p)}"
-    result = _tool_shell_cmd(cmd)
-    return result[:3000] if len(result) > 3000 else result
-
-
-def _tool_write_file(path: str, content: str) -> str:
-    """Write content to a file (sandboxed to home)."""
-    p = os.path.realpath(os.path.expanduser(path))
-    if not _tool_path_allowed(p):
-        return "ERROR: Access outside the allowed directories."
-    approval_action = approval_actions.build_edit_approval_action(
-        "write",
-        p,
-        session_id=str(_current_agent_runtime_context().get("agent_session_id") or ""),
-        workspace_root=_active_workspace_root(),
-    )
-    if not _action_is_allowed(approval_action):
-        return f"BLOCKED_EDIT:write:{p}"
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    try:
-        with open(p, "w", encoding="utf-8") as f:
-            f.write(content)
-        return f"Written {len(content)} bytes to {p}"
-    except PermissionError:
-        return f"ERROR: Permission denied: {p}"
-
-
-def _tool_create_file(path: str, content: str = "") -> str:
-    p = os.path.realpath(os.path.expanduser(path))
-    if not _tool_path_allowed(p):
-        return "ERROR: Access outside the allowed directories."
-    approval_action = approval_actions.build_edit_approval_action(
-        "create",
-        p,
-        session_id=str(_current_agent_runtime_context().get("agent_session_id") or ""),
-        workspace_root=_active_workspace_root(),
-    )
-    if not _action_is_allowed(approval_action):
-        return f"BLOCKED_EDIT:create:{p}"
-    if os.path.exists(p):
-        return f"ERROR: File already exists: {p}"
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    try:
-        with open(p, "w", encoding="utf-8") as f:
-            f.write(content)
-        return f"Created {p}"
-    except PermissionError:
-        return f"ERROR: Permission denied: {p}"
-
-
-def _normalize_tool_args(name: str, args: dict) -> dict:
-    """Accept common argument aliases from weaker local models."""
-    normalized = dict(args or {})
-
-    if name == "shell_cmd":
-        raw_cmd = str(normalized.get("cmd") or "").strip()
-        if raw_cmd and not normalized.get("cwd"):
-            cd_prefix = _re.match(r"""^\s*cd\s+(['"]?)(.+?)\1\s*&&\s*(.+)$""", raw_cmd)
-            if cd_prefix:
-                normalized["cwd"] = cd_prefix.group(2).strip()
-                normalized["cmd"] = cd_prefix.group(3).strip()
-        if not normalized.get("cwd"):
-            for alias in ("dir", "directory", "workdir", "working_dir", "path"):
-                if normalized.get(alias):
-                    normalized["cwd"] = normalized.pop(alias)
-                    break
-        for alias in ("dir", "directory", "workdir", "working_dir", "path"):
-            normalized.pop(alias, None)
-        return {k: v for k, v in normalized.items() if k in {"cmd", "cwd", "timeout"}}
-
-    if name in {"git_status", "list_dir", "read_file"}:
-        if not normalized.get("path"):
-            for alias in ("cwd", "dir", "directory", "repo", "repository", "file"):
-                if normalized.get(alias):
-                    normalized["path"] = normalized.pop(alias)
-                    break
-        for alias in ("cwd", "dir", "directory", "repo", "repository", "file"):
-            normalized.pop(alias, None)
-        allowed = {"path"}
-        if name == "read_file":
-            allowed.add("max_kb")
-        return {k: v for k, v in normalized.items() if k in allowed}
-
-    if name == "search_code":
-        if not normalized.get("path"):
-            for alias in ("cwd", "dir", "directory", "repo", "repository"):
-                if normalized.get(alias):
-                    normalized["path"] = normalized.pop(alias)
-                    break
-        if not normalized.get("pattern"):
-            for alias in ("query", "text", "search", "term"):
-                if normalized.get(alias):
-                    normalized["pattern"] = normalized.pop(alias)
-                    break
-        for alias in ("cwd", "dir", "directory", "repo", "repository", "query", "text", "search", "term"):
-            normalized.pop(alias, None)
-        return {k: v for k, v in normalized.items() if k in {"pattern", "path", "glob"}}
-
-    if name in {"write_file", "create_file"}:
-        if not normalized.get("path"):
-            for alias in ("file", "target", "destination"):
-                if normalized.get(alias):
-                    normalized["path"] = normalized.pop(alias)
-                    break
-        if not normalized.get("content"):
-            for alias in ("text", "body"):
-                if normalized.get(alias):
-                    normalized["content"] = normalized.pop(alias)
-                    break
-        for alias in ("file", "target", "destination", "text", "body"):
-            normalized.pop(alias, None)
-        return {k: v for k, v in normalized.items() if k in {"path", "content"}}
-
-    return normalized
-
-
-_TOOL_REGISTRY = {
-    "read_file": _tool_read_file,
-    "list_dir": _tool_list_dir,
-    "shell_cmd": _tool_shell_cmd,
-    "git_status": _tool_git_status,
-    "search_code": _tool_search_code,
-    "create_file": _tool_create_file,
-    "write_file": _tool_write_file,
-}
+_TOOL_REGISTRY = build_tool_registry(
+    current_agent_runtime_context_fn=_current_agent_runtime_context,
+    tool_path_allowed_fn=_tool_path_allowed,
+    action_is_allowed_fn=_action_is_allowed,
+    workspace_root_fn=_workspace_root,
+    active_workspace_root_fn=_active_workspace_root,
+    effective_allowed_cmds_fn=_effective_allowed_cmds,
+    build_command_approval_action=approval_actions.build_command_approval_action,
+    build_edit_approval_action=approval_actions.build_edit_approval_action,
+    normalize_command_preview=approval_actions.normalize_command_preview,
+    db_path=DEVBRAIN_DB_PATH,
+)
 
 
 def _agent_runtime_deps(exclude_tools: set[str] | None = None) -> AgentRuntimeDeps:
@@ -988,7 +763,7 @@ def _agent_runtime_deps(exclude_tools: set[str] | None = None) -> AgentRuntimeDe
     }
     return AgentRuntimeDeps(
         tool_registry=tool_registry,
-        normalize_tool_args=_normalize_tool_args,
+        normalize_tool_args=normalize_tool_args,
         stream_cli=_stream_cli,
         stream_api_chat=_stream_api_chat,
         stream_ollama_chat=_stream_ollama_chat,
@@ -1002,99 +777,6 @@ def _agent_runtime_deps(exclude_tools: set[str] | None = None) -> AgentRuntimeDe
         db_path=DEVBRAIN_DB_PATH,
     )
 
-AGENT_TOOL_DEFS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "Read a file from the filesystem. Returns file content.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "File path (absolute or ~-relative)"},
-                    "max_kb": {"type": "integer", "description": "Max KB to read (default 32)", "default": 32},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_dir",
-            "description": "List files and directories in a given path.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Directory path (default: ~)", "default": "~"},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "shell_cmd",
-            "description": "Run an allowlisted shell command (git, ls, grep, python3, etc.) and return output.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "cmd": {"type": "string", "description": "Shell command to run"},
-                    "cwd": {"type": "string", "description": "Working directory (default: home)", "default": "~"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 15)", "default": 15},
-                },
-                "required": ["cmd"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "git_status",
-            "description": "Get git branch, status, and recent commit log for a project directory.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Project directory path"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_code",
-            "description": "Search for a pattern in source code files using grep.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pattern": {"type": "string", "description": "Search pattern (regex)"},
-                    "path": {"type": "string", "description": "Directory to search in", "default": "~"},
-                    "glob": {"type": "string", "description": "File glob patterns (space-separated)", "default": "*.py *.ts *.tsx *.js *.jsx"},
-                },
-                "required": ["pattern"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_file",
-            "description": "Write content to a file.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "File path to write"},
-                    "content": {"type": "string", "description": "Content to write"},
-                },
-                "required": ["path", "content"],
-            },
-        },
-    },
-]
-
 
 def _execute_tool(name: str, args: dict) -> str:
     """Execute a tool by name with the given arguments."""
@@ -1102,7 +784,7 @@ def _execute_tool(name: str, args: dict) -> str:
     if not fn:
         return f"ERROR: Unknown tool '{name}'"
     try:
-        return fn(**_normalize_tool_args(name, args))
+        return fn(**normalize_tool_args(name, args))
     except TypeError as e:
         return f"ERROR: Bad arguments for {name}: {e}"
     except Exception as e:

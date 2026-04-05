@@ -14,32 +14,41 @@ export function AppSideBar({
   activeKey,
   statusLabel,
   statusColor,
+  collapsed = false,
   onChange,
 }: {
   items: readonly SideNavItem[];
   activeKey: string;
   statusLabel: string;
   statusColor: string;
+  collapsed?: boolean;
   onChange: (key: string) => void;
 }) {
   const { colors } = useTheme();
 
   return (
-    <View style={[styles.rail, { borderRightColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+    <View
+      style={[
+        styles.rail,
+        { borderRightColor: colors.border, backgroundColor: colors.surfaceAlt },
+        collapsed ? styles.railCollapsed : null,
+      ]}
+    >
       <View style={styles.brand}>
         <View style={[styles.orb, { borderColor: colors.accent, shadowColor: colors.accent }]} />
-        <Text style={[styles.brandText, { color: colors.text }]}>Axon</Text>
-        <Text style={[styles.brandSub, { color: colors.muted }]}>Online</Text>
+        {!collapsed ? <Text style={[styles.brandText, { color: colors.text }]}>Axon</Text> : null}
+        {!collapsed ? <Text style={[styles.brandSub, { color: colors.muted }]}>Online</Text> : null}
       </View>
 
       <View style={[styles.statusPill, { borderColor: colors.border, backgroundColor: colors.surface }]}>
         <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-        <Text style={[styles.statusText, { color: statusColor }]}>{statusLabel}</Text>
+        {!collapsed ? <Text style={[styles.statusText, { color: statusColor }]}>{statusLabel}</Text> : null}
       </View>
 
       <ScrollView contentContainerStyle={styles.navList} showsVerticalScrollIndicator={false}>
         {items.map((item) => {
           const active = item.key === activeKey;
+          const initials = item.label.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase();
           return (
             <Pressable
               key={item.key}
@@ -55,8 +64,10 @@ export function AppSideBar({
                 },
               ]}
             >
-              <Text style={[styles.navLabel, { color: active ? colors.accent : colors.text }]}>{item.label}</Text>
-              {item.hint ? (
+              <Text style={[styles.navLabel, { color: active ? colors.accent : colors.text }]}>
+                {collapsed ? initials : item.label}
+              </Text>
+              {item.hint && !collapsed ? (
                 <Text style={[styles.navHint, { color: colors.muted }]}>{item.hint}</Text>
               ) : null}
             </Pressable>
@@ -74,6 +85,9 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     paddingHorizontal: 10,
     borderRightWidth: 1,
+  },
+  railCollapsed: {
+    width: 76,
   },
   brand: {
     alignItems: 'center',

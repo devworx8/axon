@@ -39,9 +39,13 @@ export function useMissionControl(config: CompanionConfig) {
   const refresh = useCallback(async (
     workspaceId?: number | null,
     sessionId?: number | null,
+    options?: { silent?: boolean },
   ) => {
-    setLoading(true);
-    setError(null);
+    const silent = options?.silent ?? false;
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const nextSnapshot = await fetchMissionSnapshot(
         config,
@@ -52,10 +56,14 @@ export function useMissionControl(config: CompanionConfig) {
       setDigest(buildDigest(nextSnapshot || null));
       return nextSnapshot || null;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to load Mission Control');
+      if (!silent) {
+        setError(err instanceof Error ? err.message : 'Unable to load Mission Control');
+      }
       throw err;
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, [config]);
 

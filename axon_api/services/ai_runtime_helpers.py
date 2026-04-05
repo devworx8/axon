@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import HTTPException
 
 from axon_api.services import composer_runtime
+from axon_core.image_generation import DEFAULT_GEMINI_IMAGE_MODEL
 
 
 async def ai_params(
@@ -299,7 +300,7 @@ async def auto_route_image_generation_runtime(
     candidate = provider_registry_module.merged_provider_config(
         candidate_id,
         settings,
-        {"model": settings.get("gemini_image_model") or "gemini-3.1-flash-image-preview"},
+        {"model": settings.get("gemini_image_model") or DEFAULT_GEMINI_IMAGE_MODEL},
     )
     candidate_key = settings.get(candidate.get("key_setting", ""), "") or ""
     if not candidate_key and devvault_module.VaultSession.is_unlocked():
@@ -314,7 +315,7 @@ async def auto_route_image_generation_runtime(
             "api_provider": candidate_id,
             "api_key": candidate_key,
             "api_base_url": candidate.get("base_url", ""),
-            "api_model": candidate.get("model", "gemini-3.1-flash-image-preview"),
+            "api_model": candidate.get("model", DEFAULT_GEMINI_IMAGE_MODEL),
         }
     )
     warnings.append(f"Image generation request — auto-routed to {candidate.get('label', candidate_id)} for image-capable tool use.")

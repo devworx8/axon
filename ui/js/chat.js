@@ -177,157 +177,6 @@ function axonChatMixin() {
       }
     },
 
-    /* ── Live operator ────────────────────────────────────────── */
-
-    beginLiveOperator(mode, msg = '') {
-      if (this.liveOperatorTimer) clearTimeout(this.liveOperatorTimer);
-      this.liveOperator = {
-        active: true,
-        mode,
-        phase: mode === 'agent' ? 'observe' : 'plan',
-        title: mode === 'agent' ? 'Observing the task' : 'Opening the reply stream',
-        detail: mode === 'agent'
-          ? 'Axon is checking your goal and lining up the first safe step.'
-          : 'Axon is preparing a response.',
-        tool: '',
-        startedAt: new Date().toISOString(),
-      };
-      this.liveOperatorFeed = [];
-      this.pushLiveOperatorFeed(
-        this.liveOperator.phase,
-        this.liveOperator.title,
-        msg ? `Goal received: ${msg.slice(0, 120)}` : this.liveOperator.detail,
-      );
-      if (mode === 'agent') this.setAgentStage('observe');
-      if (this.desktopPreview.enabled) {
-        this.refreshDesktopPreview(true);
-        this.scheduleDesktopPreview();
-      }
-    },
-
-    updateLiveOperator(mode, event = {}) {
-      if (!this.liveOperator.active) this.beginLiveOperator(mode);
-      if (mode !== 'agent') {
-        if (event.error) {
-          this.liveOperator = {
-            ...this.liveOperator,
-            active: true,
-            phase: 'recover',
-            title: 'Reply interrupted',
-            detail: event.error,
-          };
-          this.pushLiveOperatorFeed('recover', 'Reply interrupted', event.error);
-          return;
-        }
-        if (event.done) {
-          this.liveOperator = {
-            ...this.liveOperator,
-            active: true,
-            phase: 'verify',
-            title: 'Reply complete',
-            detail: 'Axon finished streaming the answer.',
-          };
-          this.pushLiveOperatorFeed('verify', 'Reply complete', 'Axon finished streaming the answer.');
-          return;
-        }
-        this.liveOperator = {
-          ...this.liveOperator,
-          active: true,
-          phase: 'execute',
-          title: 'Writing the reply',
-          detail: 'Live response is flowing into the console now.',
-        };
-        this.pushLiveOperatorFeed('execute', 'Writing the reply', 'Live response is flowing into the console now.');
-        return;
-      }
-
-      if (event.type === 'tool_call') {
-        this.liveOperator = {
-          ...this.liveOperator,
-          active: true,
-          phase: 'execute',
-          title: `Running ${this.prettyToolName(event.name)}`,
-          detail: event.args ? JSON.stringify(event.args).slice(0, 96) : 'Using a local operator tool.',
-          tool: event.name || '',
-        };
-        this.pushLiveOperatorFeed('execute', `Running ${this.prettyToolName(event.name)}`, event.args ? JSON.stringify(event.args).slice(0, 96) : 'Using a local operator tool.');
-        return;
-      }
-      if (event.type === 'tool_result') {
-        this.liveOperator = {
-          ...this.liveOperator,
-          active: true,
-          phase: 'verify',
-          title: `Checking ${this.prettyToolName(event.name)}`,
-          detail: (event.result || 'Axon is reviewing the tool output.').slice(0, 120),
-          tool: event.name || this.liveOperator.tool,
-        };
-        this.pushLiveOperatorFeed('verify', `Checking ${this.prettyToolName(event.name)}`, (event.result || 'Axon is reviewing the tool output.').slice(0, 120));
-        return;
-      }
-      if (event.type === 'text') {
-        this.liveOperator = {
-          ...this.liveOperator,
-          active: true,
-          phase: this.liveOperator.tool ? 'verify' : 'plan',
-          title: this.liveOperator.tool ? 'Writing the result' : 'Planning the next step',
-          detail: this.liveOperator.tool
-            ? 'Axon is turning tool output into a final answer.'
-            : 'Axon is reasoning through the task before it acts.',
-        };
-        this.pushLiveOperatorFeed(
-          this.liveOperator.tool ? 'verify' : 'plan',
-          this.liveOperator.tool ? 'Writing the result' : 'Planning the next step',
-          this.liveOperator.tool
-            ? 'Axon is turning tool output into a final answer.'
-            : 'Axon is reasoning through the task before it acts.',
-        );
-        return;
-      }
-      if (event.type === 'done') {
-        this.liveOperator = {
-          ...this.liveOperator,
-          active: true,
-          phase: 'verify',
-          title: 'Task complete',
-          detail: 'Axon finished the operator pass.',
-        };
-        this.pushLiveOperatorFeed('verify', 'Task complete', 'Axon finished the operator pass.');
-        return;
-      }
-      if (event.type === 'error') {
-        this.liveOperator = {
-          ...this.liveOperator,
-          active: true,
-          phase: 'recover',
-          title: 'Needs attention',
-          detail: event.message || 'Axon hit an error and stopped safely.',
-        };
-        this.pushLiveOperatorFeed('recover', 'Needs attention', event.message || 'Axon hit an error and stopped safely.');
-      }
-    },
-
-    clearLiveOperator(delay = 0) {
-      if (this.liveOperatorTimer) clearTimeout(this.liveOperatorTimer);
-      const reset = () => {
-        this.liveOperator = {
-          active: false,
-          mode: 'chat',
-          phase: 'observe',
-          title: '',
-          detail: '',
-          tool: '',
-          startedAt: '',
-        };
-        this.stopDesktopPreview();
-      };
-      if (delay > 0) {
-        this.liveOperatorTimer = setTimeout(reset, delay);
-      } else {
-        reset();
-      }
-    },
-
     rememberOperatorOutcome(mode, message) {
       const content = String(message?.content || '').replace(/\s+/g, ' ').trim();
       const latestEvent = [...(message?.agentEvents || [])].reverse()
@@ -453,11 +302,14 @@ function axonChatMixin() {
       this.showToast('Generation stopped');
     },
 
-    async streamChatMessage(msg, mode, respId, resourceIds = [], extraPayload = {}) {
+    async streamChatMessage(msg, mode, respId, resourceIds = [], extraPayload = {}, workspaceId = null) {
+      const targetWorkspaceId = String(
+        workspaceId == null ? (this.chatProjectId || '') : workspaceId,
+      ).trim();
       const endpoint = mode === 'agent' ? '/api/agent' : '/api/chat/stream';
       const payload = {
         message: msg,
-        project_id: this.chatProjectId ? parseInt(this.chatProjectId) : null,
+        project_id: targetWorkspaceId ? parseInt(targetWorkspaceId, 10) : null,
         resource_ids: resourceIds,
         composer_options: this.normalizedComposerOptions(),
         ...extraPayload,
@@ -476,12 +328,12 @@ function axonChatMixin() {
 
       if (resp.status === 401) {
         this.handleAuthRequired();
-        this.updateLiveOperator(mode, { type: 'error', message: 'Session expired.' });
+        this.updateLiveOperator(mode, { type: 'error', message: 'Session expired.' }, targetWorkspaceId);
         throw new Error('Session expired');
       }
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-        this.updateLiveOperator(mode, { type: 'error', message: err.detail || resp.statusText });
+        this.updateLiveOperator(mode, { type: 'error', message: err.detail || resp.statusText }, targetWorkspaceId);
         throw new Error(err.detail || resp.statusText);
       }
 
@@ -490,9 +342,9 @@ function axonChatMixin() {
       let buf = '';
       if (mode === 'agent') {
         this.setAgentStage('plan');
-        this.updateLiveOperator(mode, { type: 'text' });
+        this.updateLiveOperator(mode, { type: 'text' }, targetWorkspaceId);
       } else {
-        this.updateLiveOperator(mode, { chunk: 'stream-open' });
+        this.updateLiveOperator(mode, { chunk: 'stream-open' }, targetWorkspaceId);
       }
 
       while (true) {
@@ -513,13 +365,13 @@ function axonChatMixin() {
               if (data.type === 'thinking') {
                 this.setAgentStage('plan');
                 this.appendThinkingBlock(this.chatMessages[idx], data.chunk);
-                this.updateLiveOperator(mode, { type: 'text' });
+                this.updateLiveOperator(mode, { type: 'text' }, targetWorkspaceId);
                 this.scrollChat();
               } else if (data.type === 'text') {
                 this.finalizeThinkingBlocks(this.chatMessages[idx]);
                 if (this.chatMessages[idx].agentEvents?.length) this.setAgentStage('verify');
                 this.chatMessages[idx].content += data.chunk;
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(mode, data, targetWorkspaceId);
                 this.scrollChat();
               } else if (data.type === 'tool_call' || data.type === 'tool_result') {
                 this.setAgentStage(data.type === 'tool_call' ? 'execute' : 'verify');
@@ -530,7 +382,7 @@ function axonChatMixin() {
                 } else {
                   this.resolveWorkingBlock(this.chatMessages[idx], data);
                 }
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(mode, data, targetWorkspaceId);
                 this.scrollChat();
               } else if (data.type === 'done') {
                 this.setAgentStage('verify');
@@ -541,7 +393,7 @@ function axonChatMixin() {
                 if (typeof this.autoSpeakResponse === 'function') {
                   this.autoSpeakResponse(this.chatMessages[idx].content);
                 }
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(mode, data, targetWorkspaceId);
               } else if (data.type === 'error') {
                 this.setAgentStage('recover');
                 this.finalizeThinkingBlocks(this.chatMessages[idx]);
@@ -550,12 +402,12 @@ function axonChatMixin() {
                 this.chatMessages[idx].streaming = false;
                 this.chatMessages[idx].error = true;
                 this.chatMessages[idx].retryMsg = msg;
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(mode, data, targetWorkspaceId);
               }
             } else {
               if (data.chunk) {
                 this.chatMessages[idx].content += data.chunk;
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(mode, data, targetWorkspaceId);
                 this.scrollChat();
               }
               if (data.done) {
@@ -564,14 +416,14 @@ function axonChatMixin() {
                 if (typeof this.autoSpeakResponse === 'function') {
                   this.autoSpeakResponse(this.chatMessages[idx].content);
                 }
-                this.updateLiveOperator(mode, data);
+                this.updateLiveOperator(mode, data, targetWorkspaceId);
               }
               if (data.error) {
                 this.chatMessages[idx].content += `\n⚠️ ${data.error}`;
                 this.chatMessages[idx].streaming = false;
                 this.chatMessages[idx].error = true;
                 this.chatMessages[idx].retryMsg = msg;
-                this.updateLiveOperator(mode, { error: data.error });
+                this.updateLiveOperator(mode, { error: data.error }, targetWorkspaceId);
               }
             }
           } catch(_) {}
@@ -586,7 +438,12 @@ function axonChatMixin() {
         this.chatMessages[idx].streaming = false;
         this.rememberOperatorOutcome(mode, this.chatMessages[idx]);
       }
-      this.clearLiveOperator(this.liveOperator.phase === 'recover' ? 4200 : 1400);
+      const targetPhase = String(
+        this.workspaceRunStateFor?.(targetWorkspaceId)?.liveOperator?.phase
+        || this.liveOperator.phase
+        || 'observe',
+      );
+      this.clearLiveOperator(targetPhase === 'recover' ? 4200 : 1400, targetWorkspaceId);
     },
 
     /* ── Chat CRUD ────────────────────────────────────────────── */
@@ -648,15 +505,16 @@ function axonChatMixin() {
         mode,
         resources: attachedResources,
       });
+      const workspaceId = String(this.chatProjectId || '').trim();
       this.chatLoading = true;
-      this.beginLiveOperator(mode, msg);
+      this.beginLiveOperator(mode, msg, workspaceId);
       this.scrollChat();
 
       const respId = Date.now() + 1;
       this.chatMessages.push(this.createAssistantPlaceholder(respId, mode, attachedResourceIds));
       this.scrollChat();
       try {
-        await this.streamChatMessage(msg, mode, respId, attachedResourceIds);
+        await this.streamChatMessage(msg, mode, respId, attachedResourceIds, {}, workspaceId);
       } catch(e) {
         if (e.name === 'AbortError') {
           // User clicked stop — not an error
@@ -676,8 +534,8 @@ function axonChatMixin() {
           this.rememberOperatorOutcome(mode, this.chatMessages[idx]);
         }
         if (mode === 'agent') this.setAgentStage('recover');
-        this.updateLiveOperator(mode, { type: 'error', message: e.message === 'Failed to fetch' || e.message.includes('NetworkError') ? 'Connection lost.' : e.message });
-        this.clearLiveOperator(4200);
+        this.updateLiveOperator(mode, { type: 'error', message: e.message === 'Failed to fetch' || e.message.includes('NetworkError') ? 'Connection lost.' : e.message }, workspaceId);
+        this.clearLiveOperator(4200, workspaceId);
       }
 
       this.chatLoading = false;
@@ -693,13 +551,14 @@ function axonChatMixin() {
         ? errorMsg.retryResources
         : (researchPack?.resources || []).map(resource => Number(resource.id)).filter(Boolean);
       this.chatMessages = this.chatMessages.filter(m => m.id !== errorMsg.id);
+      const workspaceId = String(this.chatProjectId || '').trim();
       this.chatLoading = true;
-      this.beginLiveOperator(mode, msg);
+      this.beginLiveOperator(mode, msg, workspaceId);
       this.scrollChat();
       const respId = Date.now() + 1;
       this.chatMessages.push(this.createAssistantPlaceholder(respId, mode, resourceIds));
       try {
-        await this.streamChatMessage(msg, mode, respId, resourceIds);
+        await this.streamChatMessage(msg, mode, respId, resourceIds, {}, workspaceId);
       } catch(e) {
         if (e.name === 'AbortError') {
           this.chatLoading = false;
@@ -720,8 +579,8 @@ function axonChatMixin() {
           this.rememberOperatorOutcome(mode, this.chatMessages[idx]);
         }
         if (mode === 'agent') this.setAgentStage('recover');
-        this.updateLiveOperator(mode, { type: 'error', message: isFetch ? 'Connection lost.' : e.message });
-        this.clearLiveOperator(4200);
+        this.updateLiveOperator(mode, { type: 'error', message: isFetch ? 'Connection lost.' : e.message }, workspaceId);
+        this.clearLiveOperator(4200, workspaceId);
       }
       this.chatLoading = false;
       this.scrollChat();
@@ -761,7 +620,7 @@ function axonChatMixin() {
         });
         this._markdownConfigured = true;
       }
-      const html = marked.parse(String(text || ''));
+      const html = marked.parse(this.prepareMarkdownText(text));
       return this.sanitizeRenderedHtml(html);
     },
 

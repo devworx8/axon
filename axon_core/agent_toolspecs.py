@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Optional
 import re as _re
 
+from .agent_tool_metadata import TOOL_ALIAS_MAP, TOOL_ARG_EXAMPLES
 from .agent_paths import DEFAULT_DEVBRAIN_DB_PATH
 
 
@@ -363,6 +364,37 @@ AGENT_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "generate_pdf",
+            "description": "Render a structured PDF document and save it to disk.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Document title"},
+                    "subtitle": {"type": "string", "description": "Optional subtitle", "default": ""},
+                    "author": {"type": "string", "description": "Optional author", "default": ""},
+                    "content": {"type": "string", "description": "Optional plain-text body content", "default": ""},
+                    "sections": {
+                        "type": "array",
+                        "description": "Optional structured sections for the PDF body",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "heading": {"type": "string"},
+                                "lead": {"type": "string"},
+                                "paragraphs": {"type": "array", "items": {"type": "string"}},
+                                "bullets": {"type": "array", "items": {"type": "string"}},
+                            },
+                        },
+                    },
+                    "output_path": {"type": "string", "description": "Optional explicit output path", "default": ""},
+                },
+                "required": ["title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "remember",
             "description": (
                 "Persist a named note in agent memory. Use this to save important facts, decisions, "
@@ -518,97 +550,9 @@ AGENT_TOOL_DEFS: list[dict[str, Any]] = [
 def _canonical_tool_name(name: str, args: dict[str, Any] | None = None) -> str:
     raw = str(name or "").strip().lower()
     normalized = _re.sub(r"[^a-z0-9]+", "_", raw).strip("_")
-    alias_map = {
-        "append": "append_file",
-        "append_file": "append_file",
-        "create": "create_file",
-        "create_file": "create_file",
-        "delete": "delete_file",
-        "delete_file": "delete_file",
-        "remove": "delete_file",
-        "remove_file": "delete_file",
-        "rm": "delete_file",
-        "read": "read_file",
-        "read_file": "read_file",
-        "readfile": "read_file",
-        "write": "write_file",
-        "write_file": "write_file",
-        "writefile": "write_file",
-        "list": "list_dir",
-        "list_dir": "list_dir",
-        "listdir": "list_dir",
-        "gitstatus": "git_status",
-        "git_status": "git_status",
-        "search": "search_code",
-        "search_code": "search_code",
-        "searchcode": "search_code",
-        "shell": "shell_cmd",
-        "shell_cmd": "shell_cmd",
-        "shellcmd": "shell_cmd",
-        "shell_bg": "shell_bg",
-        "shellbg": "shell_bg",
-        "shell_background": "shell_bg",
-        "background": "shell_bg",
-        "shell_bg_check": "shell_bg_check",
-        "shellbgcheck": "shell_bg_check",
-        "bg_check": "shell_bg_check",
-        "edit": "edit_file",
-        "edit_file": "edit_file",
-        "editfile": "edit_file",
-        "replace": "edit_file",
-        "patch": "edit_file",
-        "diff": "show_diff",
-        "show_diff": "show_diff",
-        "showdiff": "show_diff",
-        "git_diff": "show_diff",
-        # enhanced agentic tools
-        "http": "http_get",
-        "http_get": "http_get",
-        "fetch": "http_get",
-        "get_url": "http_get",
-        "image": "generate_image",
-        "generate_image": "generate_image",
-        "image_gen": "generate_image",
-        "imagegen": "generate_image",
-        "create_image": "generate_image",
-        "save_note": "remember",
-        "note": "remember",
-        "remember": "remember",
-        "recall": "recall",
-        "search_memory": "recall",
-        "plan": "plan_task",
-        "plan_task": "plan_task",
-        "subagent": "spawn_subagent",
-        "spawn_subagent": "spawn_subagent",
-        "delegate": "spawn_subagent",
-        # power tools
-        "project_info": "project_info",
-        "projectinfo": "project_info",
-        "scan_project": "project_info",
-        "analyze_project": "project_info",
-        "web_search": "web_search",
-        "websearch": "web_search",
-        "search_web": "web_search",
-        "google": "web_search",
-        "duckduckgo": "web_search",
-        "glob_files": "glob_files",
-        "glob": "glob_files",
-        "find_files": "glob_files",
-        "grep_code": "grep_code",
-        "rg": "grep_code",
-        "ripgrep": "grep_code",
-        "diff_files": "diff_files",
-        "diff": "diff_files",
-        "memory_write": "memory_write",
-        "memorize": "memory_write",
-        "save_memory": "memory_write",
-        "memory_read": "memory_read",
-        "recall_memory": "memory_read",
-        "load_memory": "memory_read",
-    }
     if normalized == "using" and (args or {}).get("path"):
         return "read_file"
-    return alias_map.get(normalized, normalized)
+    return TOOL_ALIAS_MAP.get(normalized, normalized)
 
 
 def _execute_tool(name: str, args: dict[str, Any], deps: AgentRuntimeDeps) -> str:
@@ -621,30 +565,9 @@ def _execute_tool(name: str, args: dict[str, Any], deps: AgentRuntimeDeps) -> st
     try:
         return fn(**normalized)
     except TypeError as e:
-        example = _TOOL_ARG_EXAMPLES.get(canonical_name, "")
+        example = TOOL_ARG_EXAMPLES.get(canonical_name, "")
         hint = f"\nExample:\nACTION: {canonical_name}\nARGS: {example}" if example else ""
         received = ", ".join(sorted(normalized.keys())) if normalized else "none"
         return f"ERROR: Bad arguments for {canonical_name}: {e}\nReceived keys: {received}{hint}"
     except Exception as e:
         return f"ERROR: {canonical_name} failed: {e}"
-
-
-_TOOL_ARG_EXAMPLES: dict[str, str] = {
-    "shell_cmd":    '{"cmd": "ls -la", "cwd": "~/project"}',
-    "shell_bg":     '{"cmd": "npm run dev", "cwd": "~/project"}',
-    "read_file":    '{"path": "~/project/src/app.tsx"}',
-    "write_file":   '{"path": "~/project/file.ts", "content": "file contents here"}',
-    "edit_file":    '{"path": "~/project/file.ts", "old_string": "exact old text", "new_string": "replacement text"}',
-    "search_code":  '{"pattern": "function_name", "path": "~/project"}',
-    "list_dir":     '{"path": "~/project/src"}',
-    "delete_file":  '{"path": "~/project/old_file.ts"}',
-    "git_status":   '{"path": "~/project"}',
-    "show_diff":    '{"path": "~/project"}',
-    "http_get":     '{"url": "http://localhost:3000"}',
-    "generate_image": '{"prompt": "A clean isometric landing page hero illustration of a futuristic AI workspace", "aspect_ratio": "16:9", "image_size": "1K"}',
-    "plan_task":    '{"goal": "Fix the login page", "steps": ["Read the file", "Find the bug", "Fix it"]}',
-    "remember":     '{"key": "db_url", "value": "postgres://localhost/mydb"}',
-    "recall":       '{"query": "database"}',
-    "glob_files":   '{"pattern": "**/*.tsx", "path": "~/project"}',
-}
-

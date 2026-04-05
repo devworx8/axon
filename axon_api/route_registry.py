@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from axon_api.routes import companion, connectors, mcp_routes, mobile_control, mobile_mission, mobile_vault
+from axon_api.routes import companion, connectors, file_links, mcp_routes, media_routes, mobile_control, mobile_mission, mobile_vault
 
 
 def register_core_routers(
@@ -21,5 +21,7 @@ def register_core_routers(
     app.include_router(mobile_mission.router)
     app.include_router(mcp_routes.router)
     app.include_router(mobile_vault.router)
+    app.include_router(file_links.router)
+    app.include_router(media_routes.router)
     if voice_status_router is not None:
         app.include_router(voice_status_router)

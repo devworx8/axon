@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from typing import Optional
 
+from .agent_document_guidance import document_operator_guidance_block
+
 
 def _build_react_system(context_block: str, project_name: Optional[str], tool_names: list[str]) -> str:
     """Build ReAct-style system prompt for the agent."""
@@ -99,6 +101,10 @@ To generate an image:
 ACTION: generate_image
 ARGS: {{"prompt": "A minimal product hero image for an AI dashboard", "aspect_ratio": "16:9", "image_size": "1K"}}
 
+To generate a PDF:
+ACTION: generate_pdf
+ARGS: {{"title": "Quarterly Update", "sections": [{{"heading": "Summary", "paragraphs": ["Revenue grew 18 percent quarter over quarter."], "bullets": ["Retention up", "Pipeline expanded"]}}]}}
+
 CRITICAL: Always put arguments in a JSON object with named keys. Never omit ARGS or leave it empty.
 CRITICAL: For write_file and edit_file, the ARGS must be VALID JSON. Escape newlines as \\n inside strings.
 Multi-line content example:
@@ -165,6 +171,7 @@ When a user reports a page not loading, errors, or build issues:
 | `git_status` | Check branch and uncommitted changes |
 | `show_diff` | Review edits after making them |
 | `http_get` | Fetch docs, APIs, web content |
+| `generate_pdf` | Render a PDF document to disk |
 | `remember` | Persist key facts across sessions |
 | `recall` | Search your persisted memory |
 | `create_mission` | Create a task/mission to track work |
@@ -212,6 +219,6 @@ Violating these rules is the worst failure mode. Zero tolerance.
 - If the request is underspecified, ask a short clarification question before using tools. Never guess the target.
 - Be warm, direct, technically precise. South African dev context (Rands R, UTC+2).
 - All paths: start with ~ or /home/{os.getenv('USER', 'edp')}
-{self_awareness}{axon_ctx}
+{document_operator_guidance_block()}{self_awareness}{axon_ctx}
 {('Context: ' + context_block[:800]) if context_block else ''}
 {('Project: ' + project_name) if project_name else ''}"""

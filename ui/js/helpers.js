@@ -3,6 +3,8 @@
    ══════════════════════════════════════════════════════════════ */
 
 function axonHelpersMixin() {
+  const LOCAL_PATH_TOKEN_RE = /(^|[\s(])((?:~\/|\/|\.{1,2}\/|[A-Za-z0-9._-]+\/)[^\s<>\]]*[A-Za-z0-9_/-]\.[A-Za-z0-9]{1,10}|[A-Za-z0-9._-]+\.(?:pptx|pdf|png|jpg|jpeg|gif|svg|webp|md|txt|csv|json|yml|yaml|html|css|js|ts|py|sh|log|zip|tar|gz))(?=$|[\s),.!?;:])/g;
+
   return {
 
     // ── Helpers ────────────────────────────────────────────────────
@@ -39,11 +41,16 @@ function axonHelpersMixin() {
             return;
           }
           if (name === 'href') {
-            if (!/^(https?:|mailto:|#)/i.test(value)) {
+            if (!/^(https?:|mailto:|#|\/)/i.test(value)) {
               node.removeAttribute(attr.name);
             } else {
-              node.setAttribute('target', '_blank');
-              node.setAttribute('rel', 'noopener noreferrer');
+              if (/^(https?:|mailto:|\/)/i.test(value)) {
+                node.setAttribute('target', '_blank');
+                node.setAttribute('rel', 'noopener noreferrer');
+              } else {
+                node.removeAttribute('target');
+                node.removeAttribute('rel');
+              }
             }
             return;
           }
@@ -54,6 +61,71 @@ function axonHelpersMixin() {
       }
       toRemove.forEach(node => node.replaceWith(...node.childNodes));
       return template.innerHTML;
+    },
+
+    fileOpenHref(path = '') {
+      const value = String(path || '').trim();
+      if (!value) return '';
+      return `/api/files/open?path=${encodeURIComponent(value)}`;
+    },
+
+    isLikelyLocalPath(value = '', { allowBare = false } = {}) {
+      const raw = String(value || '').trim();
+      if (!raw) return false;
+      if (/^(https?:|mailto:|data:|blob:|javascript:|#)/i.test(raw)) return false;
+      if (/^\/(?:api|css|js|images|img|favicon)/i.test(raw)) return false;
+      if (/^(~\/|\/|\.{1,2}\/)/.test(raw)) return true;
+      if (/^[A-Za-z0-9._-]+\/.+/.test(raw)) return true;
+      return !!allowBare && /^[A-Za-z0-9._-]+\.[A-Za-z0-9]{1,10}$/.test(raw);
+    },
+
+    rewriteMarkdownLocalLinks(text = '') {
+      return String(text || '').replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, target) => {
+        const cleanedTarget = String(target || '').trim();
+        if (!this.isLikelyLocalPath(cleanedTarget, { allowBare: true })) return match;
+        return `[${label}](${this.fileOpenHref(cleanedTarget)})`;
+      });
+    },
+
+    linkifyPlainLocalPaths(text = '') {
+      const parts = String(text || '').split(/(```[\s\S]*?```|`[^`]*`)/g);
+      return parts.map((part, index) => {
+        if (index % 2 === 1) return part;
+        return part.replace(LOCAL_PATH_TOKEN_RE, (match, prefix, token) => {
+          if (!this.isLikelyLocalPath(token, { allowBare: true })) return match;
+          return `${prefix}[${token}](${this.fileOpenHref(token)})`;
+        });
+      }).join('');
+    },
+
+    prepareMarkdownText(text = '') {
+      const linked = this.rewriteMarkdownLocalLinks(text);
+      return this.linkifyPlainLocalPaths(linked);
+    },
+
+    extractRenderedMarkdownHrefs(text = '') {
+      const prepared = this.prepareMarkdownText(text);
+      return [...prepared.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)]
+        .map(match => String(match?.[1] || '').trim())
+        .filter(Boolean);
+    },
+
+    messagePrimaryFileHref(message = null) {
+      const content = typeof message === 'string' ? message : String(message?.content || '');
+      return this.extractRenderedMarkdownHrefs(content).find(href => (
+        href.startsWith('/api/files/open?path=')
+        || href.startsWith('/api/generate/pptx/download?path=')
+        || href.startsWith('/api/generate/pdf/download?path=')
+      )) || '';
+    },
+
+    openMessagePrimaryFile(message = null) {
+      const href = this.messagePrimaryFileHref(message);
+      if (!href) return;
+      const popup = window.open(href, '_blank', 'noopener,noreferrer');
+      if (!popup) {
+        this.showToast?.('Popup blocked. Use the inline file link instead.');
+      }
     },
 
     renderMd(text) {
@@ -67,7 +139,7 @@ function axonHelpersMixin() {
         });
         this._markdownConfigured = true;
       }
-      const html = marked.parse(String(text || ''));
+      const html = marked.parse(this.prepareMarkdownText(text));
       return this.sanitizeRenderedHtml(html);
     },
 

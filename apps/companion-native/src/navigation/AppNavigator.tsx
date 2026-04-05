@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
 
 import {
   fetchMobileVaultProviderKeys,
@@ -8,7 +8,6 @@ import {
   unlockMobileVault,
   unlockMobileVaultWithBiometric,
 } from '@/api/vault';
-import { AppSideBar } from '@/components/AppSideBar';
 import { useAxonMobileRuntime } from '@/features/axon/useAxonMobileRuntime';
 import { useCompanionBootstrap } from '@/features/auth/useCompanionBootstrap';
 import { useStoredCompanionConfig } from '@/features/auth/useStoredCompanionConfig';
@@ -98,16 +97,25 @@ export function AppNavigator() {
     }));
   }, [config.sessionId, config.workspaceId, mission.snapshot?.focus?.workspace?.id, mission.snapshot?.sessions?.[0]?.id]);
 
+  const missionRefreshRef = useRef(mission.refresh);
+  const controlRefreshRef = useRef(control.refresh);
+  useEffect(() => {
+    missionRefreshRef.current = mission.refresh;
+  }, [mission.refresh]);
+  useEffect(() => {
+    controlRefreshRef.current = control.refresh;
+  }, [control.refresh]);
+
   useEffect(() => {
     if (!config.accessToken) return;
     const timer = setInterval(() => {
-      mission.refresh().catch(() => undefined);
-      control.refresh().catch(() => undefined);
+      missionRefreshRef.current(undefined, undefined, { silent: true }).catch(() => undefined);
+      controlRefreshRef.current().catch(() => undefined);
       fetchMobileVaultStatus(config).then(setVaultStatus).catch(() => undefined);
       fetchMobileVaultProviderKeys(config).then(setVaultProviderKeys).catch(() => undefined);
-    }, 6000);
+    }, 15000);
     return () => clearInterval(timer);
-  }, [config, config.accessToken, control.refresh, mission.refresh]);
+  }, [config.accessToken, config.apiBaseUrl]);
 
   const activeSession = mission.snapshot?.sessions?.[0] || null;
   const currentWorkspaceLabel = mission.snapshot?.focus?.workspace?.name || undefined;
@@ -437,8 +445,6 @@ export function AppNavigator() {
     ? (mission.snapshot?.posture === 'urgent' ? colors.danger : mission.snapshot?.posture === 'degraded' ? colors.warning : colors.success)
     : (config.accessToken ? colors.warning : colors.muted);
 
-  const activeTabMeta = tabs.find(([key]) => key === activeTab);
-
   return (
     <KeyboardAvoidingView
       style={styles.shell}
@@ -446,27 +452,10 @@ export function AppNavigator() {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
     >
       <View style={styles.main}>
-        <AppSideBar
-          items={tabs.map(([key, label, hint]) => ({ key, label, hint }))}
-          activeKey={activeTab}
-          statusLabel={statusLabel}
-          statusColor={statusColor}
-          onChange={(key) => setActiveTab(key as TabKey)}
-        />
         <View style={styles.contentShell}>
-          <View style={styles.sectionHeader}>
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>{activeTabMeta?.[1] || 'Mission Control'}</Text>
-            <Text style={[styles.sectionSubtitle, { color: colors.muted }]}>{activeTabMeta?.[2] || ''}</Text>
+          <View style={[styles.fullBleed, { backgroundColor: colors.background }]}>
+            {body}
           </View>
-          <ScrollView
-            contentContainerStyle={[styles.content, styles.contentGrow]}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-            contentInsetAdjustmentBehavior={Platform.OS === 'ios' ? 'always' : undefined}
-          >
-            <View style={styles.stack}>{body}</View>
-          </ScrollView>
         </View>
       </View>
       <RiskChallengeSheet
@@ -492,29 +481,8 @@ const styles = StyleSheet.create({
   contentShell: {
     flex: 1,
   },
-  sectionHeader: {
-    paddingHorizontal: 18,
-    paddingTop: 18,
-    paddingBottom: 6,
-    gap: 4,
-  },
-  sectionTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-  },
-  sectionSubtitle: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  content: {
-    paddingHorizontal: 16,
-    paddingBottom: 140,
-  },
-  contentGrow: {
-    flexGrow: 1,
-  },
-  stack: {
-    gap: 14,
+  fullBleed: {
+    flex: 1,
   },
   heroKicker: {
     fontSize: 11,

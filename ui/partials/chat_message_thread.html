@@ -114,6 +114,10 @@
                         @click="speakMessage(msg.content)"
                         class="console-meta-action"
                         title="Read aloud">Voice</button>
+                <button x-show="msg.role === 'assistant' && messagePrimaryFileHref(msg) && !msg.streaming"
+                        @click="openMessagePrimaryFile(msg)"
+                        class="console-meta-action"
+                        title="Open the primary generated file">Open file</button>
                 <button x-show="msg.role === 'assistant' && !msg.streaming"
                         @click="openCanvas(msg)"
                         class="console-meta-action"
