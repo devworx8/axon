@@ -16,6 +16,10 @@ export function normalizeCompanionSettings(settings: Partial<CompanionSettings> 
     continuousForegroundMonitoring: settings?.continuousForegroundMonitoring ?? true,
     axonVoiceProvider: provider === 'local' || provider === 'device' ? provider : 'cloud',
     axonVoiceIdentity: String(settings?.axonVoiceIdentity || '').trim(),
+    azureSpeechKey: String(settings?.azureSpeechKey || '').trim(),
+    azureSpeechRegion: String(settings?.azureSpeechRegion || 'eastus').trim() || 'eastus',
+    voiceSpeechRate: String(settings?.voiceSpeechRate || '0.85').trim() || '0.85',
+    voiceSpeechPitch: String(settings?.voiceSpeechPitch || '1.04').trim() || '1.04',
     preferredWorkspaceId: settings?.preferredWorkspaceId ?? null,
     apiBaseUrl: settings?.apiBaseUrl || '',
   };

@@ -22,6 +22,10 @@ export function SettingsScreen({
   onToggleContinuousForegroundMonitoring,
   onChangeAxonVoiceProvider,
   onChangeAxonVoiceIdentity,
+  onChangeAzureSpeechKey,
+  onChangeAzureSpeechRegion,
+  onChangeVoiceSpeechRate,
+  onChangeVoiceSpeechPitch,
   vaultStatus,
   vaultProviderKeys,
   vaultBusy,
@@ -52,6 +56,10 @@ export function SettingsScreen({
   onToggleContinuousForegroundMonitoring: (value: boolean) => void;
   onChangeAxonVoiceProvider: (value: 'cloud' | 'local' | 'device') => void;
   onChangeAxonVoiceIdentity: (value: string) => void;
+  onChangeAzureSpeechKey: (value: string) => void;
+  onChangeAzureSpeechRegion: (value: string) => void;
+  onChangeVoiceSpeechRate: (value: string) => void;
+  onChangeVoiceSpeechPitch: (value: string) => void;
   vaultStatus?: VaultStatus | null;
   vaultProviderKeys?: VaultProviderKeys | null;
   vaultBusy?: boolean;
@@ -153,6 +161,10 @@ export function SettingsScreen({
         onToggleContinuousForegroundMonitoring={onToggleContinuousForegroundMonitoring}
         onChangeAxonVoiceProvider={onChangeAxonVoiceProvider}
         onChangeAxonVoiceIdentity={onChangeAxonVoiceIdentity}
+        onChangeAzureSpeechKey={onChangeAzureSpeechKey}
+        onChangeAzureSpeechRegion={onChangeAzureSpeechRegion}
+        onChangeVoiceSpeechRate={onChangeVoiceSpeechRate}
+        onChangeVoiceSpeechPitch={onChangeVoiceSpeechPitch}
       />
 
       <VaultSettingsCard

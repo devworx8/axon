@@ -115,8 +115,8 @@ function axonSettingsMixin() {
           webhook_secret: '',  // never pre-fill
           azure_speech_key: '',  // never pre-fill secrets
           azure_speech_region: s.azure_speech_region || 'eastus',
-          azure_voice: s.azure_voice || 'en-ZA-LeahNeural',
-          voice_speech_rate: s.voice_speech_rate || '0.92',
+          azure_voice: s.azure_voice || 'en-ZA-LukeNeural',
+          voice_speech_rate: s.voice_speech_rate || '0.85',
           voice_speech_pitch: s.voice_speech_pitch || '1.04',
           voice_attention_enabled: this.settingEnabled(s.voice_attention_enabled ?? true),
           voice_attention_autowake: this.settingEnabled(s.voice_attention_autowake ?? true),
@@ -257,8 +257,9 @@ function axonSettingsMixin() {
       if (this.settingsForm.webhook_secret) payload.webhook_secret = this.settingsForm.webhook_secret;
       if (this.settingsForm.azure_speech_key) payload.azure_speech_key = this.settingsForm.azure_speech_key;
       payload.azure_speech_region = this.settingsForm.azure_speech_region || 'eastus';
-      payload.azure_voice = this.settingsForm.azure_voice || 'en-ZA-LeahNeural';
-      payload.voice_speech_rate = String(this.settingsForm.voice_speech_rate || '0.92');
+      payload.azure_voice = this.settingsForm.azure_voice || 'en-ZA-LukeNeural';
+      payload.voice_speech_rate = String(this.settingsForm.voice_speech_rate || '0.85');
+      payload.voice_speech_pitch = String(this.settingsForm.voice_speech_pitch || '1.04');
       payload.voice_attention_enabled = !!this.settingsForm.voice_attention_enabled;
       payload.voice_attention_autowake = !!this.settingsForm.voice_attention_autowake;
       payload.local_stt_model = this.settingsForm.local_stt_model || 'base';

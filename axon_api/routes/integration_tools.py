@@ -10,11 +10,19 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from axon_api.services.voice_tuning import (
+    DEFAULT_VOICE_PITCH,
+    DEFAULT_VOICE_RATE,
+    azure_voice_pitch_attr,
+    azure_voice_rate_attr,
+)
+
 
 class TTSRequest(BaseModel):
     text: str
-    voice: str = "en-ZA-LeahNeural"
-    rate: float = 0.92
+    voice: str = "en-ZA-LukeNeural"
+    rate: float | str = DEFAULT_VOICE_RATE
+    pitch: float | str = DEFAULT_VOICE_PITCH
 
 
 class VoiceSpeakRequest(BaseModel):
@@ -34,20 +42,6 @@ class WebhookTestRequest(BaseModel):
 class FileWriteBody(BaseModel):
     path: str
     content: str
-
-
-def _normalized_voice_rate(value: float | int | str | None) -> float:
-    try:
-        rate = float(value)
-    except (TypeError, ValueError):
-        rate = 0.85
-    return max(0.50, min(1.15, rate))
-
-
-def _azure_voice_rate_attr(value: float | int | str | None) -> str:
-    rate = _normalized_voice_rate(value)
-    delta = int(round((rate - 1.0) * 100))
-    return f"{delta:+d}%"
 
 
 class IntegrationToolsRouteHandlers:
@@ -92,9 +86,10 @@ class IntegrationToolsRouteHandlers:
 
         safe_voice = escape(body.voice, {"'": "&apos;", '"': "&quot;"})
         safe_text = escape(body.text[:900])
-        rate_attr = _azure_voice_rate_attr(body.rate)
+        rate_attr = azure_voice_rate_attr(body.rate)
+        pitch_attr = azure_voice_pitch_attr(body.pitch)
         ssml = f"""<speak version='1.0' xml:lang='en-ZA'>
-        <voice name='{safe_voice}'><prosody rate='{rate_attr}'>{safe_text}</prosody></voice>
+        <voice name='{safe_voice}'><prosody rate='{rate_attr}' pitch='{pitch_attr}'>{safe_text}</prosody></voice>
     </speak>"""
         tts_url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
 
@@ -149,13 +144,24 @@ class IntegrationToolsRouteHandlers:
     async def voice_status(self):
         async with self._db.get_db() as conn:
             settings = await self._db.get_all_settings(conn)
-        return self._local_voice_status(settings)
+        status = self._local_voice_status(settings)
+        # Augment with cloud transcription availability (Azure Speech STT)
+        # Cloud STT also needs ffmpeg to convert uploaded audio to WAV
+        azure_key = (settings or {}).get("azure_speech_key", "")
+        azure_region = (settings or {}).get("azure_speech_region", "")
+        cloud_transcription = bool(azure_key and azure_region and status.get("ffmpeg_available"))
+        status["cloud_transcription_available"] = cloud_transcription
+        status["transcription_ready"] = status["transcription_available"] or cloud_transcription
+        return status
 
     async def voice_transcribe(self, file: UploadFile = File(...), language: str = Query(default="en")):
         async with self._db.get_db() as conn:
             settings = await self._db.get_all_settings(conn)
         status = self._local_voice_status(settings)
-        if not status["transcription_available"]:
+        azure_key = (settings or {}).get("azure_speech_key", "")
+        azure_region = (settings or {}).get("azure_speech_region", "eastus")
+        cloud_stt = bool(azure_key and azure_region)
+        if not status["transcription_available"] and not cloud_stt:
             raise HTTPException(503, status["detail"])
 
         suffix = Path(file.filename or "voice.webm").suffix or ".webm"
@@ -172,13 +178,33 @@ class IntegrationToolsRouteHandlers:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
                 wav_path = wav_file.name
             self._run_ffmpeg_to_wav(input_path, wav_path)
-            text, engine = self._transcribe_local_audio(
-                wav_path,
-                model_name=status["stt_model"],
-                language=language or status["language"],
-            )
+
+            # Try local Whisper first, fall back to Azure STT
+            if status["transcription_available"]:
+                text, engine = self._transcribe_local_audio(
+                    wav_path,
+                    model_name=status["stt_model"],
+                    language=language or status["language"],
+                )
+            elif cloud_stt:
+                from axon_api.services.azure_speech import transcribe_azure_speech
+                import aiohttp as _aiohttp
+                # Azure STT needs a full locale code, not bare "en"
+                azure_lang = language if language and "-" in language else "en-US"
+                text = await transcribe_azure_speech(
+                    wav_path,
+                    region=azure_region,
+                    key=azure_key,
+                    language=azure_lang,
+                    aiohttp_module=_aiohttp,
+                    http_exception_cls=HTTPException,
+                )
+                engine = "azure-stt"
+            else:
+                raise HTTPException(503, "No transcription backend available")
+
             self._local_voice_state.update({"last_engine": engine, "last_error": "", "updated_at": self._now_iso()})
-            return {"text": text, "engine": engine, "language": language or status["language"]}
+            return {"text": text, "engine": engine, "language": language or status.get("language", "en")}
         except HTTPException as exc:
             self._local_voice_state.update({"last_error": str(exc.detail), "updated_at": self._now_iso()})
             raise

@@ -609,7 +609,17 @@
 }
 
 .stark-hud-edge-top { top: 8px; }
-.stark-hud-edge-bottom { bottom: 60px; }
+.stark-hud-edge-bottom {
+  bottom: 60px;
+  opacity: 0.42;
+  background: linear-gradient(90deg,
+    transparent,
+    rgba(0, 212, 255, 0.14) 20%,
+    rgba(0, 212, 255, 0.05) 50%,
+    rgba(0, 212, 255, 0.14) 80%,
+    transparent
+  );
+}
 
 /* ── Stark Vignette (edge darkening for depth) ───────────────── */
 .stark-vignette {
@@ -634,7 +644,11 @@
 }
 
 .stark-hud-label-tl { top: 16px; left: 16px; }
-.stark-hud-label-br { bottom: 68px; right: 16px; }
+.stark-hud-label-br {
+  bottom: 68px;
+  right: 16px;
+  color: rgba(0, 212, 255, 0.24);
+}
 
 /* ── Arc Reactor Spinner (for loading states) ────────────────── */
 .stark-arc-spinner {

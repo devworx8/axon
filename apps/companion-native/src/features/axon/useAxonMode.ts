@@ -228,7 +228,7 @@ export function useAxonMode(
       && settings.axonModeEnabled
       && effectiveStatus?.armed
       && effectiveStatus?.continuous_monitoring_enabled
-      && effectiveStatus?.local_voice_ready
+      && (effectiveStatus?.transcription_ready || effectiveStatus?.local_voice_ready)
       && appState.current === 'active',
     );
     if (!shouldListen) {
@@ -383,6 +383,7 @@ export function useAxonMode(
     effectiveStatus?.armed,
     effectiveStatus?.continuous_monitoring_enabled,
     effectiveStatus?.local_voice_ready,
+    effectiveStatus?.transcription_ready,
     effectiveStatus?.wake_phrase,
     pushEvent,
     settings.axonModeEnabled,

@@ -215,6 +215,52 @@ class MobileAxonModeServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(exc.exception.status_code, 400)
         self.assertIn("Speech text is required", str(exc.exception.detail))
 
+    async def test_build_mobile_axon_audio_payload_applies_configured_voice_rate_and_pitch(self):
+        synth = AsyncMock(return_value=(b"mp3-bytes", "audio/mpeg"))
+        with patch.object(
+            mobile_axon_audio,
+            "get_all_settings",
+            AsyncMock(
+                return_value={
+                    "azure_speech_key": "test",
+                    "azure_speech_region": "eastus",
+                    "voice_speech_rate": "0.85",
+                    "voice_speech_pitch": "1.04",
+                }
+            ),
+        ), patch.object(
+            mobile_axon_audio,
+            "get_companion_presence",
+            AsyncMock(return_value={"meta_json": '{"axon_mode":{"voice_provider_preference":"cloud"}}'}),
+        ), patch.object(
+            mobile_axon_audio,
+            "voice_dependency_snapshot",
+            return_value={"synthesis_available": False},
+        ), patch.object(
+            mobile_axon_audio,
+            "resolve_axon_voice_profile",
+            return_value={
+                "voice_provider": "cloud",
+                "voice_provider_detail": "Azure speech ready · en-ZA-LeahNeural",
+                "voice_identity": "en-ZA-LeahNeural",
+                "local_ready": False,
+            },
+        ), patch.object(
+            mobile_axon_audio,
+            "synthesize_azure_speech",
+            synth,
+        ):
+            payload = await mobile_axon_audio.build_mobile_axon_audio_payload(
+                object(),
+                device_id=7,
+                text="Status report",
+            )
+
+        self.assertEqual(payload["provider"], "cloud")
+        self.assertEqual(payload["media_type"], "audio/mpeg")
+        self.assertEqual(synth.await_args.kwargs["rate"], "0.85")
+        self.assertEqual(synth.await_args.kwargs["pitch"], "1.04")
+
 
 class MobileAxonRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_mobile_axon_status_returns_snapshot(self):

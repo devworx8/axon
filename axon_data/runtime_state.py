@@ -39,49 +39,65 @@ def _row_value(row, key: str, default: str = "") -> str:
 async def _fetchone_compat(cursor):
     if cursor is None:
         return None
+    fetchone = getattr(cursor, "fetchone", None)
+    if fetchone is not None:
+        result = fetchone()
+        if inspect.isawaitable(result):
+            return await result
+        return result
     raw_cursor = getattr(cursor, "_cursor", None)
     if raw_cursor is not None:
         try:
             return raw_cursor.fetchone()
         except Exception:
-            pass
-    fetchone = getattr(cursor, "fetchone", None)
-    if fetchone is None:
-        return None
-    result = fetchone()
-    if inspect.isawaitable(result):
-        return await result
-    return result
+            return None
+    return None
+
+
+async def _execute_fetchone_compat(db, sql: str, params=()):
+    if not isinstance(db, aiosqlite.Connection):
+        raw_conn = getattr(db, "_conn", None)
+        if raw_conn is not None:
+            cursor = raw_conn.execute(sql, params)
+            try:
+                return cursor.fetchone()
+            finally:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+    cursor = await db.execute(sql, params)
+    return await _fetchone_compat(cursor)
 
 
 async def compute_workspace_revision(db: aiosqlite.Connection, workspace_id: int | None) -> str:
     if workspace_id is None:
         return "global"
-    project_cur = await db.execute(
+    project_row = await _execute_fetchone_compat(
+        db,
         "SELECT COALESCE(updated_at, created_at, '') AS stamp FROM projects WHERE id = ?",
         (workspace_id,),
     )
-    project_row = await _fetchone_compat(project_cur)
-    prompt_cur = await db.execute(
+    prompt_row = await _execute_fetchone_compat(
+        db,
         "SELECT COALESCE(MAX(updated_at), MAX(created_at), '') AS stamp FROM prompts WHERE project_id = ?",
         (workspace_id,),
     )
-    prompt_row = await _fetchone_compat(prompt_cur)
-    task_cur = await db.execute(
+    task_row = await _execute_fetchone_compat(
+        db,
         "SELECT COALESCE(MAX(updated_at), MAX(created_at), '') AS stamp FROM tasks WHERE project_id = ?",
         (workspace_id,),
     )
-    task_row = await _fetchone_compat(task_cur)
-    resource_cur = await db.execute(
+    resource_row = await _execute_fetchone_compat(
+        db,
         "SELECT COALESCE(MAX(updated_at), MAX(created_at), '') AS stamp FROM resources WHERE workspace_id = ?",
         (workspace_id,),
     )
-    resource_row = await _fetchone_compat(resource_cur)
-    memory_cur = await db.execute(
+    memory_row = await _execute_fetchone_compat(
+        db,
         "SELECT COALESCE(MAX(updated_at), MAX(created_at), '') AS stamp FROM memory_items WHERE workspace_id = ? OR workspace_id IS NULL",
         (workspace_id,),
     )
-    memory_row = await _fetchone_compat(memory_cur)
     payload = "|".join(
         _row_value(item, "stamp")
         for item in (

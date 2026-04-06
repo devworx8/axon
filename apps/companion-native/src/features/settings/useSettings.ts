@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { pushVoiceSettings } from '@/api/axon';
 import { getSuggestedApiBaseUrl } from '@/api/client';
 import { CompanionConfig } from '@/types/companion';
 import { loadCompanionSettings, normalizeCompanionSettings, saveCompanionSettings } from './settingsStore';
@@ -14,6 +15,10 @@ export type CompanionSettings = {
   continuousForegroundMonitoring: boolean;
   axonVoiceProvider: 'cloud' | 'local' | 'device';
   axonVoiceIdentity: string;
+  azureSpeechKey: string;
+  azureSpeechRegion: string;
+  voiceSpeechRate: string;
+  voiceSpeechPitch: string;
   preferredWorkspaceId: number | null;
   apiBaseUrl: string;
 };
@@ -28,6 +33,10 @@ const DEFAULT_SETTINGS: CompanionSettings = {
   continuousForegroundMonitoring: true,
   axonVoiceProvider: 'cloud',
   axonVoiceIdentity: '',
+  azureSpeechKey: '',
+  azureSpeechRegion: 'eastus',
+  voiceSpeechRate: '0.85',
+  voiceSpeechPitch: '1.04',
   preferredWorkspaceId: null,
   apiBaseUrl: '',
 };
@@ -63,6 +72,28 @@ export function useSettings(config: CompanionConfig, onConfigChange: (next: Comp
   useEffect(() => {
     saveCompanionSettings(settings).catch(() => undefined);
   }, [settings]);
+
+  /* ── Push voice-relevant settings to backend when changed ── */
+  const prevVoiceSettingsRef = useRef('');
+  useEffect(() => {
+    const voicePayload: Record<string, string | null> = {
+      azure_speech_key: settings.azureSpeechKey || null,
+      azure_speech_region: settings.azureSpeechRegion || null,
+      voice_speech_rate: settings.voiceSpeechRate || null,
+      voice_speech_pitch: settings.voiceSpeechPitch || null,
+    };
+    const sig = JSON.stringify(voicePayload);
+    if (sig === prevVoiceSettingsRef.current) return;
+    prevVoiceSettingsRef.current = sig;
+    if (!config.accessToken) return;
+    pushVoiceSettings(voicePayload, config).catch(() => undefined);
+  }, [
+    settings.azureSpeechKey,
+    settings.azureSpeechRegion,
+    settings.voiceSpeechRate,
+    settings.voiceSpeechPitch,
+    config,
+  ]);
 
   useEffect(() => {
     setSettings(current => normalizeCompanionSettings({

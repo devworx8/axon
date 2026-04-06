@@ -47,11 +47,12 @@ import provider_registry
 import resource_bank
 import memory_engine
 from model_router import resolve_model_for_role
-from axon_api import route_registry, ui_renderer
+from axon_api import route_registry, settings_models, ui_renderer
 from axon_api.services import auth_runtime_state as auth_runtime_state_service
 from axon_api.services import ai_runtime_helpers as ai_runtime_helpers_service
 from axon_api.services import auto_session_runtime as auto_session_runtime_service
 from axon_api.services import auto_sessions as auto_session_service
+from axon_api.services import azure_speech as azure_speech_service
 from axon_api.services import browser_runtime_state
 from axon_api.services import chat_history_runtime as chat_history_runtime_service
 from axon_api.services import chat_message_state
@@ -73,7 +74,7 @@ from axon_api.services import runtime_truth as runtime_truth_service
 from axon_api.services import settings_runtime_state as settings_runtime_state_service
 from axon_api.services import task_sandboxes as task_sandbox_service
 from axon_api.services import workspace_sandbox_state as workspace_sandbox_service
-from axon_api.routes import agent_control, agent_routes, auto_session_routes, chat_routes, runtime_cli as runtime_cli_routes, settings_memory, task_sandbox_routes, voice_status, workspace_projects
+from axon_api.routes import agent_control, agent_routes, auto_session_routes, chat_routes, integration_tools, runtime_cli as runtime_cli_routes, settings_memory, task_sandbox_routes, voice_status, workspace_projects
 from axon_core import agent_fast_path, agent_runtime_state, approval_actions
 from axon_core.chat_context import select_history_for_chat
 from axon_core.cli_command import cli_session_persistence_enabled
@@ -2050,89 +2051,9 @@ async def get_settings():
     return await _settings_memory_handlers.get_settings()
 
 
-class SettingsUpdate(BaseModel):
-    anthropic_api_key: Optional[str] = None
-    anthropic_base_url: Optional[str] = None
-    anthropic_api_model: Optional[str] = None
-    scan_interval_hours: Optional[str] = None
-    morning_digest_hour: Optional[str] = None
-    projects_root: Optional[str] = None
-    notify_desktop: Optional[str] = None
-    ai_backend: Optional[str] = None
-    api_provider: Optional[str] = None
-    claude_cli_path: Optional[str] = None
-    ollama_url: Optional[str] = None
-    ollama_runtime_mode: Optional[str] = None
-    ollama_model: Optional[str] = None
-    code_model: Optional[str] = None
-    general_model: Optional[str] = None
-    reasoning_model: Optional[str] = None
-    embeddings_model: Optional[str] = None
-    vision_model: Optional[str] = None
-    resource_storage_path: Optional[str] = None
-    resource_upload_max_mb: Optional[str] = None
-    resource_url_import_enabled: Optional[bool] = None
-    live_feed_enabled: Optional[bool] = None
-    stable_domain_enabled: Optional[bool] = None
-    stable_domain: Optional[str] = None
-    public_base_url: Optional[str] = None
-    tunnel_mode: Optional[str] = None
-    cloudflare_tunnel_token: Optional[str] = None
-    terminal_default_mode: Optional[str] = None
-    terminal_command_timeout_seconds: Optional[str] = None
-    cloud_agents_enabled: Optional[bool] = None
-    openai_gpts_enabled: Optional[bool] = None
-    gemini_gems_enabled: Optional[bool] = None
-    generic_api_enabled: Optional[bool] = None
-    openai_api_key: Optional[str] = None
-    openai_base_url: Optional[str] = None
-    openai_api_model: Optional[str] = None
-    gemini_api_key: Optional[str] = None
-    gemini_base_url: Optional[str] = None
-    gemini_api_model: Optional[str] = None
-    generic_api_key: Optional[str] = None
-    generic_api_url: Optional[str] = None
-    generic_api_model: Optional[str] = None
-    github_token: Optional[str] = None
-    slack_webhook_url: Optional[str] = None
-    webhook_urls: Optional[str] = None
-    webhook_secret: Optional[str] = None
-    azure_speech_key: Optional[str] = None
-    azure_speech_region: Optional[str] = None
-    azure_voice: Optional[str] = None
-    alerts_enabled: Optional[bool] = None
-    alerts_desktop: Optional[bool] = None
-    alerts_mobile: Optional[bool] = None
-    alerts_missions: Optional[bool] = None
-    alerts_runtime: Optional[bool] = None
-    alerts_morning_brief: Optional[bool] = None
-    alerts_tunnel: Optional[bool] = None
-    dash_bridge_enabled: Optional[bool] = None
-    dash_bridge_url: Optional[str] = None
-    dash_bridge_token: Optional[str] = None
-    dash_bridge_mode: Optional[str] = None
-
-
 @app.post("/api/settings")
-async def update_settings(body: SettingsUpdate):
-    async with devdb.get_db() as conn:
-        data = body.model_dump(exclude_none=True)
-        for key, value in data.items():
-            if isinstance(value, bool):
-                await devdb.set_setting(conn, key, "1" if value else "0")
-            else:
-                await devdb.set_setting(conn, key, str(value))
-
-        # Restart scheduler with new settings if timing changed
-        if "scan_interval_hours" in data or "morning_digest_hour" in data:
-            settings = await devdb.get_all_settings(conn)
-            scan_h = int(settings.get("scan_interval_hours", 6))
-            digest_h = int(settings.get("morning_digest_hour", 8))
-            scheduler = sched_module.get_scheduler()
-            if scheduler.running:
-                sched_module.setup_scheduler(scan_h, digest_h)
-
-        return {"updated": list(data.keys())}
+async def update_settings(body: settings_models.SettingsUpdate):
+    return await _settings_memory_handlers.update_settings(body)
 
 
 class CloudProviderTestRequest(BaseModel):
@@ -2843,36 +2764,10 @@ async def tunnel_stop():
 
 # ─── Azure TTS proxy ─────────────────────────────────────────────────────────
 
-from fastapi.responses import Response as FastAPIResponse
-
-
-class TTSRequest(BaseModel):
-    text: str
-    voice: str = "en-ZA-LeahNeural"   # South African English
-    rate: float = 0.92
-    pitch: str = ""                    # e.g. "+5%" or "-2%"
-    region: str = ""
-
-
-async def _issue_azure_speech_token(region: str, key: str) -> str:
-    """Mint a short-lived Azure Speech auth token."""
-    import aiohttp
-    token_url = f"https://{region}.api.cognitive.microsoft.com/sts/v1.0/issueToken"
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            token_url,
-            headers={"Ocp-Apim-Subscription-Key": key},
-            timeout=aiohttp.ClientTimeout(total=15),
-        ) as r:
-            if r.status != 200:
-                detail = await r.text()
-                raise HTTPException(400, f"Azure auth failed ({r.status})")
-            return await r.text()
-
 
 @app.post("/api/tts")
-async def azure_tts(body: TTSRequest):
-    """Proxy text-to-speech via Azure Cognitive Services."""
+async def azure_tts(body: integration_tools.TTSRequest):
+    """Compatibility facade for the extracted Azure speech service."""
     async with devdb.get_db() as conn:
         settings = await devdb.get_all_settings(conn)
     key = settings.get("azure_speech_key", "")
@@ -2880,42 +2775,24 @@ async def azure_tts(body: TTSRequest):
     if not key:
         raise HTTPException(400, "Azure Speech key not set in Settings")
 
-    import html as _html
-    safe_text = _html.escape(body.text[:2000])
-    rate_delta = max(-50, min(15, int(round((float(body.rate or 0.85) - 1.0) * 100))))
-    rate_attr = f"{rate_delta:+d}%"
-    pitch_attr = f' pitch="{_html.escape(body.pitch)}"' if body.pitch else ' pitch="+3%"'
-    ssml = (
-        f"<speak version='1.0' xml:lang='en-ZA'>"
-        f"<voice name='{_html.escape(body.voice)}'>"
-        f"<prosody rate='{rate_attr}'{pitch_attr}>"
-        f"{safe_text}"
-        f"</prosody></voice></speak>"
-    )
-    tts_url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
-
-    import aiohttp
     try:
-        token = await _issue_azure_speech_token(region, key)
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                tts_url,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/ssml+xml",
-                    "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
-                },
-                data=ssml.encode("utf-8"),
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as r:
-                if r.status != 200:
-                    raise HTTPException(502, "Azure TTS failed")
-                audio = await r.read()
-        return FastAPIResponse(content=audio, media_type="audio/mpeg")
+        import aiohttp
+
+        audio, media_type = await azure_speech_service.synthesize_azure_speech(
+            body.text,
+            voice=body.voice,
+            region=region,
+            key=key,
+            rate=body.rate,
+            pitch=body.pitch,
+            aiohttp_module=aiohttp,
+            http_exception_cls=HTTPException,
+        )
+        return Response(content=audio, media_type=media_type)
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(502, f"TTS error: {e}")
+    except Exception as exc:
+        raise HTTPException(502, f"TTS error: {exc}")
 
 
 @app.get("/api/stt/token")
@@ -2927,7 +2804,19 @@ async def azure_stt_token():
     region = settings.get("azure_speech_region", "eastus")
     if not key:
         raise HTTPException(400, "Azure Speech key not set in Settings")
-    token = await _issue_azure_speech_token(region, key)
+    try:
+        import aiohttp
+
+        token = await azure_speech_service.issue_azure_speech_token(
+            region,
+            key,
+            aiohttp_module=aiohttp,
+            http_exception_cls=HTTPException,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, f"Azure STT token error: {exc}")
     return {
         "token": token,
         "region": region,

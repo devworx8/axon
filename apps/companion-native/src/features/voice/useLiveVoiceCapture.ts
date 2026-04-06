@@ -78,8 +78,8 @@ export function useLiveVoiceCapture(
     if (!enabled) {
       throw new Error('Voice is disabled in settings.');
     }
-    if (!status?.transcription_available) {
-      throw new Error(status?.detail || 'Axon local transcription is not ready yet.');
+    if (!(status?.transcription_ready || status?.transcription_available)) {
+      throw new Error(status?.detail || 'No transcription backend available (local or cloud).');
     }
     const permission = await requestRecordingPermissionsAsync();
     if (!permission.granted) {
@@ -180,7 +180,7 @@ export function useLiveVoiceCapture(
     lastEngine,
     isRecording: Boolean(recorderState.isRecording),
     durationLabel,
-    canUseLiveVoice: Boolean(enabled && voiceStatus?.transcription_available),
+    canUseLiveVoice: Boolean(enabled && (voiceStatus?.transcription_ready || voiceStatus?.transcription_available)),
     refreshVoiceStatus,
     startRecording,
     stopRecordingToTranscript,

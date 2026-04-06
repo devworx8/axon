@@ -1,11 +1,13 @@
-import { Dispatch, SetStateAction, useEffect, useRef, useState } from 'react';
+import { Dispatch, SetStateAction, useEffect, useState } from 'react';
 
 import { fetchCompanionIdentity } from '@/api/companion';
 import { fetchMobileVaultProviderKeys, fetchMobileVaultStatus } from '@/api/vault';
 import {
-  clearCompanionSession,
-  COMPANION_SESSION_EXPIRED_MESSAGE,
-  isCompanionAuthErrorMessage,
+  CompanionLinkState,
+  COMPANION_REPAIR_REQUIRED_MESSAGE,
+  hasStoredCompanionPairing,
+  isCompanionOfflineErrorMessage,
+  isCompanionRepairRequiredMessage,
 } from '@/features/auth/sessionState';
 import type {
   CompanionConfig,
@@ -18,6 +20,7 @@ type RestoreSession = (options?: { force?: boolean; clearOnFailure?: boolean }) 
 
 const BOOTSTRAP_IDENTITY_TIMEOUT_MS = 12_000;
 const BOOTSTRAP_REFRESH_TIMEOUT_MS = 10_000;
+const BOOTSTRAP_RETRY_DELAY_MS = 8_000;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -59,31 +62,65 @@ export function useCompanionBootstrap({
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [verifiedPairing, setVerifiedPairing] = useState(false);
   const [verifyingPairing, setVerifyingPairing] = useState(false);
-  const wasVerifiedRef = useRef(false);
-  const authFailureRef = useRef(0);
+  const [linkState, setLinkState] = useState<CompanionLinkState>('unpaired');
+  const [retryNonce, setRetryNonce] = useState(0);
+
+  const storedPairing = hasStoredCompanionPairing(config);
+  const canAttemptBootstrap = Boolean(
+    String(config.accessToken || '').trim()
+    || String(config.tokenPair?.refresh_token || '').trim()
+    || (String(config.deviceKey || '').trim() && String(config.restoreToken || '').trim()),
+  );
 
   useEffect(() => {
-    if (!config.accessToken) {
+    if (!storedPairing || linkState !== 'offline' || verifyingPairing) {
+      return undefined;
+    }
+    const timer = setTimeout(() => {
+      setRetryNonce((current) => current + 1);
+    }, BOOTSTRAP_RETRY_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [linkState, storedPairing, verifyingPairing]);
+
+  useEffect(() => {
+    if (!canAttemptBootstrap) {
       setVerifiedPairing(false);
       setVerifyingPairing(false);
-      setBootstrapError(null);
-      wasVerifiedRef.current = false;
-      authFailureRef.current = 0;
+      setBootstrapError(storedPairing ? COMPANION_REPAIR_REQUIRED_MESSAGE : null);
+      setLinkState(storedPairing ? 'repair_required' : 'unpaired');
       return;
     }
+
     let cancelled = false;
 
     (async () => {
       setVerifyingPairing(true);
+      setBootstrapError(null);
+      setLinkState('checking');
+
       try {
         let activeConfig = config;
+        if (!String(activeConfig.accessToken || '').trim()) {
+          const restored = await restoreSession({ force: true, clearOnFailure: false });
+          if (restored) {
+            activeConfig = restored;
+          }
+        }
+
         let identity = await withTimeout(
           fetchCompanionIdentity(activeConfig),
           BOOTSTRAP_IDENTITY_TIMEOUT_MS,
           'Axon Online link check timed out.',
         );
-        if ((!identity.device || !identity.auth_session) && activeConfig.tokenPair?.refresh_token) {
-          const restored = await restoreSession({ force: true });
+
+        if (
+          (!identity.device || !identity.auth_session)
+          && (
+            String(activeConfig.tokenPair?.refresh_token || '').trim()
+            || (String(activeConfig.deviceKey || '').trim() && String(activeConfig.restoreToken || '').trim())
+          )
+        ) {
+          const restored = await restoreSession({ force: true, clearOnFailure: false });
           if (restored) {
             activeConfig = restored;
             identity = await withTimeout(
@@ -93,14 +130,16 @@ export function useCompanionBootstrap({
             );
           }
         }
+
         if (!identity.device || !identity.auth_session) {
-          throw new Error(COMPANION_SESSION_EXPIRED_MESSAGE);
+          throw new Error(COMPANION_REPAIR_REQUIRED_MESSAGE);
         }
         if (cancelled) return;
+
         setVerifiedPairing(true);
-        wasVerifiedRef.current = true;
-        authFailureRef.current = 0;
+        setLinkState('linked');
         setBootstrapError(null);
+
         const nextDevice = identity.device || null;
         const nextSession = (identity.sessions || [])[0] || null;
         setConfig((current) => {
@@ -129,12 +168,14 @@ export function useCompanionBootstrap({
             apiBaseUrl: current.apiBaseUrl || '',
           };
         });
+
         if (nextDevice?.name) {
           setDeviceName(nextDevice.name);
         }
         if (identity.presence) {
           setPresence(identity.presence);
         }
+
         void Promise.allSettled([
           withTimeout(
             refreshMission(
@@ -171,18 +212,19 @@ export function useCompanionBootstrap({
           }
         });
       } catch (err) {
-        if (!cancelled) {
-          const message = err instanceof Error ? err.message : 'Unable to reach live Axon.';
-          const authError = isCompanionAuthErrorMessage(message);
-          if (authError) {
-            authFailureRef.current += 1;
-          }
-          const shouldDrop = authError && authFailureRef.current >= 2;
-          if (shouldDrop || !wasVerifiedRef.current) {
-            setVerifiedPairing(false);
-          }
-          setBootstrapError(message);
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : 'Unable to reach live Axon.';
+        setVerifiedPairing(false);
+        setBootstrapError(message);
+        if (isCompanionRepairRequiredMessage(message)) {
+          setLinkState('repair_required');
+          return;
         }
+        if (storedPairing || isCompanionOfflineErrorMessage(message)) {
+          setLinkState('offline');
+          return;
+        }
+        setLinkState('unpaired');
       } finally {
         if (!cancelled) {
           setVerifyingPairing(false);
@@ -194,18 +236,23 @@ export function useCompanionBootstrap({
       cancelled = true;
     };
   }, [
+    canAttemptBootstrap,
     config.accessToken,
     config.apiBaseUrl,
+    config.deviceKey,
+    config.restoreToken,
     config.tokenPair?.refresh_token,
     refreshControl,
     refreshMission,
     restoreSession,
+    retryNonce,
     setConfig,
     setDeviceName,
     setPresence,
     setVaultProviderKeys,
     setVaultStatus,
+    storedPairing,
   ]);
 
-  return { bootstrapError, verifiedPairing, verifyingPairing };
+  return { bootstrapError, verifiedPairing, verifyingPairing, linkState };
 }

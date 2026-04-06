@@ -22,7 +22,7 @@ export function AuthScreen({ apiBaseUrl, onChangeApiBaseUrl, deviceName, onChang
   const { colors } = useTheme();
   return (
     <SurfaceCard>
-      <SurfaceHeader title="Device auth" subtitle="Pair this phone with Axon Online and resume live sessions securely." />
+      <SurfaceHeader title="Device auth" subtitle="Pair this phone once, then let Axon restore it silently whenever the desktop is reachable." />
       <View style={styles.row}>
         <StatusPill label="Axon Online" tone="ok" />
         <StatusPill label="Native" tone="neutral" />

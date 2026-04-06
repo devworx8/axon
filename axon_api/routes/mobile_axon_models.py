@@ -46,3 +46,7 @@ class MobileAxonSpeakRequest(BaseModel):
     text: str
     preferred_provider: str = ""
     voice_identity: str = ""
+
+
+class MobileVoiceSettingsRequest(BaseModel):
+    settings: dict[str, str | None] = Field(default_factory=dict)

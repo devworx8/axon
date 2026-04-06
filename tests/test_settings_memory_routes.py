@@ -80,6 +80,33 @@ class SettingsMemoryRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(db_module.settings["vercel_api_token"], "vercel_secret_token")
         self.assertEqual(payload["updated"], ["vercel_api_token"])
 
+    async def test_update_settings_persists_voice_runtime_fields(self):
+        db_module = _FakeDbModule()
+        handlers = self._handlers(db_module)
+
+        payload = await handlers.update_settings(
+            SettingsUpdate(
+                voice_speech_rate="0.91",
+                voice_speech_pitch="1.08",
+                voice_attention_enabled=True,
+                voice_attention_autowake=False,
+                local_stt_model="small",
+                local_stt_language="en",
+                local_tts_model_path="/tmp/piper.onnx",
+                local_tts_config_path="/tmp/piper.onnx.json",
+            )
+        )
+
+        self.assertEqual(db_module.settings["voice_speech_rate"], "0.91")
+        self.assertEqual(db_module.settings["voice_speech_pitch"], "1.08")
+        self.assertEqual(db_module.settings["voice_attention_enabled"], "1")
+        self.assertEqual(db_module.settings["voice_attention_autowake"], "0")
+        self.assertEqual(db_module.settings["local_stt_model"], "small")
+        self.assertEqual(db_module.settings["local_stt_language"], "en")
+        self.assertEqual(db_module.settings["local_tts_model_path"], "/tmp/piper.onnx")
+        self.assertEqual(db_module.settings["local_tts_config_path"], "/tmp/piper.onnx.json")
+        self.assertIn("voice_speech_rate", payload["updated"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from axon_api.routes import companion, connectors, file_links, mcp_routes, media_routes, mobile_control, mobile_mission, mobile_vault
+from axon_api.routes import companion, companion_access, connectors, file_links, mcp_routes, media_routes, mobile_control, mobile_mission, mobile_vault
 
 
 def register_core_routers(
@@ -17,6 +17,7 @@ def register_core_routers(
     app.include_router(agent_control_router)
     app.include_router(connectors.router)
     app.include_router(companion.router)
+    app.include_router(companion_access.router)
     app.include_router(mobile_control.router)
     app.include_router(mobile_mission.router)
     app.include_router(mcp_routes.router)

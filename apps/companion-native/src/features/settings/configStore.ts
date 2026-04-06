@@ -9,6 +9,7 @@ function normalizeConfig(config: CompanionConfig): CompanionConfig {
     apiBaseUrl: config.apiBaseUrl || '',
     accessToken: config.accessToken || '',
     tokenPair: config.tokenPair,
+    restoreToken: config.restoreToken || '',
     deviceId: config.deviceId ?? null,
     deviceKey: config.deviceKey || '',
     deviceName: config.deviceName || '',

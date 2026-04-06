@@ -2,6 +2,7 @@ export type CompanionConfig = {
   apiBaseUrl?: string;
   accessToken?: string;
   tokenPair?: CompanionTokenPair;
+  restoreToken?: string;
   deviceId?: number | null;
   deviceKey?: string;
   deviceName?: string;
@@ -39,6 +40,7 @@ export type CompanionPairResponse = {
   access_token: string;
   refresh_token: string;
   expires_at: string;
+  restore_token?: string;
 };
 
 export type CompanionPresence = {
@@ -167,6 +169,8 @@ export type LocalVoiceStatus = {
   available?: boolean;
   preferred_mode?: string;
   transcription_available?: boolean;
+  cloud_transcription_available?: boolean;
+  transcription_ready?: boolean;
   synthesis_available?: boolean;
   ffmpeg_available?: boolean;
   faster_whisper_available?: boolean;

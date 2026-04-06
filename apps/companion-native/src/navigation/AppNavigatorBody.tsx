@@ -2,11 +2,14 @@ import React from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AttentionScreen } from '@/features/attention/AttentionScreen';
+import { activeGateError, sessionGateCopy } from '@/features/auth/gateCopy';
+import { CompanionOfflineGate } from '@/features/auth/CompanionOfflineGate';
 import { CompanionSessionGate } from '@/features/auth/CompanionSessionGate';
-import { MissionControlScreen } from '@/features/mission/MissionControlScreen';
+import type { CompanionLinkState } from '@/features/auth/sessionState';
+import { MissionControlScreen } from '@/features/mission/MissionControlDashboard';
 import { ProjectsScreen } from '@/features/projects/ProjectsScreen';
 import { SessionScreen } from '@/features/session/SessionScreen';
-import { VoiceScreen } from '@/features/voice/VoiceScreen';
+import { VoiceScreen } from '@/features/voice/VoiceCommandCenter';
 import { SettingsTabScreen } from '@/navigation/SettingsTabScreen';
 import type {
   AxonModeStatus,
@@ -20,31 +23,6 @@ import type {
 import type { CompanionSettings } from '@/features/settings/useSettings';
 
 type TabKey = 'mission' | 'voice' | 'attention' | 'projects' | 'sessions' | 'settings';
-
-function sessionGateCopy(activeTab: TabKey) {
-  if (activeTab === 'voice') {
-    return {
-      title: 'Reconnect Axon voice',
-      subtitle: 'Voice capture and Axon mode need a verified companion session before this phone can call protected routes.',
-      detail: 'If the saved session expired or this device was revoked, pair again and Voice will resume from the same mobile shell.',
-    };
-  }
-  return {
-    title: 'Pair your mobile operator',
-    subtitle: 'Link this device to live Axon first, then your phone can act like a real command center.',
-    detail: 'Protected routes stay locked until Axon verifies the saved mobile session.',
-  };
-}
-
-function activeGateError(config: CompanionConfig, authError?: string | null, bootstrapError?: string | null) {
-  if (authError) {
-    return authError;
-  }
-  if (!config.accessToken) {
-    return null;
-  }
-  return bootstrapError || null;
-}
 
 export function AppNavigatorBody({
   activeTab,
@@ -110,6 +88,7 @@ export function AppNavigatorBody({
   setActiveTab,
   authChecking,
   verifiedPairing,
+  linkState,
   axon,
   axonError,
   onArmAxon,
@@ -180,6 +159,7 @@ export function AppNavigatorBody({
   setActiveTab: (tab: TabKey) => void;
   authChecking?: boolean;
   verifiedPairing: boolean;
+  linkState: CompanionLinkState;
   axon: { status: AxonModeStatus | null; busy: boolean };
   axonError?: string | null;
   onArmAxon: () => void;
@@ -203,9 +183,9 @@ export function AppNavigatorBody({
     </ScrollView>
   );
   if (activeTab !== 'settings') {
-    const gateCopy = sessionGateCopy(activeTab);
-    const gateError = activeGateError(config, authError, bootstrapError);
-    if (authChecking && config.accessToken) {
+    const gateCopy = sessionGateCopy(activeTab, linkState);
+    const gateError = activeGateError(authError, bootstrapError);
+    if (authChecking) {
       return wrapScrollable(
         <CompanionSessionGate
           title={gateCopy.title}
@@ -224,7 +204,19 @@ export function AppNavigatorBody({
         />
       );
     }
-    if (!config.accessToken || !verifiedPairing) {
+    if (linkState === 'offline') {
+      return wrapScrollable(
+        <CompanionOfflineGate
+          title={gateCopy.title}
+          subtitle={gateCopy.subtitle}
+          detail={gateCopy.detail}
+          deviceName={deviceName}
+          apiBaseUrl={config.apiBaseUrl || ''}
+          error={gateError}
+        />
+      );
+    }
+    if (linkState !== 'linked' || !verifiedPairing) {
       return wrapScrollable(
         <CompanionSessionGate
           title={gateCopy.title}
@@ -260,7 +252,7 @@ export function AppNavigatorBody({
         />
       );
     case 'voice':
-      return wrapScrollable(
+      return (
         <VoiceScreen
           onSubmit={onSubmitCommand}
           sending={voice.sending}
@@ -275,6 +267,7 @@ export function AppNavigatorBody({
           onOpenSession={() => setActiveTab('sessions')}
           speaking={speech.speaking}
           onSpeak={voice.responseText ? () => speech.speak(voice.responseText) : undefined}
+          onSpeakText={speech.speak}
           onStopSpeaking={speech.stop}
           liveVoiceStatus={liveVoice.voiceStatus}
           checkingVoiceStatus={liveVoice.checkingStatus}
@@ -294,6 +287,7 @@ export function AppNavigatorBody({
           axonError={axonError}
           onArmAxon={() => onArmAxon()}
           onDisarmAxon={() => onDisarmAxon()}
+          onExitVoice={() => setActiveTab('mission')}
         />
       );
     case 'projects':
@@ -366,7 +360,7 @@ export function AppNavigatorBody({
       );
     case 'mission':
     default:
-      return (
+      return wrapScrollable(
         <MissionControlScreen
           snapshot={mission.snapshot}
           onOpenVoice={() => setActiveTab('voice')}

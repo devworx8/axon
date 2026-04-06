@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Clipboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Clipboard, KeyboardAvoidingView, Platform, StyleSheet, View } from 'react-native';
 
+import { BottomTabBar } from '@/components/BottomTabBar';
+import {
+  shouldShowCompanionTabBar,
+} from '@/features/auth/linkPresentation';
 import {
   fetchMobileVaultProviderKeys,
   fetchMobileVaultStatus,
@@ -16,7 +19,7 @@ import { useAuth } from '@/features/auth/useAuth';
 import { useMobileControl } from '@/features/control/useMobileControl';
 import { useMissionControl } from '@/features/mission/useMissionControl';
 import { usePresence } from '@/features/presence/usePresence';
-import { clearCompanionSession } from '@/features/auth/sessionState';
+import { clearCompanionSession, hasStoredCompanionPairing } from '@/features/auth/sessionState';
 import { RiskChallengeSheet } from '@/features/session/RiskChallengeSheet';
 import { useSettings } from '@/features/settings/useSettings';
 import { useVoice } from '@/features/voice/useVoice';
@@ -44,8 +47,7 @@ const EMPTY_INBOX = {
 
 export function AppNavigator() {
   const { colors } = useTheme();
-  const insets = useSafeAreaInsets();
-  const [activeTab, setActiveTab] = useState<TabKey>('mission');
+  const [activeTab, setActiveTab] = useState<TabKey>('voice');
   const [autoNavEnabled, setAutoNavEnabled] = useState(true);
   const [config, setConfig] = useState<CompanionConfig>({ apiBaseUrl: '', workspaceId: null, sessionId: null, deviceId: null });
   const [deviceName, setDeviceName] = useState('Axon phone');
@@ -74,7 +76,7 @@ export function AppNavigator() {
   });
 
   useStoredCompanionConfig(config, setConfig, setDeviceName);
-  const { bootstrapError, verifiedPairing, verifyingPairing } = useCompanionBootstrap({
+  const { bootstrapError, verifiedPairing, verifyingPairing, linkState } = useCompanionBootstrap({
     config,
     setConfig,
     setDeviceName,
@@ -128,6 +130,7 @@ export function AppNavigator() {
   const attentionInbox = mission.snapshot?.attention?.inbox || EMPTY_INBOX;
   const currentWorkspaceId = config.workspaceId ?? mission.snapshot?.focus?.workspace?.id ?? null;
   const currentSessionId = config.sessionId ?? activeSession?.id ?? null;
+  const hasStoredPairing = hasStoredCompanionPairing(config);
   const focusedProject = useMemo(() => {
     const projects = mission.snapshot?.projects || [];
     if (currentWorkspaceId !== null) {
@@ -293,6 +296,8 @@ export function AppNavigator() {
     setConfig((current) => ({
       ...clearCompanionSession(current),
       deviceId: null,
+      deviceKey: '',
+      restoreToken: '',
       sessionId: null,
       workspaceId: null,
     }));
@@ -472,8 +477,9 @@ export function AppNavigator() {
       onExpoPublishUpdate={(workspaceId) => workspaceActions.expoPublishUpdate(workspaceId).catch(() => undefined)}
       onRefreshMission={() => syncMission().catch(() => undefined)}
       setActiveTab={setActiveTab}
-      authChecking={Boolean(config.accessToken) && verifyingPairing && !verifiedPairing}
+      authChecking={verifyingPairing && linkState === 'checking'}
       verifiedPairing={verifiedPairing}
+      linkState={linkState}
       axon={{ status: axonMode.status, busy: axonMode.busy }}
       axonError={axonMode.error}
       onArmAxon={() => handleArmAxon().catch(() => undefined)}
@@ -483,16 +489,8 @@ export function AppNavigator() {
     />
   );
 
-  const statusLabel = Boolean(config.accessToken) && verifyingPairing && !verifiedPairing
-    ? 'Checking link'
-    : verifiedPairing
-    ? String(mission.snapshot?.posture || 'healthy').replace('_', ' ')
-    : (config.accessToken ? 'Re-pair required' : 'Not paired');
-  const statusColor = Boolean(config.accessToken) && verifyingPairing && !verifiedPairing
-    ? colors.warning
-    : verifiedPairing
-    ? (mission.snapshot?.posture === 'urgent' ? colors.danger : mission.snapshot?.posture === 'degraded' ? colors.warning : colors.success)
-    : (config.accessToken ? colors.warning : colors.muted);
+  const urgentCount = Number(attentionSummary.counts?.now || 0);
+  const showTabBar = shouldShowCompanionTabBar(linkState, hasStoredPairing) && activeTab !== 'voice';
 
   return (
     <KeyboardAvoidingView
@@ -504,18 +502,16 @@ export function AppNavigator() {
         <View style={styles.contentShell}>
           <View style={[styles.fullBleed, { backgroundColor: colors.background }]}> 
             {body}
-            {(verifiedPairing || config.accessToken) && activeTab !== 'mission' && (
-              <View style={[styles.navOverlay, { top: insets.top + 8 }]}> 
-                <View style={styles.navRow}>
-                  <Pressable style={styles.navButton} onPress={() => setActiveTab('mission')}>
-                    <Text style={styles.navButtonText}>Back</Text>
-                  </Pressable>
-                </View>
-              </View>
-            )}
           </View>
         </View>
       </View>
+      {showTabBar && (
+        <BottomTabBar
+          activeTab={activeTab}
+          onTabPress={setActiveTab}
+          urgentCount={urgentCount}
+        />
+      )}
       <RiskChallengeSheet
         challenge={selectedChallenge}
         visible={Boolean(selectedChallenge)}
@@ -541,49 +537,5 @@ const styles = StyleSheet.create({
   },
   fullBleed: {
     flex: 1,
-  },
-  navOverlay: {
-    position: 'absolute',
-    right: 12,
-    gap: 6,
-  },
-  navRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 6,
-  },
-  navButton: {
-    borderRadius: 16,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: 'rgba(8, 16, 30, 0.55)',
-    borderWidth: 1,
-    borderColor: 'rgba(110, 231, 255, 0.2)',
-  },
-  navButtonActive: {
-    backgroundColor: 'rgba(12, 34, 60, 0.75)',
-    borderColor: 'rgba(110, 231, 255, 0.5)',
-  },
-  navButtonText: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.6,
-    color: '#dff4ff',
-    textTransform: 'uppercase',
-  },
-  heroKicker: {
-    fontSize: 11,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    letterSpacing: 1.1,
-  },
-  heroTitle: {
-    fontSize: 24,
-    fontWeight: '800',
-  },
-  heroText: {
-    marginTop: 8,
-    fontSize: 14,
-    lineHeight: 20,
   },
 });

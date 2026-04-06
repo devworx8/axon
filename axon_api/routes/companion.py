@@ -8,23 +8,22 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from axon_api.routes.companion_models import (
-    CompanionDeviceTouchRequest,
-    CompanionPairRequest,
     CompanionPresenceRequest,
     CompanionPushSubscriptionRequest,
-    CompanionRefreshRequest,
-    CompanionRevokeRequest,
     CompanionSessionRequest,
     CompanionSessionResumeRequest,
     CompanionSessionTouchRequest,
     CompanionVoiceTurnRequest,
 )
-import ipaddress
 
+from axon_api.services.companion_request_auth import (
+    companion_auth_context,
+    require_companion_context,
+    require_same_device,
+)
 from axon_api.services.companion_status_summary import build_latest_presence_payload
 from axon_api.services import (
     auth_runtime_state as auth_runtime_state_service,
-    companion_auth as companion_auth_service,
     companion_live as companion_live_service,
     companion_presence as companion_presence_service,
     companion_push as companion_push_service,
@@ -34,9 +33,6 @@ from axon_api.services import (
 )
 from axon_data import (
     clear_companion_presence,
-    get_companion_auth_session,
-    get_companion_device,
-    get_companion_device_by_key,
     get_companion_presence,
     get_companion_session,
     get_companion_session_by_key,
@@ -48,39 +44,17 @@ from axon_data import (
     list_companion_push_subscriptions,
     list_companion_sessions,
     list_companion_voice_turns,
-    revoke_companion_device,
     touch_companion_device,
-    update_companion_device_status,
 )
 
 router = APIRouter(prefix="/api/companion", tags=["companion"])
 
+# Compatibility hook for older imports and direct test patching.
+_require_companion_context = require_companion_context
+
 
 def _row(row: Any) -> dict[str, Any]:
     return dict(row) if row else {}
-
-
-def _token_from_request(request: Request) -> str:
-    auth = request.headers.get("Authorization", "").strip()
-    if auth.lower().startswith("bearer "):
-        return auth[7:].strip()
-    return (
-        request.headers.get("X-Axon-Token")
-        or request.headers.get("X-DevBrain-Token")
-        or request.headers.get("X-Session-Token")
-        or request.query_params.get("token")
-        or ""
-    ).strip()
-
-
-def _expires_at_passed(expires_at: str) -> bool:
-    if not expires_at:
-        return False
-    try:
-        expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-    except Exception:
-        return False
-    return expiry <= datetime.now(timezone.utc)
 
 
 def _parse_seen_at(value: str) -> datetime | None:
@@ -98,53 +72,12 @@ def _parse_seen_at(value: str) -> datetime | None:
     return None
 
 
-def _client_ip(request: Request) -> str:
-    return str(getattr(getattr(request, "client", None), "host", "") or "").strip()
-
-
-def _client_is_private(request: Request) -> bool:
-    raw = _client_ip(request)
-    if not raw:
-        return False
-    try:
-        ip = ipaddress.ip_address(raw)
-        return ip.is_private or ip.is_loopback
-    except ValueError:
-        return False
-
-
-async def _companion_auth_context(request: Request) -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
-    token = _token_from_request(request)
-    if not token:
-        return "", None, None
-    async with get_db() as db:
-        auth_row = await companion_auth_service.resolve_companion_auth_session(db, access_token=token)
-        if not auth_row or _expires_at_passed(str(auth_row.get("expires_at") or "")):
-            return token, None, None
-        device_row = await get_companion_device(db, int(auth_row["device_id"]))
-    return token, dict(auth_row), dict(device_row) if device_row else None
-
-
-async def _require_companion_context(request: Request) -> tuple[str, dict[str, Any], dict[str, Any]]:
-    token, auth_row, device_row = await _companion_auth_context(request)
-    if not token or not auth_row or not device_row:
-        raise HTTPException(401, "Companion auth token required")
-    return token, auth_row, device_row
-
-
-def _require_same_device(device_row: dict[str, Any], target_device_id: int) -> int:
-    device_id = int(device_row.get("id") or 0)
-    if device_id <= 0 or device_id != int(target_device_id):
-        raise HTTPException(403, "This companion token cannot access another device")
-    return device_id
-
-
 async def _require_owned_session(db, *, session_id: int, device_row: dict[str, Any]) -> dict[str, Any]:
     row = await get_companion_session(db, session_id)
     if not row:
         raise HTTPException(404, "Session not found")
     session = dict(row)
-    _require_same_device(device_row, int(session.get("device_id") or 0))
+    require_same_device(device_row, int(session.get("device_id") or 0))
     return session
 
 
@@ -153,7 +86,7 @@ async def _require_owned_session_by_key(db, *, session_key: str, device_row: dic
     if not row:
         raise HTTPException(404, "Session not found")
     session = dict(row)
-    _require_same_device(device_row, int(session.get("device_id") or 0))
+    require_same_device(device_row, int(session.get("device_id") or 0))
     return session
 
 
@@ -166,9 +99,14 @@ async def _require_owned_turn(db, *, turn_id: int, device_row: dict[str, Any]) -
     return turn
 
 
+async def companion_devices(request: Request):
+    _, _, device_row = await _require_companion_context(request)
+    return {"devices": [device_row]}
+
+
 @router.get("/status")
 async def companion_status(request: Request):
-    token, auth_row, device_row = await _companion_auth_context(request)
+    token, auth_row, device_row = await companion_auth_context(request)
     async with get_db() as db:
         auth_enabled = bool(await get_setting(db, "auth_pin_hash"))
         device_rows = [dict(row) for row in await list_companion_devices(db, limit=500)]
@@ -242,7 +180,7 @@ async def companion_status(request: Request):
 
 @router.get("/identity")
 async def companion_identity(request: Request):
-    token, auth_row, device_row = await _companion_auth_context(request)
+    token, auth_row, device_row = await companion_auth_context(request)
     if not token or not auth_row or not device_row:
         return {"device": None, "auth_session": None, "presence": None, "sessions": []}
     async with get_db() as db:
@@ -273,153 +211,12 @@ async def companion_live_state(
     return snapshot
 
 
-@router.post("/auth/pair")
-async def companion_pair(body: CompanionPairRequest, request: Request):
-    async with get_db() as db:
-        pin_hash = await get_setting(db, "auth_pin_hash")
-        if pin_hash:
-            import hmac
-            from hashlib import sha256
-
-            if not body.pin or not body.pin.strip():
-                raise HTTPException(401, "PIN required")
-            expected = sha256(f"devbrain-pin-{body.pin.strip()}".encode()).hexdigest()
-            if not hmac.compare_digest(expected, pin_hash):
-                raise HTTPException(401, "Wrong PIN")
-        device = await companion_auth_service.register_companion_device(
-            db,
-            device_key=body.device_key,
-            name=body.name,
-            user_id=body.user_id,
-            kind=body.kind,
-            platform=body.platform,
-            model=body.model,
-            os_version=body.os_version,
-            status=body.status,
-            meta=body.meta or {
-                "paired_via": "companion_auth_pair",
-                "client_ip": getattr(getattr(request, "client", None), "host", "") or "",
-            },
-        )
-        ttl_seconds = int(body.ttl_seconds or 0) or (60 * 60 * 24 * 30)
-        session = await companion_auth_service.issue_companion_auth_session(
-            db,
-            device_id=int(device["id"]),
-            ttl_seconds=max(60, ttl_seconds),
-            meta={"paired_from": "companion_auth_pair"},
-        )
-    return {"device": device, **session}
-
-
-@router.post("/auth/refresh")
-async def companion_refresh(body: CompanionRefreshRequest):
-    async with get_db() as db:
-        ttl_seconds = int(body.ttl_seconds or 0) or (60 * 60 * 24 * 30)
-        session = await companion_auth_service.refresh_companion_auth_session(
-            db,
-            refresh_token=body.refresh_token,
-            ttl_seconds=max(60, ttl_seconds),
-        )
-    if not session:
-        raise HTTPException(401, "Invalid refresh token")
-    return session
-
-
-@router.post("/auth/revoke")
-async def companion_revoke(body: CompanionRevokeRequest, request: Request):
-    if body.device_id is not None or body.auth_session_id is not None:
-        _, auth_row, device_row = await _require_companion_context(request)
-        if body.device_id is not None:
-            _require_same_device(device_row, int(body.device_id))
-        if body.auth_session_id is not None and int(body.auth_session_id) != int(auth_row.get("id") or 0):
-            raise HTTPException(403, "This companion token cannot revoke another auth session")
-    async with get_db() as db:
-        revoked = await companion_auth_service.revoke_companion_device_auth(
-            db,
-            device_id=body.device_id,
-            auth_session_id=body.auth_session_id,
-            access_token=body.access_token,
-            refresh_token=body.refresh_token,
-        )
-    if not revoked:
-        raise HTTPException(400, "Provide device_id, auth_session_id, access_token, or refresh_token")
-    return {"revoked": True}
-
-
-@router.get("/devices")
-async def companion_devices(request: Request):
-    _, _, device_row = await _require_companion_context(request)
-    return {"devices": [device_row]}
-
-
-@router.get("/devices/current")
-async def companion_current_device(request: Request):
-    _, _, device_row = await _companion_auth_context(request)
-    if not device_row:
-        raise HTTPException(401, "Companion auth token required")
-    async with get_db() as db:
-        presence_row = await get_companion_presence(db, int(device_row["id"]))
-    return {"device": device_row, "presence": dict(presence_row) if presence_row else None}
-
-
-@router.get("/devices/{device_id}")
-async def companion_device_detail(device_id: int, request: Request):
-    _, _, device_row = await _require_companion_context(request)
-    _require_same_device(device_row, device_id)
-    async with get_db() as db:
-        row = await get_companion_device(db, device_id)
-    if not row:
-        raise HTTPException(404, "Device not found")
-    return dict(row)
-
-
-@router.get("/devices/by-key/{device_key}")
-async def companion_device_detail_by_key(device_key: str, request: Request):
-    _, _, device_row = await _require_companion_context(request)
-    async with get_db() as db:
-        row = await get_companion_device_by_key(db, device_key)
-    if not row:
-        raise HTTPException(404, "Device not found")
-    resolved = dict(row)
-    _require_same_device(device_row, int(resolved.get("id") or 0))
-    return resolved
-
-
-@router.post("/devices/{device_id}/touch")
-async def companion_device_touch(device_id: int, body: CompanionDeviceTouchRequest, request: Request):
-    _, _, device_row = await _require_companion_context(request)
-    _require_same_device(device_row, device_id)
-    async with get_db() as db:
-        if body.status == "revoked":
-            await revoke_companion_device(db, device_id)
-        else:
-            await touch_companion_device(db, device_id)
-            if body.status and body.status != "active":
-                await update_companion_device_status(db, device_id, status=body.status)
-        row = await get_companion_device(db, device_id)
-    if not row:
-        raise HTTPException(404, "Device not found")
-    return {"device": dict(row)}
-
-
-@router.post("/devices/{device_id}/revoke")
-async def companion_device_revoke(device_id: int, request: Request):
-    _, _, device_row = await _require_companion_context(request)
-    _require_same_device(device_row, device_id)
-    async with get_db() as db:
-        await revoke_companion_device(db, device_id)
-        row = await get_companion_device(db, device_id)
-    if not row:
-        raise HTTPException(404, "Device not found")
-    return {"device": dict(row), "revoked": True}
-
-
 @router.get("/presence/current")
 async def companion_presence_current(request: Request, device_id: int | None = None):
     _, _, device_row = await _require_companion_context(request)
     if device_id is None:
         device_id = int(device_row["id"])
-    _require_same_device(device_row, device_id)
+    require_same_device(device_row, device_id)
     async with get_db() as db:
         row = await get_companion_presence(db, device_id)
     return {"presence": dict(row) if row else None}
@@ -440,7 +237,7 @@ async def companion_presence_workspace(workspace_id: int, request: Request):
 async def companion_presence_heartbeat(body: CompanionPresenceRequest, request: Request):
     _, _, device_row = await _require_companion_context(request)
     device_id = body.device_id if body.device_id is not None else int(device_row["id"])
-    _require_same_device(device_row, int(device_id))
+    require_same_device(device_row, int(device_id))
     async with get_db() as db:
         row = await companion_presence_service.heartbeat_companion_presence(
             db,
@@ -462,7 +259,7 @@ async def companion_presence_clear(request: Request, device_id: int | None = Non
     _, _, device_row = await _require_companion_context(request)
     if device_id is None:
         device_id = int(device_row["id"])
-    _require_same_device(device_row, int(device_id))
+    require_same_device(device_row, int(device_id))
     async with get_db() as db:
         await clear_companion_presence(db, device_id)
     return {"cleared": True, "device_id": device_id}
@@ -479,7 +276,7 @@ async def companion_sessions(
     _, _, device_row = await _require_companion_context(request)
     if device_id is None:
         device_id = int(device_row["id"])
-    _require_same_device(device_row, int(device_id))
+    require_same_device(device_row, int(device_id))
     async with get_db() as db:
         rows = await list_companion_sessions(
             db,
@@ -511,7 +308,7 @@ async def companion_session_detail_by_key(session_key: str, request: Request):
 async def companion_session_upsert(body: CompanionSessionRequest, request: Request):
     _, _, device_row = await _require_companion_context(request)
     device_id = body.device_id if body.device_id is not None else int(device_row["id"])
-    _require_same_device(device_row, int(device_id))
+    require_same_device(device_row, int(device_id))
     session_key = body.session_key.strip() or companion_sessions_service.companion_session_key(
         device_id,
         body.workspace_id,
@@ -619,7 +416,7 @@ async def companion_voice_turn_detail(turn_id: int, request: Request):
 
 @router.post("/voice/turns")
 async def companion_voice_turn_create(body: CompanionVoiceTurnRequest, request: Request):
-    token, auth_row, device_row = await _companion_auth_context(request)
+    token, auth_row, device_row = await companion_auth_context(request)
     device_id = int(device_row["id"]) if device_row else None
     async with get_db() as db:
         if str(body.role or "user").strip().lower() == "user":
@@ -683,7 +480,7 @@ async def companion_push_subscriptions(
     limit: int = 100,
 ):
     if device_id is None:
-        _, _, device_row = await _companion_auth_context(request)
+        _, _, device_row = await companion_auth_context(request)
         if device_row:
             device_id = int(device_row["id"])
     async with get_db() as db:
@@ -695,7 +492,7 @@ async def companion_push_subscriptions(
 async def companion_push_subscription_create(body: CompanionPushSubscriptionRequest, request: Request):
     device_id = body.device_id
     if device_id is None:
-        _, _, device_row = await _companion_auth_context(request)
+        _, _, device_row = await companion_auth_context(request)
         if not device_row:
             raise HTTPException(401, "Companion auth token required")
         device_id = int(device_row["id"])

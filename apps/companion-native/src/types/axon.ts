@@ -25,6 +25,8 @@ export type AxonModeStatus = {
   voice_identity?: string;
   voice_identity_label?: string;
   local_voice_ready?: boolean;
+  transcription_ready?: boolean;
+  cloud_transcription_available?: boolean;
   local_voice_status?: AxonLocalVoiceReadiness | null;
   summary?: string;
   last_event_type?: string;

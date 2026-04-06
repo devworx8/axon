@@ -331,6 +331,7 @@ function axonDashboardLiveFeedMixin() {
       if (Array.isArray(payload?.activity)) {
         this.dashRecentActivity = payload.activity;
       }
+      this.syncVoiceCommandCenterRuntime?.();
       this.syncDesktopPreviewStream?.(false);
     },
   };

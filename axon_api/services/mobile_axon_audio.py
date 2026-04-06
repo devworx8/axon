@@ -55,6 +55,8 @@ async def build_mobile_axon_audio_payload(
                 voice=str(profile.get("voice_identity") or settings.get("azure_voice") or DEFAULT_AZURE_VOICE),
                 region=str(settings.get("azure_speech_region") or "eastus").strip() or "eastus",
                 key=str(settings.get("azure_speech_key") or "").strip(),
+                rate=settings.get("voice_speech_rate"),
+                pitch=settings.get("voice_speech_pitch"),
                 aiohttp_module=aiohttp,
                 http_exception_cls=HTTPException,
             )

@@ -53,6 +53,24 @@ export async function refreshCompanionSession(refresh_token: string, config?: Co
   );
 }
 
+export async function restoreCompanionDevice(
+  payload: { deviceKey: string; restoreToken: string },
+  config?: CompanionConfig,
+) {
+  return axonRequest<CompanionPairResponse>(
+    '/api/companion/auth/restore',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        device_key: payload.deviceKey,
+        restore_token: payload.restoreToken,
+        ttl_seconds: 60 * 60 * 24 * 30,
+      }),
+    },
+    config,
+  );
+}
+
 export async function fetchCurrentPresence(config?: CompanionConfig) {
   return axonRequest<{ presence: CompanionPresence | null }>('/api/companion/presence/current', {}, config);
 }

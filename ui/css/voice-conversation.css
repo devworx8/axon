@@ -1,0 +1,463 @@
+/* =============================================================
+   Axon - Voice Conversation UI
+   Control rail, mission timeline, and text fallback dock.
+   ============================================================= */
+
+.voice-control-rail {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.voice-control-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.84), rgba(2, 6, 23, 0.92));
+  color: rgba(203, 213, 225, 0.82);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.voice-control-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(34, 211, 238, 0.28);
+  color: rgba(226, 232, 240, 0.96);
+}
+
+.voice-control-chip--active {
+  border-color: rgba(34, 211, 238, 0.34);
+  color: rgba(165, 243, 252, 0.96);
+  box-shadow: 0 0 18px rgba(34, 211, 238, 0.08);
+}
+
+.voice-control-chip__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.75);
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.2);
+}
+
+.voice-control-chip--active .voice-control-chip__dot {
+  background: rgba(34, 211, 238, 0.92);
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.45);
+}
+
+.voice-awaiting-banner {
+  margin-top: 10px;
+  padding: 12px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(34, 211, 238, 0.18);
+  background: rgba(8, 15, 32, 0.76);
+  color: rgba(191, 219, 254, 0.88);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 0 24px rgba(34, 211, 238, 0.08);
+}
+
+.voice-awaiting-banner__label {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(103, 232, 249, 0.8);
+}
+
+.voice-awaiting-banner__detail {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(203, 213, 225, 0.86);
+}
+
+.voice-mission-rail {
+  width: min(1080px, 100%);
+  margin-top: 6px;
+  padding: 18px 18px 20px;
+  border-radius: 28px;
+  border: 1px solid rgba(34, 211, 238, 0.12);
+  background:
+    linear-gradient(180deg, rgba(8, 15, 32, 0.84), rgba(2, 6, 23, 0.92));
+  box-shadow:
+    0 14px 60px rgba(2, 6, 23, 0.46),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(20px);
+}
+
+.voice-mission-rail__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  margin-bottom: 14px;
+}
+
+.voice-mission-rail__eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: rgba(103, 232, 249, 0.76);
+}
+
+.voice-mission-rail__summary {
+  font-size: 12px;
+  color: rgba(148, 163, 184, 0.76);
+  text-align: right;
+}
+
+.voice-mission-rail__grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.voice-mission-step {
+  position: relative;
+  padding: 14px 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(51, 65, 85, 0.74);
+  background: rgba(2, 6, 23, 0.72);
+  min-height: 128px;
+}
+
+.voice-mission-step::after {
+  content: '';
+  position: absolute;
+  top: 20px;
+  right: -8px;
+  width: 16px;
+  height: 1px;
+  background: rgba(51, 65, 85, 0.84);
+}
+
+.voice-mission-step:last-child::after {
+  display: none;
+}
+
+.voice-mission-step--cyan {
+  border-color: rgba(34, 211, 238, 0.26);
+  box-shadow: inset 0 0 0 1px rgba(34, 211, 238, 0.05);
+}
+
+.voice-mission-step--amber {
+  border-color: rgba(251, 191, 36, 0.26);
+}
+
+.voice-mission-step--emerald {
+  border-color: rgba(52, 211, 153, 0.24);
+}
+
+.voice-mission-step--rose {
+  border-color: rgba(251, 113, 133, 0.24);
+}
+
+.voice-mission-step__phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.75);
+}
+
+.voice-mission-step__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.52);
+}
+
+.voice-mission-step--cyan .voice-mission-step__dot {
+  background: rgba(34, 211, 238, 0.88);
+}
+
+.voice-mission-step--amber .voice-mission-step__dot {
+  background: rgba(251, 191, 36, 0.92);
+}
+
+.voice-mission-step--emerald .voice-mission-step__dot {
+  background: rgba(52, 211, 153, 0.92);
+}
+
+.voice-mission-step--rose .voice-mission-step__dot {
+  background: rgba(251, 113, 133, 0.9);
+}
+
+.voice-mission-step__title {
+  margin-top: 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(226, 232, 240, 0.94);
+}
+
+.voice-mission-step__detail {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: rgba(148, 163, 184, 0.84);
+}
+
+.voice-mission-step__time {
+  margin-top: 10px;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(100, 116, 139, 0.74);
+}
+
+.voice-command-dock {
+  position: fixed;
+  left: 24px;
+  bottom: 24px;
+  z-index: 1015;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  width: min(360px, calc(100vw - 32px));
+  transition: transform 180ms ease, opacity 180ms ease;
+}
+
+.voice-command-dock--active {
+  transform: translateY(-4px);
+}
+
+.voice-command-dock__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(34, 211, 238, 0.18);
+  background:
+    linear-gradient(180deg, rgba(8, 15, 32, 0.92), rgba(2, 6, 23, 0.96));
+  color: rgba(191, 219, 254, 0.92);
+  box-shadow: 0 16px 40px rgba(2, 6, 23, 0.42);
+  backdrop-filter: blur(18px);
+}
+
+.voice-command-dock__toggle-label {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.voice-command-dock__toggle-title {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.voice-command-dock__toggle-detail {
+  font-size: 12px;
+  color: rgba(148, 163, 184, 0.76);
+}
+
+.voice-command-dock__panel {
+  width: 100%;
+  border-radius: 26px;
+  border: 1px solid rgba(34, 211, 238, 0.18);
+  background:
+    radial-gradient(circle at top left, rgba(34, 211, 238, 0.08), transparent 34%),
+    linear-gradient(180deg, rgba(8, 15, 32, 0.94), rgba(2, 6, 23, 0.97));
+  box-shadow:
+    0 20px 60px rgba(2, 6, 23, 0.52),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(22px);
+  padding: 16px;
+  overflow: hidden;
+}
+
+.voice-command-dock__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.voice-command-dock__eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(103, 232, 249, 0.82);
+}
+
+.voice-command-dock__hint {
+  font-size: 12px;
+  color: rgba(148, 163, 184, 0.74);
+}
+
+.voice-command-dock__textarea {
+  width: 100%;
+  min-height: 108px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(51, 65, 85, 0.9);
+  background: rgba(2, 6, 23, 0.72);
+  color: rgba(226, 232, 240, 0.96);
+  font-size: 14px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.voice-command-dock__textarea:focus {
+  outline: none;
+  border-color: rgba(34, 211, 238, 0.38);
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.16);
+}
+
+.voice-command-dock__prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.voice-command-dock__prompt {
+  padding: 7px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(51, 65, 85, 0.84);
+  background: rgba(15, 23, 42, 0.7);
+  color: rgba(191, 219, 254, 0.78);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.voice-command-dock__prompt:hover {
+  border-color: rgba(34, 211, 238, 0.22);
+  color: rgba(224, 242, 254, 0.92);
+}
+
+.voice-command-dock__actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+  align-items: center;
+}
+
+.voice-command-dock__meta {
+  font-size: 11px;
+  color: rgba(148, 163, 184, 0.74);
+  line-height: 1.5;
+  max-width: 190px;
+}
+
+.voice-command-dock__buttons {
+  display: flex;
+  gap: 10px;
+}
+
+.voice-command-dock__btn {
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(51, 65, 85, 0.84);
+  background: rgba(15, 23, 42, 0.74);
+  color: rgba(226, 232, 240, 0.88);
+  font-size: 12px;
+}
+
+.voice-command-dock__btn:hover {
+  border-color: rgba(34, 211, 238, 0.24);
+}
+
+.voice-command-dock__btn--primary {
+  border-color: rgba(34, 211, 238, 0.3);
+  color: rgba(165, 243, 252, 0.96);
+}
+
+.voice-command-dock__btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.hud-approval__preview {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(251, 191, 36, 0.16);
+  background: rgba(2, 6, 23, 0.58);
+  color: rgba(226, 232, 240, 0.82);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 900px) {
+  .voice-mission-rail__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .voice-mission-step:nth-child(2n)::after {
+    display: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .voice-control-rail {
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .voice-mission-rail {
+    padding: 16px;
+    border-radius: 22px;
+  }
+
+  .voice-mission-rail__header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .voice-mission-rail__summary {
+    text-align: left;
+  }
+
+  .voice-mission-rail__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .voice-mission-step::after {
+    display: none;
+  }
+
+  .voice-command-dock {
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+    width: auto;
+  }
+
+  .voice-command-dock__meta {
+    max-width: none;
+  }
+
+  .voice-command-dock__actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .voice-command-dock__buttons {
+    width: 100%;
+  }
+
+  .voice-command-dock__btn {
+    flex: 1 1 auto;
+  }
+}

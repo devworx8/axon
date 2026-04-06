@@ -102,6 +102,7 @@ from .companion_devices import (
     list_companion_devices,
     revoke_companion_device,
     touch_companion_device,
+    update_companion_device_meta,
     update_companion_device_status,
     upsert_companion_device,
 )
@@ -324,6 +325,7 @@ __all__ = [
     "list_companion_devices",
     "upsert_companion_device",
     "touch_companion_device",
+    "update_companion_device_meta",
     "update_companion_device_status",
     "revoke_companion_device",
     "get_companion_auth_session",

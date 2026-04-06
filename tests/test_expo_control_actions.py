@@ -4,6 +4,7 @@ import os
 import unittest
 from tempfile import TemporaryDirectory
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from axon_api.services import expo_control_actions
@@ -79,7 +80,17 @@ class ExpoControlActionsTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch.object(expo_control_actions, "discover_expo_projects", AsyncMock(return_value=[project])), \
-             patch.object(expo_control_actions, "expo_token_state", AsyncMock(return_value={"value": "", "present": True, "locked": True, "source": "vault"})):
+             patch.object(expo_control_actions, "expo_token_state", AsyncMock(return_value={"value": "", "present": True, "locked": True, "source": "vault"})), \
+             patch.object(
+                 expo_control_actions,
+                 "resolve_expo_cli_runtime",
+                 return_value=SimpleNamespace(available=True, source="npx", command_preview="npx --yes eas-cli", summary="npx can invoke eas-cli"),
+             ), \
+             patch.object(
+                 expo_control_actions,
+                 "_run_eas_cli_async",
+                 AsyncMock(side_effect=expo_control_actions.ExpoControlError("no local session", outcome="expo_auth_failed")),
+             ):
             with self.assertRaises(expo_control_actions.ExpoControlError) as ctx:
                 await expo_control_actions.prepare_expo_action_request(
                     object(),
@@ -90,6 +101,47 @@ class ExpoControlActionsTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(ctx.exception.outcome, "vault_locked")
         self.assertIn("vault is currently locked", ctx.exception.summary)
+
+    async def test_prepare_request_allows_local_cli_session_when_token_missing(self):
+        project = expo_control_actions.ExpoProjectContext(
+            workspace_id=202,
+            workspace_name="Axon",
+            workspace_path="/tmp/axon",
+            project_root=Path("/tmp/axon/apps/companion-native"),
+            app_name="Axon Online",
+            owner="king-prod",
+            slug="axon-online",
+            project_id="expo-project-id",
+            android_package="za.org.edudashpro.axononline",
+            ios_bundle_identifier="za.org.edudashpro.axononline",
+            build_profiles=["development"],
+            runtime_version="policy:appVersion",
+            update_channel="development",
+            channels={"development": "development"},
+            git_branch="axon-dev",
+        )
+
+        with patch.object(expo_control_actions, "discover_expo_projects", AsyncMock(return_value=[project])), \
+             patch.object(expo_control_actions, "expo_token_state", AsyncMock(return_value={"value": "", "present": False, "locked": False, "source": ""})), \
+             patch.object(
+                 expo_control_actions,
+                 "resolve_expo_cli_runtime",
+                 return_value=SimpleNamespace(available=True, source="npx", command_preview="npx --yes eas-cli", summary="npx can invoke eas-cli"),
+             ), \
+             patch.object(
+                 expo_control_actions,
+                 "_run_eas_cli_async",
+                 AsyncMock(return_value={"stdout": "king-prod\ndash@example.com\n\nAccounts:\n• king-prod (Role: Owner)\n"}),
+             ):
+            prepared = await expo_control_actions.prepare_expo_action_request(
+                object(),
+                action_type="expo.build.android.dev",
+                workspace_id=202,
+                payload={"workspace_id": 202},
+            )
+
+        self.assertEqual(prepared["auth"]["source"], "local_cli_session")
+        self.assertEqual(prepared["auth"]["authenticated_account"], "king-prod")
 
     async def test_load_overview_marks_account_mismatch_when_token_actor_cannot_access_owner(self):
         project = expo_control_actions.ExpoProjectContext(
@@ -128,6 +180,24 @@ class ExpoControlActionsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(overview["projects"][0]["status"], "expo_account_mismatch")
         self.assertEqual(overview["projects"][0]["account_name"], "dash-t")
         self.assertIn("king-prod", overview["projects"][0]["error"]["summary"])
+
+    async def test_build_entry_prefers_eas_error_message_and_build_profile(self):
+        build = expo_control_actions._build_entry(
+            {
+                "id": "build-1",
+                "platform": "ANDROID",
+                "status": "ERRORED",
+                "buildProfile": "development",
+                "gitCommitMessage": "Commit message",
+                "error": {"errorCode": "UNKNOWN_ERROR", "message": "Prebuild failed"},
+                "logFiles": ["https://logs.example/build-1.txt"],
+            }
+        )
+
+        self.assertEqual(build["message"], "Prebuild failed")
+        self.assertEqual(build["error_code"], "UNKNOWN_ERROR")
+        self.assertEqual(build["meta"]["profile"], "development")
+        self.assertEqual(build["url"], "https://logs.example/build-1.txt")
 
     async def test_load_overview_preserves_runtime_version_channel_and_active_builds(self):
         project = expo_control_actions.ExpoProjectContext(

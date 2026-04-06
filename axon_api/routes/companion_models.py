@@ -26,6 +26,12 @@ class CompanionRefreshRequest(BaseModel):
     ttl_seconds: int = 60 * 60 * 24 * 30
 
 
+class CompanionRestoreRequest(BaseModel):
+    device_key: str
+    restore_token: str = ""
+    ttl_seconds: int = 60 * 60 * 24 * 30
+
+
 class CompanionRevokeRequest(BaseModel):
     device_id: int | None = None
     auth_session_id: int | None = None

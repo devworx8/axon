@@ -14,9 +14,9 @@
       "web"
     ],
     "orientation": "portrait",
-    "icon": "../../ui/icons/icon-512.png",
+    "icon": "./assets/icon.png",
     "splash": {
-      "image": "../../ui/icons/icon-512.png",
+      "image": "./assets/icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#08111f"
     },
@@ -45,7 +45,7 @@
       "package": "za.org.edudashpro.axononline",
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
-        "foregroundImage": "../../ui/icons/icon-512.png",
+        "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#08111f"
       }
     },

@@ -35,6 +35,7 @@ export function useStoredCompanionConfig(
             deviceId: stored.deviceId ?? current.deviceId ?? null,
             deviceKey: stored.deviceKey || current.deviceKey || '',
             deviceName: stored.deviceName || current.deviceName || '',
+            restoreToken: stored.restoreToken || current.restoreToken || '',
             accessToken,
             tokenPair,
           };

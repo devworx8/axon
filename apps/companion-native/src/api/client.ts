@@ -130,6 +130,20 @@ function extractApiErrorMessage(status: number, rawBody: string): string {
   return detail;
 }
 
+function normalizeTransportError(error: unknown): Error {
+  if (error instanceof Error) {
+    const message = String(error.message || '').trim().toLowerCase();
+    if (error.name === 'AbortError' || message.includes('aborted')) {
+      return new Error('Axon request timed out.');
+    }
+    if (message.includes('network request failed') || message.includes('load failed')) {
+      return new Error('Unable to reach live Axon.');
+    }
+    return error;
+  }
+  return new Error('Axon request failed.');
+}
+
 export async function axonRequest<T>(
   path: string,
   init: RequestInit = {},
@@ -152,16 +166,20 @@ export async function axonRequest<T>(
   const timeout = setTimeout(() => controller.abort(), 30_000);
 
   try {
-    const response = await fetch(`${getApiBaseUrl(config)}${path}`, {
-      ...init,
-      headers,
-      signal: init.signal || controller.signal,
-    });
-    if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      throw new Error(extractApiErrorMessage(response.status, body));
+    try {
+      const response = await fetch(`${getApiBaseUrl(config)}${path}`, {
+        ...init,
+        headers,
+        signal: init.signal || controller.signal,
+      });
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new Error(extractApiErrorMessage(response.status, body));
+      }
+      return response.json() as Promise<T>;
+    } catch (error) {
+      throw normalizeTransportError(error);
     }
-    return response.json() as Promise<T>;
   } finally {
     clearTimeout(timeout);
   }

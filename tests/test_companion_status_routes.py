@@ -16,7 +16,7 @@ class CompanionStatusRouteTests(unittest.IsolatedAsyncioTestCase):
 
         latest_meta = '{"axon_mode":{"armed":true,"wake_phrase":"Axon","voice_identity":"en-ZA-LeahNeural"}}'
 
-        with patch.object(companion_routes, "_companion_auth_context", AsyncMock(return_value=("", None, None))), \
+        with patch.object(companion_routes, "companion_auth_context", AsyncMock(return_value=("", None, None))), \
              patch.object(companion_routes, "get_db", fake_db), \
              patch.object(companion_routes, "get_setting", AsyncMock(return_value="pin-hash")), \
              patch.object(companion_routes, "list_companion_devices", AsyncMock(return_value=[{"id": 29, "name": "Axon phone", "platform": "expo", "status": "paired"}])), \

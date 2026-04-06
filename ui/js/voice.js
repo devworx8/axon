@@ -98,6 +98,7 @@ function axonVoiceMixin() {
       this.showVoiceOrb = true;
       this.switchTab('chat');
       this.refreshVoiceCapability();
+      this.ensureVoiceConversationState?.();
       if (this.chatInput && !this.voiceTranscript) {
         this.voiceTranscript = this.chatInput;
       }
@@ -105,10 +106,12 @@ function axonVoiceMixin() {
         window.axonVoiceBootSound.play();
       }
       this._scheduleBootGreeting?.();
+      this.syncVoiceCommandCenterRuntime?.();
     },
 
     closeVoiceCommandCenter(stopCapture = true) {
       this.showVoiceOrb = false;
+      this.closeVoiceConversationRuntime?.();
       if (stopCapture && this.voiceActive) {
         this.startVoice();
       }
@@ -129,7 +132,11 @@ function axonVoiceMixin() {
 
     async sendVoiceCommand() {
       const text = String(this.voiceTranscript || this.chatInput || '').trim();
-      if (!text || this.chatLoading) return;
+      const workspaceBusy = typeof this.currentWorkspaceRunActive === 'function'
+        ? this.currentWorkspaceRunActive()
+        : !!this.chatLoading;
+      if (!text || workspaceBusy) return;
+      this.onVoiceCommandDispatched?.(text);
       if (this.voiceActive) {
         this.startVoice();
       }
@@ -140,6 +147,8 @@ function axonVoiceMixin() {
     },
 
     voiceCenterStatusLabel() {
+      const conversationLabel = this.voiceConversationStatusLabel?.();
+      if (conversationLabel) return conversationLabel;
       if (this.reactorAsleep) return 'Reactor sleeping';
       const state = this.orbState();
       if (state === 'listening') return 'Listening for a command';
@@ -150,6 +159,8 @@ function axonVoiceMixin() {
     },
 
     voiceCenterStatusDetail() {
+      const conversationDetail = this.voiceConversationStatusDetail?.();
+      if (conversationDetail) return conversationDetail;
       if (this.voiceActive) return 'Axon is capturing your voice and updating the command live.';
       if (this.chatLoading) return this.liveOperator?.detail || 'Axon is working through the latest command.';
       if (this.voiceTranscript) return 'Review the transcript, then send it or keep dictating.';

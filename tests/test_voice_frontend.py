@@ -12,6 +12,7 @@ INDEX_HTML = ROOT / "ui/index.html"
 VOICE_SPEECH_JS = ROOT / "ui/js/voice-speech.js"
 VOICE_PLAYBACK_JS = ROOT / "ui/js/voice-playback.js"
 VOICE_COMMAND_CENTER_JS = ROOT / "ui/js/voice-command-center.js"
+VOICE_CONVERSATION_JS = ROOT / "ui/js/voice-conversation.js"
 
 
 def _run_voice_script(files: list[Path], body: str):
@@ -69,6 +70,7 @@ def _run_voice_script(files: list[Path], body: str):
           console,
           setTimeout,
           clearTimeout,
+          requestAnimationFrame: (cb) => setTimeout(cb, 0),
         }};
         ctx.window.window = ctx.window;
         ctx.globalThis = ctx;
@@ -190,6 +192,52 @@ class VoiceFrontendTests(unittest.TestCase):
         self.assertEqual(payload["afterClear"], "The latest voice response will appear here.")
         self.assertEqual(payload["responseAfterNewMessage"], "New response after clear")
 
+    def test_voice_command_center_prefers_text_dock_draft_for_transcript_display(self):
+        payload = _run_voice_script(
+            [VOICE_COMMAND_CENTER_JS],
+            """
+            const mixin = ctx.window.axonVoiceCommandCenterMixin();
+            const app = {
+              voiceTranscript: 'stale transcript',
+              chatInput: '',
+              voiceConversation: {
+                textDockOpen: true,
+                textDraft: 'Open the most recent PDF in Documents',
+              },
+            };
+            Object.assign(app, mixin);
+            console.log(JSON.stringify({
+              transcript: app.voiceDisplayTranscript(),
+            }));
+            """,
+        )
+
+        self.assertEqual(payload["transcript"], "Open the most recent PDF in Documents")
+
+    def test_voice_command_center_rephrases_outside_directory_error(self):
+        payload = _run_voice_script(
+            [VOICE_COMMAND_CENTER_JS],
+            """
+            const mixin = ctx.window.axonVoiceCommandCenterMixin();
+            const app = {
+              chatMessages: [{
+                id: 10,
+                role: 'assistant',
+                content: 'ERROR: Access outside the allowed directories is not allowed.',
+              }],
+              chatLoading: false,
+              liveOperator: { detail: '' },
+              voiceConversation: {},
+            };
+            Object.assign(app, mixin);
+            console.log(JSON.stringify({
+              response: app.voiceDisplayResponse(),
+            }));
+            """,
+        )
+
+        self.assertIn("outside the current workspace sandbox", payload["response"])
+
     def test_voice_playback_queues_multiple_browser_utterances_for_long_text(self):
         payload = _run_voice_script(
             [VOICE_SPEECH_JS, VOICE_PLAYBACK_JS],
@@ -221,8 +269,198 @@ class VoiceFrontendTests(unittest.TestCase):
         self.assertGreater(payload["utteranceCount"], 1)
         self.assertLessEqual(payload["longestUtterance"], 420)
         self.assertGreater(payload["totalLength"], 4000)
-        self.assertTrue(all(abs(rate - 0.92) < 0.001 for rate in payload["utteranceRates"]))
+        self.assertTrue(all(abs(rate - 0.85) < 0.001 for rate in payload["utteranceRates"]))
         self.assertEqual(payload["toast"], "")
+
+    def test_voice_playback_posts_numeric_rate_and_pitch_to_tts(self):
+        payload = _run_voice_script(
+            [VOICE_SPEECH_JS, VOICE_PLAYBACK_JS],
+            """
+            let requestBody = null;
+            ctx.fetch = async (_url, init) => {
+              requestBody = JSON.parse(init.body);
+              throw new Error('network disabled in test');
+            };
+            const mixin = ctx.window.axonVoicePlaybackMixin();
+            const app = {
+              settingsForm: {
+                azure_speech_region: 'eastus',
+                azure_voice: 'en-ZA-LeahNeural',
+                voice_speech_rate: '0.91',
+                voice_speech_pitch: '1.08',
+              },
+              voiceMode: false,
+              chatLoading: false,
+              voiceActive: false,
+              agentMode: false,
+              _currentAudio: null,
+              authHeaders(headers) { return headers; },
+              azureSpeechConfigured() { return true; },
+              showToast(message) { this.toast = message; },
+            };
+            Object.assign(app, mixin);
+            await app.speakMessage('Status report');
+            console.log(JSON.stringify({ requestBody, toast: app.toast || '' }));
+            """,
+        )
+
+        self.assertEqual(payload["requestBody"]["rate"], 0.91)
+        self.assertEqual(payload["requestBody"]["pitch"], 1.08)
+        self.assertEqual(payload["toast"], "")
+
+    def test_voice_conversation_text_dock_submits_draft_command(self):
+        payload = _run_voice_script(
+            [VOICE_CONVERSATION_JS],
+            """
+            const mixin = ctx.window.axonVoiceConversationMixin();
+            const app = {
+              showVoiceOrb: true,
+              voiceTranscript: '',
+              chatInput: '',
+              chatLoading: false,
+              voiceConversation: {},
+              syncVoiceTranscript(value) {
+                this.synced = value;
+                this.voiceTranscript = value;
+                this.chatInput = value;
+              },
+              async sendVoiceCommand() {
+                this.sent = this.voiceTranscript;
+              },
+            };
+            Object.assign(app, mixin);
+            app.toggleVoiceTextDock(true);
+            app.voiceConversation.textDraft = 'Run diagnostics for the active workspace';
+            await app.submitVoiceTextDock();
+            console.log(JSON.stringify({
+              textDockOpen: app.voiceConversation.textDockOpen,
+              synced: app.synced,
+              sent: app.sent,
+            }));
+            """,
+        )
+
+        self.assertFalse(payload["textDockOpen"])
+        self.assertEqual(payload["synced"], "Run diagnostics for the active workspace")
+        self.assertEqual(payload["sent"], "Run diagnostics for the active workspace")
+
+    def test_voice_conversation_marks_awaiting_reply_after_playback(self):
+        payload = _run_voice_script(
+            [VOICE_CONVERSATION_JS],
+            """
+            const mixin = ctx.window.axonVoiceConversationMixin();
+            const app = {
+              showVoiceOrb: true,
+              reactorAsleep: false,
+              chatLoading: false,
+              voiceConversation: {},
+              voiceInputAvailable() { return false; },
+            };
+            Object.assign(app, mixin);
+            app.onVoiceReplyPlaybackComplete('Status report complete. Awaiting your next instruction.');
+            console.log(JSON.stringify({
+              awaitingReply: app.voiceConversation.awaitingReply,
+              stateCaption: app.voiceConversationStateCaption(),
+              preview: app.voiceConversation.lastReplyPreview,
+            }));
+            """,
+        )
+
+        self.assertTrue(payload["awaitingReply"])
+        self.assertEqual(payload["stateCaption"], "Awaiting reply")
+        self.assertIn("Status report complete", payload["preview"])
+
+    def test_voice_conversation_surfaces_external_file_approval_copy(self):
+        payload = _run_voice_script(
+            [VOICE_CONVERSATION_JS],
+            """
+            const mixin = ctx.window.axonVoiceConversationMixin();
+            const app = {
+              showVoiceOrb: true,
+              reactorAsleep: false,
+              chatLoading: false,
+              voiceConversation: {},
+              terminal: { approvalRequired: false },
+              currentPendingAgentApproval() {
+                return {
+                  action: {
+                    action_type: 'file_read',
+                    operation: 'read',
+                    path: '/home/edp/Documents/demo.pdf',
+                  },
+                };
+              },
+              consoleProviderIdentity() { return { providerLabel: '' }; },
+              hudShowApproval(detail) {
+                this.hudDetail = detail;
+                this.hudApprovalPending = true;
+              },
+              hudDismissApproval() {},
+              hudHideBeam() {},
+              hudShowBeam() {},
+            };
+            Object.assign(app, mixin);
+            app.syncVoiceCommandCenterRuntime();
+            console.log(JSON.stringify({
+              label: app.voiceApprovalLabel(),
+              summary: app.voiceApprovalSummary(),
+              detail: app.hudDetail || '',
+            }));
+            """,
+        )
+
+        self.assertEqual(payload["label"], "Approve file access")
+        self.assertIn("outside the current workspace", payload["summary"])
+        self.assertIn("/home/edp/Documents/demo.pdf", payload["detail"])
+
+    def test_voice_conversation_syncs_terminal_overlay_from_live_terminal(self):
+        payload = _run_voice_script(
+            [VOICE_CONVERSATION_JS],
+            """
+            const mixin = ctx.window.axonVoiceConversationMixin();
+            const app = {
+              showVoiceOrb: true,
+              reactorAsleep: false,
+              chatLoading: true,
+              voiceConversation: {},
+              terminal: { approvalRequired: false },
+              dashboardLiveTerminalSession() {
+                return { title: 'Workspace Terminal', running: true, status: 'running', active_command: 'npm test' };
+              },
+              dashboardLiveTerminalDetail() {
+                return {
+                  recent_events: [
+                    { event_type: 'command', content: 'npm test' },
+                    { event_type: 'output', content: 'Ran 32 tests' },
+                    { event_type: 'status', content: 'completed' },
+                  ],
+                };
+              },
+              consoleProviderIdentity() { return { providerLabel: 'CLI Agent' }; },
+              hudShowTerminal(title, lines) {
+                this.hudTitle = title;
+                this.hudLines = lines;
+                this.hudTerminalVisible = true;
+              },
+              hudHideBeam() {},
+              hudShowBeam(label) { this.beam = label; },
+            };
+            Object.assign(app, mixin);
+            app.syncVoiceCommandCenterRuntime();
+            console.log(JSON.stringify({
+              hudTerminalVisible: app.hudTerminalVisible,
+              hudTitle: app.hudTitle,
+              hudLines: app.hudLines,
+              beam: app.beam,
+            }));
+            """,
+        )
+
+        self.assertTrue(payload["hudTerminalVisible"])
+        self.assertIn("Workspace Terminal", payload["hudTitle"])
+        self.assertEqual(payload["hudLines"][0], "$ npm test")
+        self.assertIn("Ran 32 tests", payload["hudLines"][1])
+        self.assertEqual(payload["beam"], "CLI Agent")
 
 
 if __name__ == "__main__":

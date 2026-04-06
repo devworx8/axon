@@ -66,6 +66,10 @@ export function SettingsTabScreen({
       onToggleContinuousForegroundMonitoring={(value) => settings.setSettings((current) => ({ ...current, continuousForegroundMonitoring: value }))}
       onChangeAxonVoiceProvider={(value) => settings.setSettings((current) => ({ ...current, axonVoiceProvider: value }))}
       onChangeAxonVoiceIdentity={(value) => settings.setSettings((current) => ({ ...current, axonVoiceIdentity: value }))}
+      onChangeAzureSpeechKey={(value) => settings.setSettings((current) => ({ ...current, azureSpeechKey: value }))}
+      onChangeAzureSpeechRegion={(value) => settings.setSettings((current) => ({ ...current, azureSpeechRegion: value }))}
+      onChangeVoiceSpeechRate={(value) => settings.setSettings((current) => ({ ...current, voiceSpeechRate: value }))}
+      onChangeVoiceSpeechPitch={(value) => settings.setSettings((current) => ({ ...current, voiceSpeechPitch: value }))}
       vaultStatus={vaultStatus}
       vaultProviderKeys={vaultProviderKeys}
       vaultBusy={vaultBusy}

@@ -57,3 +57,17 @@ export async function speakAxonReply(payload: AxonSpeakRequest, config?: Compani
     config,
   );
 }
+
+export async function pushVoiceSettings(
+  settings: Record<string, string | null>,
+  config?: CompanionConfig,
+) {
+  return axonRequest<{ ok: boolean; updated: string[] }>(
+    '/api/mobile/axon/voice-settings',
+    {
+      method: 'POST',
+      body: JSON.stringify({ settings }),
+    },
+    config,
+  );
+}

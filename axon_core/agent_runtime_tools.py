@@ -129,10 +129,21 @@ def build_tool_registry(
         except (TypeError, ValueError):
             return None
 
+    def _file_approval_action(operation: str, resolved: str) -> dict[str, Any]:
+        return build_edit_approval_action(
+            operation,
+            resolved,
+            workspace_id=_runtime_workspace_id(),
+            session_id=str(current_agent_runtime_context_fn().get("agent_session_id") or ""),
+            workspace_root=active_workspace_root_fn(),
+        )
+
     def _tool_read_file(path: str, max_kb: int = 32) -> str:
         resolved = os.path.realpath(os.path.expanduser(path))
         if not tool_path_allowed_fn(resolved):
-            return "ERROR: Access outside the allowed directories is not allowed."
+            approval_action = _file_approval_action("read", resolved)
+            if not action_is_allowed_fn(approval_action):
+                return f"BLOCKED_EDIT:read:{resolved}"
         if not os.path.exists(resolved):
             return f"ERROR: File not found: {resolved}"
         if os.path.isdir(resolved):
@@ -150,7 +161,9 @@ def build_tool_registry(
     def _tool_list_dir(path: str = "~") -> str:
         resolved = os.path.realpath(os.path.expanduser(path))
         if not tool_path_allowed_fn(resolved):
-            return "ERROR: Access outside the allowed directories is not allowed."
+            approval_action = _file_approval_action("list", resolved)
+            if not action_is_allowed_fn(approval_action):
+                return f"BLOCKED_EDIT:list:{resolved}"
         if not os.path.exists(resolved):
             return f"ERROR: Path not found: {resolved}"
         if not os.path.isdir(resolved):
@@ -228,7 +241,9 @@ def build_tool_registry(
     def _tool_git_status(path: str = "~") -> str:
         resolved = os.path.realpath(os.path.expanduser(path))
         if not tool_path_allowed_fn(resolved):
-            return "ERROR: Access outside the allowed directories."
+            approval_action = _file_approval_action("git_status", resolved)
+            if not action_is_allowed_fn(approval_action):
+                return f"BLOCKED_EDIT:git_status:{resolved}"
         if not os.path.exists(resolved):
             return f"ERROR: Path not found: {resolved}"
         status = _tool_shell_cmd("git status --short", cwd=resolved)
@@ -243,7 +258,9 @@ def build_tool_registry(
     ) -> str:
         resolved = os.path.realpath(os.path.expanduser(path))
         if not tool_path_allowed_fn(resolved):
-            return "ERROR: Access outside the allowed directories."
+            approval_action = _file_approval_action("search", resolved)
+            if not action_is_allowed_fn(approval_action):
+                return f"BLOCKED_EDIT:search:{resolved}"
         includes = " ".join(f"--include={item}" for item in glob.split())
         cmd = f"grep -rn --max-count=3 {includes} -l {shlex.quote(pattern)} {shlex.quote(resolved)}"
         result = _tool_shell_cmd(cmd)
@@ -251,15 +268,7 @@ def build_tool_registry(
 
     def _tool_write_file(path: str, content: str) -> str:
         resolved = os.path.realpath(os.path.expanduser(path))
-        if not tool_path_allowed_fn(resolved):
-            return "ERROR: Access outside the allowed directories."
-        approval_action = build_edit_approval_action(
-            "write",
-            resolved,
-            workspace_id=_runtime_workspace_id(),
-            session_id=str(current_agent_runtime_context_fn().get("agent_session_id") or ""),
-            workspace_root=active_workspace_root_fn(),
-        )
+        approval_action = _file_approval_action("write", resolved)
         if not action_is_allowed_fn(approval_action):
             return f"BLOCKED_EDIT:write:{resolved}"
         os.makedirs(os.path.dirname(resolved), exist_ok=True)
@@ -272,15 +281,7 @@ def build_tool_registry(
 
     def _tool_create_file(path: str, content: str = "") -> str:
         resolved = os.path.realpath(os.path.expanduser(path))
-        if not tool_path_allowed_fn(resolved):
-            return "ERROR: Access outside the allowed directories."
-        approval_action = build_edit_approval_action(
-            "create",
-            resolved,
-            workspace_id=_runtime_workspace_id(),
-            session_id=str(current_agent_runtime_context_fn().get("agent_session_id") or ""),
-            workspace_root=active_workspace_root_fn(),
-        )
+        approval_action = _file_approval_action("create", resolved)
         if not action_is_allowed_fn(approval_action):
             return f"BLOCKED_EDIT:create:{resolved}"
         if os.path.exists(resolved):

@@ -1360,6 +1360,7 @@ function axonDashboardMixin() {
         if (idx >= 0) nextSessions[idx] = { ...nextSessions[idx], ...detail };
         else nextSessions.unshift(detail);
         this.terminal.sessions = nextSessions;
+        this.syncVoiceCommandCenterRuntime?.();
       } catch (e) {
         if (!silent) this.showToast(`Terminal detail failed: ${e.message}`);
       }
@@ -1400,6 +1401,7 @@ function axonDashboardMixin() {
           this.showToast('Terminal command started');
         }
         await this.loadTerminalSessionDetail(this.terminal.activeSessionId, { silent: true });
+        this.syncVoiceCommandCenterRuntime?.();
       } catch (e) {
         this.showToast(`Terminal run failed: ${e.message}`);
       }
@@ -1413,6 +1415,7 @@ function axonDashboardMixin() {
         const res = await this.api('POST', `/api/terminal/sessions/${this.terminal.activeSessionId}/stop`);
         this.showToast(res.message || 'Command stopped');
         await this.loadTerminalSessionDetail(this.terminal.activeSessionId, { silent: true });
+        this.syncVoiceCommandCenterRuntime?.();
       } catch (e) {
         this.showToast(`Stop failed: ${e.message}`);
       }

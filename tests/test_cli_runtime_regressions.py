@@ -2172,49 +2172,43 @@ class MemorySyncRegressionTests(unittest.TestCase):
 
 class RuntimeStateRegressionTests(unittest.IsolatedAsyncioTestCase):
     async def test_compute_workspace_revision_supports_sqlite_row_results(self):
-        with sqlite3.connect(":memory:", check_same_thread=False) as conn:
+        with sqlite3.connect(":memory:") as conn:
             conn.row_factory = sqlite3.Row
 
-            await asyncio.to_thread(
-                conn.execute,
+            conn.execute(
                 "CREATE TABLE projects (id INTEGER PRIMARY KEY, created_at TEXT, updated_at TEXT)",
             )
-            await asyncio.to_thread(
-                conn.execute,
+            conn.execute(
                 "CREATE TABLE prompts (project_id INTEGER, created_at TEXT, updated_at TEXT)",
             )
-            await asyncio.to_thread(
-                conn.execute,
+            conn.execute(
                 "CREATE TABLE tasks (project_id INTEGER, created_at TEXT, updated_at TEXT)",
             )
-            await asyncio.to_thread(
-                conn.execute,
+            conn.execute(
                 "CREATE TABLE resources (workspace_id INTEGER, created_at TEXT, updated_at TEXT)",
             )
-            await asyncio.to_thread(
-                conn.execute,
+            conn.execute(
                 "CREATE TABLE memory_items (workspace_id INTEGER, created_at TEXT, updated_at TEXT)",
             )
-            await asyncio.to_thread(
-                conn.execute,
+            conn.execute(
                 "INSERT INTO projects (id, created_at, updated_at) VALUES (1, '2026-04-03T08:00:00Z', '2026-04-03T09:00:00Z')",
             )
-            await asyncio.to_thread(conn.commit)
+            conn.commit()
 
             class AsyncSqliteCompat:
                 def __init__(self, db_conn):
                     self._conn = db_conn
 
                 class _CursorCompat:
-                    def __init__(self, cursor):
-                        self._cursor = cursor
+                    def __init__(self, row):
+                        self._row = row
 
                     async def fetchone(self):
-                        return await asyncio.to_thread(self._cursor.fetchone)
+                        return self._row
 
                 async def execute(self, sql, params=()):
-                    cursor = await asyncio.to_thread(self._conn.execute, sql, params)
-                    return self._CursorCompat(cursor)
+                    row = self._conn.execute(sql, params).fetchone()
+                    return self._CursorCompat(row)
 
             revision = await runtime_state.compute_workspace_revision(AsyncSqliteCompat(conn), 1)
 

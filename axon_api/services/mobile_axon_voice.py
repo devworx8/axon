@@ -20,7 +20,7 @@ from axon_api.services.local_voice_execution import speak_local_text
 from axon_api.services.local_voice_runtime import local_voice_paths, local_voice_status
 from axon_data import get_all_settings
 
-DEFAULT_AZURE_VOICE = "en-ZA-LeahNeural"
+DEFAULT_AZURE_VOICE = "en-ZA-LukeNeural"
 _PIPER_VOICE_CACHE: dict[str, object] = {}
 
 

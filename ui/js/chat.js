@@ -301,7 +301,8 @@ function axonChatMixin() {
       this.chatMessages.forEach(m => {
         if (m.streaming) m.streaming = false;
       });
-      this.chatLoading = false;
+      if (typeof this.stopWorkspaceRun === 'function') this.stopWorkspaceRun();
+      else this.chatLoading = false;
       this.clearLiveOperator(400);
       this.showToast('Generation stopped');
     },
@@ -504,7 +505,10 @@ function axonChatMixin() {
         this.agentMode = false;
       }
       const msg = this.chatInput.trim();
-      if (!msg || this.chatLoading) return;
+      const workspaceBusy = typeof this.currentWorkspaceRunActive === 'function'
+        ? this.currentWorkspaceRunActive()
+        : !!this.chatLoading;
+      if (!msg || workspaceBusy) return;
       const mode = this.resolveChatMode(msg);
       const researchPack = this.currentResearchPack();
       const packResources = researchPack?.resources || [];
@@ -534,7 +538,8 @@ function axonChatMixin() {
         imageAttachments: [...(this.imageAttachments || [])],
       });
       const workspaceId = String(this.chatProjectId || '').trim();
-      this.chatLoading = true;
+      this.setWorkspaceRunLoading?.(workspaceId, true);
+      if (typeof this.setWorkspaceRunLoading !== 'function') this.chatLoading = true;
       this.clearImageAttachments?.();
       this.beginLiveOperator(mode, msg, workspaceId);
       this.scrollChat();
@@ -547,7 +552,8 @@ function axonChatMixin() {
       } catch(e) {
         if (e.name === 'AbortError') {
           // User clicked stop — not an error
-          this.chatLoading = false;
+          this.setWorkspaceRunLoading?.(workspaceId, false);
+          if (typeof this.setWorkspaceRunLoading !== 'function') this.chatLoading = false;
           this.scrollChat();
           return;
         }
@@ -567,7 +573,8 @@ function axonChatMixin() {
         this.clearLiveOperator(4200, workspaceId);
       }
 
-      this.chatLoading = false;
+      this.setWorkspaceRunLoading?.(workspaceId, false);
+      if (typeof this.setWorkspaceRunLoading !== 'function') this.chatLoading = false;
       this.scrollChat();
     },
 
@@ -581,7 +588,8 @@ function axonChatMixin() {
         : (researchPack?.resources || []).map(resource => Number(resource.id)).filter(Boolean);
       this.chatMessages = this.chatMessages.filter(m => m.id !== errorMsg.id);
       const workspaceId = String(this.chatProjectId || '').trim();
-      this.chatLoading = true;
+      this.setWorkspaceRunLoading?.(workspaceId, true);
+      if (typeof this.setWorkspaceRunLoading !== 'function') this.chatLoading = true;
       this.beginLiveOperator(mode, msg, workspaceId);
       this.scrollChat();
       const respId = Date.now() + 1;
@@ -590,7 +598,8 @@ function axonChatMixin() {
         await this.streamChatMessage(msg, mode, respId, resourceIds, {}, workspaceId);
       } catch(e) {
         if (e.name === 'AbortError') {
-          this.chatLoading = false;
+          this.setWorkspaceRunLoading?.(workspaceId, false);
+          if (typeof this.setWorkspaceRunLoading !== 'function') this.chatLoading = false;
           this.scrollChat();
           return;
         }
@@ -611,7 +620,8 @@ function axonChatMixin() {
         this.updateLiveOperator(mode, { type: 'error', message: isFetch ? 'Connection lost.' : e.message }, workspaceId);
         this.clearLiveOperator(4200, workspaceId);
       }
-      this.chatLoading = false;
+      this.setWorkspaceRunLoading?.(workspaceId, false);
+      if (typeof this.setWorkspaceRunLoading !== 'function') this.chatLoading = false;
       this.scrollChat();
     },
 

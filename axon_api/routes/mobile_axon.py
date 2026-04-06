@@ -9,6 +9,7 @@ from axon_api.routes.mobile_axon_models import (
     MobileAxonDisarmRequest,
     MobileAxonEventRequest,
     MobileAxonSpeakRequest,
+    MobileVoiceSettingsRequest,
 )
 from axon_api.services.mobile_axon_audio import build_mobile_axon_audio_payload
 from axon_api.services.companion_request_auth import require_companion_context
@@ -105,3 +106,23 @@ async def mobile_axon_speak(request: Request, body: MobileAxonSpeakRequest):
             voice_identity=body.voice_identity,
         )
     return payload
+
+
+@router.post("/api/mobile/axon/voice-settings")
+async def mobile_axon_voice_settings(request: Request, body: MobileVoiceSettingsRequest):
+    """Push Azure speech credentials and voice tuning from mobile to backend settings."""
+    await require_companion_context(request)
+    ALLOWED_KEYS = {
+        "azure_speech_key",
+        "azure_speech_region",
+        "voice_speech_rate",
+        "voice_speech_pitch",
+    }
+    updates = {k: v for k, v in body.settings.items() if k in ALLOWED_KEYS and v is not None}
+    if not updates:
+        return {"ok": True, "updated": []}
+    async with get_db() as db:
+        from axon_data.settings import set_setting
+        for key, value in updates.items():
+            await set_setting(db, key, str(value))
+    return {"ok": True, "updated": list(updates.keys())}

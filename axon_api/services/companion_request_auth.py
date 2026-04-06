@@ -55,3 +55,10 @@ async def require_companion_context(request: Request) -> tuple[str, dict[str, An
     if not token or not auth_row or not device_row:
         raise HTTPException(401, "Companion auth token required")
     return token, auth_row, device_row
+
+
+def require_same_device(device_row: dict[str, Any], target_device_id: int) -> int:
+    device_id = int(device_row.get("id") or 0)
+    if device_id <= 0 or device_id != int(target_device_id):
+        raise HTTPException(403, "This companion token cannot access another device")
+    return device_id

@@ -24,6 +24,25 @@
           </div>
         </div>
 
+        <div class="voice-control-rail">
+          <button class="voice-control-chip" :class="voiceMode ? 'voice-control-chip--active' : ''" @click="toggleVoiceMode()">
+            <span class="voice-control-chip__dot"></span>
+            <span>Auto-speak</span>
+          </button>
+          <button class="voice-control-chip" :class="voiceConversation.handsFree ? 'voice-control-chip--active' : ''" @click="voiceConversation.handsFree = !voiceConversation.handsFree; syncVoiceCommandCenterRuntime()">
+            <span class="voice-control-chip__dot"></span>
+            <span>Hands-free</span>
+          </button>
+          <button class="voice-control-chip" :class="voiceConversation.textDockOpen ? 'voice-control-chip--active' : ''" @click="toggleVoiceTextDock()">
+            <span class="voice-control-chip__dot"></span>
+            <span>Text dock</span>
+          </button>
+          <button class="voice-control-chip" :class="hudTerminalVisible ? 'voice-control-chip--active' : ''" @click="voiceConversation.terminalPinned = !voiceConversation.terminalPinned; syncVoiceCommandCenterRuntime()">
+            <span class="voice-control-chip__dot"></span>
+            <span>Live terminal</span>
+          </button>
+        </div>
+
         <!-- ── Mobile: compact stacked layout ── -->
         <div class="md:hidden flex flex-col items-center gap-4 w-full">
           <!-- Reactor (compact on mobile) -->
@@ -113,8 +132,13 @@
             <div class="text-[11px] tracking-[0.12em] uppercase text-slate-500 mt-1" x-text="voiceStateCaption()"></div>
           </div>
 
+          <div x-show="voiceConversation.awaitingReply" class="voice-awaiting-banner w-full max-w-[24rem]" x-transition>
+            <div class="voice-awaiting-banner__label">Conversation hold</div>
+            <div class="voice-awaiting-banner__detail" x-text="voiceStatusHint()"></div>
+          </div>
+
           <!-- Transcript card -->
-          <div class="w-full rounded-2xl border border-slate-800/60 bg-slate-900/50 p-3.5" style="backdrop-filter:blur(8px);">
+          <div class="voice-mobile-panel">
             <div class="flex items-center gap-2 mb-2">
               <span class="w-1.5 h-1.5 rounded-full bg-slate-600 shrink-0" :class="voiceRecordingActive() ? 'bg-cyan-400 animate-pulse' : ''"></span>
               <span class="text-[10px] tracking-[0.2em] uppercase text-slate-500 font-semibold">Transcript</span>
@@ -123,13 +147,13 @@
           </div>
 
           <!-- Response card -->
-          <div class="w-full rounded-2xl border border-cyan-500/15 bg-slate-900/60 p-3.5" style="backdrop-filter:blur(8px);"
-               :class="voiceResponseAvailable() ? 'border-cyan-500/30' : ''">
+          <div class="voice-mobile-panel voice-mobile-panel--response"
+               :class="voiceResponseAvailable() ? 'voice-mobile-panel--active' : ''">
             <div class="flex items-center gap-2 mb-2">
               <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="voiceResponseAvailable() ? 'bg-cyan-400 shadow-[0_0_6px_rgba(34,211,238,0.6)]' : 'bg-slate-600'"></span>
               <span class="text-[10px] tracking-[0.2em] uppercase font-semibold" :class="voiceResponseAvailable() ? 'text-cyan-400' : 'text-slate-500'">Response</span>
             </div>
-            <div class="text-sm leading-relaxed min-h-[36px] max-h-[120px] overflow-y-auto"
+            <div class="text-sm leading-relaxed min-h-[72px] max-h-[220px] overflow-y-auto"
                  :class="voiceResponseAvailable() ? 'text-slate-200' : 'text-slate-500'"
                  x-text="voiceDisplayResponse()"></div>
           </div>
@@ -141,7 +165,9 @@
         <div class="hidden md:block w-full">
         <div class="voice-arena">
           <!-- Left float: Transcript -->
-          <div class="voice-float voice-float--left">
+          <div class="voice-float voice-float--left"
+               x-show="!voiceConversation.textDockOpen"
+               x-transition.opacity>
             <div class="voice-float__edge"></div>
             <div class="voice-float__inner">
               <div class="voice-float__label">
@@ -248,11 +274,15 @@
           <div class="voice-stage__state-caption" x-text="voiceStateCaption()"></div>
           <div class="voice-stage__state-hint" x-text="voiceStatusHint()"></div>
           <div x-show="voiceSessionStartedAt" class="voice-stage__started" x-text="'Started ' + timeAgo(voiceSessionStartedAt)"></div>
+          <div x-show="voiceConversation.awaitingReply" class="voice-awaiting-banner" x-transition>
+            <div class="voice-awaiting-banner__label">Conversation hold</div>
+            <div class="voice-awaiting-banner__detail" x-text="voiceStatusHint()"></div>
+          </div>
         </div>
           </div><!-- /voice-arena__center -->
 
           <!-- Right float: Response -->
-          <div class="voice-float voice-float--right" :class="voiceResponseAvailable() ? 'voice-float--active' : ''">
+          <div class="voice-float voice-float--right voice-float--response" :class="voiceResponseAvailable() ? 'voice-float--active' : ''">
             <div class="voice-float__edge"></div>
             <div class="voice-float__scanline"></div>
             <div class="voice-float__inner">
@@ -266,6 +296,26 @@
         </div><!-- /voice-arena -->
 
 
+        </div>
+
+        <div class="voice-mission-rail" x-show="voiceMissionTimeline().length && !voiceConversation.textDockOpen" x-transition>
+          <div class="voice-mission-rail__header">
+            <div class="voice-mission-rail__eyebrow">Mission timeline</div>
+            <div class="voice-mission-rail__summary" x-text="voiceMissionSummary()"></div>
+          </div>
+          <div class="voice-mission-rail__grid">
+            <template x-for="entry in voiceMissionTimeline()" :key="entry.id">
+              <div class="voice-mission-step" :class="'voice-mission-step--' + voiceMissionTone(entry.phase)">
+                <div class="voice-mission-step__phase">
+                  <span class="voice-mission-step__dot"></span>
+                  <span x-text="entry.phase"></span>
+                </div>
+                <div class="voice-mission-step__title" x-text="entry.title"></div>
+                <div class="voice-mission-step__detail" x-text="entry.detail || 'Axon is staging the next action.'"></div>
+                <div class="voice-mission-step__time" x-show="entry.at" x-text="timeAgo(entry.at)"></div>
+              </div>
+            </template>
+          </div>
         </div>
 
       </div>
@@ -295,14 +345,58 @@
               <div class="hud-approval__icon">⚠</div>
               <div class="hud-approval__title">Approval Required</div>
             </div>
-            <div class="hud-approval__body" x-text="hudApprovalDetail || 'Axon needs your permission to proceed.'"></div>
+            <div class="hud-approval__body" x-text="voiceApprovalSummary()"></div>
+            <div class="hud-approval__preview" x-show="hudApprovalDetail" x-text="hudApprovalDetail"></div>
             <div class="hud-approval__actions">
-              <button class="hud-approval__btn hud-approval__btn--deny" @click="hudDismissApproval()">Deny</button>
-              <button class="hud-approval__btn hud-approval__btn--approve" @click="hudDismissApproval()">Approve</button>
+              <button class="hud-approval__btn hud-approval__btn--deny" @click="denyVoiceCenterAction()">Deny</button>
+              <button class="hud-approval__btn hud-approval__btn--approve" @click="approveVoiceCenterAction()" x-text="voiceApprovalLabel()"></button>
             </div>
           </div>
         </div>
       </template>
+
+      <div class="voice-command-dock" :class="voiceConversation.textDockOpen ? 'voice-command-dock--active' : ''" x-show="showVoiceOrb" x-transition>
+        <button class="voice-command-dock__toggle" @click="toggleVoiceTextDock()">
+          <span class="voice-control-chip__dot"></span>
+          <span class="voice-command-dock__toggle-label">
+            <span class="voice-command-dock__toggle-title">Text command</span>
+            <span class="voice-command-dock__toggle-detail" x-text="voiceTextDockLabel()"></span>
+          </span>
+        </button>
+
+        <div class="voice-command-dock__panel" x-show="voiceConversation.textDockOpen" x-transition>
+          <div class="voice-command-dock__header">
+            <div>
+              <div class="voice-command-dock__eyebrow">Fallback text channel</div>
+              <div class="voice-command-dock__hint">Type without leaving voice mode.</div>
+            </div>
+            <button class="voice-command-dock__btn" @click="toggleVoiceTextDock(false)">Close</button>
+          </div>
+
+          <textarea
+            x-ref="voiceTextDockInput"
+            class="voice-command-dock__textarea"
+            x-model="voiceConversation.textDraft"
+            :placeholder="voiceTextDockPlaceholder()"
+            @keydown.meta.enter.prevent="submitVoiceTextDock()"
+            @keydown.ctrl.enter.prevent="submitVoiceTextDock()"></textarea>
+
+          <div class="voice-command-dock__prompts">
+            <template x-for="prompt in voiceQuickPrompts()" :key="prompt">
+              <button class="voice-command-dock__prompt" @click="applyVoiceQuickPrompt(prompt)" x-text="prompt"></button>
+            </template>
+          </div>
+
+          <div class="voice-command-dock__actions">
+            <div class="voice-command-dock__meta" x-text="voiceConversation.lastReplyPreview || 'Axon will keep the transcript and text composer in sync here.'"></div>
+            <div class="voice-command-dock__buttons">
+              <button class="voice-command-dock__btn" @click="startVoiceListening()">Listen</button>
+              <button class="voice-command-dock__btn" @click="clearVoiceTextDock(true)">Clear</button>
+              <button class="voice-command-dock__btn voice-command-dock__btn--primary" :disabled="chatLoading" @click="submitVoiceTextDock()">Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
     </div>
   </div>

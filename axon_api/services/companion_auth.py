@@ -1,15 +1,15 @@
-"""Companion device registration and auth-session helpers."""
+"""Companion device registration, trust restore, and auth-session helpers."""
 
 from __future__ import annotations
 
 import json
 import hashlib
+import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from axon_data import (
-    get_active_companion_auth_sessions_for_device,
     get_companion_auth_session,
     get_companion_auth_session_by_access_hash,
     get_companion_auth_session_by_refresh_hash,
@@ -17,6 +17,7 @@ from axon_data import (
     get_companion_device_by_key,
     revoke_companion_auth_session,
     revoke_companion_auth_sessions_for_device,
+    update_companion_device_meta,
     upsert_companion_auth_session,
     upsert_companion_device,
 )
@@ -32,6 +33,23 @@ def _hash_token(token: str) -> str:
 
 def _issue_tokens() -> tuple[str, str]:
     return secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+
+
+def _parse_meta(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    try:
+        loaded = json.loads(text)
+    except Exception:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _json_meta(meta: dict[str, Any]) -> str:
+    return json.dumps(meta, sort_keys=True, ensure_ascii=True)
 
 
 async def register_companion_device(
@@ -61,6 +79,29 @@ async def register_companion_device(
     )
     row = await get_companion_device(db, device_id)
     return dict(row) if row else {"id": device_id, "device_key": device_key, "name": name}
+
+
+async def issue_companion_device_restore_token(
+    db,
+    *,
+    device_id: int,
+) -> str:
+    row = await get_companion_device(db, device_id)
+    if not row:
+        raise ValueError(f"Companion device {device_id} not found")
+    restore_token = secrets.token_urlsafe(32)
+    meta = _parse_meta(row["meta_json"])
+    meta.update({
+        "restore_token_hash": _hash_token(restore_token),
+        "restore_token_issued_at": _now_iso(),
+    })
+    await update_companion_device_meta(
+        db,
+        device_id,
+        meta_json=_json_meta(meta),
+        commit=True,
+    )
+    return restore_token
 
 
 async def issue_companion_auth_session(
@@ -121,6 +162,40 @@ async def resolve_companion_auth_session(
         row = await get_companion_auth_session_by_refresh_hash(db, _hash_token(refresh_token))
         return dict(row) if row else None
     return None
+
+
+async def restore_companion_auth_session(
+    db,
+    *,
+    device_key: str,
+    restore_token: str,
+    ttl_seconds: int = 60 * 60 * 24 * 30,
+) -> dict[str, Any] | None:
+    device_row = await get_companion_device_by_key(db, device_key)
+    if not device_row:
+        return None
+    device = dict(device_row)
+    if str(device.get("status") or "").strip().lower() == "revoked":
+        return None
+    meta = _parse_meta(device.get("meta_json"))
+    expected_hash = str(meta.get("restore_token_hash") or "").strip()
+    if not expected_hash:
+        return None
+    if not restore_token or not hmac.compare_digest(expected_hash, _hash_token(restore_token)):
+        return None
+    session = await issue_companion_auth_session(
+        db,
+        device_id=int(device["id"]),
+        ttl_seconds=ttl_seconds,
+        meta={"restored_from": "companion_restore"},
+    )
+    next_restore_token = await issue_companion_device_restore_token(db, device_id=int(device["id"]))
+    refreshed_device = await get_companion_device(db, int(device["id"]))
+    return {
+        "device": dict(refreshed_device) if refreshed_device else device,
+        "restore_token": next_restore_token,
+        **session,
+    }
 
 
 async def revoke_companion_device_auth(

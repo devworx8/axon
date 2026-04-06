@@ -56,14 +56,10 @@ function axonVoiceCommandCenterMixin() {
       }, 6800);
     },
 
-    /** Speak greeting at a slow, deliberate JARVIS pace using the configured voice */
+    /** Speak greeting using the configured voice profile */
     _speakGreeting(text) {
-      // Force a slow greeting rate that bypasses the normal clamp
-      this._greetingRateOverride = 0.15;
       if (typeof this.speakMessage === 'function') {
-        this.speakMessage(text).finally(() => {
-          this._greetingRateOverride = null;
-        });
+        this.speakMessage(text);
       }
     },
 
@@ -93,6 +89,7 @@ function axonVoiceCommandCenterMixin() {
     },
 
     async startVoiceListening() {
+      this.clearVoiceAwaitingReply?.();
       if (this.voiceActive) {
         await this.startVoice();
         if (String(this.voiceTranscript || '').trim()) {
@@ -139,12 +136,23 @@ function axonVoiceCommandCenterMixin() {
     },
 
     voiceDisplayTranscript() {
+      const dockDraft = String(
+        this.voiceConversation?.textDockOpen
+          ? (this.voiceConversation?.textDraft || this.chatInput || '')
+          : ''
+      ).trim();
+      if (dockDraft) return dockDraft;
       return String(this.voiceTranscript || '').trim() || 'Waiting for a voice command…';
     },
 
     voiceDisplayResponse() {
       const text = this.voiceLatestResponseText();
-      if (text) return text;
+      if (text) {
+        if (text.includes('ERROR: Access outside the allowed directories')) {
+          return 'That file or folder is outside the current workspace sandbox. Ask Axon to open the exact path again and approve the file-access prompt when it appears.';
+        }
+        return text;
+      }
       if (this.chatLoading) return 'Axon is processing your request…';
       return 'The latest voice response will appear here.';
     },
@@ -155,6 +163,8 @@ function axonVoiceCommandCenterMixin() {
 
     clearVoiceCommandCenterState() {
       this.clearVoiceTranscript?.();
+      this.clearVoiceTextDock?.();
+      this.clearVoiceAwaitingReply?.();
       this._voiceResponseDismissedAt = this.voiceLatestResponseMarker();
     },
 
@@ -165,8 +175,10 @@ function axonVoiceCommandCenterMixin() {
     },
 
     voiceStateCaption() {
+      const override = this.voiceConversationStateCaption?.();
+      if (override) return override;
       const state = typeof this.orbState === 'function' ? this.orbState() : 'idle';
-      if (this.reactorAsleep) return 'Sleeping — tap to wake';
+      if (this.reactorAsleep) return 'Sleeping - tap to wake';
       if (state === 'listening') return 'Microphone live';
       if (state === 'speaking') return 'Reply playback';
       if (state === 'thinking') return 'Reasoning in progress';

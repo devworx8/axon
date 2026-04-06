@@ -2,7 +2,10 @@ import { CompanionConfig, CompanionTokenPair } from '@/types/companion';
 
 const COMPANION_REFRESH_MARGIN_MS = 60_000;
 
+export type CompanionLinkState = 'unpaired' | 'checking' | 'linked' | 'offline' | 'repair_required';
+
 export const COMPANION_SESSION_EXPIRED_MESSAGE = 'Mobile operator session expired. Pair this device again.';
+export const COMPANION_REPAIR_REQUIRED_MESSAGE = 'Saved device trust is no longer valid. Pair this device again.';
 
 function parseExpiryMs(value?: string): number | null {
   const raw = String(value || '').trim();
@@ -44,6 +47,16 @@ export function clearCompanionSession(config: CompanionConfig): CompanionConfig 
   };
 }
 
+export function hasStoredCompanionPairing(config: CompanionConfig): boolean {
+  const hasDeviceIdentity = Boolean(String(config.deviceKey || '').trim() || Number(config.deviceId || 0) > 0);
+  const hasRestorePath = Boolean(
+    String(config.accessToken || '').trim()
+    || String(config.tokenPair?.refresh_token || '').trim()
+    || String(config.restoreToken || '').trim(),
+  );
+  return hasDeviceIdentity && hasRestorePath;
+}
+
 export function isCompanionAuthErrorMessage(value?: string | null): boolean {
   const lowered = String(value || '').trim().toLowerCase();
   if (!lowered) {
@@ -53,7 +66,44 @@ export function isCompanionAuthErrorMessage(value?: string | null): boolean {
     lowered.includes('companion auth token required')
     || lowered.includes('authentication required')
     || lowered.includes('invalid refresh token')
+    || lowered.includes('saved device trust is no longer valid')
+    || lowered.includes('restore token')
+    || lowered.includes('device trust')
+    || lowered.includes('device revoked')
     || lowered.includes('pair this device again')
     || lowered.includes('session expired')
+  );
+}
+
+export function isCompanionRepairRequiredMessage(value?: string | null): boolean {
+  const lowered = String(value || '').trim().toLowerCase();
+  if (!lowered) {
+    return false;
+  }
+  return (
+    lowered.includes('saved device trust is no longer valid')
+    || lowered.includes('pair this device again')
+    || lowered.includes('restore token')
+    || lowered.includes('device trust')
+    || lowered.includes('device revoked')
+    || lowered.includes('invalid refresh token')
+  );
+}
+
+export function isCompanionOfflineErrorMessage(value?: string | null): boolean {
+  const lowered = String(value || '').trim().toLowerCase();
+  if (!lowered) {
+    return false;
+  }
+  return (
+    lowered.includes('unable to reach live axon')
+    || lowered.includes('timed out')
+    || lowered.includes('timeout')
+    || lowered.includes('offline')
+    || lowered.includes('network request failed')
+    || lowered.includes('load failed')
+    || lowered.includes('fetch failed')
+    || lowered.includes('failed to fetch')
+    || lowered.includes('aborted')
   );
 }

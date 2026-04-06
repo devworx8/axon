@@ -3,6 +3,7 @@ import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import * as Speech from 'expo-speech';
 
 import { speakAxonReply } from '@/api/axon';
+import { pickBestVoice, VOICE_RATE, VOICE_PITCH } from '@/utils/pickVoice';
 import type { AxonVoiceProvider, CompanionConfig } from '@/types/companion';
 
 type AxonSpeechSettings = {
@@ -30,6 +31,12 @@ export function useAxonSpeech(
   const [error, setError] = useState<string | null>(null);
   const [provider, setProvider] = useState<string>(String(settings.axonVoiceProvider || 'cloud'));
   const speaking = Boolean(status.playing || fallbackSpeaking);
+  const voiceIdRef = useRef<string | undefined>(undefined);
+
+  /* Resolve shared voice once (same prefs as desktop) */
+  useEffect(() => {
+    pickBestVoice().then(id => { voiceIdRef.current = id; });
+  }, []);
 
   const stop = useCallback(() => {
     Speech.stop();
@@ -47,9 +54,9 @@ export function useAxonSpeech(
     setFallbackSpeaking(true);
     setProvider('device');
     Speech.speak(message, {
-      language: fallbackLocale(settings.axonVoiceIdentity),
-      rate: 0.97,
-      pitch: 0.9,
+      rate: VOICE_RATE,
+      pitch: VOICE_PITCH,
+      ...(voiceIdRef.current ? { voice: voiceIdRef.current } : { language: fallbackLocale(settings.axonVoiceIdentity) }),
       onDone: () => { setFallbackSpeaking(false); },
       onStopped: () => { setFallbackSpeaking(false); },
       onError: () => { setFallbackSpeaking(false); },

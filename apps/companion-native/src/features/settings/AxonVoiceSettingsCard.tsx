@@ -1,5 +1,6 @@
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import Slider from '@react-native-community/slider';
 
 import { MetricCard } from '@/components/MetricCard';
 import { SurfaceCard, SurfaceHeader } from '@/components/SurfaceCard';
@@ -25,6 +26,10 @@ export function AxonVoiceSettingsCard({
   onToggleContinuousForegroundMonitoring,
   onChangeAxonVoiceProvider,
   onChangeAxonVoiceIdentity,
+  onChangeAzureSpeechKey,
+  onChangeAzureSpeechRegion,
+  onChangeVoiceSpeechRate,
+  onChangeVoiceSpeechPitch,
 }: {
   settings: CompanionSettings;
   axonStatus?: AxonModeStatus | null;
@@ -37,6 +42,10 @@ export function AxonVoiceSettingsCard({
   onToggleContinuousForegroundMonitoring: (value: boolean) => void;
   onChangeAxonVoiceProvider: (value: 'cloud' | 'local' | 'device') => void;
   onChangeAxonVoiceIdentity: (value: string) => void;
+  onChangeAzureSpeechKey: (value: string) => void;
+  onChangeAzureSpeechRegion: (value: string) => void;
+  onChangeVoiceSpeechRate: (value: string) => void;
+  onChangeVoiceSpeechPitch: (value: string) => void;
 }) {
   const provider = String(axonStatus?.voice_provider || settings.axonVoiceProvider || 'cloud').toLowerCase();
   const providerReady = axonStatus?.voice_provider_ready ?? false;
@@ -129,12 +138,69 @@ export function AxonVoiceSettingsCard({
       <TextInput
         value={settings.axonVoiceIdentity}
         onChangeText={onChangeAxonVoiceIdentity}
-        placeholder="Voice identity, e.g. en-ZA-LeahNeural"
+        placeholder="Voice identity, e.g. en-ZA-LukeNeural"
         placeholderTextColor="#7b8aa3"
         autoCapitalize="none"
         autoCorrect={false}
         style={styles.input}
       />
+      <View style={styles.stack}>
+        <Text style={styles.sectionLabel}>Azure speech credentials</Text>
+        <TextInput
+          value={settings.azureSpeechKey}
+          onChangeText={onChangeAzureSpeechKey}
+          placeholder="Azure Speech API key"
+          placeholderTextColor="#7b8aa3"
+          autoCapitalize="none"
+          autoCorrect={false}
+          secureTextEntry
+          style={styles.input}
+        />
+        <TextInput
+          value={settings.azureSpeechRegion}
+          onChangeText={onChangeAzureSpeechRegion}
+          placeholder="Azure region, e.g. eastus"
+          placeholderTextColor="#7b8aa3"
+          autoCapitalize="none"
+          autoCorrect={false}
+          style={styles.input}
+        />
+      </View>
+      <View style={styles.stack}>
+        <Text style={styles.sectionLabel}>Speech tuning</Text>
+        <View style={styles.sliderRow}>
+          <Text style={styles.sliderLabel}>Rate</Text>
+          <View style={styles.sliderTrack}>
+            <Slider
+              minimumValue={0.5}
+              maximumValue={1.5}
+              step={0.05}
+              value={parseFloat(settings.voiceSpeechRate) || 0.85}
+              onSlidingComplete={(v: number) => onChangeVoiceSpeechRate(v.toFixed(2))}
+              minimumTrackTintColor="#38bdf8"
+              maximumTrackTintColor="#22304a"
+              thumbTintColor="#7dd3fc"
+            />
+          </View>
+          <Text style={styles.sliderValue}>{settings.voiceSpeechRate || '0.85'}</Text>
+        </View>
+        <View style={styles.sliderRow}>
+          <Text style={styles.sliderLabel}>Pitch</Text>
+          <View style={styles.sliderTrack}>
+            <Slider
+              minimumValue={0.5}
+              maximumValue={1.5}
+              step={0.05}
+              value={parseFloat(settings.voiceSpeechPitch) || 1.04}
+              onSlidingComplete={(v: number) => onChangeVoiceSpeechPitch(v.toFixed(2))}
+              minimumTrackTintColor="#38bdf8"
+              maximumTrackTintColor="#22304a"
+              thumbTintColor="#7dd3fc"
+            />
+          </View>
+          <Text style={styles.sliderValue}>{settings.voiceSpeechPitch || '1.04'}</Text>
+        </View>
+      </View>
       <Text style={styles.helper}>
         Cloud is the primary Axon voice when Azure speech is configured. Local uses Axon&apos;s synthesis backend. Device is the last-resort on-phone fallback.
       </Text>
@@ -275,5 +341,26 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
     fontSize: 12,
     lineHeight: 18,
+  },
+  sliderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  sliderLabel: {
+    color: '#94a3b8',
+    fontSize: 12,
+    fontWeight: '700',
+    width: 38,
+  },
+  sliderTrack: {
+    flex: 1,
+  },
+  sliderValue: {
+    color: '#7dd3fc',
+    fontSize: 12,
+    fontWeight: '800',
+    width: 36,
+    textAlign: 'right',
   },
 });

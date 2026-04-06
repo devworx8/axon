@@ -6,7 +6,6 @@ function axonVoicePlaybackMixin() {
   return {
 
     voiceSpeechRate() {
-      if (this._greetingRateOverride) return this._greetingRateOverride;
       const raw = Number.parseFloat(this.settingsForm?.voice_speech_rate);
       if (!Number.isFinite(raw)) return 0.85;
       return Math.max(0.50, Math.min(1.15, raw));
@@ -25,13 +24,10 @@ function axonVoicePlaybackMixin() {
       const voices = synthesis.getVoices();
       if (!Array.isArray(voices) || !voices.length) return null;
       const prefs = [
-        /google.*uk.*english.*female/i,
-        /google.*us.*english/i,
-        /microsoft.*zira/i,
         /microsoft.*david/i,
-        /samantha/i,
-        /karen/i,
-        /daniel/i,
+        /\bdaniel\b/i,
+        /google.*uk.*english.*male/i,
+        /google.*us.*english/i,
         /\bnatural\b/i,
         /\bneural\b/i,
         /\benhanced\b/i,
@@ -130,7 +126,7 @@ function axonVoicePlaybackMixin() {
               voice: this.settingsForm.azure_voice || 'en-GB-RyanNeural',
               region: this.settingsForm.azure_speech_region,
               rate: this.voiceSpeechRate(),
-              pitch: (() => { const d = Math.round((this.voiceSpeechPitch() - 1.0) * 100); return (d >= 0 ? '+' : '') + d + '%'; })(),
+              pitch: this.voiceSpeechPitch(),
             }),
           });
           if (!res.ok) {
@@ -199,12 +195,17 @@ function axonVoicePlaybackMixin() {
       this.stopSpeech();
       const chunks = this._speechChunks(text);
       if (!chunks.length) return;
+      const spokenText = chunks.join(' ');
+      this.onVoiceReplyPlaybackStarted?.(spokenText);
       const sessionId = Number(this._speechPlaybackSession || 0) + 1;
       this._speechPlaybackSession = sessionId;
 
       if (this.azureSpeechConfigured() && this.settingsForm.azure_speech_region) {
         try {
           await this._playAzureSpeechChunks(chunks, sessionId);
+          if (sessionId === this._speechPlaybackSession) {
+            this.onVoiceReplyPlaybackComplete?.(spokenText);
+          }
           return;
         } catch (error) {
           if (sessionId !== this._speechPlaybackSession) return;
@@ -216,6 +217,9 @@ function axonVoicePlaybackMixin() {
       }
 
       const spoke = await this._speakBrowserChunks(chunks, sessionId);
+      if (spoke && sessionId === this._speechPlaybackSession) {
+        this.onVoiceReplyPlaybackComplete?.(spokenText);
+      }
       if (!spoke && sessionId === this._speechPlaybackSession) {
         this.showToast?.('Speech playback is not available in this browser');
       }
@@ -235,6 +239,7 @@ function axonVoicePlaybackMixin() {
     },
 
     autoSpeakResponse(text) {
+      this.onVoiceResponseReady?.(text);
       if (this.voiceMode && this.speechOutputSupported) {
         this.speakMessage(text);
       }

@@ -200,8 +200,11 @@ function axonChatConsoleCommandsMixin() {
         ? this.currentWorkspaceRunActive()
         : !!this.chatLoading;
       if (!msg || workspaceBusy) return;
-      if (await this.maybeHandleInteractiveConsoleCommand?.(msg)) return;
-      if (await this.maybeHandleSlashCommand?.(msg)) return;
+      const startsWithSlash = msg.startsWith('/');
+      if (startsWithSlash) {
+        if (await this.maybeHandleInteractiveConsoleCommand?.(msg)) return;
+        if (await this.maybeHandleSlashCommand?.(msg)) return;
+      }
 
       const mode = this.resolveChatMode?.(msg) || 'chat';
       const researchPack = this.currentResearchPack?.();

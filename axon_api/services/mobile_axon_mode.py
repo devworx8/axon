@@ -57,6 +57,12 @@ async def build_mobile_axon_snapshot(
     settings = dict(await get_all_settings(db) or {})
     voice_status = await local_voice_snapshot(db)
     local_voice_ready = bool(voice_status.get("transcription_available"))
+    # Cloud transcription needs Azure Speech key + region AND ffmpeg for audio conversion
+    azure_key = settings.get("azure_speech_key", "")
+    azure_region = settings.get("azure_speech_region", "")
+    has_ffmpeg = bool(voice_status.get("ffmpeg_available"))
+    cloud_transcription_ready = bool(azure_key and azure_region and has_ffmpeg)
+    transcription_ready = local_voice_ready or cloud_transcription_ready
     monitoring_state = str(state.get("monitoring_state") or "idle")
     degraded_reason = str(state.get("degraded_reason") or "")
     voice_profile = resolve_axon_voice_profile(
@@ -66,9 +72,9 @@ async def build_mobile_axon_snapshot(
         preferred_voice=str(state.get("voice_identity_preference") or ""),
     )
 
-    if state["armed"] and not local_voice_ready:
+    if state["armed"] and not transcription_ready:
         monitoring_state = "degraded"
-        degraded_reason = str(voice_status.get("detail") or "Local transcription is not ready.")
+        degraded_reason = str(voice_status.get("detail") or "No transcription backend available (local or cloud).")
     elif state["armed"] and not is_foreground_app_state(state.get("app_state")):
         monitoring_state = "degraded"
         degraded_reason = "App left the foreground, so Axon mode paused."
@@ -81,6 +87,8 @@ async def build_mobile_axon_snapshot(
         "available": bool(voice_status.get("available")),
         "foreground_only": True,
         "local_voice_ready": local_voice_ready,
+        "transcription_ready": transcription_ready,
+        "cloud_transcription_available": cloud_transcription_ready,
         "voice_provider_preference": str(voice_profile.get("voice_provider_preference") or ""),
         "voice_provider": str(voice_profile.get("voice_provider") or "unavailable"),
         "voice_provider_ready": bool(voice_profile.get("voice_provider_ready")),

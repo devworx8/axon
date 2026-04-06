@@ -54,6 +54,11 @@ function axonLiveOperatorMixin() {
         this.beginLiveOperator(mode, '', target);
       }
 
+      if (typeof this.hudProcessAgentEvent === 'function') {
+        try { this.hudProcessAgentEvent(event); } catch (_) {}
+      }
+      this.syncVoiceCommandCenterRuntime?.();
+
       const current = scopedOperator(this, target);
       if (mode !== 'agent') {
         if (event.error) {
@@ -172,10 +177,6 @@ function axonLiveOperatorMixin() {
         });
       }
 
-      // Forward to voice HUD if available
-      if (typeof this.hudProcessAgentEvent === 'function') {
-        try { this.hudProcessAgentEvent(event); } catch (_) { /* non-critical */ }
-      }
     },
 
     clearLiveOperator(delay = 0, workspaceId = null) {

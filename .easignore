@@ -1,0 +1,47 @@
+# EAS Build: exclude everything not needed for apps/companion-native
+# Start by including gitignore defaults
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.pid
+.tunnel.pid
+.ollama.pid
+devbrain.db
+*.sqlite
+*.sqlite3
+.env
+.env.*
+.venv/
+venv/
+cloudflared
+auto_sessions/
+live_preview_sessions/
+runtime_login_sessions/
+task_sandboxes/
+.codex-home/
+tools/
+resources/
+.expo/
+node_modules/
+.cache/
+brain.db
+.claude/
+
+# Exclude all top-level files not needed for the native build
+*.py
+*.sh
+*.txt
+*.md
+*.desktop
+*.json.corrupt.*
+design/
+docs/
+scripts/
+ui/
+axon_api/
+axon_core/
+axon_data/
+
+# Exclude other apps if any
+apps/*/node_modules/

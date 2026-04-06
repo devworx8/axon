@@ -118,6 +118,21 @@ async def update_companion_device_status(
         await db.commit()
 
 
+async def update_companion_device_meta(
+    db: aiosqlite.Connection,
+    device_id: int,
+    *,
+    meta_json: str,
+    commit: bool = True,
+):
+    await db.execute(
+        "UPDATE companion_devices SET meta_json = ?, updated_at = datetime('now') WHERE id = ?",
+        (meta_json, device_id),
+    )
+    if commit:
+        await db.commit()
+
+
 async def revoke_companion_device(db: aiosqlite.Connection, device_id: int, *, commit: bool = True):
     await update_companion_device_status(db, device_id, status="revoked", commit=False)
     await db.execute(
@@ -126,4 +141,3 @@ async def revoke_companion_device(db: aiosqlite.Connection, device_id: int, *, c
     )
     if commit:
         await db.commit()
-

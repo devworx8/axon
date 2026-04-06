@@ -12,27 +12,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from axon_api.services.expo_action_auth import resolve_project_action_auth
+from axon_api.services.expo_cli_runtime import (
+    ExpoControlError,
+    parse_whoami_profile,
+    resolve_expo_cli_runtime,
+    run_eas_cli,
+    whoami_has_project_access,
+)
 from axon_api.services.vault_secret_lookup import vault_secret_status_by_name
 from axon_data import get_project, get_projects, get_setting
 
 OVERVIEW_CACHE_TTL_SECONDS = 45.0
 _OVERVIEW_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 PERSISTED_OVERVIEW_CACHE_DIR = Path.home() / ".devbrain" / ".cache" / "expo_overview"
-
-
-class ExpoControlError(Exception):
-    def __init__(
-        self,
-        summary: str,
-        *,
-        outcome: str = "blocked",
-        result_payload: dict[str, Any] | None = None,
-    ) -> None:
-        super().__init__(summary)
-        self.summary = summary
-        self.outcome = outcome
-        self.result_payload = result_payload or {}
-
 
 @dataclass(slots=True)
 class ExpoProjectContext:
@@ -403,73 +396,6 @@ def _cached_fallback_payload(
             project["stale_reason"] = reason
     return payload
 
-
-def _coerce_json(text: str) -> Any:
-    raw = str(text or "").strip()
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except Exception:
-        pass
-    for line in reversed([line.strip() for line in raw.splitlines() if line.strip()]):
-        if not line.startswith("{") and not line.startswith("["):
-            continue
-        try:
-            return json.loads(line)
-        except Exception:
-            continue
-    return None
-
-
-def _parse_whoami_profile(stdout: str) -> dict[str, Any]:
-    raw = str(stdout or "").strip()
-    lines = [line.strip() for line in raw.splitlines()]
-    username = lines[0] if lines else ""
-    email = ""
-    accounts: list[dict[str, str]] = []
-    in_accounts = False
-    for line in lines[1:]:
-        if not line:
-            continue
-        if line.lower().startswith("accounts:"):
-            in_accounts = True
-            continue
-        if in_accounts and line.startswith("•"):
-            item = line.lstrip("•").strip()
-            name = item
-            role = ""
-            if " (Role:" in item and item.endswith(")"):
-                name, _, tail = item.partition(" (Role:")
-                role = tail[:-1].strip()
-            accounts.append({"name": name.strip(), "role": role})
-            continue
-        if "@" in line and not email:
-            email = line
-    return {
-        "raw": raw,
-        "username": username,
-        "email": email,
-        "accounts": accounts,
-        "account_names": [str(item.get("name") or "").strip() for item in accounts if str(item.get("name") or "").strip()],
-    }
-
-
-def _whoami_has_project_access(profile: dict[str, Any] | None, project: ExpoProjectContext) -> bool:
-    if not profile:
-        return True
-    owner = str(project.owner or "").strip()
-    if not owner:
-        return True
-    account_names = {str(name or "").strip() for name in profile.get("account_names") or [] if str(name or "").strip()}
-    username = str(profile.get("username") or "").strip()
-    return owner in account_names or owner == username
-
-
-def _sanitized_command_preview(command: list[str]) -> str:
-    return " ".join(command)
-
-
 def _run_eas_cli(
     *,
     project_root: Path,
@@ -478,45 +404,13 @@ def _run_eas_cli(
     timeout: int = 600,
     expect_json: bool = True,
 ) -> dict[str, Any]:
-    full_command = ["npx", "eas-cli", *command]
-    env = dict(os.environ)
-    if token:
-        env["EXPO_TOKEN"] = token
-    else:
-        env.pop("EXPO_TOKEN", None)
-    env["CI"] = env.get("CI") or "1"
-    proc = subprocess.run(
-        full_command,
-        cwd=str(project_root),
-        env=env,
-        capture_output=True,
-        text=True,
+    return run_eas_cli(
+        project_root=project_root,
+        token=token,
+        command=command,
         timeout=timeout,
-        check=False,
+        expect_json=expect_json,
     )
-    stdout = str(proc.stdout or "")
-    stderr = str(proc.stderr or "")
-    if proc.returncode != 0:
-        lower = f"{stdout}\n{stderr}".lower()
-        outcome = "expo_auth_failed" if "not logged in" in lower or "authentication" in lower or "unauthorized" in lower else "expo_cli_failed"
-        raise ExpoControlError(
-            "Expo / EAS CLI could not complete the requested action.",
-            outcome=outcome,
-            result_payload={
-                "returncode": proc.returncode,
-                "stdout": stdout[-2000:],
-                "stderr": stderr[-2000:],
-                "command_preview": _sanitized_command_preview(full_command),
-            },
-        )
-
-    parsed = _coerce_json(stdout) if expect_json else None
-    return {
-        "command_preview": _sanitized_command_preview(full_command),
-        "stdout": stdout[-4000:],
-        "stderr": stderr[-2000:],
-        "parsed": parsed,
-    }
 
 
 async def _run_eas_cli_async(
@@ -559,7 +453,9 @@ def _overview_status(projects: list[dict[str, Any]], token_state: dict[str, Any]
     if not bool(token_state.get("present")):
         return "blocked", "Add EXPO_ACCESS_TOKEN to the Axon vault to unlock Expo / EAS control."
     statuses = {str(project.get("status") or "").strip().lower() for project in projects}
-    if any(status in {"expo_auth_failed", "expo_cli_failed", "expo_account_mismatch"} for status in statuses):
+    if "expo_cli_missing" in statuses and statuses.issubset({"expo_cli_missing"}):
+        return "blocked", "Expo / EAS project discovery worked, but Axon cannot run the EAS CLI from this runtime yet."
+    if any(status in {"expo_auth_failed", "expo_cli_failed", "expo_account_mismatch", "expo_cli_missing"} for status in statuses):
         return "degraded", "Expo / EAS is connected, but one or more project checks failed."
     if any(status in {"ready"} for status in statuses):
         return "ready", f"Expo / EAS is connected across {len(projects)} project(s)."
@@ -572,23 +468,28 @@ def _build_entry(raw: dict[str, Any]) -> dict[str, Any]:
     artifacts = dict(raw.get("artifacts") or {})
     actor = raw.get("actor") or raw.get("initiatingActor") or raw.get("userActor") or {}
     actor_dict = dict(actor) if isinstance(actor, dict) else {}
+    error = dict(raw.get("error") or {})
+    log_files = [str(item).strip() for item in raw.get("logFiles") or [] if str(item).strip()]
+    profile = raw.get("profile") or raw.get("buildProfile")
     return {
         "id": str(raw.get("id") or raw.get("buildId") or raw.get("group") or "").strip(),
-        "name": str(raw.get("appName") or raw.get("profile") or raw.get("name") or "").strip(),
+        "name": str(raw.get("appName") or profile or raw.get("name") or "").strip(),
         "platform": str(raw.get("platform") or "").strip(),
         "status": str(raw.get("status") or raw.get("buildStatus") or raw.get("state") or "").strip(),
         "created_at": _iso_from_any(raw.get("createdAt") or raw.get("created") or raw.get("updatedAt")),
         "updated_at": _iso_from_any(raw.get("updatedAt") or raw.get("completedAt") or raw.get("finishedAt")),
         "branch": str(raw.get("branch") or raw.get("gitBranch") or "").strip(),
-        "message": str(raw.get("message") or raw.get("commitMessage") or "").strip(),
+        "message": str(error.get("message") or raw.get("message") or raw.get("gitCommitMessage") or raw.get("commitMessage") or "").strip(),
         "actor": str(actor_dict.get("displayName") or actor_dict.get("username") or "").strip(),
-        "url": str(raw.get("webpageUrl") or raw.get("logsUrl") or raw.get("detailsUrl") or "").strip(),
+        "url": str(raw.get("webpageUrl") or raw.get("logsUrl") or raw.get("detailsUrl") or (log_files[0] if log_files else "")).strip(),
         "runtime_version": str(raw.get("runtimeVersion") or "").strip(),
         "commit_sha": str(raw.get("gitCommitHash") or "").strip(),
         "artifact_url": str(artifacts.get("buildUrl") or artifacts.get("applicationArchiveUrl") or "").strip(),
         "developer_tool": str(raw.get("developmentClient") or "").strip(),
+        "error_code": str(error.get("errorCode") or "").strip(),
+        "log_files": log_files,
         "meta": {
-            "profile": raw.get("profile"),
+            "profile": profile,
             "distribution": raw.get("distribution"),
             "appVersion": raw.get("appVersion"),
             "appBuildVersion": raw.get("appBuildVersion"),
@@ -664,12 +565,21 @@ async def load_expo_overview(
     whoami_profiles: dict[str, dict[str, Any]] = {}
     whoami_errors: dict[str, dict[str, Any]] = {}
     effective_token_states: dict[str, dict[str, Any]] = {}
+    project_cli_states: list[dict[str, Any]] = []
     project_payloads: list[dict[str, Any]] = []
     build_count = 0
     flattened_builds: list[dict[str, Any]] = []
     active_builds: list[dict[str, Any]] = []
 
     for project in projects:
+        cli_runtime = resolve_expo_cli_runtime(project.project_root)
+        project_cli_states.append(
+            {
+                "available": cli_runtime.available,
+                "source": cli_runtime.source,
+                "command_preview": cli_runtime.command_preview,
+            }
+        )
         owner_key = str(project.owner or "").strip()
         token_state = project_token_states.get(owner_key) or {"present": False, "locked": False, "source": ""}
         effective_token_state = dict(token_state)
@@ -680,7 +590,15 @@ async def load_expo_overview(
         project_error: dict[str, Any] | None = None
         whoami_profile = whoami_profiles.get(owner_key)
         whoami_error = whoami_errors.get(owner_key)
-        if not effective_token:
+        if not cli_runtime.available:
+            status = "expo_cli_missing"
+            project_error = {
+                "summary": cli_runtime.summary,
+                "outcome": status,
+                "command_preview": cli_runtime.command_preview,
+                "cli_source": cli_runtime.source,
+            }
+        elif not effective_token:
             try:
                 session_probe = await _run_eas_cli_async(
                     project_root=project.project_root,
@@ -689,7 +607,7 @@ async def load_expo_overview(
                     timeout=120,
                     expect_json=False,
                 )
-                session_profile = _parse_whoami_profile(str(session_probe.get("stdout") or ""))
+                session_profile = parse_whoami_profile(str(session_probe.get("stdout") or ""))
                 if str(session_profile.get("username") or "").strip():
                     effective_token_state = {
                         **effective_token_state,
@@ -721,7 +639,7 @@ async def load_expo_overview(
                             timeout=120,
                             expect_json=False,
                         )
-                        whoami_profile = _parse_whoami_profile(str(whoami_result.get("stdout") or ""))
+                        whoami_profile = parse_whoami_profile(str(whoami_result.get("stdout") or ""))
                         whoami_profiles[owner_key] = whoami_profile
                     except ExpoControlError as exc:
                         whoami_error = {
@@ -733,7 +651,7 @@ async def load_expo_overview(
                 if whoami_error:
                     status = str(whoami_error.get("outcome") or "expo_cli_failed")
                     project_error = dict(whoami_error)
-                elif not _whoami_has_project_access(whoami_profile, project):
+                elif not whoami_has_project_access(whoami_profile, required_owner=project.owner):
                     status = "expo_account_mismatch"
                     project_error = {
                         "summary": (
@@ -828,6 +746,9 @@ async def load_expo_overview(
                     "ios_bundle_identifier": project.ios_bundle_identifier,
                     "build_profiles": project.build_profiles,
                     "channels": project.channels,
+                    "eas_cli_available": cli_runtime.available,
+                    "eas_cli_source": cli_runtime.source,
+                    "eas_cli_command_preview": cli_runtime.command_preview,
                     "token_source": effective_token_state.get("source") or "",
                     "auth_mode": "session" if effective_token_state.get("source") == "local_cli_session" else "token",
                     "authenticated_account": str((whoami_profile or {}).get("username") or "").strip(),
@@ -857,6 +778,26 @@ async def load_expo_overview(
             )
         ),
     }
+    overview_cli_state = {
+        "available": any(bool(state.get("available")) for state in project_cli_states),
+        "source": ",".join(
+            sorted(
+                {
+                    str(state.get("source") or "")
+                    for state in project_cli_states
+                    if str(state.get("source") or "").strip()
+                }
+            )
+        ),
+        "command_preview": next(
+            (
+                str(state.get("command_preview") or "")
+                for state in project_cli_states
+                if str(state.get("command_preview") or "").strip()
+            ),
+            "",
+        ),
+    }
     if persisted_fallback is not None:
         blocked_statuses = {str(project.get("status") or "").strip().lower() for project in project_payloads}
         if blocked_statuses and blocked_statuses.issubset({"vault_locked", "token_missing"}):
@@ -877,6 +818,7 @@ async def load_expo_overview(
             "locked": bool(overview_token_state.get("locked")),
             "source": str(overview_token_state.get("source") or ""),
         },
+        "cli": overview_cli_state,
         "project_count": len(project_payloads),
         "build_count": build_count,
         "projects": project_payloads,
@@ -896,38 +838,19 @@ async def prepare_expo_action_request(
     payload = dict(payload or {})
     projects = await discover_expo_projects(db, workspace_id=workspace_id, limit=8)
     project = _select_project_context(projects, workspace_id=workspace_id, payload=payload)
-    token_state = await expo_token_state(db, owner=project.owner)
-    token = str(token_state.get("value") or "").strip()
-    if not token:
-        owner_hint = _owner_env_suffix(project.owner)
-        summary = "Expo / EAS actions need an Expo access token. Store EXPO_ACCESS_TOKEN in the Axon vault or set expo_api_token / EXPO_TOKEN in the environment first."
-        outcome = "missing_expo_token"
-        if token_state.get("locked"):
-            summary = "EXPO_ACCESS_TOKEN exists in the Axon vault, but the vault is currently locked. Unlock the vault or set expo_api_token / EXPO_TOKEN in the environment first."
-            outcome = "vault_locked"
-        elif owner_hint:
-            summary = (
-                f"Expo / EAS actions for owner '{project.owner}' need a matching token. "
-                f"Set EXPO_ACCESS_TOKEN__{owner_hint} or EXPO_TOKEN__{owner_hint} in the Axon vault or environment."
-            )
-        raise ExpoControlError(
-            summary,
-            outcome=outcome,
-            result_payload={
-                "workspace_id": workspace_id,
-                "project_root": str(project.project_root),
-                "project_name": project.app_name,
-                "owner": project.owner,
-                "vault_locked": bool(token_state.get("locked")),
-                "token_present": bool(token_state.get("present")),
-            },
-        )
+    auth = await resolve_project_action_auth(
+        db,
+        project,
+        expo_token_state_fn=expo_token_state,
+        run_eas_cli_async_fn=_run_eas_cli_async,
+    )
 
     message = str(payload.get("message") or "").strip()
     branch = str(payload.get("branch") or project.git_branch or "development").strip() or "development"
 
     if action_type == "expo.build.android.dev":
         return {
+            "auth": auth,
             "payload": {
                 "workspace_id": workspace_id,
                 "project_root": str(project.project_root),
@@ -940,6 +863,7 @@ async def prepare_expo_action_request(
         }
     if action_type == "expo.build.ios.dev":
         return {
+            "auth": auth,
             "payload": {
                 "workspace_id": workspace_id,
                 "project_root": str(project.project_root),
@@ -952,6 +876,7 @@ async def prepare_expo_action_request(
         }
     if action_type == "expo.update.publish":
         return {
+            "auth": auth,
             "payload": {
                 "workspace_id": workspace_id,
                 "project_root": str(project.project_root),
@@ -964,6 +889,7 @@ async def prepare_expo_action_request(
         }
     if action_type in {"expo.project.status", "expo.build.list"}:
         return {
+            "auth": auth,
             "payload": {
                 "workspace_id": workspace_id,
                 "project_root": str(project.project_root),
@@ -1030,16 +956,11 @@ async def execute_expo_build_action(
 ) -> dict[str, Any]:
     prepared = await prepare_expo_action_request(db, action_type=action_type, workspace_id=workspace_id, payload=payload)
     run_payload = dict(prepared.get("payload") or {})
+    auth = dict(prepared.get("auth") or {})
     project_root = Path(str(run_payload["project_root"]))
-    project_owner = ""
-    for project in await discover_expo_projects(db, workspace_id=workspace_id, limit=8):
-        if str(project.project_root) == str(project_root):
-            project_owner = project.owner
-            break
-    token = str((await expo_token_state(db, owner=project_owner)).get("value") or "").strip()
     result = await _run_eas_cli_async(
         project_root=project_root,
-        token=token,
+        token=str(auth.get("token") or "").strip(),
         command=[
             "build",
             "--platform", str(run_payload.get("platform") or "android"),
@@ -1069,16 +990,11 @@ async def execute_expo_update_publish(
 ) -> dict[str, Any]:
     prepared = await prepare_expo_action_request(db, action_type="expo.update.publish", workspace_id=workspace_id, payload=payload)
     run_payload = dict(prepared.get("payload") or {})
+    auth = dict(prepared.get("auth") or {})
     project_root = Path(str(run_payload["project_root"]))
-    project_owner = ""
-    for project in await discover_expo_projects(db, workspace_id=workspace_id, limit=8):
-        if str(project.project_root) == str(project_root):
-            project_owner = project.owner
-            break
-    token = str((await expo_token_state(db, owner=project_owner)).get("value") or "").strip()
     result = await _run_eas_cli_async(
         project_root=project_root,
-        token=token,
+        token=str(auth.get("token") or "").strip(),
         command=[
             "update",
             "--branch", str(run_payload.get("branch") or "development"),
