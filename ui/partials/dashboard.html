@@ -9,6 +9,13 @@
           <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400 uppercase tracking-wider">Control Room</span>
         </div>
         <div class="flex items-center gap-3 text-[11px]">
+          <button @click="openVoiceCommandCenter()"
+                  class="flex items-center gap-1.5 rounded-full border px-3 py-1 transition press-scale"
+                  :class="showVoiceOrb ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300' : 'border-slate-700 bg-slate-950/60 text-slate-400 hover:border-cyan-500/20 hover:text-cyan-300'"
+                  title="Open voice command center">
+            <span class="text-sm leading-none">✦</span>
+            <span>Voice</span>
+          </button>
           <span x-show="currentUser.name" class="text-slate-500">
             Signed in as <span class="text-slate-300 font-medium" x-text="currentUser.name"></span>
           </span>
@@ -56,6 +63,12 @@
                         x-text="liveFeed.connected ? 'Live' : 'Idle'"></span>
                 </div>
                 <div class="mt-4 flex flex-wrap gap-1.5">
+                  <button @click="openVoiceCommandCenter()"
+                          class="rounded-full border px-2.5 py-0.5 text-[10px] transition press-scale"
+                          :class="showVoiceOrb ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
+                          title="Open voice command center">
+                    ✦ Voice
+                  </button>
                   <template x-for="badge in connectionStatusBadges()" :key="badge.key">
                     <span class="rounded-full border px-2 py-0.5 text-[10px]"
                           :class="connectionBadgeClass(badge.state)"

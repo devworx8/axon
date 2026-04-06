@@ -6,12 +6,23 @@ function axonDashboardPreviewMixin() {
   return {
 
     desktopPreviewShouldStream() {
+      const surfaceMode = typeof this.dashboardLiveSurfaceMode === 'function'
+        ? this.dashboardLiveSurfaceMode()
+        : 'desktop';
+      if (this.activeTab === 'dashboard' && surfaceMode !== 'desktop' && !this.composerOptions?.live_desktop_feed) {
+        return false;
+      }
       return !!(
-        this.activeTab === 'dashboard'
+        (this.activeTab === 'dashboard' && surfaceMode === 'desktop')
         || this.composerOptions?.live_desktop_feed
         || this.chatLoading
         || this.liveOperator?.active
       );
+    },
+
+    desktopPreviewIntervalMs() {
+      if (this.chatLoading || this.liveOperator?.active) return 3000;
+      return 6000;
     },
 
     async refreshDesktopPreview(force = false) {
@@ -58,7 +69,7 @@ function axonDashboardPreviewMixin() {
       this.desktopPreview.timer = setTimeout(async () => {
         await this.refreshDesktopPreview();
         this.scheduleDesktopPreview();
-      }, this.desktopPreview.intervalMs || 8000);
+      }, this.desktopPreviewIntervalMs());
     },
 
     stopDesktopPreview(force = false) {

@@ -1,0 +1,388 @@
+/* ══════════════════════════════════════════════════════════════
+   Axon — Voice HUD (Heads-Up Display) CSS
+   JARVIS-style holographic overlays within voice command center
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── HUD Terminal Pull-up Panel ──────────────────────────────── */
+@keyframes hud-terminal-slide-up {
+  0%   { opacity: 0; transform: translateY(30px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes hud-terminal-slide-down {
+  0%   { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(30px); }
+}
+@keyframes hud-scanline-scroll {
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+.hud-terminal {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(600px, 92vw);
+  max-height: 260px;
+  z-index: 1010;
+  border-radius: 16px;
+  background: rgba(2, 6, 18, 0.88);
+  border: 1px solid rgba(34, 211, 238, 0.2);
+  box-shadow:
+    0 0 30px rgba(34, 211, 238, 0.08),
+    inset 0 1px 0 rgba(34, 211, 238, 0.06);
+  backdrop-filter: blur(16px);
+  overflow: hidden;
+  animation: hud-terminal-slide-up 0.4s ease-out both;
+}
+.hud-terminal--closing {
+  animation: hud-terminal-slide-down 0.35s ease-in forwards;
+}
+.hud-terminal__scanline {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(34, 211, 238, 0.015) 0px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+.hud-terminal__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(34, 211, 238, 0.1);
+  background: rgba(34, 211, 238, 0.04);
+}
+.hud-terminal__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22d3ee;
+  box-shadow: 0 0 6px rgba(34, 211, 238, 0.6);
+  animation: reactor-core-breathe 1.5s ease-in-out infinite;
+}
+.hud-terminal__title {
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(34, 211, 238, 0.8);
+  font-weight: 600;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+.hud-terminal__body {
+  padding: 10px 16px 14px;
+  max-height: 200px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(34, 211, 238, 0.2) transparent;
+}
+.hud-terminal__line {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  color: rgba(148, 163, 184, 0.85);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.hud-terminal__line--new {
+  animation: hud-line-appear 0.15s ease-out;
+  color: rgba(34, 211, 238, 0.9);
+}
+@keyframes hud-line-appear {
+  0%   { opacity: 0; transform: translateX(-6px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+.hud-terminal__cursor {
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  background: rgba(34, 211, 238, 0.7);
+  animation: hud-cursor-blink 1s step-end infinite;
+  vertical-align: text-bottom;
+  margin-left: 2px;
+}
+@keyframes hud-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+/* ── HUD Scan Ring (around reactor) ──────────────────────────── */
+@keyframes hud-scan-sweep {
+  0%   { stroke-dashoffset: 880; }
+  100% { stroke-dashoffset: 0; }
+}
+@keyframes hud-scan-pulse {
+  0%, 100% { opacity: 0.3; }
+  50%      { opacity: 0.7; }
+}
+
+.hud-scan-ring {
+  position: absolute;
+  inset: -20px;
+  pointer-events: none;
+  z-index: 5;
+}
+.hud-scan-ring svg {
+  width: 100%;
+  height: 100%;
+}
+.hud-scan-ring__track {
+  fill: none;
+  stroke: rgba(34, 211, 238, 0.08);
+  stroke-width: 2;
+}
+.hud-scan-ring__progress {
+  fill: none;
+  stroke: rgba(34, 211, 238, 0.6);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-dasharray: 880;
+  transform-origin: center;
+  transition: stroke-dashoffset 0.4s ease-out;
+  filter: drop-shadow(0 0 4px rgba(34, 211, 238, 0.4));
+}
+.hud-scan-label {
+  position: absolute;
+  bottom: -28px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(34, 211, 238, 0.6);
+  font-weight: 600;
+  white-space: nowrap;
+  animation: hud-scan-pulse 2s ease-in-out infinite;
+}
+
+/* ── HUD Tool Badges (around reactor perimeter) ──────────────── */
+@keyframes hud-badge-pop {
+  0%   { opacity: 0; transform: scale(0.4); }
+  50%  { opacity: 1; transform: scale(1.1); }
+  100% { opacity: 1; transform: scale(1); }
+}
+@keyframes hud-badge-fade {
+  0%   { opacity: 1; }
+  100% { opacity: 0; transform: scale(0.6); }
+}
+
+.hud-tools {
+  position: absolute;
+  inset: -30px;
+  pointer-events: none;
+  z-index: 6;
+}
+.hud-tool-badge {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(2, 6, 18, 0.8);
+  border: 1px solid rgba(34, 211, 238, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  animation: hud-badge-pop 0.3s ease-out both;
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.15);
+}
+.hud-tool-badge:nth-child(1) { top: 0; left: 50%; transform: translateX(-50%); }
+.hud-tool-badge:nth-child(2) { top: 20%; right: 0; }
+.hud-tool-badge:nth-child(3) { bottom: 20%; right: 0; }
+.hud-tool-badge:nth-child(4) { bottom: 0; left: 50%; transform: translateX(-50%); }
+.hud-tool-badge:nth-child(5) { bottom: 20%; left: 0; }
+.hud-tool-badge:nth-child(6) { top: 20%; left: 0; }
+.hud-tool-badge--name {
+  position: absolute;
+  bottom: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 7px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: rgba(34, 211, 238, 0.5);
+  white-space: nowrap;
+}
+
+/* ── HUD Connection Beam ─────────────────────────────────────── */
+@keyframes hud-beam-fire {
+  0%   { opacity: 0; height: 0; }
+  15%  { opacity: 0.8; }
+  100% { opacity: 0; height: 120px; }
+}
+@keyframes hud-beam-particle {
+  0%   { transform: translateY(0); opacity: 0.8; }
+  100% { transform: translateY(-100px); opacity: 0; }
+}
+
+.hud-beam {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  height: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(34, 211, 238, 0.0),
+    rgba(34, 211, 238, 0.6),
+    rgba(34, 211, 238, 0.0)
+  );
+  pointer-events: none;
+  z-index: 7;
+  animation: hud-beam-fire 2s ease-out both;
+}
+.hud-beam__label {
+  position: absolute;
+  top: -22px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 8px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(34, 211, 238, 0.6);
+  white-space: nowrap;
+  animation: hud-scan-pulse 1.5s ease-in-out infinite;
+}
+.hud-beam__particle {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #22d3ee;
+  box-shadow: 0 0 4px #22d3ee;
+  animation: hud-beam-particle 0.8s linear infinite;
+}
+.hud-beam__particle:nth-child(2) { animation-delay: 0.25s; left: -1px; }
+.hud-beam__particle:nth-child(3) { animation-delay: 0.5s; left: 1px; }
+
+/* ── HUD Approval Gate Overlay ───────────────────────────────── */
+@keyframes hud-approval-slide {
+  0%   { opacity: 0; transform: translateY(20px) scale(0.95); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.hud-approval {
+  position: fixed;
+  inset: 0;
+  z-index: 1020;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(6px);
+}
+.hud-approval__card {
+  width: min(440px, 90vw);
+  border-radius: 20px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  box-shadow:
+    0 0 40px rgba(251, 191, 36, 0.1),
+    inset 0 1px 0 rgba(251, 191, 36, 0.08);
+  backdrop-filter: blur(20px);
+  padding: 24px;
+  animation: hud-approval-slide 0.35s ease-out both;
+}
+.hud-approval__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.hud-approval__icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(251, 191, 36, 0.15);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+.hud-approval__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fbbf24;
+  letter-spacing: 0.04em;
+}
+.hud-approval__body {
+  font-size: 13px;
+  line-height: 1.6;
+  color: rgba(203, 213, 225, 0.85);
+  margin-bottom: 18px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.hud-approval__actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.hud-approval__btn {
+  padding: 8px 20px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+.hud-approval__btn--approve {
+  background: rgba(251, 191, 36, 0.2);
+  border-color: rgba(251, 191, 36, 0.4);
+  color: #fbbf24;
+}
+.hud-approval__btn--approve:hover {
+  background: rgba(251, 191, 36, 0.3);
+  box-shadow: 0 0 16px rgba(251, 191, 36, 0.15);
+}
+.hud-approval__btn--deny {
+  background: rgba(30, 41, 59, 0.6);
+  border-color: rgba(148, 163, 184, 0.2);
+  color: rgba(203, 213, 225, 0.8);
+}
+.hud-approval__btn--deny:hover {
+  background: rgba(30, 41, 59, 0.8);
+}
+
+/* ── Thinking Circuit Trace (blade edge glow) ────────────────── */
+@keyframes hud-circuit-trace {
+  0%   { stroke-dashoffset: 400; opacity: 0; }
+  20%  { opacity: 0.7; }
+  80%  { opacity: 0.7; }
+  100% { stroke-dashoffset: 0; opacity: 0; }
+}
+
+.axon-reactor[data-state="thinking"] .reactor-blade path[stroke] {
+  stroke: rgba(96, 165, 250, 0.6) !important;
+  stroke-dasharray: 400;
+  animation: hud-circuit-trace 2s linear infinite;
+  filter: drop-shadow(0 0 3px rgba(96, 165, 250, 0.5));
+}
+.axon-reactor[data-state="thinking"] .reactor-blade--top path[stroke] {
+  animation-delay: 0s;
+}
+.axon-reactor[data-state="thinking"] .reactor-blade--left path[stroke] {
+  animation-delay: 0.6s;
+}
+.axon-reactor[data-state="thinking"] .reactor-blade--right path[stroke] {
+  animation-delay: 1.2s;
+}
+
+/* ── Live Data Feed — typewriter cursor in float panels ──────── */
+@keyframes hud-typewriter-cursor {
+  0%, 100% { border-right-color: rgba(34, 211, 238, 0.7); }
+  50%      { border-right-color: transparent; }
+}
+
+.voice-float__body--streaming {
+  border-right: 2px solid rgba(34, 211, 238, 0.7);
+  animation: hud-typewriter-cursor 0.8s step-end infinite;
+  padding-right: 4px;
+}

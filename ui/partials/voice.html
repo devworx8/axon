@@ -28,6 +28,22 @@
         <div class="md:hidden flex flex-col items-center gap-4 w-full">
           <!-- Reactor (compact on mobile) -->
           <div class="voice-visual-wrap-mobile">
+            <!-- HUD: Scan Ring -->
+            <div class="hud-scan-ring" x-show="hudScanActive" x-transition>
+              <svg viewBox="0 0 460 460"><circle cx="230" cy="230" r="140" class="hud-scan-ring__track"/><circle cx="230" cy="230" r="140" class="hud-scan-ring__progress" :style="'stroke-dashoffset:' + (880 - (hudScanProgress / 100 * 880))"/></svg>
+              <div class="hud-scan-label" x-text="hudScanLabel"></div>
+            </div>
+            <!-- HUD: Tool Badges -->
+            <div class="hud-tools" x-show="hudActiveTools.length > 0">
+              <template x-for="badge in hudActiveTools" :key="badge.id">
+                <div class="hud-tool-badge"><span x-text="badge.icon"></span><span class="hud-tool-badge--name" x-text="badge.name"></span></div>
+              </template>
+            </div>
+            <!-- HUD: Connection Beam -->
+            <div class="hud-beam" x-show="hudConnectionBeam" x-transition>
+              <div class="hud-beam__particle"></div><div class="hud-beam__particle"></div><div class="hud-beam__particle"></div>
+              <div class="hud-beam__label" x-text="hudConnectionBeam"></div>
+            </div>
             <svg class="axon-reactor" viewBox="0 0 420 420" role="img" aria-label="Axon voice reactor" :data-state="voiceVisualState()">
               <defs>
                 <radialGradient id="axon-orb-core-m" cx="50%" cy="50%" r="60%">
@@ -80,9 +96,12 @@
                   <path d="M354 334 L234 208" stroke="url(#blade-edge-m)" stroke-width="3" fill="none"></path>
                 </g>
               </g>
+              <circle class="reactor-core-mask" cx="210" cy="210" r="65" fill="#000"
+                      @click="toggleReactorOrbAction()" style="cursor:pointer;"/>
               <g class="reactor-core" filter="url(#orb-glow-m)">
                 <circle class="reactor-orb-glow" cx="210" cy="210" r="70" :style="voiceGlowStyle()"></circle>
-                <circle class="reactor-orb" cx="210" cy="210" r="52" fill="url(#axon-orb-core-m)"></circle>
+                <circle class="reactor-orb" cx="210" cy="210" r="52" fill="url(#axon-orb-core-m)"
+                        @click="toggleReactorOrbAction()" style="cursor:pointer;"></circle>
                 <circle class="reactor-orb-outline" cx="210" cy="210" r="58"></circle>
               </g>
             </svg>
@@ -115,20 +134,7 @@
                  x-text="voiceDisplayResponse()"></div>
           </div>
 
-          <!-- Action buttons (always visible on mobile) -->
-          <div class="flex items-center justify-center gap-3 w-full pt-1 pb-2">
-            <button @click="startVoiceListening()" class="voice-action voice-action--primary flex-1 max-w-[160px]"
-                    :class="voiceRecordingActive() ? 'voice-action--recording' : ''">
-              <span x-text="voiceRecordingActive() ? '⏹ Stop' : '🎙 Speak'"></span>
-            </button>
-            <button @click="clearVoiceCommandCenterState()" class="voice-action voice-action--secondary px-5"
-                    :disabled="!voiceCanClear()">
-              Clear
-            </button>
-            <button @click="closeVoiceCommandCenter(true)" class="voice-action voice-action--ghost px-5">
-              Close
-            </button>
-          </div>
+
         </div>
 
         <!-- ── Desktop: 3-column arena layout ── -->
@@ -151,6 +157,22 @@
             <div class="voice-visual-wrap">
           <div class="voice-hud voice-hud--left"></div>
           <div class="voice-hud voice-hud--right"></div>
+          <!-- HUD: Scan Ring -->
+          <div class="hud-scan-ring" x-show="hudScanActive" x-transition>
+            <svg viewBox="0 0 460 460"><circle cx="230" cy="230" r="140" class="hud-scan-ring__track"/><circle cx="230" cy="230" r="140" class="hud-scan-ring__progress" :style="'stroke-dashoffset:' + (880 - (hudScanProgress / 100 * 880))"/></svg>
+            <div class="hud-scan-label" x-text="hudScanLabel"></div>
+          </div>
+          <!-- HUD: Tool Badges -->
+          <div class="hud-tools" x-show="hudActiveTools.length > 0">
+            <template x-for="badge in hudActiveTools" :key="badge.id">
+              <div class="hud-tool-badge"><span x-text="badge.icon"></span><span class="hud-tool-badge--name" x-text="badge.name"></span></div>
+            </template>
+          </div>
+          <!-- HUD: Connection Beam -->
+          <div class="hud-beam" x-show="hudConnectionBeam" x-transition>
+            <div class="hud-beam__particle"></div><div class="hud-beam__particle"></div><div class="hud-beam__particle"></div>
+            <div class="hud-beam__label" x-text="hudConnectionBeam"></div>
+          </div>
           <svg class="axon-reactor" viewBox="0 0 420 420" role="img" aria-label="Axon voice reactor" :data-state="voiceVisualState()">
             <defs>
               <radialGradient id="axon-orb-core" cx="50%" cy="50%" r="60%">
@@ -210,9 +232,12 @@
               </g>
             </g>
 
+            <circle class="reactor-core-mask" cx="210" cy="210" r="65" fill="#000"
+                    @click="toggleReactorOrbAction()" style="cursor:pointer;"/>
             <g class="reactor-core" filter="url(#orb-glow)">
               <circle class="reactor-orb-glow" cx="210" cy="210" r="70" :style="voiceGlowStyle()"></circle>
-              <circle class="reactor-orb" cx="210" cy="210" r="52" fill="url(#axon-orb-core)"></circle>
+              <circle class="reactor-orb" cx="210" cy="210" r="52" fill="url(#axon-orb-core)"
+                      @click="toggleReactorOrbAction()" style="cursor:pointer;"></circle>
               <circle class="reactor-orb-outline" cx="210" cy="210" r="58"></circle>
             </g>
           </svg>
@@ -240,21 +265,44 @@
           </div>
         </div><!-- /voice-arena -->
 
-        <div class="voice-stage__actions">
-          <button @click="startVoiceListening()" class="voice-action voice-action--primary"
-                  :class="voiceRecordingActive() ? 'voice-action--recording' : ''">
-            <span x-text="voiceRecordingActive() ? '⏹ Stop & Send' : '🎙 Speak'"></span>
-          </button>
-          <button @click="clearVoiceCommandCenterState()" class="voice-action voice-action--secondary" :disabled="!voiceCanClear()">
-            Clear
-          </button>
-          <button @click="closeVoiceCommandCenter(true)" class="voice-action voice-action--ghost">
-            Close
-          </button>
-        </div>
+
         </div>
 
       </div>
+
+      <!-- ── HUD: Terminal Pull-up ── -->
+      <template x-if="hudTerminalVisible">
+        <div class="hud-terminal" :class="hudTerminalVisible ? '' : 'hud-terminal--closing'">
+          <div class="hud-terminal__scanline"></div>
+          <div class="hud-terminal__header">
+            <span class="hud-terminal__dot"></span>
+            <span class="hud-terminal__title" x-text="hudTerminalTitle || 'Terminal'"></span>
+          </div>
+          <div class="hud-terminal__body">
+            <template x-for="(line, i) in hudTerminalLines" :key="i">
+              <div class="hud-terminal__line" :class="i === hudTerminalLines.length - 1 ? 'hud-terminal__line--new' : ''" x-text="line"></div>
+            </template>
+            <span class="hud-terminal__cursor"></span>
+          </div>
+        </div>
+      </template>
+
+      <!-- ── HUD: Approval Gate Overlay ── -->
+      <template x-if="hudApprovalPending">
+        <div class="hud-approval">
+          <div class="hud-approval__card">
+            <div class="hud-approval__header">
+              <div class="hud-approval__icon">⚠</div>
+              <div class="hud-approval__title">Approval Required</div>
+            </div>
+            <div class="hud-approval__body" x-text="hudApprovalDetail || 'Axon needs your permission to proceed.'"></div>
+            <div class="hud-approval__actions">
+              <button class="hud-approval__btn hud-approval__btn--deny" @click="hudDismissApproval()">Deny</button>
+              <button class="hud-approval__btn hud-approval__btn--approve" @click="hudDismissApproval()">Approve</button>
+            </div>
+          </div>
+        </div>
+      </template>
     </div>
     </div>
   </div>

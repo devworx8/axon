@@ -54,6 +54,8 @@
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/css/stark-hud.css">
+  <link rel="stylesheet" href="/css/voice-reactor.css">
+  <link rel="stylesheet" href="/css/voice-hud.css">
   <style>
     [x-cloak] { display: none !important; }
     /* xterm overrides to fit Axon dark theme */
@@ -282,19 +284,10 @@
         <!-- Mobile: expanded mini toolbar (above input) -->
         <div x-show="isMobile && showMobileToolbar" x-transition
              class="md:hidden flex items-center gap-2 px-1 pb-2 overflow-x-auto">
-          <button x-show="voiceInputAvailable()" @click="startVoice(); showMobileToolbar = false"
-                  :class="voiceActive ? 'bg-red-500 text-white' : 'bg-slate-800 text-slate-400'"
-                  class="shrink-0 h-8 px-3 rounded-xl text-[11px] flex items-center gap-1.5 transition press-scale">
-            <svg class="w-3.5 h-3.5" :class="voiceActive ? 'animate-pulse' : ''" viewBox="0 0 24 24" fill="currentColor">
-              <rect x="2" y="9" width="2.5" height="6" rx="1.25"/><rect x="6" y="5" width="2.5" height="14" rx="1.25"/>
-              <rect x="10" y="2" width="2.5" height="20" rx="1.25"/><rect x="14" y="5" width="2.5" height="14" rx="1.25"/>
-              <rect x="18" y="9" width="2.5" height="6" rx="1.25"/>
-            </svg>
-            Voice
-          </button>
           <button @click="openVoiceCommandCenter(); showMobileToolbar = false"
-                  class="shrink-0 h-8 px-3 rounded-xl bg-slate-800 text-slate-400 text-[11px] flex items-center gap-1.5 transition press-scale">
-            ✦ Voice ORB
+                  :class="showVoiceOrb ? 'bg-cyan-500/15 text-cyan-200' : 'bg-slate-800 text-slate-400'"
+                  class="shrink-0 h-8 px-3 rounded-xl text-[11px] flex items-center gap-1.5 transition press-scale">
+            ✦ Voice
           </button>
           <button @click="openResourcePicker(); showMobileToolbar = false"
                   :class="selectedResources.length ? 'bg-sky-500/15 text-sky-200' : 'bg-slate-800 text-slate-400'"
@@ -314,20 +307,8 @@
         </div>
 
         <div class="flex gap-1.5 items-end">
-            <!-- Desktop: voice button -->
-            <button x-show="!isMobile && voiceInputAvailable()" @click="startVoice()"
-                    :class="voiceActive ? 'bg-red-500 text-white shadow-lg shadow-red-500/30' : 'bg-slate-800 text-slate-400'"
-                    class="w-9 h-9 flex-none rounded-xl transition flex items-center justify-center press-scale" title="Voice input">
-              <svg class="w-4 h-4" :class="voiceActive ? 'animate-pulse' : ''" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="2" y="9" width="2.5" height="6" rx="1.25"/>
-                <rect x="6" y="5" width="2.5" height="14" rx="1.25"/>
-                <rect x="10" y="2" width="2.5" height="20" rx="1.25"/>
-                <rect x="14" y="5" width="2.5" height="14" rx="1.25"/>
-                <rect x="18" y="9" width="2.5" height="6" rx="1.25"/>
-              </svg>
-            </button>
 
-            <!-- Desktop: full voice command center -->
+            <!-- Desktop: dedicated voice command center button -->
             <button x-show="!isMobile" @click="openVoiceCommandCenter()"
                     :class="showVoiceOrb ? 'bg-cyan-500/15 text-cyan-200 shadow-lg shadow-cyan-500/10' : 'bg-slate-800 text-slate-400'"
                     class="w-9 h-9 flex-none rounded-xl transition flex items-center justify-center press-scale" title="Voice command center">
@@ -2947,8 +2928,10 @@
 <script src="/js/voice-speech.js"></script>
 <script src="/js/voice.js"></script>
 <script src="/js/voice-playback.js"></script>
+<script src="/js/voice-boot-sound.js"></script>
 <script src="/js/voice-attention-monitor.js"></script>
 <script src="/js/voice-command-center.js"></script>
+<script src="/js/voice-hud.js"></script>
 <script src="/js/settings.js"></script>
 <script src="/js/resources.js"></script>
 <script src="/js/projects.js"></script>
@@ -3524,6 +3507,7 @@ function devbrain() {
     axonVoicePlaybackMixin(),
     typeof axonVoiceAttentionMonitorMixin === 'function' ? axonVoiceAttentionMonitorMixin() : {},
     axonVoiceCommandCenterMixin(),
+    typeof axonVoiceHudMixin === 'function' ? axonVoiceHudMixin() : {},
     axonSettingsMixin(),
     axonResourcesMixin(),
     axonProjectsMixin(),

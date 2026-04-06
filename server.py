@@ -2849,6 +2849,9 @@ from fastapi.responses import Response as FastAPIResponse
 class TTSRequest(BaseModel):
     text: str
     voice: str = "en-ZA-LeahNeural"   # South African English
+    rate: float = 0.92
+    pitch: str = ""                    # e.g. "+5%" or "-2%"
+    region: str = ""
 
 
 async def _issue_azure_speech_token(region: str, key: str) -> str:
@@ -2877,9 +2880,18 @@ async def azure_tts(body: TTSRequest):
     if not key:
         raise HTTPException(400, "Azure Speech key not set in Settings")
 
-    ssml = f"""<speak version='1.0' xml:lang='en-ZA'>
-        <voice name='{body.voice}'>{body.text[:500]}</voice>
-    </speak>"""
+    import html as _html
+    safe_text = _html.escape(body.text[:2000])
+    rate_delta = max(-50, min(15, int(round((float(body.rate or 0.85) - 1.0) * 100))))
+    rate_attr = f"{rate_delta:+d}%"
+    pitch_attr = f' pitch="{_html.escape(body.pitch)}"' if body.pitch else ' pitch="+3%"'
+    ssml = (
+        f"<speak version='1.0' xml:lang='en-ZA'>"
+        f"<voice name='{_html.escape(body.voice)}'>"
+        f"<prosody rate='{rate_attr}'{pitch_attr}>"
+        f"{safe_text}"
+        f"</prosody></voice></speak>"
+    )
     tts_url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
 
     import aiohttp

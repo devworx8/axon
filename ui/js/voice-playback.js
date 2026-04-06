@@ -6,9 +6,45 @@ function axonVoicePlaybackMixin() {
   return {
 
     voiceSpeechRate() {
+      if (this._greetingRateOverride) return this._greetingRateOverride;
       const raw = Number.parseFloat(this.settingsForm?.voice_speech_rate);
-      if (!Number.isFinite(raw)) return 0.92;
-      return Math.max(0.72, Math.min(1.15, raw));
+      if (!Number.isFinite(raw)) return 0.85;
+      return Math.max(0.50, Math.min(1.15, raw));
+    },
+
+    voiceSpeechPitch() {
+      const raw = Number.parseFloat(this.settingsForm?.voice_speech_pitch);
+      if (!Number.isFinite(raw)) return 1.04;
+      return Math.max(0.5, Math.min(1.5, raw));
+    },
+
+    _pickBestBrowserVoice() {
+      const synthesis = window.speechSynthesis;
+      if (!synthesis || typeof synthesis.getVoices !== 'function') return null;
+      if (this._cachedBrowserVoice) return this._cachedBrowserVoice;
+      const voices = synthesis.getVoices();
+      if (!Array.isArray(voices) || !voices.length) return null;
+      const prefs = [
+        /google.*uk.*english.*female/i,
+        /google.*us.*english/i,
+        /microsoft.*zira/i,
+        /microsoft.*david/i,
+        /samantha/i,
+        /karen/i,
+        /daniel/i,
+        /\bnatural\b/i,
+        /\bneural\b/i,
+        /\benhanced\b/i,
+        /\bpremium\b/i,
+      ];
+      for (const pref of prefs) {
+        const match = voices.find(v => pref.test(v.name));
+        if (match) { this._cachedBrowserVoice = match; return match; }
+      }
+      const en = voices.find(v => v.lang?.startsWith('en') && v.localService === false)
+        || voices.find(v => v.lang?.startsWith('en'));
+      if (en) { this._cachedBrowserVoice = en; return en; }
+      return voices[0];
     },
 
     _cleanForSpeech(text) {
@@ -94,6 +130,7 @@ function axonVoicePlaybackMixin() {
               voice: this.settingsForm.azure_voice || 'en-GB-RyanNeural',
               region: this.settingsForm.azure_speech_region,
               rate: this.voiceSpeechRate(),
+              pitch: (() => { const d = Math.round((this.voiceSpeechPitch() - 1.0) * 100); return (d >= 0 ? '+' : '') + d + '%'; })(),
             }),
           });
           if (!res.ok) {
@@ -134,8 +171,16 @@ function axonVoicePlaybackMixin() {
               else resolve();
             };
             const utterance = new SpeechSynthesisUtterance(chunk);
-            utterance.lang = 'en-GB';
+            const bestVoice = this._pickBestBrowserVoice();
+            if (bestVoice) {
+              utterance.voice = bestVoice;
+              utterance.lang = bestVoice.lang || 'en-GB';
+            } else {
+              utterance.lang = 'en-GB';
+            }
             utterance.rate = this.voiceSpeechRate();
+            utterance.pitch = this.voiceSpeechPitch();
+            utterance.volume = 1.0;
             utterance.onend = () => finish();
             utterance.onerror = (event) => finish(new Error(event?.error || 'Speech synthesis failed'));
             this._speechPlaybackResolveCurrent = finish;

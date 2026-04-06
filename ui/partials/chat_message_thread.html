@@ -143,8 +143,8 @@
                 </div>
               </template>
 
-              <div class="console-message-meta flex items-center gap-2 mt-1 px-1"
-                   :class="msg.role === 'user' ? 'justify-end' : 'justify-start'">
+              <div class="console-message-meta flex items-center gap-1 mt-0.5 px-1"
+                   :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
                 <button x-show="msg.role === 'user'"
                         @click="editUserMessage(msg)"
                         class="console-meta-action"

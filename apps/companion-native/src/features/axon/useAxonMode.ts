@@ -6,6 +6,11 @@ import type {
   CompanionConfig,
 } from '@/types/companion';
 import { useAxonBootSound } from './useAxonBootSound';
+import { detectWakePhrase, isNoSpeechTranscriptError } from './voiceCommandUtils';
+
+const AXON_LISTEN_WINDOW_MS = 4200;
+const AXON_FOLLOW_UP_LISTEN_WINDOW_MS = 5200;
+const AXON_FOLLOW_UP_COMMAND_WINDOW_MS = 8000;
 
 type CaptureRuntime = {
   voiceStatus?: { transcription_available?: boolean } | null;
@@ -43,19 +48,6 @@ function normaliseWakePhrase(value: string) {
   return value.trim() || 'Axon';
 }
 
-function detectWakePhrase(transcript: string, wakePhrase: string) {
-  const phrase = normaliseWakePhrase(wakePhrase).toLowerCase();
-  const spoken = transcript.trim();
-  const lowered = spoken.toLowerCase();
-  if (lowered === phrase) {
-    return { matched: true, command: '' };
-  }
-  if (lowered.startsWith(`${phrase} `)) {
-    return { matched: true, command: spoken.slice(phrase.length).trim() };
-  }
-  return { matched: false, command: '' };
-}
-
 export function useAxonMode(
   config: CompanionConfig,
   settings: AxonSettings,
@@ -69,6 +61,7 @@ export function useAxonMode(
   const appState = useRef<AppStateStatus>(AppState.currentState);
   const loopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loopCancelled = useRef(false);
+  const followUpCommandUntil = useRef(0);
   const bootSound = useAxonBootSound(Boolean(settings.axonBootSound));
 
   const effectiveStatus = useMemo(
@@ -150,6 +143,7 @@ export function useAxonMode(
     }
     setBusy(true);
     setError(null);
+    followUpCommandUntil.current = 0;
     try {
       if (capture.isRecording) {
         await capture.cancelRecording().catch(() => undefined);
@@ -175,7 +169,14 @@ export function useAxonMode(
   }, [snapshot]);
 
   useEffect(() => {
+    if (!effectiveStatus?.armed) {
+      followUpCommandUntil.current = 0;
+    }
+  }, [effectiveStatus?.armed]);
+
+  useEffect(() => {
     if (!config.accessToken) {
+      followUpCommandUntil.current = 0;
       setStatus(null);
       return;
     }
@@ -190,6 +191,7 @@ export function useAxonMode(
         return;
       }
       if (nextState !== 'active') {
+        followUpCommandUntil.current = 0;
         setStatus(current => current ? {
           ...current,
           monitoring_state: 'degraded',
@@ -248,19 +250,33 @@ export function useAxonMode(
       if (loopCancelled.current) {
         return;
       }
+      const awaitingFollowUp = followUpCommandUntil.current > Date.now();
       if (capture.isRecording || capture.transcribing) {
-        schedule(400);
+        schedule(awaitingFollowUp ? 220 : 400);
         return;
       }
       try {
-        setStatus(current => current ? { ...current, monitoring_state: 'listening', app_state: 'foreground' } : current);
+        setError(null);
+        setStatus(current => current ? {
+          ...current,
+          monitoring_state: awaitingFollowUp ? 'engaged' : 'listening',
+          app_state: 'foreground',
+          degraded_reason: '',
+          last_error: '',
+        } : current);
         await capture.startRecording();
+        const captureWindowMs = awaitingFollowUp ? AXON_FOLLOW_UP_LISTEN_WINDOW_MS : AXON_LISTEN_WINDOW_MS;
         loopTimer.current = setTimeout(async () => {
+          if (loopCancelled.current) {
+            return;
+          }
           try {
             const heard = await capture.stopRecordingToTranscript();
             const transcript = heard.transcript.trim();
+            const wakePhrase = effectiveStatus?.wake_phrase || settings.axonWakePhrase;
+            const waitingForFollowUp = followUpCommandUntil.current > Date.now();
             if (transcript) {
-              const wake = detectWakePhrase(transcript, effectiveStatus?.wake_phrase || settings.axonWakePhrase);
+              const wake = detectWakePhrase(transcript, wakePhrase);
               if (wake.matched) {
                 setStatus(current => current ? {
                   ...current,
@@ -268,42 +284,79 @@ export function useAxonMode(
                   last_transcript: transcript,
                   last_wake_at: new Date().toISOString(),
                   last_command_text: wake.command,
+                  degraded_reason: '',
+                  last_error: '',
                 } : current);
                 await pushEvent('wake_detected', {
                   transcript,
                   command_text: wake.command,
-                  wake_phrase: effectiveStatus?.wake_phrase || settings.axonWakePhrase,
+                  wake_phrase: wakePhrase,
                 });
                 if (wake.command) {
+                  followUpCommandUntil.current = 0;
                   await submitVoiceTurn(wake.command, transcript, 'axon');
                   await pushEvent('command_submitted', {
                     transcript,
                     command_text: wake.command,
                   });
+                } else {
+                  followUpCommandUntil.current = Date.now() + AXON_FOLLOW_UP_COMMAND_WINDOW_MS;
                 }
+              } else if (waitingForFollowUp) {
+                followUpCommandUntil.current = 0;
+                setStatus(current => current ? {
+                  ...current,
+                  monitoring_state: 'engaged',
+                  last_transcript: transcript,
+                  last_command_text: transcript,
+                  last_command_at: new Date().toISOString(),
+                  degraded_reason: '',
+                  last_error: '',
+                } : current);
+                await submitVoiceTurn(transcript, transcript, 'axon');
+                await pushEvent('command_submitted', {
+                  transcript,
+                  command_text: transcript,
+                });
               }
             }
+            const stillWaitingForFollowUp = followUpCommandUntil.current > Date.now();
             setStatus(current => current ? {
               ...current,
-              monitoring_state: current.armed ? 'armed' : 'idle',
+              monitoring_state: stillWaitingForFollowUp ? 'engaged' : (current.armed ? 'armed' : 'idle'),
               app_state: 'foreground',
+              degraded_reason: '',
+              last_error: '',
             } : current);
           } catch (nextError) {
             const message = nextError instanceof Error ? nextError.message : 'Axon listening failed';
-            setError(message);
-            setStatus(current => current ? {
-              ...current,
-              monitoring_state: 'degraded',
-              degraded_reason: message,
-              last_error: message,
-            } : current);
-            await pushEvent('error', { error: message });
+            if (isNoSpeechTranscriptError(nextError)) {
+              const stillWaitingForFollowUp = followUpCommandUntil.current > Date.now();
+              setStatus(current => current ? {
+                ...current,
+                monitoring_state: stillWaitingForFollowUp ? 'engaged' : (current.armed ? 'armed' : 'idle'),
+                app_state: 'foreground',
+                degraded_reason: '',
+                last_error: '',
+              } : current);
+            } else {
+              followUpCommandUntil.current = 0;
+              setError(message);
+              setStatus(current => current ? {
+                ...current,
+                monitoring_state: 'degraded',
+                degraded_reason: message,
+                last_error: message,
+              } : current);
+              await pushEvent('error', { error: message });
+            }
           } finally {
-            schedule(900);
+            schedule(followUpCommandUntil.current > Date.now() ? 220 : 900);
           }
-        }, 2400);
+        }, captureWindowMs);
       } catch (nextError) {
         const message = nextError instanceof Error ? nextError.message : 'Axon could not start listening';
+        followUpCommandUntil.current = 0;
         setError(message);
         setStatus(current => current ? {
           ...current,

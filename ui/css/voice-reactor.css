@@ -1,0 +1,571 @@
+/* ══════════════════════════════════════════════════════════════
+   Axon — Voice Reactor & Command Center CSS
+   Arc Reactor visual + voice stage layout + animations
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Keyframes ───────────────────────────────────────────────── */
+@keyframes reactor-spin-slow {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+@keyframes reactor-spin-reverse {
+  0%   { transform: rotate(360deg); }
+  100% { transform: rotate(0deg); }
+}
+@keyframes reactor-core-breathe {
+  0%, 100% { opacity: 0.8; }
+  50%      { opacity: 1; }
+}
+@keyframes reactor-core-pulse {
+  0%, 100% { r: 70; opacity: 0.35; }
+  50%      { r: 78; opacity: 0.52; }
+}
+@keyframes reactor-beam-sweep {
+  0%   { opacity: 0.18; transform: scaleX(0.6); }
+  50%  { opacity: 0.8; transform: scaleX(1.05); }
+  100% { opacity: 0.18; transform: scaleX(0.6); }
+}
+@keyframes reactor-boot-in {
+  0%   { opacity: 0; filter: blur(18px) brightness(0); }
+  25%  { opacity: 0.4; filter: blur(8px) brightness(0.3); }
+  50%  { opacity: 0.8; filter: blur(2px) brightness(0.7); }
+  75%  { opacity: 0.95; filter: blur(0) brightness(1.1); }
+  100% { opacity: 1; filter: brightness(1); }
+}
+@keyframes reactor-ring-boot {
+  0%   { stroke-dashoffset: 900; opacity: 0; }
+  60%  { opacity: 0.9; }
+  100% { stroke-dashoffset: 0; opacity: 1; }
+}
+@keyframes reactor-blade-unfold {
+  0%   { opacity: 0; transform: scale(0.3) rotate(-30deg); }
+  60%  { opacity: 1; transform: scale(1.06) rotate(2deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+@keyframes reactor-orb-glow-idle {
+  0%, 100% { filter: drop-shadow(0 0 10px rgba(34, 211, 238, 0.25)); }
+  50%      { filter: drop-shadow(0 0 22px rgba(34, 211, 238, 0.45)); }
+}
+@keyframes reactor-listening-pulse {
+  0%, 100% { filter: drop-shadow(0 0 14px rgba(103, 232, 249, 0.35)); }
+  50%      { filter: drop-shadow(0 0 32px rgba(103, 232, 249, 0.65)); }
+}
+@keyframes reactor-speaking-pulse {
+  0%, 100% { filter: drop-shadow(0 0 12px rgba(96, 165, 250, 0.3)); }
+  30%  { filter: drop-shadow(0 0 28px rgba(96, 165, 250, 0.55)); }
+  60%  { filter: drop-shadow(0 0 16px rgba(96, 165, 250, 0.35)); }
+  85%  { filter: drop-shadow(0 0 22px rgba(96, 165, 250, 0.48)); }
+}
+@keyframes reactor-thinking-spin {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+@keyframes voice-float-slide-left {
+  0%   { opacity: 0; transform: translateX(-40px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+@keyframes voice-float-slide-right {
+  0%   { opacity: 0; transform: translateX(40px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+@keyframes voice-stage-boot {
+  0%   { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+/* ── Voice Stage Layout ──────────────────────────────────────── */
+.voice-stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 100%;
+  animation: voice-stage-boot 0.4s ease-out both;
+}
+.voice-stage__backdrop {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 50% 30%, rgba(34, 211, 238, 0.08) 0%, transparent 60%),
+    radial-gradient(ellipse at 50% 70%, rgba(59, 130, 246, 0.05) 0%, transparent 50%);
+  pointer-events: none;
+}
+.voice-stage__content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  width: 100%;
+  max-width: 1200px;
+}
+.voice-stage__eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.7);
+}
+.voice-stage__provider {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.voice-stage__provider-chip {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  color: rgba(203, 213, 225, 0.85);
+}
+.voice-stage__provider-chip--muted {
+  color: rgba(148, 163, 184, 0.6);
+}
+
+/* ── Reactor Sizing & Container ──────────────────────────────── */
+.voice-visual-wrap {
+  position: relative;
+  width: min(520px, 50vw);
+  height: min(520px, 50vw);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.voice-visual-wrap-mobile {
+  position: relative;
+  width: min(340px, 82vw);
+  height: min(340px, 82vw);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── The SVG Reactor ─────────────────────────────────────────── */
+.axon-reactor {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ── Rings: concentric rotating arcs ─────────────────────────── */
+.reactor-ring {
+  fill: none;
+  stroke-dasharray: 18 8;
+  transform-origin: 210px 210px;
+  transition: stroke 0.4s, opacity 0.4s;
+}
+.reactor-ring:nth-child(1) {
+  animation: reactor-spin-slow 20s linear infinite;
+}
+.reactor-ring:nth-child(2) {
+  animation: reactor-spin-reverse 28s linear infinite;
+}
+.reactor-ring:nth-child(3) {
+  animation: reactor-spin-slow 36s linear infinite;
+  stroke-dasharray: 24 12;
+}
+
+/* ── Beams: horizontal sweep bars ────────────────────────────── */
+.reactor-beam {
+  transform-origin: 209px 297px;
+  animation: reactor-beam-sweep 3s ease-in-out infinite;
+}
+.reactor-beam.beam-right {
+  animation-delay: -1.5s;
+}
+
+/* ── Blades: triangular segments ─────────────────────────────── */
+.reactor-blade {
+  transform-origin: 210px 210px;
+}
+/* Blades appear instantly — no unfold animation */
+
+/* ── Core mask: black hollow that hides blade tips ───────────── */
+.reactor-core-mask {
+  /* Always visible — blades sit behind this opaque black circle */
+}
+
+/* ── Core: center orb + glow ─────────────────────────────────── */
+/* The core GROUP gets a gentle breathe after boot finishes */
+.reactor-core {
+  animation: reactor-core-breathe 4s ease-in-out 6.5s infinite;
+}
+
+/* Core glow grows from a tiny point inside the black hollow */
+.reactor-orb {
+  r: 0;
+  animation: reactor-orb-ignite 6s ease-in 0.8s forwards;
+  cursor: pointer;
+}
+.reactor-orb-glow {
+  r: 0;
+  animation: reactor-glow-ignite 6s ease-in 0.6s forwards;
+  pointer-events: none;
+}
+.reactor-orb-outline {
+  fill: none;
+  stroke: rgba(125, 211, 252, 0.25);
+  stroke-width: 1.5;
+  r: 0;
+  animation: reactor-outline-ignite 5s ease-in 1.2s forwards;
+}
+
+@keyframes reactor-orb-ignite {
+  0%   { r: 0; }
+  8%   { r: 2; }
+  20%  { r: 6; }
+  35%  { r: 14; }
+  50%  { r: 26; }
+  65%  { r: 40; }
+  80%  { r: 52; }
+  100% { r: 62; }
+}
+@keyframes reactor-glow-ignite {
+  0%   { r: 0; opacity: 0; }
+  10%  { r: 2; opacity: 0.05; }
+  25%  { r: 10; opacity: 0.12; }
+  40%  { r: 22; opacity: 0.22; }
+  55%  { r: 38; opacity: 0.32; }
+  70%  { r: 54; opacity: 0.4; }
+  85%  { r: 66; opacity: 0.48; }
+  100% { r: 74; opacity: 0.55; }
+}
+@keyframes reactor-outline-ignite {
+  0%   { r: 0; opacity: 0; }
+  30%  { r: 10; opacity: 0.15; }
+  60%  { r: 35; opacity: 0.5; }
+  100% { r: 58; opacity: 1; }
+}
+
+/* ── Sleep state: reactor dims down gradually (reverse of wake) ── */
+.axon-reactor[data-state="sleep"] .reactor-core {
+  animation: reactor-sleep-core 2.5s ease-in-out forwards;
+}
+.axon-reactor[data-state="sleep"] .reactor-orb {
+  animation: reactor-sleep-orb 3s ease-in-out forwards;
+}
+.axon-reactor[data-state="sleep"] .reactor-orb-glow {
+  animation: reactor-sleep-glow 2.8s ease-in-out forwards;
+}
+.axon-reactor[data-state="sleep"] .reactor-orb-outline {
+  animation: reactor-sleep-outline 2.2s ease-in-out forwards;
+}
+.axon-reactor[data-state="sleep"] .reactor-ring {
+  opacity: 0.06;
+  transition: opacity 3s ease-out;
+}
+.axon-reactor[data-state="sleep"] .reactor-ring:nth-child(1) {
+  animation: reactor-spin-slow 80s linear infinite;
+}
+.axon-reactor[data-state="sleep"] .reactor-ring:nth-child(2) {
+  animation: reactor-spin-reverse 100s linear infinite;
+}
+.axon-reactor[data-state="sleep"] .reactor-ring:nth-child(3) {
+  animation: reactor-spin-slow 120s linear infinite;
+}
+.axon-reactor[data-state="sleep"] .reactor-beam {
+  opacity: 0;
+  transition: opacity 2.5s ease-out;
+}
+.axon-reactor[data-state="sleep"] .reactor-blade {
+  opacity: 0.15;
+  transition: opacity 2.5s ease-out;
+}
+/* Core breathe → dim */
+@keyframes reactor-sleep-core {
+  0%   { opacity: 1; }
+  40%  { opacity: 0.5; }
+  100% { opacity: 0.08; }
+}
+/* Orb shrinks back: 62 → tiny ember (reverse of ignite) */
+@keyframes reactor-sleep-orb {
+  0%   { r: 62; opacity: 1; }
+  15%  { r: 52; opacity: 0.9; }
+  30%  { r: 40; opacity: 0.75; }
+  50%  { r: 26; opacity: 0.55; }
+  70%  { r: 14; opacity: 0.35; }
+  85%  { r: 6;  opacity: 0.15; }
+  100% { r: 2;  opacity: 0.06; }
+}
+/* Glow contracts: 74 → tiny (reverse of glow-ignite) */
+@keyframes reactor-sleep-glow {
+  0%   { r: 74; opacity: 0.55; }
+  20%  { r: 54; opacity: 0.4; }
+  40%  { r: 38; opacity: 0.28; }
+  60%  { r: 22; opacity: 0.16; }
+  80%  { r: 10; opacity: 0.06; }
+  100% { r: 2;  opacity: 0; }
+}
+/* Outline fades: 58 → 0 */
+@keyframes reactor-sleep-outline {
+  0%   { r: 58; opacity: 1; }
+  30%  { r: 35; opacity: 0.5; }
+  60%  { r: 10; opacity: 0.15; }
+  100% { r: 0;  opacity: 0; }
+}
+
+/* ── State-driven reactor animation overrides ────────────────── */
+.axon-reactor[data-state="idle"] {
+  animation: reactor-orb-glow-idle 4s ease-in-out 6.5s infinite;
+}
+.axon-reactor[data-state="listening"] {
+  animation: reactor-listening-pulse 1.4s ease-in-out infinite;
+}
+.axon-reactor[data-state="listening"] .reactor-ring {
+  stroke-dasharray: 12 4;
+}
+.axon-reactor[data-state="listening"] .reactor-ring:nth-child(1) {
+  animation: reactor-spin-slow 6s linear infinite;
+}
+.axon-reactor[data-state="listening"] .reactor-ring:nth-child(2) {
+  animation: reactor-spin-reverse 8s linear infinite;
+}
+.axon-reactor[data-state="listening"] .reactor-ring:nth-child(3) {
+  animation: reactor-spin-slow 10s linear infinite;
+}
+.axon-reactor[data-state="speaking"] {
+  animation: reactor-speaking-pulse 1.6s ease-in-out infinite;
+}
+.axon-reactor[data-state="speaking"] .reactor-ring:nth-child(1) {
+  animation: reactor-spin-slow 10s linear infinite;
+}
+.axon-reactor[data-state="speaking"] .reactor-ring:nth-child(2) {
+  animation: reactor-spin-reverse 14s linear infinite;
+}
+.axon-reactor[data-state="thinking"] .reactor-rings {
+  animation: reactor-thinking-spin 3s linear infinite;
+}
+.axon-reactor[data-state="thinking"] .reactor-core {
+  animation: reactor-core-breathe 1.5s ease-in-out infinite;
+}
+.axon-reactor[data-state="agent"] .reactor-ring {
+  stroke-dasharray: 6 18;
+}
+.axon-reactor[data-state="agent"] .reactor-core {
+  animation: reactor-core-breathe 2.5s ease-in-out infinite;
+}
+
+/* ── HUD Corner Brackets ─────────────────────────────────────── */
+.voice-hud {
+  position: absolute;
+  width: 36px;
+  height: 36px;
+  pointer-events: none;
+  opacity: 0.35;
+}
+.voice-hud--left {
+  top: -8px;
+  left: -8px;
+  border-top: 2px solid var(--stark-arc-blue, #00d4ff);
+  border-left: 2px solid var(--stark-arc-blue, #00d4ff);
+}
+.voice-hud--right {
+  bottom: -8px;
+  right: -8px;
+  border-bottom: 2px solid var(--stark-arc-blue, #00d4ff);
+  border-right: 2px solid var(--stark-arc-blue, #00d4ff);
+}
+
+/* ── Voice Arena (desktop 3-col) ─────────────────────────────── */
+.voice-arena {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 28px;
+  align-items: center;
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding-top: 20px;
+}
+.voice-arena__center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+/* ── Voice Floats (transcript/response panels) ───────────────── */
+.voice-float {
+  position: relative;
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  backdrop-filter: blur(10px);
+  padding: 0;
+  overflow: hidden;
+  min-height: 140px;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+.voice-float--left {
+  animation: voice-float-slide-left 0.5s ease-out 0.3s both;
+}
+.voice-float--right {
+  animation: voice-float-slide-right 0.5s ease-out 0.3s both;
+}
+.voice-float--active {
+  border-color: rgba(34, 211, 238, 0.3);
+  box-shadow: 0 0 20px rgba(34, 211, 238, 0.08);
+}
+.voice-float__edge {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3px;
+  height: 100%;
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.4), transparent 70%);
+}
+.voice-float--right .voice-float__edge {
+  left: auto;
+  right: 0;
+}
+.voice-float__scanline {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(34, 211, 238, 0.03) 0px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+.voice-float__inner {
+  position: relative;
+  z-index: 1;
+  padding: 16px 18px;
+}
+.voice-float__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.7);
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.voice-float__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(148, 163, 184, 0.4);
+}
+.voice-float__dot--cyan {
+  background: rgba(34, 211, 238, 0.7);
+  box-shadow: 0 0 6px rgba(34, 211, 238, 0.4);
+}
+.voice-float__body {
+  font-size: 13px;
+  line-height: 1.6;
+  color: rgba(203, 213, 225, 0.8);
+  max-height: 200px;
+  overflow-y: auto;
+}
+.voice-float__body--response {
+  color: rgba(224, 242, 254, 0.9);
+}
+
+/* ── Voice Status Block ──────────────────────────────────────── */
+.voice-stage__status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.voice-stage__state-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: #e2e8f0;
+  letter-spacing: 0.04em;
+}
+.voice-stage__state-label-mobile {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e2e8f0;
+  letter-spacing: 0.04em;
+}
+.voice-stage__state-caption {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.65);
+}
+.voice-stage__state-hint {
+  font-size: 12px;
+  color: rgba(148, 163, 184, 0.55);
+  max-width: 340px;
+  margin: 0 auto;
+}
+.voice-stage__started {
+  font-size: 10px;
+  color: rgba(148, 163, 184, 0.4);
+  margin-top: 2px;
+}
+
+/* ── Voice Action Buttons ────────────────────────────────────── */
+.voice-stage__actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  padding-top: 14px;
+  flex-wrap: wrap;
+}
+.voice-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 22px;
+  border-radius: 14px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+}
+.voice-action--primary {
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.2), rgba(59, 130, 246, 0.15));
+  border-color: rgba(34, 211, 238, 0.35);
+  color: #67e8f9;
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.12);
+}
+.voice-action--primary:hover {
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.3), rgba(59, 130, 246, 0.22));
+  box-shadow: 0 0 24px rgba(34, 211, 238, 0.2);
+  transform: translateY(-1px);
+}
+.voice-action--recording {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.25), rgba(248, 113, 113, 0.15));
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.15);
+  animation: reactor-core-breathe 1.5s ease-in-out infinite;
+}
+.voice-action--secondary {
+  background: rgba(30, 41, 59, 0.6);
+  border-color: rgba(148, 163, 184, 0.18);
+  color: rgba(203, 213, 225, 0.8);
+}
+.voice-action--secondary:hover {
+  background: rgba(30, 41, 59, 0.8);
+  border-color: rgba(148, 163, 184, 0.3);
+  color: #e2e8f0;
+}
+.voice-action--ghost {
+  background: transparent;
+  color: rgba(148, 163, 184, 0.6);
+}
+.voice-action--ghost:hover {
+  color: rgba(203, 213, 225, 0.85);
+  background: rgba(30, 41, 59, 0.4);
+}
+.voice-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

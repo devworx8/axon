@@ -171,6 +171,11 @@ function axonLiveOperatorMixin() {
           detail,
         });
       }
+
+      // Forward to voice HUD if available
+      if (typeof this.hudProcessAgentEvent === 'function') {
+        try { this.hudProcessAgentEvent(event); } catch (_) { /* non-critical */ }
+      }
     },
 
     clearLiveOperator(delay = 0, workspaceId = null) {

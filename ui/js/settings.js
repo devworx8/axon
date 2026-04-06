@@ -117,6 +117,7 @@ function axonSettingsMixin() {
           azure_speech_region: s.azure_speech_region || 'eastus',
           azure_voice: s.azure_voice || 'en-ZA-LeahNeural',
           voice_speech_rate: s.voice_speech_rate || '0.92',
+          voice_speech_pitch: s.voice_speech_pitch || '1.04',
           voice_attention_enabled: this.settingEnabled(s.voice_attention_enabled ?? true),
           voice_attention_autowake: this.settingEnabled(s.voice_attention_autowake ?? true),
           local_stt_model: s.local_stt_model || 'base',

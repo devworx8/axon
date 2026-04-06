@@ -101,6 +101,10 @@ function axonVoiceMixin() {
       if (this.chatInput && !this.voiceTranscript) {
         this.voiceTranscript = this.chatInput;
       }
+      if (window.axonVoiceBootSound) {
+        window.axonVoiceBootSound.play();
+      }
+      this._scheduleBootGreeting?.();
     },
 
     closeVoiceCommandCenter(stopCapture = true) {
@@ -136,6 +140,7 @@ function axonVoiceMixin() {
     },
 
     voiceCenterStatusLabel() {
+      if (this.reactorAsleep) return 'Reactor sleeping';
       const state = this.orbState();
       if (state === 'listening') return 'Listening for a command';
       if (state === 'speaking') return 'Speaking the result';

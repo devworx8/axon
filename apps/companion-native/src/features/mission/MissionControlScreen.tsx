@@ -39,7 +39,7 @@ export function MissionControlScreen({
         : snapshot?.axon?.monitoring_state === 'degraded'
           ? 'degraded'
           : 'armed')
-    : (snapshot?.axon?.status || 'standby');
+    : (snapshot?.axon?.monitoring_state === 'idle' ? 'standby' : (snapshot?.axon?.monitoring_state || 'standby'));
   const focusName = snapshot?.focus?.workspace?.name || 'Global platform view';
   const cpuValue = snapshot?.systems?.find((item) => String(item.key || item.label || '').toLowerCase().includes('cpu'))?.meta?.value;
   const memValue = snapshot?.systems?.find((item) => String(item.key || item.label || '').toLowerCase().includes('mem'))?.meta?.value;

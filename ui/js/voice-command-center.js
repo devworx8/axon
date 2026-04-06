@@ -5,6 +5,93 @@
 function axonVoiceCommandCenterMixin() {
   return {
 
+    /** Sleep state — when true the reactor goes dark */
+    reactorAsleep: false,
+
+    /** Tap the ORB: asleep → wake, awake → sleep */
+    toggleReactorOrbAction() {
+      if (this.reactorAsleep) {
+        this.wakeReactor();
+        return;
+      }
+      // Any awake state — tap puts reactor to sleep
+      this.sleepReactor();
+    },
+
+    /** Put reactor to sleep — play power-down sound, speak goodbye, then dim */
+    sleepReactor() {
+      clearTimeout(this._bootGreetingTimer);
+      if (typeof this.stopSpeech === 'function') this.stopSpeech();
+      if (window.axonVoiceSleepSound) {
+        window.axonVoiceSleepSound.play();
+      }
+      this._speakGreeting(this._pickSleepGoodbye());
+      this.reactorAsleep = true;
+    },
+
+    /** Wake reactor — re-ignite glow + boot sound */
+    wakeReactor() {
+      this.reactorAsleep = false;
+      // Re-trigger ignite animations by removing and re-adding the class
+      document.querySelectorAll('.axon-reactor').forEach(svg => {
+        svg.classList.add('reactor--reignite');
+        requestAnimationFrame(() => {
+          svg.classList.remove('reactor--reignite');
+        });
+      });
+      if (window.axonVoiceBootSound) {
+        window.axonVoiceBootSound.play();
+      }
+      // JARVIS-style greeting after boot sound finishes (~6.5s)
+      this._scheduleBootGreeting();
+    },
+
+    /** Speak a contextual greeting once the boot animation settles */
+    _scheduleBootGreeting() {
+      clearTimeout(this._bootGreetingTimer);
+      this._bootGreetingTimer = setTimeout(() => {
+        if (!this.showVoiceOrb || this.reactorAsleep) return;
+        const greeting = this._pickBootGreeting();
+        this._speakGreeting(greeting);
+      }, 6800);
+    },
+
+    /** Speak greeting at a slow, deliberate JARVIS pace using the configured voice */
+    _speakGreeting(text) {
+      // Force a slow greeting rate that bypasses the normal clamp
+      this._greetingRateOverride = 0.15;
+      if (typeof this.speakMessage === 'function') {
+        this.speakMessage(text).finally(() => {
+          this._greetingRateOverride = null;
+        });
+      }
+    },
+
+    /** Pick a time-aware JARVIS-style greeting */
+    _pickBootGreeting() {
+      const hour = new Date().getHours();
+      const timeWord = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
+
+      const greetings = [
+        `Good ${timeWord}, Sir. All systems are online.`,
+        `Reactor online. Standing by, Sir.`,
+        `Good ${timeWord}, Sir. Axon is ready for your command.`,
+        `Systems nominal. How can I help you, Sir?`,
+        `Online and operational. Good ${timeWord}, Sir.`,
+      ];
+      return greetings[Math.floor(Math.random() * greetings.length)];
+    },
+
+    /** Pick a JARVIS-style goodbye when going to sleep */
+    _pickSleepGoodbye() {
+      const goodbyes = [
+        'Going offline, Sir. I\'ll be here when you need me.',
+        'Reactor powering down. Rest well, Sir.',
+        'Standing down, Sir. Systems on standby.',
+      ];
+      return goodbyes[Math.floor(Math.random() * goodbyes.length)];
+    },
+
     async startVoiceListening() {
       if (this.voiceActive) {
         await this.startVoice();
@@ -79,6 +166,7 @@ function axonVoiceCommandCenterMixin() {
 
     voiceStateCaption() {
       const state = typeof this.orbState === 'function' ? this.orbState() : 'idle';
+      if (this.reactorAsleep) return 'Sleeping — tap to wake';
       if (state === 'listening') return 'Microphone live';
       if (state === 'speaking') return 'Reply playback';
       if (state === 'thinking') return 'Reasoning in progress';
@@ -93,11 +181,21 @@ function axonVoiceCommandCenterMixin() {
     },
 
     voiceVisualState() {
+      if (this.reactorAsleep) return 'sleep';
       return typeof this.orbState === 'function' ? this.orbState() : 'idle';
     },
 
     voiceVisualPalette() {
       const state = this.voiceVisualState();
+      if (state === 'sleep') {
+        return {
+          stroke: 'rgba(51, 65, 85, 0.3)',
+          glow: 'rgba(0, 0, 0, 0)',
+          beamOpacity: 0.08,
+          ringOpacity: 0.12,
+          strokeWidth: 1.2,
+        };
+      }
       if (state === 'listening') {
         return {
           stroke: 'rgba(103, 232, 249, 0.92)',

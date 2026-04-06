@@ -40,8 +40,8 @@ def _normalized_voice_rate(value: float | int | str | None) -> float:
     try:
         rate = float(value)
     except (TypeError, ValueError):
-        rate = 0.92
-    return max(0.72, min(1.15, rate))
+        rate = 0.85
+    return max(0.50, min(1.15, rate))
 
 
 def _azure_voice_rate_attr(value: float | int | str | None) -> str:

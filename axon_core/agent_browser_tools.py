@@ -12,7 +12,6 @@ agent loop can inject the image into vision-capable LLM context.
 from __future__ import annotations
 
 import base64
-import json
 import os
 import time
 from pathlib import Path
@@ -327,17 +326,17 @@ async def execute_browser_tool(name: str, args: dict[str, Any]) -> str:
             f"Page: {info.get('title', '?')}",
             f"URL:  {info.get('url', '?')}",
         ]
-        headings = info.get("headings") or []
+        headings: list[Any] = info.get("headings") or []
         if headings:
             lines.append(f"\nHeadings ({len(headings)}):")
             for h in headings:
                 lines.append(f"  • {h}")
-        buttons = info.get("buttons") or []
+        buttons: list[Any] = info.get("buttons") or []
         if buttons:
             lines.append(f"\nButtons ({len(buttons)}):")
             for b in buttons:
                 lines.append(f"  • {b}")
-        inputs = info.get("inputs") or []
+        inputs: list[dict[str, Any]] = info.get("inputs") or []
         if inputs:
             lines.append(f"\nInputs ({len(inputs)}):")
             for inp in inputs:
@@ -347,7 +346,7 @@ async def execute_browser_tool(name: str, args: dict[str, Any]) -> str:
                 if inp.get("placeholder"):
                     desc += f" placeholder=\"{inp['placeholder']}\""
                 lines.append(desc)
-        links = info.get("links") or []
+        links: list[dict[str, Any]] = info.get("links") or []
         if links:
             lines.append(f"\nLinks ({len(links)}):")
             for link in links[:15]:

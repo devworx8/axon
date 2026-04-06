@@ -739,18 +739,19 @@ body.console-resizing * {
   color: rgba(100, 116, 139, 0.92);
 }
 .console-meta-action {
-  border-radius: 999px;
-  border: 1px solid rgba(51, 65, 85, 0.62);
-  background: rgba(15, 23, 42, 0.6);
-  padding: 4px 9px;
-  font-size: 10px;
-  color: rgba(148, 163, 184, 0.92);
-  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  padding: 1px 5px;
+  font-size: 9px;
+  color: rgba(100, 116, 139, 0.6);
+  transition: color 0.15s ease, background 0.15s ease;
+  cursor: pointer;
+  letter-spacing: 0.02em;
 }
 .console-meta-action:hover {
-  border-color: rgba(56, 189, 248, 0.28);
-  background: rgba(30, 41, 59, 0.84);
-  color: #e2e8f0;
+  background: rgba(51, 65, 85, 0.4);
+  color: rgba(148, 163, 184, 0.92);
 }
 .console-meta-action-warn {
   border-color: rgba(245, 158, 11, 0.26);

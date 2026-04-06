@@ -50,28 +50,61 @@
 <section class="stark-dash-panel p-4">
   <div class="flex items-center justify-between gap-2 mb-3">
     <div>
-      <div class="stark-dash-header">Desktop Preview</div>
-      <div class="text-[10px] text-slate-500 mt-0.5">Proof that work is happening</div>
+      <div class="stark-dash-header">Axon Surface</div>
+      <div class="text-[10px] text-slate-500 mt-0.5" x-text="dashboardLiveSurfaceDescription()"></div>
     </div>
     <div class="flex items-center gap-1.5">
-      <span class="rounded-full border border-slate-700 px-2 py-0.5 text-[9px]"
-            :class="desktopPreview.url ? 'text-emerald-400 border-emerald-500/20' : (desktopPreview.loading ? 'text-amber-400 border-amber-500/20' : 'text-slate-500')"
-            x-text="desktopPreview.url ? 'Live' : (desktopPreview.loading ? 'Refreshing' : (desktopPreview.error ? 'Error' : 'Ready'))"></span>
-      <button @click="refreshDesktopPreview(true)"
+      <span class="rounded-full border px-2 py-0.5 text-[9px]"
+            :class="dashboardLiveSurfaceStatusTone()"
+            x-text="dashboardLiveSurfaceStatusLabel()"></span>
+      <button @click="dashboardLiveSurfaceAction()"
               class="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-[10px] text-slate-300 transition hover:border-slate-500">
-        ↻
+        <span x-text="dashboardLiveSurfaceActionLabel()"></span>
       </button>
     </div>
   </div>
-  <div class="overflow-hidden rounded-xl border border-slate-800 bg-slate-950/80 aspect-video flex items-center justify-center">
-    <img x-show="desktopPreview.url" :src="desktopPreview.url" alt="Live desktop preview" class="h-full w-full object-cover" />
-    <div x-show="!desktopPreview.url && desktopPreview.loading" class="text-[11px] text-slate-400">Capturing desktop…</div>
-    <div x-show="!desktopPreview.url && !desktopPreview.loading && !desktopPreview.error" class="px-4 text-center text-[11px] text-slate-500">Refresh to capture the desktop state.</div>
-    <div x-show="desktopPreview.error" class="px-4 text-center text-[11px] text-amber-300" x-text="desktopPreview.error"></div>
-  </div>
+  <template x-if="dashboardLiveSurfaceMode() === 'browser'">
+    <div class="overflow-hidden rounded-xl border border-slate-800 bg-slate-950/80 aspect-video">
+      <iframe :src="dashboardLiveBrowserUrl()"
+              title="Axon browser surface"
+              class="h-full w-full border-0 bg-slate-950"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+              loading="lazy"></iframe>
+    </div>
+  </template>
+  <template x-if="dashboardLiveSurfaceMode() === 'terminal'">
+    <div class="overflow-hidden rounded-xl border border-slate-800 bg-slate-950/80">
+      <div class="flex items-center justify-between gap-2 border-b border-slate-800/80 px-3 py-2">
+        <div class="truncate text-[10px] uppercase tracking-[0.16em] text-slate-500"
+             x-text="dashboardLiveTerminalSession()?.title || 'Terminal stream'"></div>
+        <div class="truncate max-w-[180px] text-[10px] text-slate-500"
+             x-text="dashboardLiveTerminalSession()?.active_command || dashboardLiveTerminalSession()?.cwd || 'Waiting for output'"></div>
+      </div>
+      <div class="max-h-[260px] overflow-y-auto px-3 py-3 font-mono text-[11px] leading-5 text-slate-300">
+        <template x-if="!dashboardLiveTerminalEvents().length">
+          <div class="text-slate-500"
+               x-text="dashboardLiveTerminalSessionId() ? 'Attaching to the live terminal stream…' : 'No active terminal stream right now.'"></div>
+        </template>
+        <template x-for="event in dashboardLiveTerminalEvents()" :key="event.id">
+          <div class="mb-2 rounded-lg border border-slate-800/70 bg-slate-950/60 px-2.5 py-2">
+            <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500" x-text="event.event_type"></div>
+            <div class="mt-1 whitespace-pre-wrap break-words" x-text="event.content"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+  <template x-if="dashboardLiveSurfaceMode() === 'desktop'">
+    <div class="overflow-hidden rounded-xl border border-slate-800 bg-slate-950/80 aspect-video flex items-center justify-center">
+      <img x-show="desktopPreview.url" :src="desktopPreview.url" alt="Live desktop preview" class="h-full w-full object-cover" />
+      <div x-show="!desktopPreview.url && desktopPreview.loading" class="text-[11px] text-slate-400">Capturing desktop…</div>
+      <div x-show="!desktopPreview.url && !desktopPreview.loading && !desktopPreview.error" class="px-4 text-center text-[11px] text-slate-500">Refresh to capture the desktop state.</div>
+      <div x-show="desktopPreview.error" class="px-4 text-center text-[11px] text-amber-300" x-text="desktopPreview.error"></div>
+    </div>
+  </template>
   <div class="mt-2 flex items-center justify-between text-[10px] text-slate-500">
-    <span x-text="desktopPreview.lastUpdated ? 'Updated ' + timeAgo(desktopPreview.lastUpdated) : 'Not yet captured'"></span>
-    <span x-show="liveOperator.workspaceName" x-text="liveOperator.workspaceName" class="truncate max-w-[100px]"></span>
+    <span x-text="dashboardLiveSurfaceUpdatedAt() ? 'Updated ' + timeAgo(dashboardLiveSurfaceUpdatedAt()) : 'Waiting for a live surface'"></span>
+    <span x-text="dashboardLiveSurfaceScopeLabel()" class="truncate max-w-[100px]"></span>
   </div>
 </section>
 

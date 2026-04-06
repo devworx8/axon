@@ -434,6 +434,11 @@ async def run_agent(
     active_tool_names = sorted(deps.tool_registry.keys()) if tools is None else [
         tool_name for tool_name in tools if tool_name in deps.tool_registry
     ]
+    # Browser tools are dispatched outside the sync registry — include them
+    from .agent_browser_tools import BROWSER_TOOL_NAMES as _BTN
+    for _bt in sorted(_BTN):
+        if _bt not in active_tool_names:
+            active_tool_names.append(_bt)
     wrote_files = False
 
     backend_mode = str(backend or "").strip().lower()
