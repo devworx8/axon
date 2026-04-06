@@ -110,11 +110,12 @@ async def mobile_axon_speak(request: Request, body: MobileAxonSpeakRequest):
 
 @router.post("/api/mobile/axon/voice-settings")
 async def mobile_axon_voice_settings(request: Request, body: MobileVoiceSettingsRequest):
-    """Push Azure speech credentials and voice tuning from mobile to backend settings."""
+    """Push voice-related settings from mobile to backend settings."""
     await require_companion_context(request)
     ALLOWED_KEYS = {
         "azure_speech_key",
         "azure_speech_region",
+        "companion_voice_runtime_mode",
         "voice_speech_rate",
         "voice_speech_pitch",
     }

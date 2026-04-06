@@ -24,6 +24,7 @@ export function SettingsScreen({
   onChangeAxonVoiceIdentity,
   onChangeAzureSpeechKey,
   onChangeAzureSpeechRegion,
+  onChangeFastVoiceRuntimeMode,
   onChangeVoiceSpeechRate,
   onChangeVoiceSpeechPitch,
   vaultStatus,
@@ -58,6 +59,7 @@ export function SettingsScreen({
   onChangeAxonVoiceIdentity: (value: string) => void;
   onChangeAzureSpeechKey: (value: string) => void;
   onChangeAzureSpeechRegion: (value: string) => void;
+  onChangeFastVoiceRuntimeMode: (value: 'auto_fastest' | 'selected_runtime') => void;
   onChangeVoiceSpeechRate: (value: string) => void;
   onChangeVoiceSpeechPitch: (value: string) => void;
   vaultStatus?: VaultStatus | null;
@@ -163,6 +165,7 @@ export function SettingsScreen({
         onChangeAxonVoiceIdentity={onChangeAxonVoiceIdentity}
         onChangeAzureSpeechKey={onChangeAzureSpeechKey}
         onChangeAzureSpeechRegion={onChangeAzureSpeechRegion}
+        onChangeFastVoiceRuntimeMode={onChangeFastVoiceRuntimeMode}
         onChangeVoiceSpeechRate={onChangeVoiceSpeechRate}
         onChangeVoiceSpeechPitch={onChangeVoiceSpeechPitch}
       />

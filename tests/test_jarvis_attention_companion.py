@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -8,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi import HTTPException
 
 from axon_api.routes import companion as companion_routes
-from axon_api.services import auth_runtime_state, companion_live, companion_runtime, connector_attention, sentry_bridge
+from axon_api.services import auth_runtime_state, companion_live, companion_runtime, companion_voice_runtime, connector_attention, sentry_bridge
 
 
 class ConnectorAttentionTests(unittest.IsolatedAsyncioTestCase):
@@ -106,6 +107,38 @@ class CompanionRuntimeTests(unittest.IsolatedAsyncioTestCase):
         chat_mock.assert_not_awaited()
         self.assertEqual(record_mock.await_count, 2)
 
+    async def test_process_voice_turn_uses_fast_path_for_day_plan_prompt(self):
+        fake_db = object()
+        session = {"id": 7, "workspace_id": 202, "session_key": "companion:1:202:", "summary": ""}
+        project = {"id": 202, "name": "Axon", "path": "/home/edp/.devbrain", "git_branch": "main"}
+        user_turn = {"id": 100, "role": "user", "content": "How should I structure today's work?"}
+        assistant_turn = {"id": 101, "role": "assistant", "content": "No urgent inbox items are flagged right now."}
+        refreshed_session = dict(session) | {"summary": "No urgent inbox items are flagged right now."}
+
+        with patch.object(companion_runtime, "get_project", AsyncMock(return_value=project)), \
+             patch.object(companion_runtime, "get_all_settings", AsyncMock(return_value={"ai_backend": "cli", "cli_runtime_path": "/tmp/codex", "cli_runtime_model": "gpt-5.4"})), \
+             patch.object(companion_runtime, "get_companion_session", AsyncMock(return_value=refreshed_session)), \
+             patch.object(companion_runtime, "list_workspace_relationships_for_workspace", AsyncMock(return_value=[])), \
+             patch.object(companion_runtime, "attention_summary", AsyncMock(return_value={"counts": {"now": 0, "waiting_on_me": 0, "watch": 0}})), \
+             patch.object(companion_runtime.companion_sessions_service, "ensure_companion_session", AsyncMock(return_value=session)), \
+             patch.object(companion_runtime.companion_sessions_service, "touch_companion_session", AsyncMock(return_value=True)), \
+             patch.object(companion_runtime.companion_voice_service, "record_companion_voice_turn", AsyncMock(side_effect=[user_turn, assistant_turn])) as record_mock, \
+             patch.object(companion_runtime.companion_voice_service, "list_recent_companion_voice_turns", AsyncMock(return_value=[user_turn])), \
+             patch.object(companion_runtime.brain, "chat", AsyncMock()) as chat_mock:
+            result = await companion_runtime.process_companion_voice_turn(
+                fake_db,
+                device_id=1,
+                workspace_id=202,
+                content="How should I structure today's work?",
+                transcript="How should I structure today's work?",
+            )
+
+        self.assertIn("Focus workspace: Axon", result["response_text"])
+        self.assertIn("No urgent inbox items are flagged right now.", result["response_text"])
+        self.assertEqual(result["tokens_used"], 0)
+        chat_mock.assert_not_awaited()
+        self.assertEqual(record_mock.await_count, 2)
+
     async def test_process_voice_turn_upgrades_to_agent_for_local_operator_request(self):
         fake_db = object()
         session = {"id": 7, "workspace_id": 202, "session_key": "companion:1:202:", "summary": ""}
@@ -164,7 +197,10 @@ class CompanionRuntimeTests(unittest.IsolatedAsyncioTestCase):
              patch.object(companion_runtime.companion_sessions_service, "touch_companion_session", AsyncMock(return_value=True)), \
              patch.object(companion_runtime.companion_voice_service, "record_companion_voice_turn", AsyncMock(side_effect=[user_turn, assistant_turn])) as record_mock, \
              patch.object(companion_runtime.companion_voice_service, "list_recent_companion_voice_turns", AsyncMock(return_value=[user_turn])), \
-             patch.object(companion_runtime.brain, "chat", AsyncMock(return_value={"content": "Voice reply ready.", "tokens": 42})) as chat_mock:
+             patch.object(companion_voice_runtime, "resolve_companion_voice_model_candidates", AsyncMock(return_value=[{"backend": "cli", "cli_path": "/tmp/codex", "cli_model": "gpt-5.1-codex-mini"}])), \
+             patch.object(companion_voice_runtime, "resolve_companion_voice_model_kwargs", AsyncMock(return_value={"backend": "cli", "cli_path": "/tmp/codex", "cli_model": "gpt-5.1-codex-mini"})), \
+             patch.object(companion_voice_runtime, "companion_voice_timeout_seconds", return_value=8.0), \
+             patch.object(companion_voice_runtime.brain, "chat", AsyncMock(return_value={"content": "Voice reply ready.", "tokens": 42})) as chat_mock:
             result = await companion_runtime.process_companion_voice_turn(
                 fake_db,
                 device_id=1,
@@ -179,6 +215,84 @@ class CompanionRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["live"]["focus"]["workspace"]["name"], "Axon")
         chat_mock.assert_awaited_once()
         self.assertEqual(record_mock.await_count, 2)
+
+    async def test_process_voice_turn_times_out_to_local_fallback(self):
+        fake_db = object()
+        session = {"id": 7, "workspace_id": 202, "session_key": "companion:1:202:", "summary": ""}
+        project = {"id": 202, "name": "Axon", "path": "/home/edp/.devbrain", "git_branch": "main"}
+        user_turn = {"id": 100, "role": "user", "content": "Explain the dashboard refactor approach."}
+        assistant_turn = {"id": 101, "role": "assistant", "content": "Fallback reply"}
+        refreshed_session = dict(session) | {"summary": "Fallback reply"}
+
+        async def slow_chat(**_kwargs):
+            await asyncio.sleep(0.05)
+            return {"content": "Too slow", "tokens": 99}
+
+        with patch.object(companion_runtime, "get_project", AsyncMock(return_value=project)), \
+             patch.object(companion_runtime, "get_all_settings", AsyncMock(return_value={"ai_backend": "cli", "cli_runtime_path": "/tmp/codex", "cli_runtime_model": "gpt-5.4"})), \
+             patch.object(companion_runtime, "get_companion_session", AsyncMock(return_value=refreshed_session)), \
+             patch.object(companion_runtime, "list_workspace_relationships_for_workspace", AsyncMock(return_value=[])), \
+             patch.object(companion_runtime, "attention_summary", AsyncMock(return_value={"counts": {"now": 1, "waiting_on_me": 2, "watch": 3}})), \
+             patch.object(companion_runtime.companion_sessions_service, "ensure_companion_session", AsyncMock(return_value=session)), \
+             patch.object(companion_runtime.companion_sessions_service, "touch_companion_session", AsyncMock(return_value=True)), \
+             patch.object(companion_runtime.companion_voice_service, "record_companion_voice_turn", AsyncMock(side_effect=[user_turn, assistant_turn])), \
+             patch.object(companion_runtime.companion_voice_service, "list_recent_companion_voice_turns", AsyncMock(return_value=[user_turn])), \
+             patch.object(companion_runtime.brain, "_requires_local_operator_execution", return_value=False), \
+             patch.object(companion_voice_runtime, "resolve_companion_voice_model_candidates", AsyncMock(return_value=[{"backend": "cli", "cli_path": "/tmp/codex", "cli_model": "gpt-5.1-codex-mini"}])), \
+             patch.object(companion_voice_runtime, "resolve_companion_voice_model_kwargs", AsyncMock(return_value={"backend": "cli", "cli_path": "/tmp/codex", "cli_model": "gpt-5.1-codex-mini"})), \
+             patch.object(companion_voice_runtime, "companion_voice_timeout_seconds", return_value=0.01), \
+             patch.object(companion_voice_runtime.brain, "chat", AsyncMock(side_effect=slow_chat)):
+            result = await companion_runtime.process_companion_voice_turn(
+                fake_db,
+                device_id=1,
+                workspace_id=202,
+                content="Explain the dashboard refactor approach.",
+                transcript="Explain the dashboard refactor approach.",
+            )
+
+        self.assertEqual(result["backend"], "local_timeout")
+        self.assertEqual(result["tokens_used"], 0)
+        self.assertIn("quick-response budget", result["response_text"])
+
+    async def test_process_voice_turn_fails_over_to_next_runtime_candidate(self):
+        fake_db = object()
+        session = {"id": 7, "workspace_id": 202, "session_key": "companion:1:202:", "summary": ""}
+        project = {"id": 202, "name": "Axon", "path": "/home/edp/.devbrain"}
+        user_turn = {"id": 100, "role": "user", "content": "Explain the dashboard refactor approach."}
+        assistant_turn = {"id": 101, "role": "assistant", "content": "Use the open issues list and start with the most urgent task."}
+        refreshed_session = dict(session) | {"summary": assistant_turn["content"]}
+
+        async def voice_chat(**kwargs):
+            if kwargs.get("api_provider") == "anthropic":
+                raise RuntimeError("Anthropic credits exhausted")
+            return {"content": "Use the open issues list and start with the most urgent task.", "tokens": 21}
+
+        with patch.object(companion_runtime, "get_project", AsyncMock(return_value=project)), \
+             patch.object(companion_runtime, "get_all_settings", AsyncMock(return_value={"ai_backend": "cli", "cli_runtime_path": "/tmp/codex", "cli_runtime_model": "gpt-5.4"})), \
+             patch.object(companion_runtime, "get_companion_session", AsyncMock(return_value=refreshed_session)), \
+             patch.object(companion_runtime, "list_workspace_relationships_for_workspace", AsyncMock(return_value=[])), \
+             patch.object(companion_runtime, "attention_summary", AsyncMock(return_value={"counts": {"now": 0, "waiting_on_me": 0, "watch": 0}})), \
+             patch.object(companion_runtime.companion_sessions_service, "ensure_companion_session", AsyncMock(return_value=session)), \
+             patch.object(companion_runtime.companion_sessions_service, "touch_companion_session", AsyncMock(return_value=True)), \
+             patch.object(companion_runtime.companion_voice_service, "record_companion_voice_turn", AsyncMock(side_effect=[user_turn, assistant_turn])), \
+             patch.object(companion_runtime.companion_voice_service, "list_recent_companion_voice_turns", AsyncMock(return_value=[user_turn])), \
+             patch.object(companion_runtime.brain, "_requires_local_operator_execution", return_value=False), \
+             patch.object(companion_voice_runtime, "resolve_companion_voice_model_candidates", AsyncMock(return_value=[
+                 {"backend": "api", "api_provider": "anthropic", "api_key": "a", "api_base_url": "https://api.anthropic.com/v1", "api_model": "claude-haiku-4-5"},
+                 {"backend": "api", "api_provider": "deepseek", "api_key": "d", "api_base_url": "https://api.deepseek.com/v1", "api_model": "deepseek-chat"},
+             ])), \
+             patch.object(companion_voice_runtime.brain, "chat", AsyncMock(side_effect=voice_chat)):
+            result = await companion_runtime.process_companion_voice_turn(
+                fake_db,
+                device_id=1,
+                workspace_id=202,
+                content="Explain the dashboard refactor approach.",
+                transcript="Explain the dashboard refactor approach.",
+            )
+
+        self.assertEqual(result["backend"], "api")
+        self.assertEqual(result["tokens_used"], 21)
+        self.assertEqual(result["response_text"], "Use the open issues list and start with the most urgent task.")
 
 
 class CompanionLiveSnapshotTests(unittest.IsolatedAsyncioTestCase):

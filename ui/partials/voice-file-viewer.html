@@ -1,0 +1,66 @@
+<!-- ── Holographic File Viewer ────────────────────────────── -->
+<template x-if="voiceFileViewer?.open">
+  <div class="voice-file-viewer-overlay" @click.self="closeVoiceFileViewer()">
+    <div class="voice-file-viewer">
+      <!-- HUD Corner brackets -->
+      <div class="voice-file-viewer__bracket voice-file-viewer__bracket--tl"></div>
+      <div class="voice-file-viewer__bracket voice-file-viewer__bracket--tr"></div>
+      <div class="voice-file-viewer__bracket voice-file-viewer__bracket--bl"></div>
+      <div class="voice-file-viewer__bracket voice-file-viewer__bracket--br"></div>
+
+      <!-- Scanline overlay -->
+      <div class="voice-file-viewer__scanline"></div>
+
+      <!-- Header -->
+      <div class="voice-file-viewer__header">
+        <div class="voice-file-viewer__header-left">
+          <span class="voice-file-viewer__dot"></span>
+          <span class="voice-file-viewer__title" x-text="voiceFileName()"></span>
+        </div>
+        <div class="voice-file-viewer__path" x-text="voiceFileViewer.path"></div>
+        <button class="voice-file-viewer__close" @click="closeVoiceFileViewer()">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <!-- Content area -->
+      <div class="voice-file-viewer__body">
+        <!-- Loading -->
+        <div x-show="voiceFileViewer.loading" class="voice-file-viewer__loading">
+          <div class="voice-file-viewer__spinner"></div>
+          <span>Loading file…</span>
+        </div>
+
+        <!-- Error -->
+        <div x-show="voiceFileViewer.error" class="voice-file-viewer__error" x-text="voiceFileViewer.error"></div>
+
+        <!-- PDF -->
+        <template x-if="voiceFileViewer.type === 'pdf' && !voiceFileViewer.loading">
+          <iframe :src="voiceFileViewerUrl()" class="voice-file-viewer__iframe"></iframe>
+        </template>
+
+        <!-- Image -->
+        <template x-if="voiceFileViewer.type === 'image' && !voiceFileViewer.loading">
+          <img :src="voiceFileViewerUrl()" :alt="voiceFileName()" class="voice-file-viewer__image">
+        </template>
+
+        <!-- Video -->
+        <template x-if="voiceFileViewer.type === 'video' && !voiceFileViewer.loading">
+          <video :src="voiceFileViewerUrl()" controls class="voice-file-viewer__video"></video>
+        </template>
+
+        <!-- Audio -->
+        <template x-if="voiceFileViewer.type === 'audio' && !voiceFileViewer.loading">
+          <div class="voice-file-viewer__audio-wrap">
+            <audio :src="voiceFileViewerUrl()" controls class="w-full"></audio>
+          </div>
+        </template>
+
+        <!-- Code / Text -->
+        <template x-if="(voiceFileViewer.type === 'code' || voiceFileViewer.type === 'text') && !voiceFileViewer.loading && !voiceFileViewer.error">
+          <pre class="voice-file-viewer__code"><code x-html="voiceFileViewer.content"></code></pre>
+        </template>
+      </div>
+    </div>
+  </div>
+</template>

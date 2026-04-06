@@ -3,8 +3,8 @@
        x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
        x-transition:leave="transition ease-in duration-200"
        x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
-       class="fixed inset-0 z-[999] bg-slate-950/95 backdrop-blur-xl voice-command-center overflow-y-auto overflow-x-hidden"
-       style="-webkit-overflow-scrolling: touch; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);"
+       class="fixed inset-0 z-[999] bg-slate-950/95 backdrop-blur-xl voice-command-center overflow-hidden"
+       style="padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);"
        x-cloak>
     <button @click="closeVoiceCommandCenter(true)"
             class="absolute right-3 top-3 md:right-5 md:top-5 z-10 w-11 h-11 md:w-10 md:h-10 rounded-full bg-slate-900/70 text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center transition"
@@ -12,7 +12,7 @@
       <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
     </button>
 
-    <div class="voice-stage min-h-full w-full px-4 py-6 md:px-10 md:py-12">
+    <div class="voice-stage w-full px-4 py-4 md:px-10 md:py-6">
       <div class="voice-stage__backdrop"></div>
 
       <div class="voice-stage__content">
@@ -153,9 +153,9 @@
               <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="voiceResponseAvailable() ? 'bg-cyan-400 shadow-[0_0_6px_rgba(34,211,238,0.6)]' : 'bg-slate-600'"></span>
               <span class="text-[10px] tracking-[0.2em] uppercase font-semibold" :class="voiceResponseAvailable() ? 'text-cyan-400' : 'text-slate-500'">Response</span>
             </div>
-            <div class="text-sm leading-relaxed min-h-[72px] max-h-[220px] overflow-y-auto"
+            <div class="text-sm leading-relaxed min-h-[48px] max-h-[180px] overflow-y-auto voice-response-render"
                  :class="voiceResponseAvailable() ? 'text-slate-200' : 'text-slate-500'"
-                 x-text="voiceDisplayResponse()"></div>
+                 x-html="voiceDisplayResponseHtml()"></div>
           </div>
 
 
@@ -290,7 +290,7 @@
                 <span class="voice-float__dot voice-float__dot--cyan"></span>
                 Response
               </div>
-              <div class="voice-float__body voice-float__body--response" x-text="voiceDisplayResponse()"></div>
+              <div class="voice-float__body voice-float__body--response voice-response-render" x-html="voiceDisplayResponseHtml()"></div>
             </div>
           </div>
         </div><!-- /voice-arena -->
@@ -398,5 +398,51 @@
         </div>
       </div>
     </div>
+
+    <!-- ── Holographic File Viewer ── -->
+    <template x-if="voiceFileViewer?.open">
+      <div class="voice-file-viewer-overlay" @click.self="closeVoiceFileViewer()">
+        <div class="voice-file-viewer">
+          <div class="voice-file-viewer__bracket voice-file-viewer__bracket--tl"></div>
+          <div class="voice-file-viewer__bracket voice-file-viewer__bracket--tr"></div>
+          <div class="voice-file-viewer__bracket voice-file-viewer__bracket--bl"></div>
+          <div class="voice-file-viewer__bracket voice-file-viewer__bracket--br"></div>
+          <div class="voice-file-viewer__scanline"></div>
+          <div class="voice-file-viewer__header">
+            <div class="voice-file-viewer__header-left">
+              <span class="voice-file-viewer__dot"></span>
+              <span class="voice-file-viewer__title" x-text="voiceFileName()"></span>
+            </div>
+            <div class="voice-file-viewer__path" x-text="voiceFileViewer.path"></div>
+            <button class="voice-file-viewer__close" @click="closeVoiceFileViewer()">✕</button>
+          </div>
+          <div class="voice-file-viewer__body">
+            <div x-show="voiceFileViewer.loading" class="voice-file-viewer__loading">
+              <div class="voice-file-viewer__spinner"></div>
+              <span>Loading file…</span>
+            </div>
+            <div x-show="voiceFileViewer.error" class="voice-file-viewer__error" x-text="voiceFileViewer.error"></div>
+            <template x-if="voiceFileViewer.type === 'pdf' && !voiceFileViewer.loading">
+              <iframe :src="voiceFileViewerUrl()" class="voice-file-viewer__iframe"></iframe>
+            </template>
+            <template x-if="voiceFileViewer.type === 'image' && !voiceFileViewer.loading">
+              <img :src="voiceFileViewerUrl()" :alt="voiceFileName()" class="voice-file-viewer__image">
+            </template>
+            <template x-if="voiceFileViewer.type === 'video' && !voiceFileViewer.loading">
+              <video :src="voiceFileViewerUrl()" controls class="voice-file-viewer__video"></video>
+            </template>
+            <template x-if="voiceFileViewer.type === 'audio' && !voiceFileViewer.loading">
+              <div class="voice-file-viewer__audio-wrap">
+                <audio :src="voiceFileViewerUrl()" controls class="w-full"></audio>
+              </div>
+            </template>
+            <template x-if="(voiceFileViewer.type === 'code' || voiceFileViewer.type === 'text') && !voiceFileViewer.loading && !voiceFileViewer.error">
+              <pre class="voice-file-viewer__code"><code x-html="voiceFileViewer.content"></code></pre>
+            </template>
+          </div>
+        </div>
+      </div>
+    </template>
+
     </div>
   </div>

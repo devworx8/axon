@@ -1,17 +1,22 @@
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
-import Slider from '@react-native-community/slider';
 
 import { MetricCard } from '@/components/MetricCard';
 import { SurfaceCard, SurfaceHeader } from '@/components/SurfaceCard';
 import { StatusPill } from '@/components/StatusPill';
 import type { AxonModeStatus } from '@/types/axon';
 import type { CompanionSettings } from './useSettings';
+import { VoiceTuningStepper } from './VoiceTuningStepper';
 
 const PROVIDER_OPTIONS = [
   { key: 'cloud', label: 'Cloud' },
   { key: 'local', label: 'Local' },
   { key: 'device', label: 'Device' },
+] as const;
+
+const FAST_RUNTIME_OPTIONS = [
+  { key: 'selected_runtime', label: 'Selected runtime' },
+  { key: 'auto_fastest', label: 'Auto fastest' },
 ] as const;
 
 export function AxonVoiceSettingsCard({
@@ -28,6 +33,7 @@ export function AxonVoiceSettingsCard({
   onChangeAxonVoiceIdentity,
   onChangeAzureSpeechKey,
   onChangeAzureSpeechRegion,
+  onChangeFastVoiceRuntimeMode,
   onChangeVoiceSpeechRate,
   onChangeVoiceSpeechPitch,
 }: {
@@ -44,6 +50,7 @@ export function AxonVoiceSettingsCard({
   onChangeAxonVoiceIdentity: (value: string) => void;
   onChangeAzureSpeechKey: (value: string) => void;
   onChangeAzureSpeechRegion: (value: string) => void;
+  onChangeFastVoiceRuntimeMode: (value: 'auto_fastest' | 'selected_runtime') => void;
   onChangeVoiceSpeechRate: (value: string) => void;
   onChangeVoiceSpeechPitch: (value: string) => void;
 }) {
@@ -126,6 +133,28 @@ export function AxonVoiceSettingsCard({
           })}
         </View>
       </View>
+      <View style={styles.stack}>
+        <Text style={styles.sectionLabel}>Fast reply runtime</Text>
+        <View style={styles.providerRow}>
+          {FAST_RUNTIME_OPTIONS.map((option) => {
+            const active = settings.fastVoiceRuntimeMode === option.key;
+            return (
+              <Pressable
+                key={option.key}
+                onPress={() => onChangeFastVoiceRuntimeMode(option.key)}
+                style={[styles.providerChip, active ? styles.providerChipActive : null]}
+              >
+                <Text style={[styles.providerText, active ? styles.providerTextActive : null]}>{option.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        <Text style={styles.helper}>
+          {settings.fastVoiceRuntimeMode === 'selected_runtime'
+            ? 'Follow the desktop runtime you already chose. This keeps fast voice on the same CLI, Ollama, or selected API path instead of switching to a different provider.'
+            : 'Auto fastest lets Axon chase the quickest live voice backend, which can switch to a vault-backed API provider when one is available.'}
+        </Text>
+      </View>
       <TextInput
         value={settings.axonWakePhrase}
         onChangeText={onChangeAxonWakePhrase}
@@ -168,38 +197,24 @@ export function AxonVoiceSettingsCard({
       </View>
       <View style={styles.stack}>
         <Text style={styles.sectionLabel}>Speech tuning</Text>
-        <View style={styles.sliderRow}>
-          <Text style={styles.sliderLabel}>Rate</Text>
-          <View style={styles.sliderTrack}>
-            <Slider
-              minimumValue={0.5}
-              maximumValue={1.5}
-              step={0.05}
-              value={parseFloat(settings.voiceSpeechRate) || 0.85}
-              onSlidingComplete={(v: number) => onChangeVoiceSpeechRate(v.toFixed(2))}
-              minimumTrackTintColor="#38bdf8"
-              maximumTrackTintColor="#22304a"
-              thumbTintColor="#7dd3fc"
-            />
-          </View>
-          <Text style={styles.sliderValue}>{settings.voiceSpeechRate || '0.85'}</Text>
-        </View>
-        <View style={styles.sliderRow}>
-          <Text style={styles.sliderLabel}>Pitch</Text>
-          <View style={styles.sliderTrack}>
-            <Slider
-              minimumValue={0.5}
-              maximumValue={1.5}
-              step={0.05}
-              value={parseFloat(settings.voiceSpeechPitch) || 1.04}
-              onSlidingComplete={(v: number) => onChangeVoiceSpeechPitch(v.toFixed(2))}
-              minimumTrackTintColor="#38bdf8"
-              maximumTrackTintColor="#22304a"
-              thumbTintColor="#7dd3fc"
-            />
-          </View>
-          <Text style={styles.sliderValue}>{settings.voiceSpeechPitch || '1.04'}</Text>
-        </View>
+        <VoiceTuningStepper
+          label="Rate"
+          value={settings.voiceSpeechRate || '0.85'}
+          minimum={0.5}
+          maximum={1.5}
+          step={0.05}
+          onChange={onChangeVoiceSpeechRate}
+          hints={['Measured', 'Balanced', 'Urgent']}
+        />
+        <VoiceTuningStepper
+          label="Pitch"
+          value={settings.voiceSpeechPitch || '1.04'}
+          minimum={0.5}
+          maximum={1.5}
+          step={0.05}
+          onChange={onChangeVoiceSpeechPitch}
+          hints={['Grounded', 'Neutral', 'Bright']}
+        />
       </View>
       <Text style={styles.helper}>
         Cloud is the primary Axon voice when Azure speech is configured. Local uses Axon&apos;s synthesis backend. Device is the last-resort on-phone fallback.
@@ -341,26 +356,5 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
     fontSize: 12,
     lineHeight: 18,
-  },
-  sliderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  sliderLabel: {
-    color: '#94a3b8',
-    fontSize: 12,
-    fontWeight: '700',
-    width: 38,
-  },
-  sliderTrack: {
-    flex: 1,
-  },
-  sliderValue: {
-    color: '#7dd3fc',
-    fontSize: 12,
-    fontWeight: '800',
-    width: 36,
-    textAlign: 'right',
   },
 });

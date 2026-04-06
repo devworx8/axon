@@ -67,6 +67,7 @@ class SettingsUpdate(BaseModel):
     azure_speech_key: Optional[str] = None
     azure_speech_region: Optional[str] = None
     azure_voice: Optional[str] = None
+    companion_voice_runtime_mode: Optional[str] = None
     voice_speech_rate: Optional[str] = None
     voice_speech_pitch: Optional[str] = None
     voice_attention_enabled: Optional[bool] = None

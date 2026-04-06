@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import server
 from axon_api.routes.chat_routes import ChatMessage, ChatRouteHandlers
-from axon_api.services import companion_runtime
+from axon_api.services import companion_runtime, companion_voice_runtime
 from axon_core import auto_fix
 
 
@@ -121,7 +121,8 @@ class CompanionRuntimeCompatibilityTests(unittest.IsolatedAsyncioTestCase):
              patch.object(companion_runtime.companion_voice_service, "list_recent_companion_voice_turns", AsyncMock(return_value=[user_turn])), \
              patch.object(companion_runtime.brain, "_requires_local_operator_execution", return_value=False), \
              patch.object(companion_runtime.companion_agent_bridge, "needs_local_operator_upgrade", return_value=False), \
-             patch.object(companion_runtime.brain, "chat", AsyncMock(return_value={"content": "Voice reply ready.", "tokens": 42})) as chat_mock:
+             patch.object(companion_voice_runtime, "companion_voice_timeout_seconds", return_value=8.0), \
+             patch.object(companion_voice_runtime.brain, "chat", AsyncMock(return_value={"content": "Voice reply ready.", "tokens": 42})) as chat_mock:
             result = await companion_runtime.process_companion_voice_turn(
                 fake_db,
                 device_id=1,
@@ -132,6 +133,58 @@ class CompanionRuntimeCompatibilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["response_text"], "Voice reply ready.")
         self.assertNotIn("workspace_path", chat_mock.await_args.kwargs)
+
+    def test_companion_voice_runtime_prefers_quick_codex_model(self):
+        kwargs = companion_voice_runtime.companion_voice_model_kwargs(
+            {
+                "ai_backend": "cli",
+                "cli_runtime_path": "/tmp/codex",
+                "cli_runtime_model": "gpt-5.4",
+            }
+        )
+
+        self.assertEqual(kwargs["backend"], "cli")
+        self.assertEqual(kwargs["cli_model"], "gpt-5.1-codex-mini")
+
+    async def test_companion_voice_runtime_prefers_api_quick_model_when_vault_key_is_live(self):
+        settings = {
+            "ai_backend": "cli",
+            "api_provider": "deepseek",
+            "cli_runtime_path": "/tmp/codex",
+            "cli_runtime_model": "gpt-5.4",
+            "companion_voice_runtime_mode": "auto_fastest",
+        }
+
+        with patch.object(companion_voice_runtime.vault.VaultSession, "is_unlocked", return_value=True), \
+             patch.object(
+                 companion_voice_runtime.vault,
+                 "vault_resolve_provider_key",
+                 AsyncMock(side_effect=lambda _db, provider_id: "anthropic-key" if provider_id == "anthropic" else ""),
+             ):
+            kwargs = await companion_voice_runtime.resolve_companion_voice_model_kwargs(object(), settings)
+
+        self.assertEqual(kwargs["backend"], "api")
+        self.assertEqual(kwargs["api_provider"], "anthropic")
+        self.assertEqual(kwargs["api_model"], "claude-haiku-4-5")
+
+    async def test_companion_voice_runtime_default_stays_on_cli_even_with_vault_key(self):
+        settings = {
+            "ai_backend": "cli",
+            "api_provider": "anthropic",
+            "cli_runtime_path": "/tmp/codex",
+            "cli_runtime_model": "gpt-5.4",
+        }
+
+        with patch.object(companion_voice_runtime.vault.VaultSession, "is_unlocked", return_value=True), \
+             patch.object(
+                 companion_voice_runtime.vault,
+                 "vault_resolve_provider_key",
+                 AsyncMock(return_value="anthropic-key"),
+             ):
+            kwargs = await companion_voice_runtime.resolve_companion_voice_model_kwargs(object(), settings)
+
+        self.assertEqual(kwargs["backend"], "cli")
+        self.assertEqual(kwargs["cli_model"], "gpt-5.1-codex-mini")
 
 
 class AutoFixCompatibilityTests(unittest.IsolatedAsyncioTestCase):

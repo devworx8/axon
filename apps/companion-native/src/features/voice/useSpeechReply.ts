@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Speech from 'expo-speech';
 import { pickBestVoice, VOICE_RATE, VOICE_PITCH } from '@/utils/pickVoice';
+import { cleanForSpeech } from '@/utils/cleanForSpeech';
 
 export function useSpeechReply(enabled: boolean) {
   const [speaking, setSpeaking] = useState(false);
@@ -18,7 +19,7 @@ export function useSpeechReply(enabled: boolean) {
   }, []);
 
   const speak = useCallback((text: string) => {
-    const message = String(text || '').trim();
+    const message = cleanForSpeech(text);
     if (!message) return;
     Speech.stop();
     setSpeaking(true);

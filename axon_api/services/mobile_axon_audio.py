@@ -27,7 +27,8 @@ async def build_mobile_axon_audio_payload(
     preferred_provider: str = "",
     voice_identity: str = "",
 ) -> dict[str, Any]:
-    message = str(text or "").strip()
+    from axon_api.services.tts_sanitizer import clean_for_speech
+    message = clean_for_speech(str(text or ""))
     if not message:
         raise HTTPException(400, "Speech text is required.")
 

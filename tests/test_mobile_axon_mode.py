@@ -411,6 +411,32 @@ class MobileAxonRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["voice_identity"], "piper")
         self.assertEqual(payload["provider"], "local")
 
+    async def test_mobile_axon_voice_settings_accepts_fast_voice_runtime_mode(self):
+        @asynccontextmanager
+        async def fake_db():
+            yield SimpleNamespace()
+
+        saved: list[tuple[str, str]] = []
+
+        async def fake_set_setting(_db, key: str, value: str):
+            saved.append((key, value))
+
+        request = SimpleNamespace()
+        body = mobile_axon.MobileVoiceSettingsRequest(
+            settings={
+                "companion_voice_runtime_mode": "selected_runtime",
+                "ignored_key": "ignored",
+            }
+        )
+
+        with patch.object(mobile_axon, "require_companion_context", AsyncMock(return_value=("", {}, {"id": 7}))), \
+             patch.object(mobile_axon, "get_db", fake_db), \
+             patch("axon_data.settings.set_setting", AsyncMock(side_effect=fake_set_setting)):
+            payload = await mobile_axon.mobile_axon_voice_settings(request, body)
+
+        self.assertEqual(payload["updated"], ["companion_voice_runtime_mode"])
+        self.assertEqual(saved, [("companion_voice_runtime_mode", "selected_runtime")])
+
 
 if __name__ == "__main__":
     unittest.main()

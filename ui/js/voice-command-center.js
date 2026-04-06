@@ -157,6 +157,52 @@ function axonVoiceCommandCenterMixin() {
       return 'The latest voice response will appear here.';
     },
 
+    /** Render response as HTML with markdown + file path chips */
+    voiceDisplayResponseHtml() {
+      const raw = this.voiceDisplayResponse();
+
+      // During agent work, show live step-by-step feed
+      if (this.chatLoading && this.liveOperator?.active && !this.voiceLatestResponseText()) {
+        const feed = Array.isArray(this.liveOperatorFeed) ? this.liveOperatorFeed : [];
+        const steps = feed.slice(-6);
+        if (steps.length) {
+          const icons = { execute: '⚡', observe: '🔍', verify: '✓', recover: '⚠', plan: '📋' };
+          const lines = steps.map(s => {
+            const icon = icons[s.phase] || '●';
+            const title = String(s.title || 'Working').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+            const detail = String(s.detail || '').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+            return `<div class="mb-1"><span class="text-cyan-400">${icon}</span> <span class="text-slate-200">${title}</span>${detail ? `<br><span class="text-slate-500 text-xs">${detail.slice(0, 120)}</span>` : ''}</div>`;
+          });
+          return '<div class="voice-typing-cursor">' + lines.join('') + '</div>';
+        }
+        // Fallback: single-line status
+        const detail = String(this.liveOperator?.detail || 'Working...').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+        return '<span class="text-slate-400 voice-typing-cursor">' + detail + '</span>';
+      }
+
+      if (!raw || raw === 'The latest voice response will appear here.') {
+        return '<span class="text-slate-500">' + raw + '</span>';
+      }
+      if (raw === 'Axon is processing your request…') {
+        return '<span class="text-slate-400 voice-typing-cursor">' + raw + '</span>';
+      }
+      // Use marked.js if available, else escape and linkify
+      let html = '';
+      if (typeof marked !== 'undefined' && marked.parse) {
+        try { html = marked.parse(raw, { breaks: true }); } catch { html = ''; }
+      }
+      if (!html) {
+        // Fallback: escape HTML and convert newlines
+        html = raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+      }
+      // Linkify file paths as holographic chips
+      html = html.replace(
+        /(?<!["\w])([/~](?:[a-zA-Z0-9._-]+\/)+[a-zA-Z0-9._-]+)/g,
+        '<a class="voice-file-chip" href="#" onclick="event.preventDefault();window.dispatchEvent(new CustomEvent(\'voice-open-file\',{detail:{path:\'$1\'}}))">$1</a>'
+      );
+      return html;
+    },
+
     voiceCanClear() {
       return !!(String(this.voiceTranscript || '').trim() || this.voiceResponseAvailable());
     },

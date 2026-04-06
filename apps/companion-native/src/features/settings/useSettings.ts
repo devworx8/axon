@@ -17,6 +17,7 @@ export type CompanionSettings = {
   axonVoiceIdentity: string;
   azureSpeechKey: string;
   azureSpeechRegion: string;
+  fastVoiceRuntimeMode: 'auto_fastest' | 'selected_runtime';
   voiceSpeechRate: string;
   voiceSpeechPitch: string;
   preferredWorkspaceId: number | null;
@@ -35,6 +36,7 @@ const DEFAULT_SETTINGS: CompanionSettings = {
   axonVoiceIdentity: '',
   azureSpeechKey: '',
   azureSpeechRegion: 'eastus',
+  fastVoiceRuntimeMode: 'selected_runtime',
   voiceSpeechRate: '0.85',
   voiceSpeechPitch: '1.04',
   preferredWorkspaceId: null,
@@ -79,6 +81,7 @@ export function useSettings(config: CompanionConfig, onConfigChange: (next: Comp
     const voicePayload: Record<string, string | null> = {
       azure_speech_key: settings.azureSpeechKey || null,
       azure_speech_region: settings.azureSpeechRegion || null,
+      companion_voice_runtime_mode: settings.fastVoiceRuntimeMode || null,
       voice_speech_rate: settings.voiceSpeechRate || null,
       voice_speech_pitch: settings.voiceSpeechPitch || null,
     };
@@ -90,6 +93,7 @@ export function useSettings(config: CompanionConfig, onConfigChange: (next: Comp
   }, [
     settings.azureSpeechKey,
     settings.azureSpeechRegion,
+    settings.fastVoiceRuntimeMode,
     settings.voiceSpeechRate,
     settings.voiceSpeechPitch,
     config,

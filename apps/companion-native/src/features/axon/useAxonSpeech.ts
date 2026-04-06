@@ -4,6 +4,7 @@ import * as Speech from 'expo-speech';
 
 import { speakAxonReply } from '@/api/axon';
 import { pickBestVoice, VOICE_RATE, VOICE_PITCH } from '@/utils/pickVoice';
+import { cleanForSpeech } from '@/utils/cleanForSpeech';
 import type { AxonVoiceProvider, CompanionConfig } from '@/types/companion';
 
 type AxonSpeechSettings = {
@@ -48,7 +49,7 @@ export function useAxonSpeech(
   }, [player]);
 
   const speakFallback = useCallback((text: string) => {
-    const message = String(text || '').trim();
+    const message = cleanForSpeech(text);
     if (!message) return;
     Speech.stop();
     setFallbackSpeaking(true);
@@ -64,7 +65,7 @@ export function useAxonSpeech(
   }, [settings.axonVoiceIdentity]);
 
   const speak = useCallback(async (text: string) => {
-    const message = String(text || '').trim();
+    const message = cleanForSpeech(text);
     if (!enabled || !message) return;
     setError(null);
     stop();

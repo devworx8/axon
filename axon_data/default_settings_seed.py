@@ -22,6 +22,7 @@ DEFAULT_SETTINGS = (
     ("webhook_secret", ""),
     ("azure_speech_key", ""),
     ("azure_speech_region", "eastus"),
+    ("companion_voice_runtime_mode", "selected_runtime"),
     ("voice_speech_rate", "0.85"),
     ("voice_speech_pitch", "1.04"),
     ("voice_attention_enabled", "1"),

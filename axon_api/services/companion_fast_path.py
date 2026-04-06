@@ -22,6 +22,12 @@ def _looks_like_fast_candidate(message: str) -> bool:
         for token in (
             "path",
             "branch",
+            "structure today's work",
+            "structure todays work",
+            "plan my day",
+            "what should i work on",
+            "where should i start",
+            "today's work",
             "workspace",
             "repo",
             "project",
@@ -68,6 +74,34 @@ def maybe_build_fast_voice_response(
         lines.append(f"Now: {int(counts.get('now') or 0)}")
         lines.append(f"Waiting on me: {int(counts.get('waiting_on_me') or 0)}")
         lines.append(f"Watch: {int(counts.get('watch') or 0)}")
+        evidence_source = "memory"
+    elif project and any(
+        token in lowered
+        for token in (
+            "structure today's work",
+            "structure todays work",
+            "plan my day",
+            "what should i work on",
+            "where should i start",
+            "today's work",
+        )
+    ):
+        lines.append(f"Focus workspace: {_clean(project.get('name')) or 'Current workspace'}")
+        branch = _clean(project.get("git_branch"))
+        if branch:
+            lines.append(f"Branch: {branch}")
+        now_count = int(counts.get("now") or 0)
+        waiting_count = int(counts.get("waiting_on_me") or 0)
+        watch_count = int(counts.get("watch") or 0)
+        lines.append(f"Attention now: {now_count}")
+        lines.append(f"Waiting on me: {waiting_count}")
+        lines.append(f"Watch: {watch_count}")
+        if now_count or waiting_count or watch_count:
+            lines.append("Start with the highest-urgency attention item, then clear anything waiting on you.")
+        else:
+            lines.append("No urgent inbox items are flagged right now.")
+            lines.append("Start with the highest-impact task already in motion for this workspace.")
+        lines.append("Use a short follow-up if you want a tighter instant answer.")
         evidence_source = "memory"
     elif relationships and any(token in lowered for token in ("linked systems", "integrations", "github", "vercel", "sentry")):
         lines.append("Linked systems:")

@@ -16,6 +16,7 @@ from axon_api.services.voice_tuning import (
     azure_voice_pitch_attr,
     azure_voice_rate_attr,
 )
+from axon_api.services.voice_status_payload import build_voice_status_payload
 
 
 class TTSRequest(BaseModel):
@@ -84,8 +85,9 @@ class IntegrationToolsRouteHandlers:
         if not key:
             raise HTTPException(400, "Azure Speech key not set in Settings")
 
+        from axon_api.services.tts_sanitizer import clean_for_speech
         safe_voice = escape(body.voice, {"'": "&apos;", '"': "&quot;"})
-        safe_text = escape(body.text[:900])
+        safe_text = escape(clean_for_speech(body.text)[:900])
         rate_attr = azure_voice_rate_attr(body.rate)
         pitch_attr = azure_voice_pitch_attr(body.pitch)
         ssml = f"""<speak version='1.0' xml:lang='en-ZA'>
@@ -144,25 +146,23 @@ class IntegrationToolsRouteHandlers:
     async def voice_status(self):
         async with self._db.get_db() as conn:
             settings = await self._db.get_all_settings(conn)
-        status = self._local_voice_status(settings)
-        # Augment with cloud transcription availability (Azure Speech STT)
-        # Cloud STT also needs ffmpeg to convert uploaded audio to WAV
-        azure_key = (settings or {}).get("azure_speech_key", "")
-        azure_region = (settings or {}).get("azure_speech_region", "")
-        cloud_transcription = bool(azure_key and azure_region and status.get("ffmpeg_available"))
-        status["cloud_transcription_available"] = cloud_transcription
-        status["transcription_ready"] = status["transcription_available"] or cloud_transcription
-        return status
+        return build_voice_status_payload(
+            dict(settings or {}),
+            self._local_voice_status(settings),
+        )
 
     async def voice_transcribe(self, file: UploadFile = File(...), language: str = Query(default="en")):
         async with self._db.get_db() as conn:
             settings = await self._db.get_all_settings(conn)
-        status = self._local_voice_status(settings)
+        status = build_voice_status_payload(
+            dict(settings or {}),
+            self._local_voice_status(settings),
+        )
         azure_key = (settings or {}).get("azure_speech_key", "")
         azure_region = (settings or {}).get("azure_speech_region", "eastus")
-        cloud_stt = bool(azure_key and azure_region)
-        if not status["transcription_available"] and not cloud_stt:
-            raise HTTPException(503, status["detail"])
+        cloud_stt = bool(status.get("cloud_transcription_available") and azure_key and azure_region)
+        if not status.get("transcription_ready"):
+            raise HTTPException(503, status.get("detail") or "No transcription backend available")
 
         suffix = Path(file.filename or "voice.webm").suffix or ".webm"
         raw_bytes = await file.read()

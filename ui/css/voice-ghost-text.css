@@ -1,0 +1,151 @@
+/* ══════════════════════════════════════════════════════════════
+   Axon — Ghost Text + Holographic Response Rendering
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Ghost text materialise effect ────────────────────────── */
+@keyframes ghost-text-in {
+  0% { opacity: 0; filter: blur(4px); color: rgba(34, 211, 238, 0.6); }
+  60% { opacity: 0.8; filter: blur(1px); color: rgba(34, 211, 238, 0.85); }
+  100% { opacity: 1; filter: blur(0); color: inherit; }
+}
+
+.voice-response-render {
+  animation: ghost-text-in 0.6s ease-out;
+}
+
+/* ── Holographic scan-line overlay on response panels ─────── */
+.voice-response-render::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(34, 211, 238, 0.02) 0px,
+    transparent 1px,
+    transparent 3px
+  );
+  z-index: 0;
+}
+
+/* ── Rendered markdown inside response ────────────────────── */
+.voice-response-render h1,
+.voice-response-render h2,
+.voice-response-render h3,
+.voice-response-render h4 {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(186, 230, 253, 0.9);
+  margin: 8px 0 4px;
+  letter-spacing: 0.04em;
+}
+
+.voice-response-render p {
+  margin: 4px 0;
+  line-height: 1.6;
+}
+
+.voice-response-render a {
+  color: rgba(34, 211, 238, 0.9);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(34, 211, 238, 0.3);
+  transition: color 0.2s, border-color 0.2s;
+}
+.voice-response-render a:hover {
+  color: #67e8f9;
+  border-color: rgba(34, 211, 238, 0.7);
+}
+
+.voice-response-render code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(51, 65, 85, 0.5);
+  color: rgba(103, 232, 249, 0.85);
+}
+
+.voice-response-render pre {
+  margin: 6px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(2, 6, 23, 0.9);
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  overflow-x: auto;
+  max-height: 120px;
+}
+.voice-response-render pre code {
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.voice-response-render ul,
+.voice-response-render ol {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+.voice-response-render li {
+  margin: 2px 0;
+  line-height: 1.5;
+}
+
+.voice-response-render blockquote {
+  margin: 6px 0;
+  padding: 6px 12px;
+  border-left: 2px solid rgba(34, 211, 238, 0.4);
+  color: rgba(148, 163, 184, 0.85);
+  font-style: italic;
+}
+
+/* ── File path chips ──────────────────────────────────────── */
+.voice-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: rgba(34, 211, 238, 0.08);
+  border: 1px solid rgba(34, 211, 238, 0.2);
+  color: rgba(103, 232, 249, 0.9);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-decoration: none;
+}
+.voice-file-chip:hover {
+  background: rgba(34, 211, 238, 0.15);
+  border-color: rgba(34, 211, 238, 0.4);
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.15);
+}
+.voice-file-chip::before {
+  content: '📁';
+  font-size: 10px;
+}
+
+/* ── Typing cursor ────────────────────────────────────────── */
+@keyframes blink-cursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.voice-typing-cursor::after {
+  content: '▎';
+  color: rgba(34, 211, 238, 0.7);
+  animation: blink-cursor 1s step-end infinite;
+  margin-left: 2px;
+}
+
+/* ── Mobile responsive for mission grid ───────────────────── */
+@media (max-width: 640px) {
+  .voice-mission-rail__grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  }
+  .voice-mission-rail {
+    max-height: 100px;
+  }
+}

@@ -5,8 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import brain
-import provider_registry
-from axon_api.services import companion_agent_bridge, companion_fast_path, companion_live
+from axon_api.services import companion_agent_bridge, companion_fast_path, companion_live, companion_voice_runtime
 from axon_api.services import companion_sessions as companion_sessions_service
 from axon_api.services import companion_voice as companion_voice_service
 from axon_api.services.attention_query import attention_summary
@@ -29,42 +28,6 @@ def _voice_history(rows: list[dict[str, Any]], current_turn_id: int) -> list[dic
             continue
         history.append({"role": role, "content": content})
     return history
-
-
-def _companion_model_kwargs(settings: dict[str, str]) -> dict[str, Any]:
-    backend = str(settings.get("ai_backend") or "").strip().lower()
-    if not backend:
-        backend = "cli" if str(settings.get("cli_runtime_path") or settings.get("claude_cli_path") or "").strip() else "api"
-
-    quick_model = str(settings.get("quick_model") or "").strip()
-    if backend == "cli":
-        return {
-            "backend": "cli",
-            "cli_path": str(settings.get("cli_runtime_path") or settings.get("claude_cli_path") or "").strip(),
-            "cli_model": quick_model or str(settings.get("cli_runtime_model") or settings.get("claude_cli_model") or "gpt-5.4").strip(),
-        }
-    if backend == "ollama":
-        return {
-            "backend": "ollama",
-            "ollama_url": str(settings.get("ollama_url") or "").strip(),
-            "ollama_model": quick_model or str(settings.get("ollama_model") or brain.OLLAMA_DEFAULT_MODEL).strip(),
-        }
-
-    api_runtime = provider_registry.runtime_api_config(settings)
-    api_key = str(api_runtime.get("api_key") or "").strip()
-    if not api_key and str(settings.get("cli_runtime_path") or settings.get("claude_cli_path") or "").strip():
-        return {
-            "backend": "cli",
-            "cli_path": str(settings.get("cli_runtime_path") or settings.get("claude_cli_path") or "").strip(),
-            "cli_model": quick_model or str(settings.get("cli_runtime_model") or settings.get("claude_cli_model") or "gpt-5.4").strip(),
-        }
-    return {
-        "backend": "api",
-        "api_key": api_key,
-        "api_provider": str(api_runtime.get("provider_id") or settings.get("api_provider") or "anthropic").strip(),
-        "api_base_url": str(api_runtime.get("api_base_url") or settings.get("api_base_url") or "").strip(),
-        "api_model": quick_model or str(api_runtime.get("api_model") or settings.get("api_model") or "").strip(),
-    }
 
 
 async def ensure_voice_session(
@@ -189,7 +152,8 @@ async def process_companion_voice_turn(
     history = _voice_history(history_rows, int(user_turn.get("id") or 0))
 
     settings = await get_all_settings(db)
-    ai = _companion_model_kwargs(settings)
+    ai_candidates = await companion_voice_runtime.resolve_companion_voice_model_candidates(db, settings)
+    ai = dict(ai_candidates[0] if ai_candidates else await companion_voice_runtime.resolve_companion_voice_model_kwargs(db, settings))
     response_text = ""
     tokens_used = 0
     response_backend = str(ai.get("backend") or settings.get("ai_backend") or "").strip()
@@ -292,24 +256,36 @@ async def process_companion_voice_turn(
                 workspace_id=resolved_workspace_id,
                 preserve_started=True,
             )
-            response = await brain.chat(
+            direct_reply = await companion_voice_runtime.generate_direct_companion_voice_reply(
                 user_message=content,
                 history=history,
                 context_block=context_block,
-                project_name=str(project.get("name") or "").strip() or None,
-                backend=str(ai.get("backend") or "cli"),
-                api_key=str(ai.get("api_key") or "").strip(),
-                api_provider=str(ai.get("api_provider") or "").strip(),
-                api_base_url=str(ai.get("api_base_url") or "").strip(),
-                api_model=str(ai.get("api_model") or "").strip(),
-                cli_path=str(ai.get("cli_path") or "").strip(),
-                cli_model=str(ai.get("cli_model") or "").strip(),
-                ollama_url=str(ai.get("ollama_url") or "").strip(),
-                ollama_model=str(ai.get("ollama_model") or "").strip(),
+                project=project,
+                attention=attention,
+                ai=ai,
+                settings=settings,
+                ai_candidates=ai_candidates,
             )
-            response_text = str(response.get("content") or "").strip()
-            tokens_used = int(response.get("tokens") or 0)
-            if resolved_workspace_id and companion_agent_bridge.needs_local_operator_upgrade(response_text):
+            response_text = str(direct_reply.get("response_text") or "").strip()
+            tokens_used = int(direct_reply.get("tokens_used") or 0)
+            response_backend = str(direct_reply.get("backend") or response_backend or "cli").strip()
+            timed_out = bool(direct_reply.get("timed_out"))
+            if timed_out:
+                assistant_meta = {
+                    "surface": "companion_voice_timeout_fallback",
+                    "budget_class": "quick",
+                    "timed_out": True,
+                }
+                set_live_operator(
+                    active=False,
+                    mode="agent",
+                    phase="recover",
+                    title="Live voice fell back to quick status",
+                    detail="The direct voice runtime exceeded the quick-response budget.",
+                    summary=response_text[:180],
+                    workspace_id=resolved_workspace_id,
+                )
+            elif resolved_workspace_id and companion_agent_bridge.needs_local_operator_upgrade(response_text):
                 agent_result = await companion_agent_bridge.run_companion_agent_turn(
                     user_message=content,
                     history=history,

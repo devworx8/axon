@@ -6,6 +6,7 @@ const COMPANION_SETTINGS_KEY = 'axon.companion.settings';
 
 export function normalizeCompanionSettings(settings: Partial<CompanionSettings> | null | undefined): CompanionSettings {
   const provider = String(settings?.axonVoiceProvider || 'cloud').trim().toLowerCase();
+  const fastVoiceRuntimeMode = String(settings?.fastVoiceRuntimeMode || 'selected_runtime').trim().toLowerCase();
   return {
     voiceEnabled: settings?.voiceEnabled ?? true,
     alwaysListening: settings?.alwaysListening ?? true,
@@ -18,6 +19,7 @@ export function normalizeCompanionSettings(settings: Partial<CompanionSettings> 
     axonVoiceIdentity: String(settings?.axonVoiceIdentity || '').trim(),
     azureSpeechKey: String(settings?.azureSpeechKey || '').trim(),
     azureSpeechRegion: String(settings?.azureSpeechRegion || 'eastus').trim() || 'eastus',
+    fastVoiceRuntimeMode: fastVoiceRuntimeMode === 'auto_fastest' ? 'auto_fastest' : 'selected_runtime',
     voiceSpeechRate: String(settings?.voiceSpeechRate || '0.85').trim() || '0.85',
     voiceSpeechPitch: String(settings?.voiceSpeechPitch || '1.04').trim() || '1.04',
     preferredWorkspaceId: settings?.preferredWorkspaceId ?? null,

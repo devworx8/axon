@@ -83,9 +83,9 @@
 
 .voice-mission-rail {
   width: min(1080px, 100%);
-  margin-top: 6px;
-  padding: 18px 18px 20px;
-  border-radius: 28px;
+  margin-top: 0;
+  padding: 10px 14px 12px;
+  border-radius: 20px;
   border: 1px solid rgba(34, 211, 238, 0.12);
   background:
     linear-gradient(180deg, rgba(8, 15, 32, 0.84), rgba(2, 6, 23, 0.92));
@@ -93,6 +93,9 @@
     0 14px 60px rgba(2, 6, 23, 0.46),
     inset 0 1px 0 rgba(255, 255, 255, 0.03);
   backdrop-filter: blur(20px);
+  flex-shrink: 0;
+  max-height: 140px;
+  overflow: hidden;
 }
 
 .voice-mission-rail__header {
@@ -119,16 +122,19 @@
 .voice-mission-rail__grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 12px;
+  gap: 8px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .voice-mission-step {
   position: relative;
-  padding: 14px 14px 16px;
-  border-radius: 18px;
+  padding: 10px 10px 12px;
+  border-radius: 14px;
   border: 1px solid rgba(51, 65, 85, 0.74);
   background: rgba(2, 6, 23, 0.72);
-  min-height: 128px;
+  min-height: 80px;
+  min-width: 140px;
 }
 
 .voice-mission-step::after {

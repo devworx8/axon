@@ -57,6 +57,8 @@
   <link rel="stylesheet" href="/css/voice-reactor.css">
   <link rel="stylesheet" href="/css/voice-hud.css">
   <link rel="stylesheet" href="/css/voice-conversation.css">
+  <link rel="stylesheet" href="/css/voice-ghost-text.css">
+  <link rel="stylesheet" href="/css/voice-file-viewer.css">
   <style>
     [x-cloak] { display: none !important; }
     /* xterm overrides to fit Axon dark theme */
@@ -2934,6 +2936,7 @@
 <script src="/js/voice-command-center.js"></script>
 <script src="/js/voice-hud.js"></script>
 <script src="/js/voice-conversation.js"></script>
+<script src="/js/voice-file-viewer.js"></script>
 <script src="/js/settings.js"></script>
 <script src="/js/resources.js"></script>
 <script src="/js/projects.js"></script>
@@ -3440,6 +3443,7 @@ function devbrain() {
       this.loadLatestDigest();
       await this.loadRuntimeStatus();
       this.ensureVoiceAttentionMonitor?.();
+      this.initVoiceFileViewer?.();
       this.restoreConsoleWindowState?.();
       this.connectLiveFeed();
       this.pollUsage();
@@ -3525,6 +3529,7 @@ function devbrain() {
     axonVoiceCommandCenterMixin(),
     typeof axonVoiceHudMixin === 'function' ? axonVoiceHudMixin() : {},
     typeof axonVoiceConversationMixin === 'function' ? axonVoiceConversationMixin() : {},
+    typeof axonVoiceFileViewerMixin === 'function' ? axonVoiceFileViewerMixin() : {},
     axonSettingsMixin(),
     axonResourcesMixin(),
     axonProjectsMixin(),

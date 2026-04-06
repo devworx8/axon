@@ -68,6 +68,7 @@ export function SettingsTabScreen({
       onChangeAxonVoiceIdentity={(value) => settings.setSettings((current) => ({ ...current, axonVoiceIdentity: value }))}
       onChangeAzureSpeechKey={(value) => settings.setSettings((current) => ({ ...current, azureSpeechKey: value }))}
       onChangeAzureSpeechRegion={(value) => settings.setSettings((current) => ({ ...current, azureSpeechRegion: value }))}
+      onChangeFastVoiceRuntimeMode={(value) => settings.setSettings((current) => ({ ...current, fastVoiceRuntimeMode: value }))}
       onChangeVoiceSpeechRate={(value) => settings.setSettings((current) => ({ ...current, voiceSpeechRate: value }))}
       onChangeVoiceSpeechPitch={(value) => settings.setSettings((current) => ({ ...current, voiceSpeechPitch: value }))}
       vaultStatus={vaultStatus}

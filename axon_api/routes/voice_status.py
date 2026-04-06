@@ -6,6 +6,8 @@ from typing import Any, Callable
 
 from fastapi import APIRouter
 
+from axon_api.services.voice_status_payload import build_voice_status_payload
+
 
 class VoiceStatusRouteHandlers:
     def __init__(
@@ -20,7 +22,10 @@ class VoiceStatusRouteHandlers:
     async def voice_status(self):
         async with self._db.get_db() as conn:
             settings = await self._db.get_all_settings(conn)
-        return self._local_voice_status(dict(settings or {}))
+        return build_voice_status_payload(
+            dict(settings or {}),
+            self._local_voice_status(dict(settings or {})),
+        )
 
 
 def build_voice_status_router(**deps: Any) -> tuple[APIRouter, VoiceStatusRouteHandlers]:

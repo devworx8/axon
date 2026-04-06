@@ -139,6 +139,24 @@ def _json_meta(meta: dict[str, Any] | None) -> str:
     return "{}" if meta is None else json.dumps(meta, sort_keys=True, ensure_ascii=True)
 
 
+def _expected_registry_keys() -> tuple[set[str], set[str], set[str]]:
+    server_keys = {str(server["server_key"]) for server in BUILTIN_SERVERS}
+    capability_keys = {str(capability["capability_key"]) for capability in BUILTIN_CAPABILITIES}
+    session_keys = {f"session:{server_key}" for server_key in server_keys}
+    return server_keys, capability_keys, session_keys
+
+
+async def _registry_snapshot(db) -> dict[str, Any]:
+    servers = [dict(row) for row in await list_mcp_servers(db, enabled_only=False, limit=100)]
+    sessions = [dict(row) for row in await list_mcp_sessions(db, limit=100)]
+    capabilities = [dict(row) for row in await list_mcp_capabilities(db, limit=250)]
+    return {
+        "servers": servers,
+        "sessions": sessions,
+        "capabilities": capabilities,
+    }
+
+
 async def seed_mcp_registry(db) -> dict[str, Any]:
     server_ids: dict[str, int] = {}
     for server in BUILTIN_SERVERS:
@@ -184,11 +202,7 @@ async def seed_mcp_registry(db) -> dict[str, Any]:
             commit=False,
         )
     await db.commit()
-    return {
-        "servers": [dict(row) for row in await list_mcp_servers(db, enabled_only=False, limit=100)],
-        "sessions": [dict(row) for row in await list_mcp_sessions(db, limit=100)],
-        "capabilities": [dict(row) for row in await list_mcp_capabilities(db, limit=250)],
-    }
+    return await _registry_snapshot(db)
 
 
 async def invoke_builtin_mcp_capability(
@@ -253,7 +267,19 @@ async def invoke_builtin_mcp_capability(
 
 
 async def registry_health_summary(db) -> dict[str, Any]:
-    seeded = await seed_mcp_registry(db)
+    snapshot = await _registry_snapshot(db)
+    expected_servers, expected_capabilities, expected_sessions = _expected_registry_keys()
+
+    existing_servers = {str(item.get("server_key") or "") for item in snapshot["servers"]}
+    existing_capabilities = {str(item.get("capability_key") or "") for item in snapshot["capabilities"]}
+    existing_sessions = {str(item.get("session_key") or "") for item in snapshot["sessions"]}
+
+    registry_ready = (
+        expected_servers.issubset(existing_servers)
+        and expected_capabilities.issubset(existing_capabilities)
+        and expected_sessions.issubset(existing_sessions)
+    )
+    seeded = snapshot if registry_ready else await seed_mcp_registry(db)
     settings = await get_all_settings(db)
     return {
         "servers": seeded["servers"],
