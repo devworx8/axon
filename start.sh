@@ -85,6 +85,7 @@ SERVER_PID=$!
 echo $SERVER_PID > "$PIDFILE"
 
 # Wait for server to be ready (up to 8s)
+SERVER_READY=0
 for i in {1..16}; do
   if health_up; then
     LIVE_PID="$(port_pid || true)"
@@ -92,13 +93,25 @@ for i in {1..16}; do
       echo "$LIVE_PID" > "$PIDFILE"
     fi
     echo "✅ Axon ready (PID ${LIVE_PID:-$SERVER_PID})"
+    SERVER_READY=1
     break
   fi
   sleep 0.5
 done
 
+if [ "$SERVER_READY" -ne 1 ]; then
+  echo "Axon did not pass health checks on $HEALTH_URL"
+  tail -n 40 "$LOGFILE" 2>/dev/null || true
+  exit 1
+fi
+
 # ── Start tunnel (named mode → axon.edudashpro.org.za) ───────────
-"$DEVBRAIN_DIR/tunnel.sh" start 2>/dev/null || true
+if TUNNEL_OUTPUT="$("$DEVBRAIN_DIR/tunnel.sh" start 2>&1)"; then
+  echo "$TUNNEL_OUTPUT"
+else
+  echo "$TUNNEL_OUTPUT"
+  echo "⚠ Tunnel is not healthy yet. Run $DEVBRAIN_DIR/tunnel.sh doctor for recovery steps."
+fi
 
 # Open browser
 xdg-open "http://localhost:$PORT" 2>/dev/null || \

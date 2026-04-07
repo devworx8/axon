@@ -135,6 +135,42 @@ class ChatSlashCommandsTests(unittest.TestCase):
         self.assertIn("Workspace: Hope", payload["assistantMessages"][1])
         self.assertIn("Permissions: Full access", payload["assistantMessages"][1])
 
+    def test_slash_deploy_expo_uses_expo_lane_helper(self):
+        payload = _run_script(
+            """
+            (async () => {
+              const app = {
+                chatInput: '/deploy expo',
+                chatMessages: [],
+                selectedResources: [],
+                composerOptions: { pin_context: false, intelligence_mode: 'ask', action_mode: '', agent_role: '' },
+                settingsForm: { ai_backend: 'cli', runtime_permissions_mode: 'default', autonomy_profile: 'workspace_auto' },
+                runtimeStatus: { cli_model: 'gpt-5.4' },
+                prepareExpoDeployLane() {
+                  this.expoPrepared = true;
+                  return Promise.resolve(true);
+                },
+                resetChatComposerHeight() {},
+                rememberComposerHistory() {},
+                scrollChat() {},
+                showToast() {},
+              };
+              Object.assign(app, ctx.window.axonChatSlashCommandsMixin());
+              await app.maybeHandleSlashCommand('/deploy expo');
+              console.log(JSON.stringify({
+                expoPrepared: !!app.expoPrepared,
+                assistantContent: app.chatMessages[1]?.content || '',
+              }));
+            })().catch((error) => {
+              console.error(error);
+              process.exit(1);
+            });
+            """
+        )
+
+        self.assertTrue(payload["expoPrepared"])
+        self.assertIn("Expo lane prepared.", payload["assistantContent"])
+
 
 if __name__ == "__main__":
     unittest.main()

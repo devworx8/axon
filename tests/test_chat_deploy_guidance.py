@@ -97,6 +97,74 @@ class ChatDeployGuidanceTests(unittest.TestCase):
         self.assertIn("perm:full_access", payload["calls"])
         self.assertIn("Deploy lane ready: Agent + CLI + Full access.", payload["toasts"])
 
+    def test_prepare_expo_lane_adds_terminal_approval_and_eas_prompt(self):
+        payload = _run_script(
+            """
+            const app = {
+              chatInput: '',
+              chatMessages: [
+                { role: 'user', content: 'Deploy the mobile companion app to EAS' },
+              ],
+              chatProjectId: '9',
+              chatProject: { id: 9, name: 'Companion Native' },
+              mode: 'auto',
+              backend: 'api',
+              permission: 'default',
+              settingsForm: { terminal_default_mode: 'read_only' },
+              runtimeStatus: { cli_model: 'gpt-5.4' },
+              _calls: [],
+              _toasts: [],
+              _settingsPayloads: [],
+              activePrimaryConversationMode() { return this.mode; },
+              currentRuntimeBackend() { return this.backend; },
+              permissionPresetKey() { return this.permission; },
+              currentCliRuntimeModel() { return 'gpt-5.4'; },
+              chooseConversationModeAgent() { this.mode = 'agent'; this._calls.push('mode'); },
+              async applyCliRuntimeModel(model) { this.backend = 'cli'; this._calls.push(`cli:${model}`); },
+              async setPermissionPreset(preset) { this.permission = preset; this._calls.push(`perm:${preset}`); },
+              async api(method, url, payload = {}) {
+                this._settingsPayloads.push({ method, url, payload });
+                if (url === '/api/settings' && payload.terminal_default_mode) {
+                  this.settingsForm.terminal_default_mode = payload.terminal_default_mode;
+                }
+                return {};
+              },
+              async loadRuntimeStatus() { this._calls.push('runtime'); },
+              workspaceTabLabel() { return 'Companion Native'; },
+              switchTab(tab) { this._calls.push(`tab:${tab}`); },
+              showToast(message) { this._toasts.push(message); },
+              $refs: { chatComposer: { focus() {} } },
+              $nextTick(callback) { if (callback) callback(); },
+            };
+            Object.assign(app, ctx.window.axonChatDeployGuidanceMixin());
+
+            app.prepareExpoDeployLane().then((result) => {
+              console.log(JSON.stringify({
+                result,
+                visible: app.expoDeployGuidanceVisible(),
+                ready: app.expoDeployLaneReady(),
+                chatInput: app.chatInput,
+                terminalMode: app.settingsForm.terminal_default_mode,
+                calls: app._calls,
+                settingsPayloads: app._settingsPayloads,
+                toasts: app._toasts,
+              }));
+            });
+            """
+        )
+
+        self.assertTrue(payload["result"])
+        self.assertTrue(payload["visible"])
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["terminalMode"], "approval_required")
+        self.assertIn("EAS_NO_VCS=1", payload["chatInput"])
+        self.assertIn("mode", payload["calls"])
+        self.assertIn("cli:gpt-5.4", payload["calls"])
+        self.assertIn("perm:full_access", payload["calls"])
+        self.assertIn("runtime", payload["calls"])
+        self.assertEqual(payload["settingsPayloads"][0]["payload"]["terminal_default_mode"], "approval_required")
+        self.assertIn("Expo lane ready: Agent + CLI + Full access + terminal approval.", payload["toasts"])
+
     def test_companion_deploy_quick_op_prepares_then_prompts(self):
         payload = _run_script(
             """

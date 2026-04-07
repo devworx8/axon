@@ -13,6 +13,7 @@ VOICE_SPEECH_JS = ROOT / "ui/js/voice-speech.js"
 VOICE_PLAYBACK_JS = ROOT / "ui/js/voice-playback.js"
 VOICE_COMMAND_CENTER_JS = ROOT / "ui/js/voice-command-center.js"
 VOICE_CONVERSATION_JS = ROOT / "ui/js/voice-conversation.js"
+VOICE_HUD_JS = ROOT / "ui/js/voice-hud.js"
 
 
 def _run_voice_script(files: list[Path], body: str):
@@ -130,21 +131,67 @@ class VoiceFrontendTests(unittest.TestCase):
         payload = _run_voice_script(
             [VOICE_SPEECH_JS],
             """
-            const clean = ctx.window.axonVoiceSpeech.cleanText('```js\\nconst route = "/api/health";\\nreturn route;\\n```\\n\\nUse `npm run dev` next.');
+            const clean = ctx.window.axonVoiceSpeech.cleanText('```js\\nconst route = "/api/health";\\nreturn route;\\n```\\n\\nUse `GIT commit --amend` with `vault.py` and `AXON_DEV_LOCAL_VAULT_BYPASS` next.');
             console.log(JSON.stringify({
               clean,
-              mentionsCodeBlock: clean.includes('js code block'),
+              mentionsLanguageIntro: clean.includes('In JavaScript'),
               mentionsRoute: clean.includes('slash api slash health'),
-              mentionsInlineCode: clean.includes('inline code npm'),
+              mentionsHumanGit: clean.includes('git commit amend flag'),
+              mentionsVaultFile: clean.includes('vault Python file'),
+              mentionsEnvVar: clean.includes('axon dev local vault bypass'),
+              mentionsInlineCode: clean.includes('inline code'),
+              mentionsMinusMinus: clean.includes('minus minus'),
               mentionsCodeEnd: clean.includes('End code block'),
             }));
             """,
         )
 
-        self.assertTrue(payload["mentionsCodeBlock"])
+        self.assertTrue(payload["mentionsLanguageIntro"])
         self.assertTrue(payload["mentionsRoute"])
-        self.assertTrue(payload["mentionsInlineCode"])
-        self.assertTrue(payload["mentionsCodeEnd"])
+        self.assertTrue(payload["mentionsHumanGit"])
+        self.assertTrue(payload["mentionsVaultFile"])
+        self.assertTrue(payload["mentionsEnvVar"])
+        self.assertFalse(payload["mentionsInlineCode"])
+        self.assertFalse(payload["mentionsMinusMinus"])
+        self.assertFalse(payload["mentionsCodeEnd"])
+
+    def test_voice_command_center_uses_markdown_pipeline_for_local_links(self):
+        payload = _run_voice_script(
+            [Path(str(ROOT / "ui/js/helpers.js")), VOICE_COMMAND_CENTER_JS],
+            """
+            ctx.marked = {
+              setOptions() {},
+              parse(value) {
+                return String(value || '').replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2">$1</a>');
+              },
+            };
+            const helperMixin = ctx.axonHelpersMixin();
+            const voiceMixin = ctx.window.axonVoiceCommandCenterMixin();
+            const app = {
+              authToken: 'token-123',
+              chatMessages: [{
+                id: 10,
+                role: 'assistant',
+                content: 'Open [vault.py](/home/edp/.devbrain/vault.py) and [status](/api/vault/status).',
+              }],
+              chatLoading: false,
+              liveOperator: { detail: '' },
+              voiceConversation: {},
+            };
+            Object.assign(app, helperMixin, voiceMixin);
+            const html = app.voiceDisplayResponseHtml();
+            console.log(JSON.stringify({
+              html,
+              hasFileRoute: html.includes('/api/files/open?path=%2Fhome%2Fedp%2F.devbrain%2Fvault.py'),
+              hasVoicePath: html.includes('data-voice-path="/home/edp/.devbrain/vault.py"'),
+              hasApiLink: html.includes('/api/vault/status'),
+            }));
+            """,
+        )
+
+        self.assertTrue(payload["hasFileRoute"])
+        self.assertTrue(payload["hasVoicePath"])
+        self.assertTrue(payload["hasApiLink"])
 
     def test_voice_command_center_stop_and_send_uses_current_transcript(self):
         payload = _run_voice_script(
@@ -461,6 +508,108 @@ class VoiceFrontendTests(unittest.TestCase):
         self.assertEqual(payload["hudLines"][0], "$ npm test")
         self.assertIn("Ran 32 tests", payload["hudLines"][1])
         self.assertEqual(payload["beam"], "CLI Agent")
+
+    def test_voice_conversation_uses_operator_trace_when_no_terminal_session_exists(self):
+        payload = _run_voice_script(
+            [VOICE_CONVERSATION_JS],
+            """
+            const mixin = ctx.window.axonVoiceConversationMixin();
+            const app = {
+              showVoiceOrb: true,
+              reactorAsleep: false,
+              chatLoading: true,
+              liveOperator: { active: true, title: 'Running Shell Cmd' },
+              hudOperatorTraceTitle: 'Shell Cmd telemetry',
+              hudOperatorTraceLines: ['$ npm run build', '@ /tmp/mobile'],
+              voiceConversation: {},
+              terminal: { approvalRequired: false },
+              consoleProviderIdentity() { return { providerLabel: '' }; },
+              hudShowTerminal(title, lines) {
+                this.hudTitle = title;
+                this.hudLines = lines;
+                this.hudTerminalVisible = true;
+              },
+              hudHideBeam() {},
+              hudShowBeam() {},
+            };
+            Object.assign(app, mixin);
+            app.syncVoiceCommandCenterRuntime();
+            console.log(JSON.stringify({
+              hudTerminalVisible: !!app.hudTerminalVisible,
+              hudTitle: app.hudTitle || '',
+              hudLines: app.hudLines || [],
+            }));
+            """,
+        )
+
+        self.assertTrue(payload["hudTerminalVisible"])
+        self.assertEqual(payload["hudTitle"], "Shell Cmd telemetry")
+        self.assertEqual(payload["hudLines"][0], "$ npm run build")
+        self.assertEqual(payload["hudLines"][1], "@ /tmp/mobile")
+
+    def test_voice_hud_records_shell_command_trace_from_agent_events(self):
+        payload = _run_voice_script(
+            [VOICE_HUD_JS],
+            """
+            const mixin = ctx.window.axonVoiceHudMixin();
+            const app = { showVoiceOrb: true };
+            Object.assign(app, mixin);
+            app.hudProcessAgentEvent({
+              type: 'tool_call',
+              name: 'shell_cmd',
+              args: { cmd: 'npm run build', cwd: '/tmp/mobile' },
+            });
+            app.hudProcessAgentEvent({
+              type: 'tool_result',
+              name: 'shell_cmd',
+              result: '[axon] build passed',
+            });
+            console.log(JSON.stringify({
+              title: app.hudOperatorTraceTitle,
+              lines: app.hudOperatorTraceLines,
+              badges: app.hudActiveTools.map((item) => item.name),
+            }));
+            """,
+        )
+
+        self.assertEqual(payload["title"], "Shell Cmd telemetry")
+        self.assertEqual(payload["lines"][0], "$ npm run build")
+        self.assertEqual(payload["lines"][1], "@ /tmp/mobile")
+        self.assertEqual(payload["lines"][2], "# [axon] build passed")
+        self.assertIn("terminal", payload["badges"])
+
+    def test_voice_command_center_renders_live_operator_story_with_draft_reply(self):
+        payload = _run_voice_script(
+            [VOICE_COMMAND_CENTER_JS, VOICE_CONVERSATION_JS],
+            """
+            const commandMixin = ctx.window.axonVoiceCommandCenterMixin();
+            const conversationMixin = ctx.window.axonVoiceConversationMixin();
+            const app = {
+              chatLoading: true,
+              liveOperator: { active: true, phase: 'execute', updatedAt: '2026-04-06T20:20:00Z' },
+              liveOperatorFeed: [
+                { id: '1', phase: 'observe', title: 'Inspecting the task', detail: 'Reviewing the mobile companion app.', at: '2026-04-06T20:19:30Z' },
+                { id: '2', phase: 'execute', title: 'Running Shell Cmd', detail: '{"cmd":"npm run build","cwd":"/tmp/mobile"}', at: '2026-04-06T20:20:00Z' },
+              ],
+              chatMessages: [{
+                id: 10,
+                role: 'assistant',
+                content: 'Preparing the deployment report now.',
+              }],
+              voiceConversation: {},
+              timeAgo(value) { return value === '2026-04-06T20:20:00Z' ? 'just now' : '1m ago'; },
+              renderMd(value) { return '<p>' + String(value || '') + '</p>'; },
+            };
+            Object.assign(app, commandMixin, conversationMixin);
+            const html = app.voiceDisplayResponseHtml();
+            console.log(JSON.stringify({ html }));
+            """,
+        )
+
+        self.assertIn("Live execution", payload["html"])
+        self.assertIn("Running Shell Cmd", payload["html"])
+        self.assertIn("Draft reply", payload["html"])
+        self.assertIn("2 steps", payload["html"])
 
 
 if __name__ == "__main__":

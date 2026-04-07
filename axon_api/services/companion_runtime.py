@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import brain
@@ -122,8 +123,14 @@ async def process_companion_voice_turn(
 ) -> dict[str, Any]:
     session = await ensure_voice_session(db, device_id=device_id, workspace_id=workspace_id, session_id=session_id)
     resolved_workspace_id = workspace_id if workspace_id is not None else session.get("workspace_id")
-    context_block, project = await _voice_context_block(db, workspace_id=resolved_workspace_id)
-    context_project, relationships, attention = await _voice_context_data(db, workspace_id=resolved_workspace_id)
+
+    # Parallel fetch: context + settings + model candidates
+    ctx_task = asyncio.ensure_future(_voice_context_block(db, workspace_id=resolved_workspace_id))
+    data_task = asyncio.ensure_future(_voice_context_data(db, workspace_id=resolved_workspace_id))
+    settings_task = asyncio.ensure_future(get_all_settings(db))
+    (context_block, project), (context_project, relationships, attention), settings = await asyncio.gather(
+        ctx_task, data_task, settings_task
+    )
     if context_project:
         project = context_project
 
@@ -143,16 +150,20 @@ async def process_companion_voice_turn(
         meta=meta or {"surface": "companion_voice"},
     )
 
-    history_rows = await companion_voice_service.list_recent_companion_voice_turns(
-        db,
-        session_id=int(session["id"]),
-        workspace_id=resolved_workspace_id,
-        limit=12,
+    # Parallel: history + model resolution (after user turn is recorded)
+    history_task = asyncio.ensure_future(
+        companion_voice_service.list_recent_companion_voice_turns(
+            db,
+            session_id=int(session["id"]),
+            workspace_id=resolved_workspace_id,
+            limit=12,
+        )
     )
+    candidates_task = asyncio.ensure_future(
+        companion_voice_runtime.resolve_companion_voice_model_candidates(db, settings)
+    )
+    history_rows, ai_candidates = await asyncio.gather(history_task, candidates_task)
     history = _voice_history(history_rows, int(user_turn.get("id") or 0))
-
-    settings = await get_all_settings(db)
-    ai_candidates = await companion_voice_runtime.resolve_companion_voice_model_candidates(db, settings)
     ai = dict(ai_candidates[0] if ai_candidates else await companion_voice_runtime.resolve_companion_voice_model_kwargs(db, settings))
     response_text = ""
     tokens_used = 0

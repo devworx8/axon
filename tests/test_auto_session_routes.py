@@ -136,6 +136,49 @@ class AutoSessionRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["written_meta"]["status"], "running")
         self.assertEqual(captured["background_session"]["status"], "running")
 
+    async def test_stop_cancels_running_auto_session_and_marks_it_stopped(self):
+        workspace = {"id": 42, "name": "Hope", "path": "/tmp/hope"}
+        existing = {
+            "session_id": "auto-42",
+            "workspace_id": 42,
+            "workspace_name": "Hope",
+            "status": "running",
+            "title": "Deploy the build",
+            "detail": "Axon is still running.",
+        }
+        stored = dict(existing)
+        run_registry: dict[str, asyncio.Task] = {}
+
+        def fake_refresh(_session_id):
+            return dict(stored)
+
+        def fake_write(meta):
+            stored.update(dict(meta))
+            return dict(stored)
+
+        auto_service = SimpleNamespace(
+            refresh_auto_session=Mock(side_effect=fake_refresh),
+            write_auto_session=Mock(side_effect=fake_write),
+            discard_auto_session=Mock(),
+            list_auto_sessions=Mock(return_value=[]),
+        )
+        handlers = self._build_handlers(workspace, auto_service, run_registry)
+
+        async def fake_running_task():
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                raise
+
+        task = asyncio.create_task(fake_running_task())
+        run_registry["auto-42"] = task
+        result = await handlers.stop_auto_session("auto-42")
+
+        self.assertTrue(result["stopped"])
+        self.assertTrue(task.cancelled())
+        self.assertEqual(result["session"]["status"], "error")
+        self.assertEqual(result["session"]["last_error"], "Stopped by user.")
+
 
 if __name__ == "__main__":
     unittest.main()

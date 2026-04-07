@@ -2,6 +2,22 @@
    Axon — Holographic File Viewer Styles
    ══════════════════════════════════════════════════════════════ */
 
+@keyframes holo-viewer-materialise {
+  0%   { opacity: 0; transform: scale(0.92) translateY(10px); filter: blur(8px) brightness(1.5); }
+  30%  { opacity: 0.6; transform: scale(0.97) translateY(3px); filter: blur(3px) brightness(1.2); }
+  60%  { opacity: 0.9; transform: scale(1.005) translateY(-1px); filter: blur(0.5px) brightness(1.05); }
+  80%  { opacity: 0.98; transform: scale(1) translateY(0); filter: blur(0); }
+  100% { opacity: 1; transform: scale(1) translateY(0); filter: none; }
+}
+@keyframes holo-viewer-glow-pulse {
+  0%, 100% { box-shadow: 0 0 40px rgba(34, 211, 238, 0.08), 0 30px 80px rgba(2, 6, 23, 0.5), inset 0 1px 0 rgba(186, 230, 253, 0.06); }
+  50%      { box-shadow: 0 0 55px rgba(34, 211, 238, 0.12), 0 30px 80px rgba(2, 6, 23, 0.5), inset 0 1px 0 rgba(186, 230, 253, 0.08); }
+}
+@keyframes holo-viewer-scanline-sweep {
+  0%   { top: -10%; }
+  100% { top: 110%; }
+}
+
 .voice-file-viewer-overlay {
   position: fixed;
   inset: 0;
@@ -20,28 +36,32 @@
   width: min(900px, 92vw);
   height: min(680px, 85vh);
   border-radius: 20px;
-  border: 1px solid rgba(34, 211, 238, 0.25);
+  border: 1px solid rgba(34, 211, 238, 0.35);
   background:
-    radial-gradient(ellipse at 30% 20%, rgba(34, 211, 238, 0.06), transparent 50%),
-    linear-gradient(180deg, rgba(8, 15, 32, 0.95), rgba(2, 6, 23, 0.98));
+    radial-gradient(ellipse at 30% 20%, rgba(34, 211, 238, 0.08), transparent 50%),
+    linear-gradient(180deg, rgba(8, 15, 32, 0.97), rgba(2, 6, 23, 0.99));
   box-shadow:
-    0 0 40px rgba(34, 211, 238, 0.08),
+    0 0 1px rgba(34, 211, 238, 0.6),
+    0 0 30px rgba(34, 211, 238, 0.12),
+    0 0 60px rgba(34, 211, 238, 0.06),
     0 30px 80px rgba(2, 6, 23, 0.5),
-    inset 0 1px 0 rgba(186, 230, 253, 0.06);
+    inset 0 1px 0 rgba(186, 230, 253, 0.08);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  animation: holo-viewer-materialise 0.6s cubic-bezier(0.16, 1, 0.3, 1),
+             holo-viewer-glow-pulse 6s ease-in-out 1.5s infinite;
 }
 
 /* ── HUD Corner Brackets ─────────────────────────────────── */
 .voice-file-viewer__bracket {
   position: absolute;
-  width: 20px;
-  height: 20px;
-  border-color: rgba(34, 211, 238, 0.5);
+  width: 32px;
+  height: 32px;
+  border-color: rgba(34, 211, 238, 0.65);
   border-style: solid;
   pointer-events: none;
-  z-index: 2;
+  z-index: 12;
 }
 .voice-file-viewer__bracket--tl { top: -1px; left: -1px; border-width: 2px 0 0 2px; border-radius: 4px 0 0 0; }
 .voice-file-viewer__bracket--tr { top: -1px; right: -1px; border-width: 2px 2px 0 0; border-radius: 0 4px 0 0; }
@@ -56,11 +76,32 @@
   border-radius: inherit;
   background: repeating-linear-gradient(
     0deg,
-    rgba(34, 211, 238, 0.015) 0px,
+    rgba(34, 211, 238, 0.04) 0px,
     transparent 1px,
     transparent 3px
   );
-  z-index: 1;
+  z-index: 10;
+}
+/* Vignette overlay on content */
+.voice-file-viewer__scanline::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(2, 6, 23, 0.45) 100%);
+  pointer-events: none;
+}
+/* Animated scan sweep on open */
+.voice-file-viewer__scanline::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 60px;
+  top: -10%;
+  background: linear-gradient(180deg, transparent, rgba(34, 211, 238, 0.06) 40%, rgba(34, 211, 238, 0.1) 50%, rgba(34, 211, 238, 0.06) 60%, transparent);
+  animation: holo-viewer-scanline-sweep 2s ease-out 0.4s both;
+  pointer-events: none;
 }
 
 /* ── Header ───────────────────────────────────────────────── */
@@ -154,6 +195,7 @@
   height: 100%;
   border: none;
   border-radius: 0 0 20px 20px;
+  filter: invert(0.92) hue-rotate(180deg);
 }
 .voice-file-viewer__image {
   max-width: 100%;

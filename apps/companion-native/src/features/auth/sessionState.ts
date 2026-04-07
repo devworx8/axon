@@ -4,8 +4,8 @@ const COMPANION_REFRESH_MARGIN_MS = 60_000;
 
 export type CompanionLinkState = 'unpaired' | 'checking' | 'linked' | 'offline' | 'repair_required';
 
-export const COMPANION_SESSION_EXPIRED_MESSAGE = 'Mobile operator session expired. Pair this device again.';
-export const COMPANION_REPAIR_REQUIRED_MESSAGE = 'Saved device trust is no longer valid. Pair this device again.';
+export const COMPANION_SESSION_EXPIRED_MESSAGE = 'Axon needs to re-verify this phone before protected routes can continue.';
+export const COMPANION_REPAIR_REQUIRED_MESSAGE = 'The saved trust for this phone is no longer valid. Pair it again to restore protected routes.';
 
 function parseExpiryMs(value?: string): number | null {
   const raw = String(value || '').trim();
@@ -73,6 +73,13 @@ export function isCompanionAuthErrorMessage(value?: string | null): boolean {
     || lowered.includes('pair this device again')
     || lowered.includes('session expired')
   );
+}
+
+export function companionAuthBannerMessage(value?: string | null): string {
+  if (isCompanionRepairRequiredMessage(value)) {
+    return COMPANION_REPAIR_REQUIRED_MESSAGE;
+  }
+  return COMPANION_SESSION_EXPIRED_MESSAGE;
 }
 
 export function isCompanionRepairRequiredMessage(value?: string | null): boolean {

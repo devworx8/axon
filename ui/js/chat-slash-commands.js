@@ -12,7 +12,8 @@ function axonChatSlashCommandsMixin() {
     '- `/help` show the command palette',
     '- `/ask`, `/agent`, `/auto`, `/code`, `/research` switch Axon modes',
     '- `/voice` open the voice command center and arm auto-speak',
-    '- `/deploy` prepare the real deploy lane',
+    '- `/deploy` prepare the Vercel deploy lane',
+    '- `/deploy expo` prepare the Expo and EAS deploy lane',
     '- `/preview` start or attach the live preview panel',
     '- `/status` show the active workspace, runtime, and permission posture',
   ].join('\n');
@@ -87,6 +88,7 @@ function axonChatSlashCommandsMixin() {
       if (!text.startsWith('/')) return false;
       const parts = text.split(/\s+/).filter(Boolean);
       const command = String(parts[0] || '/').toLowerCase();
+      const commandArg = String(parts[1] || '').toLowerCase();
       if (['/login', '/login-cli', '/install', '/install-cli'].includes(command)) return false;
 
       const now = new Date().toISOString();
@@ -107,7 +109,16 @@ function axonChatSlashCommandsMixin() {
           ? 'Voice command center opened. Auto-speak is armed.'
           : 'Voice command center opened. Speech output is not available in this browser yet.';
       } else if (command === '/deploy') {
-        if (typeof this.prepareVercelDeployLane === 'function') {
+        if (['expo', 'eas', 'mobile'].includes(commandArg)) {
+          if (typeof this.prepareExpoDeployLane === 'function') {
+            const prepared = await this.prepareExpoDeployLane();
+            response = prepared
+              ? 'Expo lane prepared. Axon is on Agent + CLI + Full access with terminal approval, and the EAS prompt is ready.'
+              : 'Expo lane could not be prepared right now.';
+          } else {
+            response = 'Expo deploy helper is not available in this shell.';
+          }
+        } else if (typeof this.prepareVercelDeployLane === 'function') {
           const prepared = await this.prepareVercelDeployLane();
           response = prepared
             ? 'Deploy lane prepared. Axon is on Agent + CLI + Full access and the deploy prompt is ready.'

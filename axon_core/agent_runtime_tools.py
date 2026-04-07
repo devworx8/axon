@@ -56,13 +56,13 @@ def normalize_tool_args(name: str, args: dict[str, Any]) -> dict[str, Any]:
             normalized.pop(alias, None)
         return {key: value for key, value in normalized.items() if key in {"pattern", "path", "glob"}}
 
-    if name in {"write_file", "create_file"}:
+    if name in {"write_file", "create_file", "append_file", "delete_file"}:
         if not normalized.get("path"):
             for alias in ("file", "target", "destination"):
                 if normalized.get(alias):
                     normalized["path"] = normalized.pop(alias)
                     break
-        if not normalized.get("content"):
+        if name != "delete_file" and not normalized.get("content"):
             for alias in ("text", "body"):
                 if normalized.get(alias):
                     normalized["content"] = normalized.pop(alias)
@@ -70,6 +70,26 @@ def normalize_tool_args(name: str, args: dict[str, Any]) -> dict[str, Any]:
         for alias in ("file", "target", "destination", "text", "body"):
             normalized.pop(alias, None)
         return {key: value for key, value in normalized.items() if key in {"path", "content"}}
+
+    if name == "edit_file":
+        if not normalized.get("path"):
+            for alias in ("file", "target", "destination"):
+                if normalized.get(alias):
+                    normalized["path"] = normalized.pop(alias)
+                    break
+        if not normalized.get("old_string"):
+            for alias in ("old", "old_text", "find", "from"):
+                if normalized.get(alias):
+                    normalized["old_string"] = normalized.pop(alias)
+                    break
+        if not normalized.get("new_string"):
+            for alias in ("new", "new_text", "replace", "to"):
+                if normalized.get(alias):
+                    normalized["new_string"] = normalized.pop(alias)
+                    break
+        for alias in ("file", "target", "destination", "old", "old_text", "find", "from", "new", "new_text", "replace", "to"):
+            normalized.pop(alias, None)
+        return {key: value for key, value in normalized.items() if key in {"path", "old_string", "new_string", "replace_all"}}
 
     if name == "generate_pdf":
         if not normalized.get("title"):
@@ -154,7 +174,7 @@ def build_tool_registry(
         try:
             with open(resolved, encoding="utf-8", errors="replace") as handle:
                 content = handle.read()
-            return f"=== {resolved} ({size} bytes) ===\n{content}"
+            return f"📁 {resolved} ({size} bytes)\n{content}"
         except PermissionError:
             return f"ERROR: Permission denied: {resolved}"
 
@@ -175,7 +195,7 @@ def build_tool_registry(
                 for entry in entries
                 if not entry.name.startswith(".")
             ]
-            return f"=== {resolved} ===\n" + "\n".join(lines[:100])
+            return f"📁 {resolved}\n" + "\n".join(lines[:100])
         except PermissionError:
             return f"ERROR: Permission denied: {resolved}"
 
@@ -275,7 +295,7 @@ def build_tool_registry(
         try:
             with open(resolved, "w", encoding="utf-8") as handle:
                 handle.write(content)
-            return f"Written {len(content)} bytes to {resolved}"
+            return f"📁 Written {len(content)} bytes to {resolved}"
         except PermissionError:
             return f"ERROR: Permission denied: {resolved}"
 
@@ -290,7 +310,59 @@ def build_tool_registry(
         try:
             with open(resolved, "w", encoding="utf-8") as handle:
                 handle.write(content)
-            return f"Created {resolved}"
+            return f"📁 Created {resolved}"
+        except PermissionError:
+            return f"ERROR: Permission denied: {resolved}"
+
+    def _tool_append_file(path: str, content: str) -> str:
+        resolved = os.path.realpath(os.path.expanduser(path))
+        approval_action = _file_approval_action("append", resolved)
+        if not action_is_allowed_fn(approval_action):
+            return f"BLOCKED_EDIT:append:{resolved}"
+        os.makedirs(os.path.dirname(resolved), exist_ok=True)
+        try:
+            with open(resolved, "a", encoding="utf-8") as handle:
+                handle.write(content)
+            return f"📁 Appended {len(content)} bytes to {resolved}"
+        except PermissionError:
+            return f"ERROR: Permission denied: {resolved}"
+
+    def _tool_delete_file(path: str) -> str:
+        resolved = os.path.realpath(os.path.expanduser(path))
+        approval_action = _file_approval_action("delete", resolved)
+        if not action_is_allowed_fn(approval_action):
+            return f"BLOCKED_EDIT:delete:{resolved}"
+        if not os.path.exists(resolved):
+            return f"ERROR: File not found: {resolved}"
+        if os.path.isdir(resolved):
+            return f"ERROR: {resolved} is a directory - delete_file only removes files."
+        try:
+            os.remove(resolved)
+            return f"🗑 Deleted {resolved}"
+        except PermissionError:
+            return f"ERROR: Permission denied: {resolved}"
+
+    def _tool_edit_file(path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
+        resolved = os.path.realpath(os.path.expanduser(path))
+        approval_action = _file_approval_action("edit", resolved)
+        if not action_is_allowed_fn(approval_action):
+            return f"BLOCKED_EDIT:edit:{resolved}"
+        if not os.path.exists(resolved):
+            return f"ERROR: File not found: {resolved}"
+        if os.path.isdir(resolved):
+            return f"ERROR: {resolved} is a directory - use read_file or list_dir."
+        try:
+            with open(resolved, encoding="utf-8", errors="replace") as handle:
+                content = handle.read()
+            matches = content.count(old_string)
+            if matches == 0:
+                return f"ERROR: old_string not found in {resolved}"
+            if matches > 1 and not replace_all:
+                return f"ERROR: old_string matched {matches} locations in {resolved}; provide more context or set replace_all."
+            updated = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
+            with open(resolved, "w", encoding="utf-8") as handle:
+                handle.write(updated)
+            return f"📁 Edited {resolved}"
         except PermissionError:
             return f"ERROR: Permission denied: {resolved}"
 
@@ -404,6 +476,9 @@ def build_tool_registry(
         "git_status": _tool_git_status,
         "search_code": _tool_search_code,
         "create_file": _tool_create_file,
+        "append_file": _tool_append_file,
+        "delete_file": _tool_delete_file,
+        "edit_file": _tool_edit_file,
         "write_file": _tool_write_file,
         "http_get": _tool_http_get,
         "generate_pdf": _tool_generate_pdf,

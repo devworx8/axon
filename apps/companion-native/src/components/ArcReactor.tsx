@@ -77,6 +77,20 @@ export function ArcReactor({ state, size = 280, onPress, onLongPress }: Props) {
   const bladeBoot = useRef(new Animated.Value(0)).current;        // blade scale+opacity
   const beamBoot = useRef(new Animated.Value(0)).current;
   const booted = useRef(false);
+  const longPressTriggered = useRef(false);
+
+  const handlePress = () => {
+    if (longPressTriggered.current) {
+      longPressTriggered.current = false;
+      return;
+    }
+    onPress?.();
+  };
+
+  const handleLongPress = () => {
+    longPressTriggered.current = true;
+    onLongPress?.();
+  };
 
   /* ── Boot-up ignition sequence (runs once on mount) ── */
   useEffect(() => {
@@ -199,6 +213,7 @@ export function ArcReactor({ state, size = 280, onPress, onLongPress }: Props) {
   const glowR  = P(70 / 420, size);
   const outR   = P(58 / 420, size);
   const maskR  = P(65 / 420, size);
+  const tapR   = glowR;
   const ringRadii = [P(86 / 420, size), P(112 / 420, size), P(138 / 420, size)];
   const ringWidths = [1.8, 1.5, 1.2];
 
@@ -314,46 +329,53 @@ export function ArcReactor({ state, size = 280, onPress, onLongPress }: Props) {
         </Svg>
       </Animated.View>
 
-      {/* ── Core mask (black hollow) ──────────────── */}
-      <View style={[styles.coreMask, {
-        width: maskR * 2, height: maskR * 2, borderRadius: maskR,
-        top: cx - maskR, left: cx - maskR,
-      }]} />
-
-      {/* ── Core glow halo ────────────────────────── */}
-      <Animated.View
-        style={[styles.coreGlow, {
-          width: glowR * 2, height: glowR * 2, borderRadius: glowR,
-          top: cx - glowR, left: cx - glowR,
-          backgroundColor: glowColor,
-          opacity: Animated.multiply(coreGlow, glowIgnite),
-          transform: [{ scale: Animated.multiply(coreScale, glowIgnite) }],
-        }]}
-      />
-
-      {/* ── Core orb — SVG radialGradient (desktop-exact) ── */}
       <Pressable
-        onPress={onPress}
-        onLongPress={onLongPress}
-        delayLongPress={600}
-        style={[styles.coreOrb, {
-          width: orbR * 2, height: orbR * 2, borderRadius: orbR,
-          top: cx - orbR, left: cx - orbR,
+        onPress={handlePress}
+        onLongPress={handleLongPress}
+        delayLongPress={400}
+        hitSlop={Math.max(20, Math.round(size * 0.08))}
+        pressRetentionOffset={24}
+        accessibilityRole="button"
+        accessibilityLabel={state === 'sleep' ? 'Wake the Axon reactor' : 'Start or stop Axon voice capture'}
+        style={[styles.coreTapTarget, {
+          width: tapR * 2, height: tapR * 2, borderRadius: tapR,
+          top: cx - tapR, left: cx - tapR,
         }]}
       >
-        <Animated.View style={{
-          width: orbR * 2, height: orbR * 2,
-          transform: [{ scale: Animated.multiply(coreScale, orbIgnite) }],
-          ...Platform.select({
-            ios: {
-              shadowColor: glowColor,
-              shadowOffset: { width: 0, height: 0 },
-              shadowOpacity: 0.9,
-              shadowRadius: orbR * 0.6,
-            },
-            android: { elevation: 16 },
-          }),
-        }}>
+        <View
+          pointerEvents="none"
+          style={[styles.coreMask, {
+            width: maskR * 2, height: maskR * 2, borderRadius: maskR,
+            top: tapR - maskR, left: tapR - maskR,
+          }]}
+        />
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.coreGlow, {
+            width: glowR * 2, height: glowR * 2, borderRadius: glowR,
+            top: tapR - glowR, left: tapR - glowR,
+            backgroundColor: glowColor,
+            opacity: Animated.multiply(coreGlow, glowIgnite),
+            transform: [{ scale: Animated.multiply(coreScale, glowIgnite) }],
+          }]}
+        />
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.coreOrb, {
+            width: orbR * 2, height: orbR * 2,
+            top: tapR - orbR, left: tapR - orbR,
+            transform: [{ scale: Animated.multiply(coreScale, orbIgnite) }],
+            ...Platform.select({
+              ios: {
+                shadowColor: glowColor,
+                shadowOffset: { width: 0, height: 0 },
+                shadowOpacity: 0.9,
+                shadowRadius: orbR * 0.6,
+              },
+              android: { elevation: 16 },
+            }),
+          }]}
+        >
           <Svg width={orbR * 2} height={orbR * 2} viewBox="0 0 124 124">
             <Defs>
               <RadialGradient id="orb-core" cx="50%" cy="50%" r="60%">
@@ -365,16 +387,15 @@ export function ArcReactor({ state, size = 280, onPress, onLongPress }: Props) {
             <Circle cx="62" cy="62" r="62" fill="url(#orb-core)" />
           </Svg>
         </Animated.View>
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.coreOutline, {
+            width: outR * 2, height: outR * 2, borderRadius: outR,
+            top: tapR - outR, left: tapR - outR,
+            opacity: Animated.multiply(coreGlow, orbIgnite),
+          }]}
+        />
       </Pressable>
-
-      {/* ── Core outline ring ─────────────────────── */}
-      <Animated.View
-        style={[styles.coreOutline, {
-          width: outR * 2, height: outR * 2, borderRadius: outR,
-          top: cx - outR, left: cx - outR,
-          opacity: Animated.multiply(coreGlow, orbIgnite),
-        }]}
-      />
     </Animated.View>
   );
 }
@@ -394,9 +415,12 @@ const styles = StyleSheet.create({
   coreGlow: {
     position: 'absolute',
   },
+  coreTapTarget: {
+    position: 'absolute',
+    overflow: 'visible',
+  },
   coreOrb: {
     position: 'absolute',
-    overflow: 'hidden',
   },
   coreOutline: {
     position: 'absolute',

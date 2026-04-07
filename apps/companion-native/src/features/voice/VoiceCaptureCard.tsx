@@ -4,6 +4,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusPill } from '@/components/StatusPill';
 import { SurfaceCard, SurfaceHeader } from '@/components/SurfaceCard';
 import { LocalVoiceStatus } from '@/types/companion';
+import { isVoiceTranscriptionReady } from './voiceReadiness';
 
 export function VoiceCaptureCard({
   voiceStatus,
@@ -30,7 +31,7 @@ export function VoiceCaptureCard({
   onStop?: () => void;
   onRefresh?: () => void;
 }) {
-  const liveReady = Boolean(voiceStatus?.transcription_available);
+  const liveReady = isVoiceTranscriptionReady(voiceStatus);
   const statusLabel = checkingStatus
     ? 'Checking'
     : isRecording

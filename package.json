@@ -10,5 +10,8 @@
     "typecheck:companion": "npm --prefix ./apps/companion-native run typecheck",
     "axon:start": "./start.sh",
     "axon:stop": "./stop.sh"
+  },
+  "dependencies": {
+    "@openai/codex": "^0.118.0"
   }
 }

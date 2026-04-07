@@ -24,6 +24,10 @@ function axonLiveOperatorMixin() {
         feed.title,
         feed.detail,
       );
+      // JARVIS narration: speak brief status update during agent work
+      if (typeof ctx.narrateAgentStep === 'function') {
+        try { ctx.narrateAgentStep(feed.phase, feed.title, feed.detail); } catch (_) {}
+      }
     }
   };
 
@@ -35,6 +39,7 @@ function axonLiveOperatorMixin() {
     beginLiveOperator(mode = 'chat', msg = '', workspaceId = null) {
       const target = scopedWorkspaceId(this, workspaceId);
       const operator = this.beginWorkspaceLiveOperator?.(target, mode, msg);
+      this.hudResetOperatorTrace?.(mode === 'agent' ? 'Live operator telemetry' : 'Reply telemetry');
       if (mode === 'agent') this.setAgentStage?.('observe');
       if (String(this.chatProjectId || '').trim() === target && this.desktopPreview?.enabled) {
         this.refreshDesktopPreview?.(true);

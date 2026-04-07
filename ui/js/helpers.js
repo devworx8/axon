@@ -5,6 +5,13 @@
 function axonHelpersMixin() {
   const LOCAL_PATH_TOKEN_RE = /(^|[\s(])((?:~\/|\/|\.{1,2}\/|[A-Za-z0-9._-]+\/)[^\s<>\]]*[A-Za-z0-9_/-]\.[A-Za-z0-9]{1,10}|[A-Za-z0-9._-]+\.(?:pptx|pdf|png|jpg|jpeg|gif|svg|webp|md|txt|csv|json|yml|yaml|html|css|js|ts|py|sh|log|zip|tar|gz))(?=$|[\s),.!?;:])/g;
   const LOCAL_PATH_LINE_SUFFIX_RE = /#L\d+(?:C\d+)?$/i;
+  const ALLOWED_RENDERED_TAGS = new Set([
+    'a', 'article', 'b', 'blockquote', 'br', 'code', 'del', 'div', 'em', 'h1', 'h2', 'h3', 'h4',
+    'h5', 'h6', 'hr', 'i', 'li', 'ol', 'p', 'pre', 's', 'span', 'strong', 'table', 'tbody',
+    'td', 'th', 'thead', 'tr', 'ul',
+  ]);
+  const FALLBACK_TAG_RE = /<\/?([a-z0-9-]+)\b[^>]*>/gi;
+  const FALLBACK_ATTR_RE = /([^\s=]+)(?:\s*=\s*(".*?"|'.*?'|[^\s>]+))?/gi;
 
   return {
 
@@ -19,18 +26,51 @@ function axonHelpersMixin() {
     },
 
     sanitizeRenderedHtml(html = '') {
+      if (
+        typeof document === 'undefined'
+        || typeof document.createElement !== 'function'
+        || typeof NodeFilter === 'undefined'
+      ) {
+        return String(html || '')
+          .replace(/<script\b[\s\S]*?<\/script>/gi, '')
+          .replace(/<style\b[\s\S]*?<\/style>/gi, '')
+          .replace(FALLBACK_TAG_RE, (match, rawTagName) => {
+            const tagName = String(rawTagName || '').toLowerCase();
+            if (!ALLOWED_RENDERED_TAGS.has(tagName)) return '';
+            if (match.startsWith('</')) return `</${tagName}>`;
+            const attrSource = match
+              .replace(/^<[a-z0-9-]+\b/i, '')
+              .replace(/\/?>$/, '');
+            const attrs = [];
+            let attrMatch;
+            FALLBACK_ATTR_RE.lastIndex = 0;
+            while ((attrMatch = FALLBACK_ATTR_RE.exec(attrSource))) {
+              const name = String(attrMatch[1] || '').toLowerCase();
+              const quoted = attrMatch[2] || '';
+              const value = quoted.replace(/^['"]|['"]$/g, '');
+              if (!name || name.startsWith('on')) continue;
+              if (name === 'href') {
+                if (!/^(https?:|mailto:|#|\/)/i.test(value)) continue;
+                attrs.push(`href="${this.escapeHtml(this.authenticatedRouteHref(value))}"`);
+                if (/^(https?:|mailto:|\/)/i.test(value)) {
+                  attrs.push('target="_blank"', 'rel="noopener noreferrer"');
+                }
+                continue;
+              }
+              if (name === 'colspan' || name === 'rowspan') {
+                attrs.push(`${name}="${this.escapeHtml(value)}"`);
+              }
+            }
+            return `<${tagName}${attrs.length ? ` ${attrs.join(' ')}` : ''}>`;
+          });
+      }
       const template = document.createElement('template');
       template.innerHTML = html;
-      const allowedTags = new Set([
-        'A', 'ARTICLE', 'B', 'BLOCKQUOTE', 'BR', 'CODE', 'DEL', 'DIV', 'EM', 'H1', 'H2', 'H3', 'H4',
-        'H5', 'H6', 'HR', 'I', 'LI', 'OL', 'P', 'PRE', 'S', 'SPAN', 'STRONG', 'TABLE', 'TBODY',
-        'TD', 'TH', 'THEAD', 'TR', 'UL',
-      ]);
       const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_ELEMENT);
       const toRemove = [];
       while (walker.nextNode()) {
         const node = walker.currentNode;
-        if (!allowedTags.has(node.tagName)) {
+        if (!ALLOWED_RENDERED_TAGS.has(node.tagName.toLowerCase())) {
           toRemove.push(node);
           continue;
         }

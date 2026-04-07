@@ -1,0 +1,284 @@
+/* =============================================================
+   Axon - Voice Operator Deck
+   Task-first status surfaces for command deck and live execution.
+   ============================================================= */
+
+.voice-float--operator .voice-float__inner {
+  border-color: rgba(56, 189, 248, 0.2);
+  box-shadow: 0 22px 60px rgba(8, 47, 73, 0.32);
+}
+
+.voice-operator-deck {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.voice-operator-deck__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.voice-operator-deck__eyebrow {
+  font-size: 0.63rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(125, 211, 252, 0.72);
+}
+
+.voice-operator-deck__headline {
+  margin-top: 0.35rem;
+  font-size: 1rem;
+  line-height: 1.45;
+  color: rgba(226, 232, 240, 0.96);
+}
+
+.voice-operator-deck__chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
+.voice-operator-deck__chip {
+  border-radius: 999px;
+  border: 1px solid rgba(51, 65, 85, 0.9);
+  background: rgba(2, 6, 23, 0.66);
+  padding: 0.28rem 0.62rem;
+  font-size: 0.64rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(191, 219, 254, 0.84);
+}
+
+.voice-operator-deck__chip--slate {
+  color: rgba(148, 163, 184, 0.92);
+}
+
+.voice-operator-deck__chip--cyan {
+  border-color: rgba(34, 211, 238, 0.24);
+  color: rgba(125, 211, 252, 0.98);
+}
+
+.voice-operator-deck__chip--amber {
+  border-color: rgba(251, 191, 36, 0.28);
+  color: rgba(253, 230, 138, 0.98);
+}
+
+.voice-operator-deck__chip--emerald {
+  border-color: rgba(16, 185, 129, 0.28);
+  color: rgba(110, 231, 183, 0.96);
+}
+
+.voice-operator-deck__chip--rose {
+  border-color: rgba(244, 63, 94, 0.28);
+  color: rgba(253, 164, 175, 0.98);
+}
+
+.voice-operator-deck__grid {
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.voice-operator-deck__metric {
+  border-radius: 1rem;
+  border: 1px solid rgba(30, 41, 59, 0.9);
+  background: rgba(2, 6, 23, 0.6);
+  padding: 0.8rem 0.9rem;
+}
+
+.voice-operator-deck__label {
+  font-size: 0.62rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.74);
+}
+
+.voice-operator-deck__value {
+  margin-top: 0.4rem;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: rgba(226, 232, 240, 0.96);
+}
+
+.voice-operator-deck__value--mono {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.8rem;
+}
+
+.voice-operator-deck__blocker {
+  border-radius: 1rem;
+  border: 1px solid rgba(244, 63, 94, 0.22);
+  background: linear-gradient(180deg, rgba(76, 5, 25, 0.32), rgba(15, 23, 42, 0.88));
+  padding: 0.9rem 1rem;
+}
+
+.voice-operator-deck__blocker-label {
+  font-size: 0.66rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(253, 164, 175, 0.96);
+}
+
+.voice-operator-deck__blocker-body,
+.voice-operator-deck__blocker-next {
+  margin-top: 0.45rem;
+  font-size: 0.84rem;
+  line-height: 1.55;
+  color: rgba(254, 226, 226, 0.94);
+}
+
+.voice-operator-deck__blocker-next {
+  color: rgba(252, 211, 77, 0.94);
+}
+
+.voice-operator-deck__timeline {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.voice-stream-blocks {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.voice-stream-blocks__header {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.62rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(125, 211, 252, 0.74);
+}
+
+.voice-stream-blocks__dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: rgba(34, 211, 238, 0.94);
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.45);
+}
+
+.voice-operator-deck__step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+  border-radius: 1rem;
+  border: 1px solid rgba(30, 41, 59, 0.88);
+  background: rgba(2, 6, 23, 0.5);
+  padding: 0.75rem 0.85rem;
+  animation: voice-step-enter 320ms ease both;
+}
+
+.voice-operator-deck__step-phase {
+  border-radius: 999px;
+  padding: 0.24rem 0.52rem;
+  font-size: 0.62rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  background: rgba(15, 23, 42, 0.88);
+  color: rgba(148, 163, 184, 0.92);
+}
+
+.voice-operator-deck__step--plan .voice-operator-deck__step-phase {
+  color: rgba(125, 211, 252, 0.96);
+}
+
+.voice-operator-deck__step--execute .voice-operator-deck__step-phase {
+  color: rgba(253, 230, 138, 0.98);
+}
+
+.voice-operator-deck__step--verify .voice-operator-deck__step-phase {
+  color: rgba(110, 231, 183, 0.98);
+}
+
+.voice-operator-deck__step--recover .voice-operator-deck__step-phase {
+  color: rgba(253, 164, 175, 0.98);
+}
+
+.voice-operator-deck__step-title {
+  font-size: 0.82rem;
+  color: rgba(241, 245, 249, 0.96);
+}
+
+.voice-operator-deck__step-detail {
+  margin-top: 0.26rem;
+  font-size: 0.76rem;
+  line-height: 1.55;
+  color: rgba(148, 163, 184, 0.9);
+}
+
+.voice-operator-deck__reply {
+  border-top: 1px solid rgba(30, 41, 59, 0.88);
+  padding-top: 0.9rem;
+}
+
+.voice-operator-deck__reply-label {
+  font-size: 0.62rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(125, 211, 252, 0.74);
+}
+
+.voice-operator-deck__reply-body {
+  margin-top: 0.45rem;
+  font-size: 0.83rem;
+  line-height: 1.6;
+  color: rgba(191, 219, 254, 0.96);
+}
+
+.voice-operator-deck__empty {
+  border-radius: 1rem;
+  border: 1px dashed rgba(51, 65, 85, 0.88);
+  padding: 0.8rem 0.9rem;
+  font-size: 0.76rem;
+  color: rgba(100, 116, 139, 0.96);
+}
+
+.voice-command-dock__status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.7rem;
+}
+
+.voice-command-dock__status-chip {
+  border-radius: 999px;
+  border: 1px solid rgba(30, 41, 59, 0.92);
+  background: rgba(2, 6, 23, 0.6);
+  padding: 0.3rem 0.62rem;
+  font-size: 0.62rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.88);
+}
+
+.voice-command-dock__status-chip--active {
+  border-color: rgba(34, 211, 238, 0.24);
+  color: rgba(125, 211, 252, 0.98);
+}
+
+.voice-command-dock__status-chip--blocked {
+  border-color: rgba(244, 63, 94, 0.26);
+  color: rgba(253, 164, 175, 0.98);
+}
+
+.voice-command-dock__status-chip--command {
+  max-width: 100%;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  letter-spacing: 0.05em;
+  text-transform: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 1024px) {
+  .voice-operator-deck__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

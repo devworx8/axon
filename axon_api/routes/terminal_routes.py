@@ -5,6 +5,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
@@ -202,13 +203,24 @@ class TerminalRouteHandlers:
             shell_argv.append("-i")
         else:
             shell_argv.append("--login")
-        home = str(Path.home())
+        home_path = Path.home()
+        session_cwd = home_path
+        session_match = re.match(r"^(\d+)", str(session_id or ""))
+        numeric_session_id = int(session_match.group(1)) if session_match else 0
+        if numeric_session_id:
+            async with self._db.get_db() as conn:
+                row = await self._db.get_terminal_session(conn, numeric_session_id)
+                if row:
+                    try:
+                        session_cwd = await self._resolve_terminal_cwd(conn, row)
+                    except Exception:
+                        session_cwd = home_path
 
         pty_proc = PtyProcess.spawn(
             shell_argv,
             dimensions=(rows, cols),
             env={**os.environ, "TERM": "xterm-256color"},
-            cwd=home,
+            cwd=str(session_cwd),
         )
 
         entry = {"pty": pty_proc, "ws": websocket, "alive": True}

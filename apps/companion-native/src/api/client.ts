@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 
 import { CompanionConfig, CompanionTokenPair } from '@/types/companion';
 import {
+  companionAuthBannerMessage,
   COMPANION_SESSION_EXPIRED_MESSAGE,
   isCompanionAuthErrorMessage,
 } from '@/features/auth/sessionState';
@@ -106,6 +107,9 @@ export function getApiBaseUrl(config?: CompanionConfig): string {
 }
 
 function extractApiErrorMessage(status: number, rawBody: string): string {
+  if (status === 502 || status === 503 || status === 504 || status === 530) {
+    return 'Axon public host is down. Run ~/.devbrain/start.sh. If the public URL still fails, run ~/.devbrain/tunnel.sh start.';
+  }
   const trimmed = String(rawBody || '').trim();
   let detail = trimmed;
 
@@ -125,7 +129,7 @@ function extractApiErrorMessage(status: number, rawBody: string): string {
     return `Axon request failed: ${status}`;
   }
   if (status === 401 && isCompanionAuthErrorMessage(detail)) {
-    return COMPANION_SESSION_EXPIRED_MESSAGE;
+    return companionAuthBannerMessage(detail);
   }
   return detail;
 }
@@ -137,7 +141,7 @@ function normalizeTransportError(error: unknown): Error {
       return new Error('Axon request timed out.');
     }
     if (message.includes('network request failed') || message.includes('load failed')) {
-      return new Error('Unable to reach live Axon.');
+      return new Error('Unable to reach live Axon. Run ~/.devbrain/start.sh. If the public host still fails, run ~/.devbrain/tunnel.sh start.');
     }
     return error;
   }

@@ -2,46 +2,85 @@
    Axon — Voice Speech Helpers
    ══════════════════════════════════════════════════════════════ */
 
+const AXON_VOICE_CODE_LABELS = {
+  bash: 'shell',
+  js: 'JavaScript',
+  jsx: 'JSX',
+  py: 'Python',
+  sh: 'shell',
+  ts: 'TypeScript',
+  tsx: 'TSX',
+  zsh: 'shell',
+};
+
 const AXON_VOICE_CODE_TOKEN_REPLACEMENTS = [
-  [/!==/g, ' not equal equal '],
-  [/===/g, ' equal equal equal '],
-  [/=>/g, ' arrow '],
-  [/\+\+/g, ' plus plus '],
-  [/--/g, ' minus minus '],
+  [/!==/g, ' is not exactly equal to '],
+  [/===/g, ' is exactly equal to '],
+  [/!=/g, ' is not equal to '],
+  [/==/g, ' is equal to '],
+  [/=>/g, ' returns '],
+  [/\+\+/g, ' increment '],
+  [/--/g, ' decrement '],
   [/&&/g, ' and '],
   [/\|\|/g, ' or '],
-  [/!=/g, ' not equal '],
-  [/==/g, ' equal equal '],
-  [/<=/g, ' less than or equal to '],
-  [/>=/g, ' greater than or equal to '],
-  [/\{/g, ' open brace '],
-  [/\}/g, ' close brace '],
-  [/\[/g, ' open bracket '],
-  [/\]/g, ' close bracket '],
-  [/\(/g, ' open parenthesis '],
-  [/\)/g, ' close parenthesis '],
-  [/;/g, ' semicolon '],
-  [/:/g, ' colon '],
-  [/,/g, ' comma '],
-  [/\./g, ' dot '],
-  [/=/g, ' equals '],
-  [/\+/g, ' plus '],
-  [/-/g, ' minus '],
-  [/\*/g, ' star '],
+  [/<=/g, ' is less than or equal to '],
+  [/>=/g, ' is greater than or equal to '],
+  [/[{}[\]();,]/g, ' '],
   [/\//g, ' slash '],
+  [/=/g, ' equals '],
+  [/:/g, ' '],
 ];
 
+const AXON_VOICE_COMMAND_RE = /\b(?:git|npm|npx|pnpm|yarn|node|python|python3|pip|pip3|bash|zsh|curl|gh|vercel)\b/gi;
+const AXON_VOICE_ENV_VAR_RE = /\b[A-Z][A-Z0-9]+(?:_[A-Z0-9]+)+\b/g;
+const AXON_VOICE_DOTTED_FILE_RE = /\b([A-Za-z0-9_-]+)\.(py|js|ts|tsx|jsx|json|md|css|html|sh|yaml|yml|env)\b/g;
+const AXON_VOICE_DOTTED_IDENTIFIER_RE = /\b([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\b/g;
+const AXON_VOICE_FILE_LABELS = {
+  py: 'Python file',
+  js: 'JavaScript file',
+  ts: 'TypeScript file',
+  tsx: 'TSX file',
+  jsx: 'JSX file',
+  json: 'JSON file',
+  md: 'Markdown file',
+  css: 'CSS file',
+  html: 'HTML file',
+  sh: 'shell script',
+  yaml: 'YAML file',
+  yml: 'YAML file',
+  env: 'env file',
+};
+
 function voiceCodeLabel(label = '') {
-  return String(label || '')
+  const normalized = String(label || '')
     .replace(/[^a-z0-9#+.-]+/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  return AXON_VOICE_CODE_LABELS[normalized.toLowerCase()] || normalized;
+}
+
+function humanizeUpperSnakeToken(value = '') {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function humanizeFileToken(stem = '', ext = '') {
+  return `${String(stem || '').replace(/[_-]+/g, ' ').trim()} ${AXON_VOICE_FILE_LABELS[String(ext || '').toLowerCase()] || ext}`.trim();
 }
 
 function normalizeVoiceCode(code = '') {
   let value = String(code || '').replace(/\r/g, '\n').trim();
   if (!value) return '';
   value = value.replace(/\t/g, ' tab ');
+  value = value.replace(AXON_VOICE_COMMAND_RE, (match) => match.toLowerCase());
+  value = value.replace(AXON_VOICE_ENV_VAR_RE, (match) => humanizeUpperSnakeToken(match));
+  value = value.replace(AXON_VOICE_DOTTED_FILE_RE, (_match, stem, ext) => humanizeFileToken(stem, ext));
+  value = value.replace(AXON_VOICE_DOTTED_IDENTIFIER_RE, (_match, left, right) => `${left} dot ${right}`);
+  value = value.replace(/(^|\s)--([a-z0-9][a-z0-9-]*)/gi, (_match, prefix, flag) => `${prefix}${flag} flag`);
+  value = value.replace(/(^|\s)-([a-z])\b/gi, (_match, prefix, flag) => `${prefix}${flag.toLowerCase()} flag`);
   AXON_VOICE_CODE_TOKEN_REPLACEMENTS.forEach(([pattern, replacement]) => {
     value = value.replace(pattern, replacement);
   });
@@ -57,21 +96,23 @@ function normalizeVoiceCode(code = '') {
 function replaceVoiceCodeBlock(_match, language = '', code = '') {
   const spokenCode = normalizeVoiceCode(code);
   const label = voiceCodeLabel(language);
-  const intro = label ? `${label} code block.` : 'Code block.';
-  if (!spokenCode) return ` ${intro} `;
-  return ` ${intro} ${spokenCode}. End code block. `;
+  if (!spokenCode) return ' ';
+  return label ? ` In ${label}, ${spokenCode}. ` : ` ${spokenCode}. `;
 }
 
 function replaceVoiceInlineCode(_match, code = '') {
   const spokenCode = normalizeVoiceCode(code);
   if (!spokenCode) return ' ';
-  return ` inline code ${spokenCode} `;
+  return ` ${spokenCode} `;
 }
 
 function cleanVoiceSpeechText(text) {
   return String(text || '')
     .replace(/```([^\n`]*)\n?([\s\S]*?)```/g, replaceVoiceCodeBlock)
     .replace(/`([^`]+)`/g, replaceVoiceInlineCode)
+    .replace(AXON_VOICE_ENV_VAR_RE, (match) => humanizeUpperSnakeToken(match))
+    .replace(AXON_VOICE_DOTTED_FILE_RE, (_match, stem, ext) => humanizeFileToken(stem, ext))
+    .replace(AXON_VOICE_DOTTED_IDENTIFIER_RE, (_match, left, right) => `${left} dot ${right}`)
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')

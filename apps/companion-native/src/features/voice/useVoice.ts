@@ -16,6 +16,9 @@ export function useVoice(
   const submitVoiceTurn = useCallback(async (content: string, transcript = content, voiceMode = 'live') => {
     setSending(true);
     setError(null);
+    setLastTranscript(transcript);
+    setResponseText('');
+    setLastResult(null);
     try {
       const result = await sendVoiceTurn(
         {
@@ -28,7 +31,6 @@ export function useVoice(
         },
         config,
       );
-      setLastTranscript(transcript);
       setResponseText(result.response_text || result.session.summary || '');
       setLastResult(result);
       if (result.session && onSessionUpdate) {

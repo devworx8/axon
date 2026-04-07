@@ -6,7 +6,7 @@ function axonVoiceMixin() {
   return {
 
     // ── New state ──
-    voiceMode: false,
+    voiceMode: true,
     voiceStatus: {
       available: false,
       preferred_mode: 'browser',
@@ -130,8 +130,8 @@ function axonVoiceMixin() {
       this.resetChatComposerHeight();
     },
 
-    async sendVoiceCommand() {
-      const text = String(this.voiceTranscript || this.chatInput || '').trim();
+    async sendVoiceCommand(commandText = '') {
+      const text = String(commandText || this.voiceTranscript || this.chatInput || '').trim();
       const workspaceBusy = typeof this.currentWorkspaceRunActive === 'function'
         ? this.currentWorkspaceRunActive()
         : !!this.chatLoading;

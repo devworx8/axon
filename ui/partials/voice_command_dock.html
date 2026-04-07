@@ -1,0 +1,53 @@
+      <div class="voice-command-dock" :class="voiceConversation.textDockOpen ? 'voice-command-dock--active' : ''" x-show="showVoiceOrb" x-transition>
+        <button class="voice-command-dock__toggle" @click="toggleVoiceTextDock()">
+          <span class="voice-control-chip__dot"></span>
+          <span class="voice-command-dock__toggle-label">
+            <span class="voice-command-dock__toggle-title">Text command</span>
+            <span class="voice-command-dock__toggle-detail" x-text="voiceTextDockLabel()"></span>
+          </span>
+        </button>
+
+        <div class="voice-command-dock__panel" x-show="voiceConversation.textDockOpen" x-transition>
+          <div class="voice-command-dock__header">
+            <div>
+              <div class="voice-command-dock__eyebrow" x-text="voiceCommandDeckTitle()"></div>
+              <div class="voice-command-dock__hint" x-text="voiceCommandDeckHint()"></div>
+              <div class="voice-command-dock__status">
+                <span class="voice-command-dock__status-chip"
+                      :class="voiceOperatorBlocker() ? 'voice-command-dock__status-chip--blocked' : 'voice-command-dock__status-chip--active'"
+                      x-text="voiceOperatorSurfaceChip()"></span>
+                <span x-show="voiceOperatorActiveCommand()"
+                      class="voice-command-dock__status-chip voice-command-dock__status-chip--command"
+                      x-text="voiceOperatorActiveCommand()"></span>
+              </div>
+            </div>
+            <button class="voice-command-dock__btn" @click="toggleVoiceTextDock(false)">Close</button>
+          </div>
+
+          <textarea
+            x-ref="voiceTextDockInput"
+            class="voice-command-dock__textarea"
+            x-model="voiceConversation.textDraft"
+            :placeholder="voiceTextDockPlaceholder()"
+            @keydown.meta.enter.prevent="submitVoiceTextDock()"
+            @keydown.ctrl.enter.prevent="submitVoiceTextDock()"></textarea>
+
+          <div class="voice-command-dock__prompts">
+            <template x-for="prompt in voiceQuickPrompts()" :key="prompt">
+              <button class="voice-command-dock__prompt" @click="applyVoiceQuickPrompt(prompt)" x-text="prompt"></button>
+            </template>
+          </div>
+
+          <div class="voice-command-dock__actions">
+            <div class="voice-command-dock__meta" x-text="voiceCommandDeckMeta()"></div>
+            <div class="voice-command-dock__buttons">
+              <button class="voice-command-dock__btn" @click="startVoiceListening()">Listen</button>
+              <button class="voice-command-dock__btn" @click="clearVoiceTextDock(true)">Clear</button>
+              <button class="voice-command-dock__btn voice-command-dock__btn--primary"
+                      :disabled="chatLoading"
+                      @click="submitVoiceTextDock()"
+                      x-text="voiceCommandDeckSubmitLabel()"></button>
+            </div>
+          </div>
+        </div>
+      </div>

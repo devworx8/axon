@@ -12,9 +12,8 @@
       <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
     </button>
 
-    <div class="voice-stage w-full px-4 py-4 md:px-10 md:py-6">
+    <div class="voice-stage w-full px-2 py-3 md:px-4 md:py-4">
       <div class="voice-stage__backdrop"></div>
-
       <div class="voice-stage__content">
         <div class="text-center">
           <div class="voice-stage__eyebrow">Axon Voice Mode</div>
@@ -37,12 +36,11 @@
             <span class="voice-control-chip__dot"></span>
             <span>Text dock</span>
           </button>
-          <button class="voice-control-chip" :class="hudTerminalVisible ? 'voice-control-chip--active' : ''" @click="voiceConversation.terminalPinned = !voiceConversation.terminalPinned; syncVoiceCommandCenterRuntime()">
+          <button class="voice-control-chip" :class="hudTerminalVisible ? 'voice-control-chip--active' : ''" @click="toggleVoiceTerminalPin()">
             <span class="voice-control-chip__dot"></span>
             <span>Live terminal</span>
           </button>
         </div>
-
         <!-- ── Mobile: compact stacked layout ── -->
         <div class="md:hidden flex flex-col items-center gap-4 w-full">
           <!-- Reactor (compact on mobile) -->
@@ -157,13 +155,11 @@
                  :class="voiceResponseAvailable() ? 'text-slate-200' : 'text-slate-500'"
                  x-html="voiceDisplayResponseHtml()"></div>
           </div>
-
-
         </div>
 
         <!-- ── Desktop: 3-column arena layout ── -->
         <div class="hidden md:block w-full">
-        <div class="voice-arena">
+        <div class="voice-arena" :class="chatLoading || (liveOperator && liveOperator.active) ? 'voice-arena--busy' : ''">
           <!-- Left float: Transcript -->
           <div class="voice-float voice-float--left"
                x-show="!voiceConversation.textDockOpen"
@@ -281,21 +277,8 @@
         </div>
           </div><!-- /voice-arena__center -->
 
-          <!-- Right float: Response -->
-          <div class="voice-float voice-float--right voice-float--response" :class="voiceResponseAvailable() ? 'voice-float--active' : ''">
-            <div class="voice-float__edge"></div>
-            <div class="voice-float__scanline"></div>
-            <div class="voice-float__inner">
-              <div class="voice-float__label">
-                <span class="voice-float__dot voice-float__dot--cyan"></span>
-                Response
-              </div>
-              <div class="voice-float__body voice-float__body--response voice-response-render" x-html="voiceDisplayResponseHtml()"></div>
-            </div>
-          </div>
+          <!-- @include partials/voice_response_panel.html -->
         </div><!-- /voice-arena -->
-
-
         </div>
 
         <div class="voice-mission-rail" x-show="voiceMissionTimeline().length && !voiceConversation.textDockOpen" x-transition>
@@ -320,22 +303,7 @@
 
       </div>
 
-      <!-- ── HUD: Terminal Pull-up ── -->
-      <template x-if="hudTerminalVisible">
-        <div class="hud-terminal" :class="hudTerminalVisible ? '' : 'hud-terminal--closing'">
-          <div class="hud-terminal__scanline"></div>
-          <div class="hud-terminal__header">
-            <span class="hud-terminal__dot"></span>
-            <span class="hud-terminal__title" x-text="hudTerminalTitle || 'Terminal'"></span>
-          </div>
-          <div class="hud-terminal__body">
-            <template x-for="(line, i) in hudTerminalLines" :key="i">
-              <div class="hud-terminal__line" :class="i === hudTerminalLines.length - 1 ? 'hud-terminal__line--new' : ''" x-text="line"></div>
-            </template>
-            <span class="hud-terminal__cursor"></span>
-          </div>
-        </div>
-      </template>
+      <!-- @include partials/voice_terminal_hud.html -->
 
       <!-- ── HUD: Approval Gate Overlay ── -->
       <template x-if="hudApprovalPending">
@@ -355,94 +323,11 @@
         </div>
       </template>
 
-      <div class="voice-command-dock" :class="voiceConversation.textDockOpen ? 'voice-command-dock--active' : ''" x-show="showVoiceOrb" x-transition>
-        <button class="voice-command-dock__toggle" @click="toggleVoiceTextDock()">
-          <span class="voice-control-chip__dot"></span>
-          <span class="voice-command-dock__toggle-label">
-            <span class="voice-command-dock__toggle-title">Text command</span>
-            <span class="voice-command-dock__toggle-detail" x-text="voiceTextDockLabel()"></span>
-          </span>
-        </button>
-
-        <div class="voice-command-dock__panel" x-show="voiceConversation.textDockOpen" x-transition>
-          <div class="voice-command-dock__header">
-            <div>
-              <div class="voice-command-dock__eyebrow">Fallback text channel</div>
-              <div class="voice-command-dock__hint">Type without leaving voice mode.</div>
-            </div>
-            <button class="voice-command-dock__btn" @click="toggleVoiceTextDock(false)">Close</button>
-          </div>
-
-          <textarea
-            x-ref="voiceTextDockInput"
-            class="voice-command-dock__textarea"
-            x-model="voiceConversation.textDraft"
-            :placeholder="voiceTextDockPlaceholder()"
-            @keydown.meta.enter.prevent="submitVoiceTextDock()"
-            @keydown.ctrl.enter.prevent="submitVoiceTextDock()"></textarea>
-
-          <div class="voice-command-dock__prompts">
-            <template x-for="prompt in voiceQuickPrompts()" :key="prompt">
-              <button class="voice-command-dock__prompt" @click="applyVoiceQuickPrompt(prompt)" x-text="prompt"></button>
-            </template>
-          </div>
-
-          <div class="voice-command-dock__actions">
-            <div class="voice-command-dock__meta" x-text="voiceConversation.lastReplyPreview || 'Axon will keep the transcript and text composer in sync here.'"></div>
-            <div class="voice-command-dock__buttons">
-              <button class="voice-command-dock__btn" @click="startVoiceListening()">Listen</button>
-              <button class="voice-command-dock__btn" @click="clearVoiceTextDock(true)">Clear</button>
-              <button class="voice-command-dock__btn voice-command-dock__btn--primary" :disabled="chatLoading" @click="submitVoiceTextDock()">Send</button>
-            </div>
-          </div>
-        </div>
-      </div>
+      <!-- @include partials/voice_command_dock.html -->
     </div>
 
-    <!-- ── Holographic File Viewer ── -->
-    <template x-if="voiceFileViewer?.open">
-      <div class="voice-file-viewer-overlay" @click.self="closeVoiceFileViewer()">
-        <div class="voice-file-viewer">
-          <div class="voice-file-viewer__bracket voice-file-viewer__bracket--tl"></div>
-          <div class="voice-file-viewer__bracket voice-file-viewer__bracket--tr"></div>
-          <div class="voice-file-viewer__bracket voice-file-viewer__bracket--bl"></div>
-          <div class="voice-file-viewer__bracket voice-file-viewer__bracket--br"></div>
-          <div class="voice-file-viewer__scanline"></div>
-          <div class="voice-file-viewer__header">
-            <div class="voice-file-viewer__header-left">
-              <span class="voice-file-viewer__dot"></span>
-              <span class="voice-file-viewer__title" x-text="voiceFileName()"></span>
-            </div>
-            <div class="voice-file-viewer__path" x-text="voiceFileViewer.path"></div>
-            <button class="voice-file-viewer__close" @click="closeVoiceFileViewer()">✕</button>
-          </div>
-          <div class="voice-file-viewer__body">
-            <div x-show="voiceFileViewer.loading" class="voice-file-viewer__loading">
-              <div class="voice-file-viewer__spinner"></div>
-              <span>Loading file…</span>
-            </div>
-            <div x-show="voiceFileViewer.error" class="voice-file-viewer__error" x-text="voiceFileViewer.error"></div>
-            <template x-if="voiceFileViewer.type === 'pdf' && !voiceFileViewer.loading">
-              <iframe :src="voiceFileViewerUrl()" class="voice-file-viewer__iframe"></iframe>
-            </template>
-            <template x-if="voiceFileViewer.type === 'image' && !voiceFileViewer.loading">
-              <img :src="voiceFileViewerUrl()" :alt="voiceFileName()" class="voice-file-viewer__image">
-            </template>
-            <template x-if="voiceFileViewer.type === 'video' && !voiceFileViewer.loading">
-              <video :src="voiceFileViewerUrl()" controls class="voice-file-viewer__video"></video>
-            </template>
-            <template x-if="voiceFileViewer.type === 'audio' && !voiceFileViewer.loading">
-              <div class="voice-file-viewer__audio-wrap">
-                <audio :src="voiceFileViewerUrl()" controls class="w-full"></audio>
-              </div>
-            </template>
-            <template x-if="(voiceFileViewer.type === 'code' || voiceFileViewer.type === 'text') && !voiceFileViewer.loading && !voiceFileViewer.error">
-              <pre class="voice-file-viewer__code"><code x-html="voiceFileViewer.content"></code></pre>
-            </template>
-          </div>
-        </div>
-      </div>
-    </template>
+    <!-- ── Holographic File Viewer (rendered by voice-file-viewer.js) ── -->
+    <div id="voice-file-viewer-mount"></div>
 
     </div>
   </div>

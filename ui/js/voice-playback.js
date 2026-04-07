@@ -239,6 +239,10 @@ function axonVoicePlaybackMixin() {
     },
 
     autoSpeakResponse(text) {
+      // Cancel any in-flight narration so it doesn't talk over the final reply
+      if (typeof this._cancelNarrationQueue === 'function') {
+        this._cancelNarrationQueue();
+      }
       this.onVoiceResponseReady?.(text);
       if (this.voiceMode && this.speechOutputSupported) {
         this.speakMessage(text);

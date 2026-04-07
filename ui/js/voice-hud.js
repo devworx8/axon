@@ -4,12 +4,104 @@
    ══════════════════════════════════════════════════════════════ */
 
 function axonVoiceHudMixin() {
+  const trimText = (value = '') => String(value || '').trim();
+
+  const prettyToolName = (value = '') => {
+    const raw = trimText(value).replace(/[_-]+/g, ' ');
+    return raw ? raw.replace(/\b\w/g, (char) => char.toUpperCase()) : 'Tool';
+  };
+
+  const clip = (value = '', limit = 180) => {
+    const text = trimText(value);
+    if (!text) return '';
+    return text.length > limit ? `${text.slice(0, Math.max(0, limit - 1))}…` : text;
+  };
+
+  const primaryArgLine = (args = {}) => {
+    const pairs = [
+      ['q', args.q],
+      ['path', args.path],
+      ['url', args.url],
+      ['location', args.location],
+      ['ticker', args.ticker],
+      ['id', args.idOrUrl],
+      ['file', args.file],
+      ['branch', args.branch_name],
+    ];
+    const match = pairs.find(([, value]) => trimText(value));
+    if (!match) return '';
+    return `· ${match[0]}: ${clip(match[1], 120)}`;
+  };
+
+  const buildOperatorTrace = (event = {}) => {
+    const type = trimText(event.type || event.action).toLowerCase();
+    const toolName = trimText(event.name || event.tool);
+    const args = event.args && typeof event.args === 'object' ? event.args : {};
+    const result = clip(event.result || event.message || event.chunk || event.detail, 180);
+    const command = trimText(args.cmd || args.command || args.script);
+    const cwd = trimText(args.cwd || args.workdir);
+    const title = toolName ? `${prettyToolName(toolName)} telemetry` : 'Live operator telemetry';
+    if (!type) return null;
+
+    if (type === 'tool_call') {
+      const lines = [];
+      if (command) lines.push(`$ ${clip(command, 180)}`);
+      else lines.push(`> ${prettyToolName(toolName)}`);
+      if (cwd) lines.push(`@ ${clip(cwd, 140)}`);
+      const argLine = primaryArgLine(args);
+      if (argLine) lines.push(argLine);
+      else if (!command && Object.keys(args).length) lines.push(`· ${clip(JSON.stringify(args), 150)}`);
+      return { title, lines };
+    }
+    if (type === 'tool_result') {
+      const tone = /^(ERROR:|BLOCKED_|!)/.test(result) ? '!' : '#';
+      return {
+        title,
+        lines: [result ? `${tone} ${result}` : '# Tool completed'],
+      };
+    }
+    if (type === 'thinking') {
+      return {
+        title: 'Planning telemetry',
+        lines: [`# ${result || 'Axon is reasoning through the next step.'}`],
+      };
+    }
+    if (type === 'text') {
+      return {
+        title: 'Response telemetry',
+        lines: [`# ${result || 'Axon is drafting the reply.'}`],
+      };
+    }
+    if (type === 'approval_required') {
+      return {
+        title: 'Approval telemetry',
+        lines: [`? ${result || 'Approval is required before Axon can continue.'}`],
+      };
+    }
+    if (type === 'error') {
+      return {
+        title: 'Recovery telemetry',
+        lines: [`! ${result || 'Axon hit an error and stopped safely.'}`],
+      };
+    }
+    if (type === 'done') {
+      return {
+        title: 'Completion telemetry',
+        lines: ['# Task complete'],
+      };
+    }
+    return null;
+  };
+
   return {
 
     // ── HUD state ──
     hudTerminalVisible: false,
     hudTerminalLines: [],
     hudTerminalTitle: '',
+    hudOperatorTraceLines: [],
+    hudOperatorTraceTitle: '',
+    hudOperatorTraceUpdatedAt: '',
     hudScanActive: false,
     hudScanProgress: 0,
     hudScanLabel: '',
@@ -46,6 +138,33 @@ function axonVoiceHudMixin() {
         this.hudTerminalLines = [];
         this.hudTerminalTitle = '';
       }, 400);
+    },
+
+    hudResetOperatorTrace(title = '') {
+      this.hudOperatorTraceLines = [];
+      this.hudOperatorTraceTitle = trimText(title);
+      this.hudOperatorTraceUpdatedAt = '';
+    },
+
+    hudOperatorTraceLinesSnapshot(limit = 12) {
+      return Array.isArray(this.hudOperatorTraceLines)
+        ? this.hudOperatorTraceLines.slice(-Math.max(1, limit))
+        : [];
+    },
+
+    hudRecordOperatorTrace(event = {}) {
+      const trace = buildOperatorTrace(event);
+      if (!trace) return;
+      if (trimText(trace.title)) this.hudOperatorTraceTitle = trimText(trace.title);
+      const nextLines = Array.isArray(trace.lines) ? trace.lines : [];
+      nextLines.forEach((line) => {
+        const text = clip(line, 220);
+        if (!text) return;
+        const last = this.hudOperatorTraceLines[this.hudOperatorTraceLines.length - 1];
+        if (last === text) return;
+        this.hudOperatorTraceLines = [...this.hudOperatorTraceLines.slice(-17), text];
+      });
+      this.hudOperatorTraceUpdatedAt = new Date().toISOString();
     },
 
     // ══════════════════════════════════════════════════════════
@@ -129,38 +248,40 @@ function axonVoiceHudMixin() {
     hudProcessAgentEvent(event) {
       if (!event || !this.showVoiceOrb) return;
       const type = String(event.type || event.action || '').toLowerCase();
-      const detail = String(event.detail || event.tool || '');
+      const detail = String(event.message || event.detail || event.tool || '');
+      const hint = `${type} ${String(event.name || '')} ${detail}`.toLowerCase();
+
+      this.hudRecordOperatorTrace(event);
 
       // Terminal commands
-      if (type.includes('shell') || type.includes('terminal') || type.includes('command')) {
-        this.hudShowTerminal(detail || 'CLI Execution');
+      if (hint.includes('shell') || hint.includes('terminal') || hint.includes('command') || hint.includes('exec')) {
         this.hudActivateTool('terminal');
       }
       // File operations
-      if (type.includes('file') || type.includes('read') || type.includes('write') || type.includes('edit')) {
+      if (hint.includes('file') || hint.includes('read') || hint.includes('write') || hint.includes('edit')) {
         this.hudActivateTool('file');
       }
       // Browser
-      if (type.includes('browser') || type.includes('fetch') || type.includes('screenshot')) {
+      if (hint.includes('browser') || hint.includes('fetch') || hint.includes('screenshot')) {
         this.hudActivateTool('browser');
       }
       // Search
-      if (type.includes('search') || type.includes('grep') || type.includes('find')) {
+      if (hint.includes('search') || hint.includes('grep') || hint.includes('find')) {
         this.hudActivateTool('search');
       }
       // Scan
-      if (type.includes('scan')) {
+      if (hint.includes('scan')) {
         this.hudStartScan(detail || 'Scanning workspace...');
       }
       // API call
-      if (type.includes('api') || type.includes('provider') || type.includes('model')) {
+      if (hint.includes('api') || hint.includes('provider') || hint.includes('model')) {
         const provider = detail || 'API';
         this.hudShowBeam(provider);
         this.hudActivateTool('api');
         setTimeout(() => this.hudHideBeam(), 2500);
       }
       // Approval
-      if (type.includes('approval') || type.includes('confirm') || type.includes('approve')) {
+      if (hint.includes('approval') || hint.includes('confirm') || hint.includes('approve')) {
         this.hudShowApproval(detail);
       }
     },

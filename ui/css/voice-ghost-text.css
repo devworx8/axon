@@ -1,32 +1,68 @@
 /* ══════════════════════════════════════════════════════════════
-   Axon — Ghost Text + Holographic Response Rendering
+   Axon — Ghost Text + Holographic Floating Response
+   Stark Net cinematic text materialisation
    ══════════════════════════════════════════════════════════════ */
 
-/* ── Ghost text materialise effect ────────────────────────── */
+/* ── Ghost text materialise: text appears from digital noise ── */
 @keyframes ghost-text-in {
-  0% { opacity: 0; filter: blur(4px); color: rgba(34, 211, 238, 0.6); }
-  60% { opacity: 0.8; filter: blur(1px); color: rgba(34, 211, 238, 0.85); }
-  100% { opacity: 1; filter: blur(0); color: inherit; }
+  0%   { opacity: 0; filter: blur(6px) brightness(2); transform: translateY(4px); }
+  30%  { opacity: 0.5; filter: blur(2px) brightness(1.4); }
+  60%  { opacity: 0.85; filter: blur(0.5px) brightness(1.1); transform: translateY(0); }
+  100% { opacity: 1; filter: blur(0) brightness(1); }
+}
+
+/* ── Holographic flicker — subtle digital glitch ──────────── */
+@keyframes holo-flicker {
+  0%, 95%, 100% { opacity: 1; }
+  96% { opacity: 0.88; }
+  97% { opacity: 1; }
+  98% { opacity: 0.92; transform: translateX(0.5px); }
+  99% { opacity: 1; transform: translateX(0); }
+}
+
+/* ── Holographic scan sweep down the text ─────────────────── */
+@keyframes holo-scan-sweep {
+  0%   { top: -20%; opacity: 0.6; }
+  100% { top: 120%; opacity: 0; }
+}
+
+/* ── Ghost line draw-in for edge accents ──────────────────── */
+@keyframes ghost-edge-draw {
+  0%   { height: 0; opacity: 0; }
+  40%  { opacity: 0.6; }
+  100% { height: 60%; opacity: 1; }
 }
 
 .voice-response-render {
-  animation: ghost-text-in 0.6s ease-out;
+  animation: ghost-text-in 0.8s cubic-bezier(0.16, 1, 0.3, 1),
+             holo-flicker 8s ease-in-out 2s infinite;
+  position: relative;
 }
 
-/* ── Holographic scan-line overlay on response panels ─────── */
+/* ── Holographic scan-line sweep on new content ───────────── */
 .voice-response-render::before {
   content: '';
   position: absolute;
-  inset: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  top: -20%;
   pointer-events: none;
-  border-radius: inherit;
-  background: repeating-linear-gradient(
-    0deg,
-    rgba(34, 211, 238, 0.02) 0px,
-    transparent 1px,
-    transparent 3px
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(34, 211, 238, 0.08) 30%,
+    rgba(34, 211, 238, 0.12) 50%,
+    rgba(34, 211, 238, 0.08) 70%,
+    transparent
   );
-  z-index: 0;
+  animation: holo-scan-sweep 1.5s ease-out 0.2s both;
+  z-index: 1;
+}
+
+/* ── Edge accent on response float ────────────────────────── */
+.voice-float--response .voice-float__edge {
+  animation: ghost-edge-draw 1s cubic-bezier(0.16, 1, 0.3, 1) 0.4s both;
 }
 
 /* ── Rendered markdown inside response ────────────────────── */
@@ -43,36 +79,40 @@
 
 .voice-response-render p {
   margin: 4px 0;
-  line-height: 1.6;
+  line-height: 1.7;
 }
 
 .voice-response-render a {
   color: rgba(34, 211, 238, 0.9);
   text-decoration: none;
-  border-bottom: 1px solid rgba(34, 211, 238, 0.3);
-  transition: color 0.2s, border-color 0.2s;
+  border-bottom: 1px solid rgba(34, 211, 238, 0.25);
+  transition: all 0.3s;
+  cursor: pointer;
+  text-shadow: 0 0 6px rgba(34, 211, 238, 0.15);
 }
 .voice-response-render a:hover {
   color: #67e8f9;
-  border-color: rgba(34, 211, 238, 0.7);
+  border-color: rgba(34, 211, 238, 0.6);
+  text-shadow: 0 0 12px rgba(34, 211, 238, 0.3);
+  background: rgba(34, 211, 238, 0.04);
 }
 
 .voice-response-render code {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 11px;
   padding: 2px 6px;
-  border-radius: 6px;
-  background: rgba(15, 23, 42, 0.8);
-  border: 1px solid rgba(51, 65, 85, 0.5);
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(51, 65, 85, 0.35);
   color: rgba(103, 232, 249, 0.85);
 }
 
 .voice-response-render pre {
   margin: 6px 0;
   padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(2, 6, 23, 0.9);
-  border: 1px solid rgba(51, 65, 85, 0.6);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.7);
+  border: 1px solid rgba(51, 65, 85, 0.4);
   overflow-x: auto;
   max-height: 120px;
 }
@@ -97,31 +137,32 @@
 .voice-response-render blockquote {
   margin: 6px 0;
   padding: 6px 12px;
-  border-left: 2px solid rgba(34, 211, 238, 0.4);
-  color: rgba(148, 163, 184, 0.85);
+  border-left: 2px solid rgba(34, 211, 238, 0.3);
+  color: rgba(148, 163, 184, 0.8);
   font-style: italic;
 }
 
-/* ── File path chips ──────────────────────────────────────── */
+/* ── File path chips — holographic ────────────────────────── */
 .voice-file-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   padding: 2px 8px;
-  border-radius: 8px;
-  background: rgba(34, 211, 238, 0.08);
-  border: 1px solid rgba(34, 211, 238, 0.2);
+  border-radius: 6px;
+  background: rgba(34, 211, 238, 0.06);
+  border: 1px solid rgba(34, 211, 238, 0.18);
   color: rgba(103, 232, 249, 0.9);
   font-size: 11px;
   font-family: 'JetBrains Mono', monospace;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.25s;
   text-decoration: none;
 }
 .voice-file-chip:hover {
-  background: rgba(34, 211, 238, 0.15);
-  border-color: rgba(34, 211, 238, 0.4);
-  box-shadow: 0 0 8px rgba(34, 211, 238, 0.15);
+  background: rgba(34, 211, 238, 0.12);
+  border-color: rgba(34, 211, 238, 0.35);
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.15);
+  text-shadow: 0 0 6px rgba(34, 211, 238, 0.3);
 }
 .voice-file-chip::before {
   content: '📁';
@@ -135,12 +176,151 @@
 }
 .voice-typing-cursor::after {
   content: '▎';
-  color: rgba(34, 211, 238, 0.7);
+  color: rgba(34, 211, 238, 0.65);
   animation: blink-cursor 1s step-end infinite;
   margin-left: 2px;
 }
 
-/* ── Mobile responsive for mission grid ───────────────────── */
+/* ── Agent Step Feed (live progress during work) ─────────── */
+@keyframes voice-step-slide-in {
+  0%   { opacity: 0; transform: translateX(-8px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+@keyframes voice-step-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.7; }
+}
+.voice-agent-feed {
+  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.voice-agent-feed__header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 9px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: rgba(34, 211, 238, 0.7);
+  margin-bottom: 10px;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+.voice-agent-feed__meta {
+  color: rgba(148, 163, 184, 0.76);
+  letter-spacing: 0.16em;
+}
+.voice-agent-feed__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(34, 211, 238, 0.9);
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.5);
+  animation: voice-step-pulse 1.5s ease-in-out infinite;
+}
+.voice-agent-feed__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.voice-agent-feed__draft {
+  border-top: 1px solid rgba(51, 65, 85, 0.45);
+  padding-top: 10px;
+}
+.voice-agent-feed__draft-label {
+  margin-bottom: 8px;
+  font-size: 9px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(96, 165, 250, 0.78);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+.voice-agent-feed__draft-body {
+  font-size: 12px;
+  line-height: 1.65;
+  color: rgba(226, 232, 240, 0.86);
+}
+.voice-step {
+  padding: 8px 0;
+  border-left: 2px solid rgba(51, 65, 85, 0.4);
+  padding-left: 12px;
+  margin-left: 2px;
+  animation: voice-step-slide-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.voice-step--past {
+  opacity: 0.45;
+}
+.voice-step--latest {
+  border-left-color: rgba(34, 211, 238, 0.5);
+  animation: voice-step-slide-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) both,
+             voice-step-pulse 2s ease-in-out 0.5s infinite;
+}
+.voice-step__icon {
+  font-size: 13px;
+  margin-right: 4px;
+}
+.voice-step__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.voice-step__phase {
+  border-radius: 999px;
+  border: 1px solid rgba(34, 211, 238, 0.2);
+  background: rgba(15, 23, 42, 0.72);
+  padding: 2px 7px;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(34, 211, 238, 0.84);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+.voice-step__phase--verify {
+  color: rgba(52, 211, 153, 0.92);
+  border-color: rgba(52, 211, 153, 0.2);
+}
+.voice-step__phase--recover {
+  color: rgba(251, 191, 36, 0.95);
+  border-color: rgba(251, 191, 36, 0.22);
+}
+.voice-step__phase--plan {
+  color: rgba(96, 165, 250, 0.9);
+  border-color: rgba(96, 165, 250, 0.2);
+}
+.voice-step__phase--observe {
+  color: rgba(148, 163, 184, 0.9);
+  border-color: rgba(148, 163, 184, 0.18);
+}
+.voice-step__title {
+  font-size: 13px;
+  color: rgba(226, 232, 240, 0.92);
+  flex: 1;
+}
+.voice-step--past .voice-step__title {
+  color: rgba(148, 163, 184, 0.65);
+}
+.voice-step__meta {
+  font-size: 10px;
+  color: rgba(148, 163, 184, 0.72);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+.voice-step__detail {
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(148, 163, 184, 0.55);
+  margin-top: 6px;
+  max-width: 340px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+}
+
+/* ── Mobile responsive ────────────────────────────────────── */
 @media (max-width: 640px) {
   .voice-mission-rail__grid {
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));

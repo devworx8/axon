@@ -273,8 +273,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(6px);
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(4px);
+  perspective: 1000px;
 }
 .hud-approval__card {
   width: min(440px, 90vw);
@@ -282,10 +283,14 @@
   background: rgba(15, 23, 42, 0.92);
   border: 1px solid rgba(251, 191, 36, 0.3);
   box-shadow:
-    0 0 40px rgba(251, 191, 36, 0.1),
+    0 0 1px rgba(251, 191, 36, 0.5),
+    0 0 30px rgba(251, 191, 36, 0.1),
+    0 0 60px rgba(251, 191, 36, 0.04),
     inset 0 1px 0 rgba(251, 191, 36, 0.08);
   backdrop-filter: blur(20px);
   padding: 24px;
+  transform: rotateX(1deg);
+  transform-origin: bottom center;
   animation: hud-approval-slide 0.35s ease-out both;
 }
 .hud-approval__header {

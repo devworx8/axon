@@ -1,0 +1,12 @@
+          <div class="voice-float voice-float--right voice-float--response"
+               :class="[voiceResponseAvailable() ? 'voice-float--active' : '', voiceResponsePanelToneClass()].join(' ').trim()">
+            <div class="voice-float__edge"></div>
+            <div class="voice-float__scanline"></div>
+            <div class="voice-float__inner">
+              <div class="voice-float__label">
+                <span class="voice-float__dot voice-float__dot--cyan"></span>
+                <span x-text="voiceResponsePanelLabel()"></span>
+              </div>
+              <div class="voice-float__body voice-float__body--response voice-response-render" x-html="voiceDisplayResponseHtml()"></div>
+            </div>
+          </div>

@@ -5,6 +5,7 @@ import type {
   AxonModeStatus,
   CompanionConfig,
 } from '@/types/companion';
+import { isVoiceTranscriptionReady } from '@/features/voice/voiceReadiness';
 import { useAxonBootSound } from './useAxonBootSound';
 import { detectWakePhrase, isNoSpeechTranscriptError } from './voiceCommandUtils';
 
@@ -13,7 +14,6 @@ const AXON_FOLLOW_UP_LISTEN_WINDOW_MS = 5200;
 const AXON_FOLLOW_UP_COMMAND_WINDOW_MS = 8000;
 
 type CaptureRuntime = {
-  voiceStatus?: { transcription_available?: boolean } | null;
   isRecording?: boolean;
   transcribing?: boolean;
   error?: string | null;
@@ -67,6 +67,14 @@ export function useAxonMode(
   const effectiveStatus = useMemo(
     () => mergedStatus(snapshot, status),
     [snapshot, status],
+  );
+  const transcriptionReady = useMemo(
+    () => isVoiceTranscriptionReady(effectiveStatus),
+    [
+      effectiveStatus?.cloud_transcription_available,
+      effectiveStatus?.local_voice_ready,
+      effectiveStatus?.transcription_ready,
+    ],
   );
 
   const refresh = useCallback(async () => {
@@ -228,7 +236,7 @@ export function useAxonMode(
       && settings.axonModeEnabled
       && effectiveStatus?.armed
       && effectiveStatus?.continuous_monitoring_enabled
-      && (effectiveStatus?.transcription_ready || effectiveStatus?.local_voice_ready)
+      && transcriptionReady
       && appState.current === 'active',
     );
     if (!shouldListen) {
@@ -382,14 +390,13 @@ export function useAxonMode(
     config.accessToken,
     effectiveStatus?.armed,
     effectiveStatus?.continuous_monitoring_enabled,
-    effectiveStatus?.local_voice_ready,
-    effectiveStatus?.transcription_ready,
     effectiveStatus?.wake_phrase,
     pushEvent,
     settings.axonModeEnabled,
     settings.axonWakePhrase,
     settings.voiceEnabled,
     submitVoiceTurn,
+    transcriptionReady,
   ]);
 
   return {

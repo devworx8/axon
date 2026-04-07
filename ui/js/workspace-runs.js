@@ -3,6 +3,8 @@
    ══════════════════════════════════════════════════════════════ */
 
 function axonWorkspaceRunsMixin() {
+  const LIVE_OPERATOR_FEED_LIMIT = 12;
+
   const defaultLiveOperator = (workspaceId = '') => ({
     active: false,
     mode: 'chat',
@@ -183,7 +185,7 @@ function axonWorkspaceRunsMixin() {
       };
       const last = state.liveOperatorFeed[state.liveOperatorFeed.length - 1];
       if (last && last.phase === entry.phase && last.title === entry.title && last.detail === entry.detail) return;
-      state.liveOperatorFeed = [...state.liveOperatorFeed.slice(-5), entry];
+      state.liveOperatorFeed = [...state.liveOperatorFeed.slice(-(LIVE_OPERATOR_FEED_LIMIT - 1)), entry];
       this.refreshWorkspaceRunBindings();
     },
 
@@ -282,7 +284,7 @@ function axonWorkspaceRunsMixin() {
         updatedAt: snapshot.updated_at || state.liveOperator.updatedAt || new Date().toISOString(),
       });
       if (Array.isArray(snapshot.feed) && snapshot.feed.length) {
-        state.liveOperatorFeed = snapshot.feed.slice(-6).map(entry => ({
+        state.liveOperatorFeed = snapshot.feed.slice(-LIVE_OPERATOR_FEED_LIMIT).map(entry => ({
           id: String(entry?.id || `${entry?.at || Date.now()}-${entry?.phase || 'observe'}`),
           phase: String(entry?.phase || 'observe'),
           title: String(entry?.title || 'Working'),

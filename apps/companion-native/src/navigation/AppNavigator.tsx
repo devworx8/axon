@@ -179,6 +179,7 @@ export function AppNavigator() {
     voice,
     syncMission,
     setActiveTab,
+    activeTab,
   });
   const { speech, liveVoice, axonMode, handleVoiceSubmit, handleArmAxon, handleDisarmAxon } = axonRuntime;
 

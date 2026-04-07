@@ -17,6 +17,20 @@ export function sessionGateCopy(activeTab: TabKey, linkState: CompanionLinkState
       detail: 'Protected routes stay paused until Axon reconnects. You do not need to pair again unless the device trust was revoked.',
     };
   }
+  if (linkState === 'repair_required') {
+    if (activeTab === 'voice') {
+      return {
+        title: 'Repair the saved Axon link',
+        subtitle: 'This phone was linked before, but Axon needs the trusted device session repaired before voice can hit protected routes again.',
+        detail: 'Pair this phone again to restore the protected voice path. Your mobile shell and settings stay in place.',
+      };
+    }
+    return {
+      title: 'Repair the saved mobile link',
+      subtitle: 'This phone is not new or unknown. Axon just needs the trusted device session repaired before protected actions can resume.',
+      detail: 'Pair this phone again to restore protected routes. You do not need to rebuild the whole mobile setup.',
+    };
+  }
   if (activeTab === 'voice') {
     return {
       title: 'Reconnect Axon voice',

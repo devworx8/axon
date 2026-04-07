@@ -234,6 +234,44 @@ function axonChatAutoStreamMixin() {
       return data;
     },
 
+    async stopAutoSession(sessionId = '', options = {}) {
+      const current = this.currentWorkspaceAutoSession?.() || null;
+      const target = String(sessionId || current?.session_id || '').trim();
+      if (!target) return null;
+      try {
+        const data = await this.api('POST', `/api/auto/${encodeURIComponent(target)}/stop`);
+        if (data?.session) this.updateAutoSessionRecord?.(data.session);
+        this.loadWorkspacePreview?.();
+        if (!options?.silent) this.showToast?.('Auto session stopped');
+        return data;
+      } catch (e) {
+        if (!options?.silent) this.showToast?.(e.message || 'Failed to stop Auto session');
+        throw e;
+      }
+    },
+
+    async stopActiveWorkspaceRun(workspaceId = null) {
+      const targetWorkspaceId = String(workspaceId == null ? (this.chatProjectId || '') : workspaceId).trim();
+      const session = this.workspaceAutoSessionFor?.(targetWorkspaceId) || this.currentWorkspaceAutoSession?.() || null;
+      const status = String(session?.status || '').trim().toLowerCase();
+      const sessionId = String(session?.session_id || this.liveOperator?.autoSessionId || '').trim();
+      if (sessionId && ['running', 'approval_required'].includes(status || 'running')) {
+        try { await this.stopAutoSession?.(sessionId, { silent: true }); } catch (_) {}
+      }
+      if (this._chatAbortController) {
+        this._chatAbortController.abort();
+        this._chatAbortController = null;
+      }
+      (this.chatMessages || []).forEach(message => {
+        if (message?.streaming) message.streaming = false;
+      });
+      if (typeof this.stopWorkspaceRun === 'function') this.stopWorkspaceRun();
+      else this.chatLoading = false;
+      this.clearLiveOperator?.(400, targetWorkspaceId || null);
+      this.showToast?.('Run stopped');
+      return true;
+    },
+
     async applyAutoSession(sessionId = '') {
       const target = String(sessionId || this.currentWorkspaceAutoSession?.()?.session_id || '').trim();
       if (!target) return;

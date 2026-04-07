@@ -22,6 +22,7 @@ from axon_api.services.mobile_axon_state import (
     row_dict,
 )
 from axon_api.services.mobile_axon_voice import local_voice_snapshot, resolve_axon_voice_profile
+from axon_api.services.voice_status_payload import build_voice_status_payload
 from axon_data import get_all_settings, get_companion_presence
 
 
@@ -32,10 +33,11 @@ def _now_iso() -> str:
 def _status_summary(state: dict[str, Any], voice_status: dict[str, Any]) -> str:
     provider_detail = str(state.get("voice_provider_detail") or "").strip()
     monitoring_state = str(state.get("monitoring_state") or "idle").replace("_", " ")
+    transcription_ready = bool(state.get("transcription_ready") or voice_status.get("transcription_ready"))
     if not state.get("armed"):
         return provider_detail or "Axon mode is standing by."
-    if not voice_status.get("transcription_available"):
-        return str(voice_status.get("detail") or "Local transcription is not ready.")
+    if not transcription_ready:
+        return str(voice_status.get("detail") or "No transcription backend available (local or cloud).")
     if not is_foreground_app_state(state.get("app_state")):
         return "Axon mode is armed but paused because the app is backgrounded."
     if state.get("monitoring_state") == "engaged":
@@ -55,14 +57,11 @@ async def build_mobile_axon_snapshot(
     presence = row_dict(presence_row) if presence_row is not None else row_dict(await get_companion_presence(db, device_id))
     state = extract_axon_state(presence)
     settings = dict(await get_all_settings(db) or {})
-    voice_status = await local_voice_snapshot(db)
-    local_voice_ready = bool(voice_status.get("transcription_available"))
-    # Cloud transcription needs Azure Speech key + region AND ffmpeg for audio conversion
-    azure_key = settings.get("azure_speech_key", "")
-    azure_region = settings.get("azure_speech_region", "")
-    has_ffmpeg = bool(voice_status.get("ffmpeg_available"))
-    cloud_transcription_ready = bool(azure_key and azure_region and has_ffmpeg)
-    transcription_ready = local_voice_ready or cloud_transcription_ready
+    local_status = await local_voice_snapshot(db)
+    voice_status = build_voice_status_payload(settings, local_status)
+    local_voice_ready = bool(local_status.get("transcription_available"))
+    cloud_transcription_ready = bool(voice_status.get("cloud_transcription_available"))
+    transcription_ready = bool(voice_status.get("transcription_ready"))
     monitoring_state = str(state.get("monitoring_state") or "idle")
     degraded_reason = str(state.get("degraded_reason") or "")
     voice_profile = resolve_axon_voice_profile(
@@ -96,10 +95,12 @@ async def build_mobile_axon_snapshot(
         "voice_identity": str(voice_profile.get("voice_identity") or ""),
         "voice_identity_label": str(voice_profile.get("voice_identity_label") or ""),
         "local_voice_status": {
-            "available": bool(voice_status.get("available")),
-            "transcription_available": bool(voice_status.get("transcription_available")),
-            "synthesis_available": bool(voice_status.get("synthesis_available")),
-            "preferred_mode": str(voice_status.get("preferred_mode") or ""),
+            "available": bool(local_status.get("available")),
+            "transcription_available": bool(local_status.get("transcription_available")),
+            "cloud_transcription_available": cloud_transcription_ready,
+            "transcription_ready": transcription_ready,
+            "synthesis_available": bool(local_status.get("synthesis_available")),
+            "preferred_mode": str(local_status.get("preferred_mode") or ""),
             "detail": str(voice_status.get("detail") or ""),
         },
         "degraded_reason": degraded_reason,
@@ -185,13 +186,14 @@ async def arm_mobile_axon_mode(
     app_state: str = "foreground",
     meta: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    voice_status = await local_voice_snapshot(db)
-    local_voice_ready = bool(voice_status.get("transcription_available"))
+    settings = dict(await get_all_settings(db) or {})
+    voice_status = build_voice_status_payload(settings, await local_voice_snapshot(db))
+    transcription_ready = bool(voice_status.get("transcription_ready"))
     degraded_reason = ""
     monitoring_state = "armed"
-    if not local_voice_ready:
+    if not transcription_ready:
         monitoring_state = "degraded"
-        degraded_reason = str(voice_status.get("detail") or "Local transcription is not ready.")
+        degraded_reason = str(voice_status.get("detail") or "No transcription backend available (local or cloud).")
     elif not is_foreground_app_state(app_state):
         monitoring_state = "degraded"
         degraded_reason = "App left the foreground, so Axon mode paused."
@@ -206,7 +208,7 @@ async def arm_mobile_axon_mode(
         "voice_identity_preference": voice_identity_preference,
         "last_event_type": "armed",
         "last_event_at": _now_iso(),
-        "last_error": "" if local_voice_ready else degraded_reason,
+        "last_error": "" if transcription_ready else degraded_reason,
         "degraded_reason": degraded_reason,
     }
     if isinstance(meta, dict) and meta:

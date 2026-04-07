@@ -30,6 +30,12 @@ import * as Speech from 'expo-speech';
 import { ArcReactor, type ReactorState } from '@/components/ArcReactor';
 import { StatusPill } from '@/components/StatusPill';
 import { useAxonBootSound } from '@/features/axon/useAxonBootSound';
+import {
+  buildVoiceLiveIndicator,
+  voiceCenterStatusCaption,
+  voiceCenterStatusLabel,
+} from '@/features/voice/voiceCenterStatus';
+import { isVoiceTranscriptionReady } from '@/features/voice/voiceReadiness';
 import { pickBestVoice, GREETING_RATE, GREETING_PITCH } from '@/utils/pickVoice';
 import type { ApprovalRequired, AxonModeStatus } from '@/types/companion';
 import type { LocalVoiceStatus } from '@/types/companion';
@@ -97,6 +103,7 @@ type Props = {
   recording?: boolean;
   transcribing?: boolean;
   recordingDuration?: string;
+  handsFree?: boolean;
   liveTranscript?: string;
   liveEngine?: string;
   liveError?: string | null;
@@ -119,9 +126,8 @@ export function VoiceScreen(props: Props) {
     onSubmit, sending, transcript, response, backend,
     approval, error, speaking, onSpeak, onSpeakText, onStopSpeaking,
     liveVoiceStatus, checkingVoiceStatus,
-    recording, transcribing, recordingDuration, liveTranscript,
-    liveEngine, liveError, onStartLiveVoice, onStopLiveVoice,
-    onRefreshLiveVoice,
+    recording, transcribing, recordingDuration, handsFree, liveTranscript,
+    liveEngine, liveError, onStartLiveVoice, onStopLiveVoice, onRefreshLiveVoice,
     axon, axonBusy, onArmAxon, onDisarmAxon,
     voiceMode, workspaceLabel,
   } = props;
@@ -161,12 +167,16 @@ export function VoiceScreen(props: Props) {
   }, [asleep, sending, transcribing, recording, speaking]);
 
   /* ── Greeting TTS (Azure cloud → device fallback) ── */
-  const speakGreeting = useCallback((text: string) => {
+  const speakGreeting = useCallback((text: string, spoken = true) => {
     setGreetingText(text);
     Animated.timing(greetingFade, { toValue: 1, duration: 600, useNativeDriver: true }).start();
     const fadeOut = () => {
       Animated.timing(greetingFade, { toValue: 0, duration: 2000, useNativeDriver: true }).start();
     };
+    if (!spoken) {
+      setTimeout(fadeOut, Math.max(1800, text.length * 48));
+      return;
+    }
     if (onSpeakText) {
       /* Route through useAxonSpeech → Azure TTS pipeline */
       onSpeakText(text);
@@ -185,7 +195,7 @@ export function VoiceScreen(props: Props) {
 
   /* ── Reactor orb tap: primary voice control ──────── */
   /* Tap = start/stop listening.  Long-press = sleep/wake toggle. */
-  const liveReady = Boolean(liveVoiceStatus?.transcription_ready || liveVoiceStatus?.transcription_available);
+  const liveReady = isVoiceTranscriptionReady(liveVoiceStatus);
 
   const handleReactorTap = useCallback(() => {
     if (asleep) {
@@ -193,18 +203,21 @@ export function VoiceScreen(props: Props) {
       setAsleep(false);
       playBootSound();
       greetingTimer.current = setTimeout(() => {
-        speakGreeting(pickBootGreeting());
+        speakGreeting(
+          handsFree ? 'Axon online. Hands-free listening engaged.' : pickBootGreeting(),
+          !handsFree,
+        );
       }, 1800);
       return;
     }
     if (recording) {
       /* Tap while recording → stop & submit */
       onStopLiveVoice?.();
-    } else if (!sending && !transcribing && liveReady) {
-      /* Tap while idle → start listening */
+    } else if (!sending && !transcribing) {
+      /* Always attempt a fresh start; startRecording re-checks readiness. */
       onStartLiveVoice?.();
     }
-  }, [asleep, recording, sending, transcribing, liveReady, speakGreeting]);
+  }, [asleep, handsFree, onStartLiveVoice, onStopLiveVoice, playBootSound, recording, sending, speakGreeting, transcribing]);
 
   const handleReactorLongPress = useCallback(() => {
     if (asleep) return; /* already sleeping — normal tap wakes */
@@ -219,34 +232,87 @@ export function VoiceScreen(props: Props) {
   useEffect(() => {
     playBootSound();
     greetingTimer.current = setTimeout(() => {
-      speakGreeting(pickBootGreeting());
+      speakGreeting(
+        handsFree ? 'Axon online. Hands-free listening engaged.' : pickBootGreeting(),
+        !handsFree,
+      );
     }, 4000);
     return () => { if (greetingTimer.current) clearTimeout(greetingTimer.current); };
-  }, []);
+  }, [handsFree, playBootSound, speakGreeting]);
 
   /* ── Status labels ─────────────────────────────────── */
-  const statusLabel = useMemo(() => {
-    if (asleep) return 'Reactor Offline';
-    if (sending) return 'Processing…';
-    if (transcribing) return 'Transcribing…';
-    if (recording) return `Listening ${recordingDuration || ''}`;
-    if (speaking) return 'Speaking the result';
-    return 'Standing By';
-  }, [asleep, sending, transcribing, recording, speaking, recordingDuration]);
+  const statusLabel = useMemo(() => voiceCenterStatusLabel({
+    asleep,
+    sending,
+    transcribing,
+    recording,
+    speaking,
+    recordingDuration,
+  }), [asleep, sending, transcribing, recording, speaking, recordingDuration]);
 
-  const statusCaption = useMemo(() => {
-    if (asleep) return 'TAP THE REACTOR TO RE-ENGAGE';
-    if (recording) return 'TAP THE REACTOR TO STOP & SUBMIT';
-    if (sending) return 'ROUTING THROUGH AXON';
-    if (speaking) return 'REPLY PLAYBACK';
-    return 'TAP THE REACTOR TO START LISTENING';
-  }, [asleep, recording, sending, speaking]);
+  const statusCaption = useMemo(() => voiceCenterStatusCaption({
+    asleep,
+    sending,
+    transcribing,
+    recording,
+    speaking,
+    liveReady,
+    checkingVoiceStatus,
+    liveError,
+  }), [asleep, sending, transcribing, recording, speaking, liveReady, checkingVoiceStatus, liveError]);
+
+  const liveIndicator = useMemo(() => buildVoiceLiveIndicator({
+    recording,
+    transcribing,
+    sending,
+    liveReady,
+    checkingVoiceStatus,
+    liveError,
+  }), [recording, transcribing, sending, liveReady, checkingVoiceStatus, liveError]);
+
+  const handleLiveIndicatorPress = useCallback(() => {
+    if (recording) {
+      onStopLiveVoice?.();
+      return;
+    }
+    if (sending || transcribing) {
+      return;
+    }
+    if (liveReady) {
+      onStartLiveVoice?.();
+      return;
+    }
+    onStartLiveVoice?.();
+  }, [recording, sending, transcribing, liveReady, onStartLiveVoice, onStopLiveVoice]);
 
   const statusColor =
     reactorState === 'listening' ? C.cyan
     : reactorState === 'speaking' ? '#60a5fa'
     : reactorState === 'thinking' ? C.amber
     : C.text;
+  const transcriptBody = liveTranscript || transcript || (recording ? 'Listening…' : 'Waiting for a voice command…');
+  const responseBody = response
+    || (sending
+      ? 'Axon is processing your request…'
+      : approval
+        ? (approval.message || 'Approval is required before Axon can continue.')
+        : 'The latest voice response will appear here.');
+  const awaitingBanner = Boolean(checkingVoiceStatus || sending || transcribing || approval);
+  const liveDetail = String(
+    liveVoiceStatus?.detail
+    || (liveReady
+      ? (handsFree
+        ? 'Live voice link ready. Axon starts listening automatically and shows live transcript as you speak.'
+        : 'Live voice link ready. Tap the reactor or the command button to start listening.')
+      : 'Voice is offline. Refresh the link or verify the desktop Axon URL from Settings.')
+  ).trim();
+  const handlePrimaryAction = useCallback(() => {
+    if (recording) {
+      onStopLiveVoice?.();
+      return;
+    }
+    handleReactorTap();
+  }, [handleReactorTap, onStopLiveVoice, recording]);
 
   /* ── Quick-command text input ───────────────────────── */
   const [commandText, setCommandText] = useState('');
@@ -259,9 +325,6 @@ export function VoiceScreen(props: Props) {
     setCommandText('');
   }, [commandText, sending, onSubmit]);
 
-  /* Show controls when there's content or interaction */
-  const hasContent = Boolean(transcript || response || liveTranscript || recording || transcribing || sending || error || liveError);
-
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       {/* ── Exit button (top-right, goes to dashboard) ── */}
@@ -270,6 +333,13 @@ export function VoiceScreen(props: Props) {
           <Text style={styles.exitBtnText}>◆</Text>
         </Pressable>
       )}
+      <Pressable
+        style={[styles.liveIndicatorBtn, { top: insets.top + 56 }]}
+        onPress={handleLiveIndicatorPress}
+        disabled={sending || transcribing}
+      >
+        <StatusPill label={liveIndicator.label} tone={liveIndicator.tone} />
+      </Pressable>
 
       {/* ── Cinematic radial glow backdrop ──────────── */}
       <Animated.View style={[styles.backdrop, { opacity: backdropGlow }]}>
@@ -283,8 +353,13 @@ export function VoiceScreen(props: Props) {
         <View style={styles.providerRow}>
           <StatusPill label={axon?.armed ? 'Armed' : 'Standby'} tone={axon?.armed ? 'accent' : 'neutral'} />
           <StatusPill label={voiceMode === 'live' ? 'Live' : voiceMode || 'Push-to-talk'} tone="accent" />
+          {handsFree ? <StatusPill label="Hands-free" tone="accent" /> : null}
+          {liveVoiceStatus?.preferred_mode ? <StatusPill label={String(liveVoiceStatus.preferred_mode)} tone="neutral" /> : null}
+          {liveEngine ? <StatusPill label={liveEngine} tone="neutral" /> : null}
+          {backend ? <StatusPill label={backend} tone="neutral" /> : null}
           {workspaceLabel ? <StatusPill label={workspaceLabel} tone="neutral" /> : null}
         </View>
+        <Text style={styles.providerDetail}>{liveDetail}</Text>
       </View>
 
       {/* ── ARC REACTOR (hero — centered) ─────────────── */}
@@ -310,48 +385,71 @@ export function VoiceScreen(props: Props) {
         ) : null}
       </View>
 
-      {/* ── Floating panels (only appear when content) ── */}
-      {hasContent && (
-        <View style={styles.panels}>
-          {/* Transcript */}
-          {(liveTranscript || transcript || recording) && (
-            <View style={styles.floatPanel}>
-              <View style={styles.panelHeader}>
-                <View style={[styles.panelDot, recording && styles.panelDotActive]} />
-                <Text style={styles.panelLabel}>TRANSCRIPT</Text>
-              </View>
-              <Text style={styles.panelBody} numberOfLines={3}>
-                {liveTranscript || transcript || 'Listening…'}
-              </Text>
-            </View>
-          )}
-          {/* Response */}
-          {(response || sending) && (
-            <View style={[styles.floatPanel, response && styles.floatPanelGlow]}>
-              <View style={styles.panelHeader}>
-                <View style={[styles.panelDot, response ? styles.panelDotCyan : undefined]} />
-                <Text style={[styles.panelLabel, response && { color: C.cyan }]}>RESPONSE</Text>
-              </View>
-              <Text style={[styles.panelBody, response && { color: C.text }]} numberOfLines={5}>
-                {response || 'Processing…'}
-              </Text>
-              {response && (
-                <View style={styles.speakRow}>
-                  {speaking ? (
-                    <Pressable style={styles.speakBtn} onPress={onStopSpeaking}>
-                      <Text style={styles.speakBtnText}>■ Stop</Text>
-                    </Pressable>
-                  ) : (
-                    <Pressable style={styles.speakBtn} onPress={onSpeak}>
-                      <Text style={styles.speakBtnText}>▶ Replay</Text>
-                    </Pressable>
-                  )}
-                </View>
+      <View style={styles.actionRail}>
+        <Pressable
+          style={[styles.primaryRailAction, (sending || transcribing) ? styles.railActionDisabled : null]}
+          onPress={handlePrimaryAction}
+          disabled={sending || transcribing}
+        >
+          <Text style={styles.primaryRailActionText}>
+            {recording ? 'Stop and run' : liveReady ? (handsFree ? 'Restart listening' : 'Start listening') : 'Retry voice'}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.secondaryRailAction, checkingVoiceStatus ? styles.railActionDisabled : null]}
+          onPress={onRefreshLiveVoice}
+          disabled={checkingVoiceStatus}
+        >
+          <Text style={styles.secondaryRailActionText}>
+            {checkingVoiceStatus ? 'Checking…' : 'Refresh link'}
+          </Text>
+        </Pressable>
+      </View>
+
+      {awaitingBanner ? (
+        <View style={styles.awaitingBanner}>
+          <Text style={styles.awaitingBannerLabel}>Conversation hold</Text>
+          <Text style={styles.awaitingBannerDetail}>{approval?.resume_task || statusCaption}</Text>
+        </View>
+      ) : null}
+
+      <View style={styles.panels}>
+        <View style={[styles.floatPanel, recording ? styles.floatPanelGlow : null]}>
+          <View style={styles.panelHeader}>
+            <View style={[styles.panelDot, recording && styles.panelDotActive]} />
+            <Text style={styles.panelLabel}>TRANSCRIPT</Text>
+          </View>
+          <ScrollView style={styles.transcriptPanelScroll} nestedScrollEnabled>
+            <Text style={[styles.panelBody, transcriptBody === 'Waiting for a voice command…' ? styles.panelBodyMuted : null]}>
+              {transcriptBody}
+            </Text>
+          </ScrollView>
+        </View>
+        <View style={[styles.floatPanel, (response || sending || approval) ? styles.floatPanelGlow : null]}>
+          <View style={styles.panelHeader}>
+            <View style={[styles.panelDot, response ? styles.panelDotCyan : undefined]} />
+            <Text style={[styles.panelLabel, response ? { color: C.cyan } : null]}>RESPONSE</Text>
+          </View>
+          <ScrollView style={styles.responsePanelScroll} nestedScrollEnabled>
+            <Text style={[styles.panelBody, (response || approval) ? { color: C.text } : styles.panelBodyMuted]}>
+              {responseBody}
+            </Text>
+          </ScrollView>
+          {response ? (
+            <View style={styles.speakRow}>
+              {speaking ? (
+                <Pressable style={styles.speakBtn} onPress={onStopSpeaking}>
+                  <Text style={styles.speakBtnText}>■ Stop</Text>
+                </Pressable>
+              ) : (
+                <Pressable style={styles.speakBtn} onPress={onSpeak}>
+                  <Text style={styles.speakBtnText}>▶ Replay</Text>
+                </Pressable>
               )}
             </View>
-          )}
+          ) : null}
         </View>
-      )}
+      </View>
 
       {/* ── Error / approval ──────────────────────────── */}
       {(error || liveError) && (
@@ -475,6 +573,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     paddingTop: 12,
+    paddingHorizontal: 16,
     zIndex: 1,
   },
   eyebrow: {
@@ -489,13 +588,19 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     justifyContent: 'center',
   },
+  providerDetail: {
+    maxWidth: 340,
+    fontSize: 12,
+    lineHeight: 18,
+    color: C.textSec,
+    textAlign: 'center',
+  },
 
-  /* Reactor — hero center */
+  /* Reactor — hero center (fixed, not flex:1 — leave room for response) */
   reactorZone: {
-    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    minHeight: 200,
+    paddingVertical: 8,
   },
 
   /* HUD corner brackets */
@@ -538,6 +643,11 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: 'rgba(148, 163, 184, 0.6)',
   },
+  liveIndicatorBtn: {
+    position: 'absolute',
+    right: 12,
+    zIndex: 10,
+  },
 
   /* Status */
   statusBlock: {
@@ -565,9 +675,74 @@ const styles = StyleSheet.create({
     color: C.textSec,
     textAlign: 'center',
   },
+  actionRail: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+  },
+  primaryRailAction: {
+    flex: 1,
+    minHeight: 46,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 16,
+    backgroundColor: 'rgba(34, 211, 238, 0.18)',
+    borderWidth: 1,
+    borderColor: C.cyanBorder,
+  },
+  primaryRailActionText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: C.cyan,
+  },
+  secondaryRailAction: {
+    minWidth: 118,
+    minHeight: 46,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    backgroundColor: 'rgba(15, 23, 42, 0.72)',
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  secondaryRailActionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: C.textSec,
+  },
+  railActionDisabled: {
+    opacity: 0.55,
+  },
+  awaitingBanner: {
+    width: '100%',
+    marginBottom: 10,
+    paddingHorizontal: 16,
+    gap: 4,
+  },
+  awaitingBannerLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+    color: C.amber,
+  },
+  awaitingBannerDetail: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(251, 191, 36, 0.22)',
+    backgroundColor: 'rgba(251, 191, 36, 0.08)',
+    color: C.textSec,
+    fontSize: 12,
+    lineHeight: 17,
+  },
 
   /* Floating panels — glass morphism */
   panels: {
+    flex: 1,
     width: '100%',
     paddingHorizontal: 16,
     gap: 8,
@@ -614,6 +789,9 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: C.textSec,
   },
+  panelBodyMuted: {
+    color: C.muted,
+  },
   speakRow: {
     flexDirection: 'row',
     marginTop: 8,
@@ -631,6 +809,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: C.cyan,
+  },
+  responsePanelScroll: {
+    maxHeight: 180,
+  },
+  transcriptPanelScroll: {
+    maxHeight: 110,
   },
 
   /* Error / Approval */
@@ -676,7 +860,7 @@ const styles = StyleSheet.create({
   bottomControls: {
     width: '100%',
     paddingHorizontal: 16,
-    paddingBottom: 12,
+    paddingBottom: 24,
     gap: 8,
   },
   micStatusPills: {

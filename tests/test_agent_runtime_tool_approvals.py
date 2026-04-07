@@ -51,6 +51,34 @@ class AgentRuntimeToolApprovalTests(unittest.TestCase):
         self.assertIn("mission ready", result)
         self.assertIn(str(target), result)
 
+    def test_delete_file_is_registered_and_respects_edit_approval(self):
+        captured: list[dict] = []
+        registry = _build_registry(
+            tool_path_allowed=lambda _path: False,
+            action_is_allowed=lambda action: captured.append(dict(action)) or False,
+        )
+
+        target = "/home/edp/Documents/demo.txt"
+        result = registry["delete_file"](target)
+
+        self.assertEqual(result, f"BLOCKED_EDIT:delete:{target}")
+        self.assertEqual(captured[0]["action_type"], "file_delete")
+        self.assertEqual(captured[0]["path"], target)
+
+    def test_edit_file_updates_content_after_approval(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = Path(tmpdir) / "report.txt"
+            target.write_text("mission ready", encoding="utf-8")
+            registry = _build_registry(
+                tool_path_allowed=lambda _path: False,
+                action_is_allowed=lambda _action: True,
+            )
+
+            result = registry["edit_file"](str(target), "mission", "system")
+
+            self.assertIn("Edited", result)
+            self.assertEqual(target.read_text(encoding="utf-8"), "system ready")
+
 
 if __name__ == "__main__":
     unittest.main()

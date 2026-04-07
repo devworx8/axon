@@ -188,6 +188,124 @@ function axonChatConsoleCommandsMixin() {
       return true;
     },
 
+    workspaceRunMode(workspaceId = null) {
+      const state = this.workspaceRunStateFor?.(workspaceId) || null;
+      return String(state?.liveOperator?.mode || this.liveOperator?.mode || '').trim().toLowerCase();
+    },
+
+    workspaceRunCanSteer(workspaceId = null) {
+      const workspaceIdText = String(
+        workspaceId == null ? (this.chatProjectId || '') : workspaceId,
+      ).trim();
+      if (!workspaceIdText) return false;
+      if (!this.workspaceRunIsActive?.(workspaceIdText)) return false;
+      return this.workspaceRunMode?.(workspaceIdText) === 'agent';
+    },
+
+    workspaceRunInterruptRequested(message = '') {
+      const lower = String(message || '').trim().toLowerCase();
+      if (!lower) return false;
+      return [
+        'stop', 'stop now', 'interrupt', 'interrupt now',
+        'cancel', 'cancel now', 'abort', '/stop',
+        '/interrupt', '/cancel', '/abort',
+      ].includes(lower);
+    },
+
+    async handleBusyWorkspaceCommand(message = '', options = {}) {
+      const msg = String(message || '').trim();
+      const workspaceId = String(
+        options?.workspaceId == null ? (this.chatProjectId || '') : options.workspaceId,
+      ).trim();
+      if (!msg || !workspaceId || !this.workspaceRunIsActive?.(workspaceId)) return '';
+
+      if (this.workspaceRunInterruptRequested?.(msg)) {
+        this.rememberComposerHistory?.(msg);
+        this.chatInput = '';
+        this.followUpSuggestions = [];
+        this.resetChatComposerHeight?.();
+        await (this.stopActiveWorkspaceRun?.(workspaceId) || this.stopGeneration?.());
+        return 'stopped';
+      }
+
+      if (!msg.startsWith('/')) {
+        const steered = await this.steerActiveWorkspaceRun?.(msg, { workspaceId });
+        return steered ? 'steered' : '';
+      }
+
+      return '';
+    },
+
+    async steerActiveWorkspaceRun(message = '', options = {}) {
+      const msg = String(message || '').trim();
+      const workspaceId = String(
+        options?.workspaceId == null ? (this.chatProjectId || '') : options.workspaceId,
+      ).trim();
+      if (!msg || !workspaceId || !this.workspaceRunCanSteer?.(workspaceId)) return false;
+
+      const sessionId = String(
+        options?.sessionId
+        || this.currentWorkspaceAutoSession?.()?.session_id
+        || this.liveOperator?.autoSessionId
+        || this.pendingAgentApproval?.sessionId
+        || ''
+      ).trim();
+
+      await this.api?.('POST', '/api/agent/steer', {
+        message: msg,
+        project_id: parseInt(workspaceId, 10) || null,
+        session_id: sessionId || undefined,
+      });
+
+      this.rememberComposerHistory?.(msg);
+      this.chatInput = '';
+      this.followUpSuggestions = [];
+      this._userScrolled = false;
+      if (this.slashMenu) {
+        this.slashMenu.open = false;
+        this.slashMenu.query = '';
+        this.slashMenu.filtered = [];
+        this.slashMenu.selectedIdx = 0;
+      }
+      if (!this.composerOptions?.pin_context) this.selectedResources = [];
+      this.showResourcePicker = false;
+      this.showComposerMenu = false;
+      this.resetChatComposerHeight?.();
+
+      this.chatMessages = Array.isArray(this.chatMessages) ? this.chatMessages : [];
+      const bubble = {
+        id: Date.now(),
+        role: 'user',
+        content: msg,
+        created_at: new Date().toISOString(),
+        mode: 'agent',
+        resources: [],
+        steeredRun: true,
+      };
+      let insertIdx = this.chatMessages.length;
+      for (let i = this.chatMessages.length - 1; i >= 0; i -= 1) {
+        if (this.chatMessages[i]?.role === 'assistant' && this.chatMessages[i]?.streaming) insertIdx = i;
+        else break;
+      }
+      this.chatMessages.splice(insertIdx, 0, bubble);
+
+      this.patchWorkspaceLiveOperator?.(workspaceId, {
+        active: true,
+        phase: 'plan',
+        title: 'Guidance queued',
+        detail: msg.slice(0, 160),
+      });
+      this.pushWorkspaceLiveOperatorFeed?.(
+        workspaceId,
+        'plan',
+        'Guidance queued',
+        msg.slice(0, 160),
+      );
+      this.scrollChat?.();
+      this.showToast?.('Queued guidance for the active run');
+      return true;
+    },
+
     async sendChat() {
       if (this.businessMode && !this.chatInput?.trim()) {
         this.chatInput = this.businessComposerPrompt(this.businessView || 'invoice');
@@ -199,7 +317,14 @@ function axonChatConsoleCommandsMixin() {
       const workspaceBusy = typeof this.currentWorkspaceRunActive === 'function'
         ? this.currentWorkspaceRunActive()
         : !!this.chatLoading;
-      if (!msg || workspaceBusy) return;
+      if (!msg) return;
+      if (workspaceBusy) {
+        const busyAction = await this.handleBusyWorkspaceCommand?.(msg);
+        if (!busyAction) {
+          this.showToast?.('This workspace is already busy. Say or type "stop" to interrupt, or give another instruction to steer it. Switch tabs to run another workspace in parallel.');
+        }
+        return;
+      }
       const startsWithSlash = msg.startsWith('/');
       if (startsWithSlash) {
         if (await this.maybeHandleInteractiveConsoleCommand?.(msg)) return;
@@ -236,7 +361,10 @@ function axonChatConsoleCommandsMixin() {
         await new Promise(resolve => setTimeout(resolve, 120));
       }
       if (this.currentWorkspaceRunActive?.()) {
-        this.showToast?.('Axon is still finishing the previous step. Try continue again in a moment.');
+        const steered = await this.steerActiveWorkspaceRun?.(msg, { workspaceId });
+        if (!steered) {
+          this.showToast?.('Axon is still finishing the previous step. Try continue again in a moment.');
+        }
         return;
       }
 

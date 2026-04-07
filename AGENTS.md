@@ -5,6 +5,15 @@ repository.
 
 Axon is no longer allowed to grow as a monolith.
 
+## Running Axon
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+./start.sh          # start server on port 7734
+./stop.sh           # stop server
+```
+
 ## Core principle
 
 Every change must make the codebase easier to split, easier to test, and easier
@@ -52,7 +61,7 @@ These are the target limits after the refactor settles:
 Critical hotspots are permanently ratcheted with checked-in budgets and may not
 grow:
 
-- `server.py`
+- `server.py` (budget 1,900 — currently over; active extraction in progress)
 - `brain.py`
 - `ui/index.html`
 - `ui/manual.html`
@@ -98,6 +107,18 @@ Every structural change must include the cheapest reliable verification:
 - targeted smoke tests for touched routes or scripts
 - guardrail scripts when architecture/governance files are touched
 
+## Testing
+
+The `tests/` directory contains 57+ test files (pytest-style). CI runs via
+`.github/workflows/guardrails.yml` on push and PR.
+
+```bash
+python3 -B -m unittest tests.test_guardrail_scripts   # guardrail tests
+python3 scripts/guardrails/check_boundaries.py         # boundary checks
+python3 scripts/guardrails/check_file_sizes.py         # size ratchet enforcement
+python3 scripts/guardrails/check_hotspot_changes.py    # hotspot change enforcement
+```
+
 ## Anti-hallucination policy — ZERO TOLERANCE
 
 Hallucination is defined as inventing data, simulating tool output, or claiming
@@ -140,5 +161,8 @@ See:
 - `docs/engineering/guardrails.md`
 - `docs/engineering/guardrail-waivers.json`
 - `docs/architecture/refactor-roadmap.md`
-- `docs/architecture/module-map.md`
+- `docs/architecture/module-map.md` (note: hotspot sizes may be stale — verify against actuals)
+- `docs/architecture/file-by-file-refactor-plan.md`
+- `docs/architecture/axon-auto-sprint.md`
 - `scripts/guardrails/hotspot_budgets.json`
+- `.github/skills/` — domain skills (axon-agent, axon-backend, axon-data, axon-frontend)

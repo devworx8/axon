@@ -1,0 +1,134 @@
+          <div x-show="terminal.panelOpen || composerOptions.terminal_mode" class="mt-3 rounded-2xl border border-amber-500/20 bg-slate-950/70 p-3">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div class="text-xs font-semibold text-white">Guarded Terminal</div>
+                <div class="text-[10px] text-slate-500">Safe read-only by default. Approval mode shows the exact command before Axon runs it.</div>
+              </div>
+              <div class="flex items-center gap-2">
+                <button @click="createTerminalSession()"
+                        class="rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-2 text-[11px] text-slate-200 transition hover:border-slate-500">
+                  New session
+                </button>
+                <button @click="toggleTerminalMode(false)"
+                        class="rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-2 text-[11px] text-slate-400 transition hover:text-slate-200">
+                  Hide
+                </button>
+              </div>
+            </div>
+            <div class="mt-3 grid gap-3 lg:grid-cols-[240px_minmax(0,1fr)]">
+              <div class="space-y-2">
+                <div class="flex items-center justify-between">
+                  <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Sessions</div>
+                  <div class="text-[10px] text-slate-500" x-text="`${terminal.sessions.length} total`"></div>
+                </div>
+                <div class="space-y-2 max-h-56 overflow-y-auto pr-1">
+                  <template x-if="!terminal.sessions.length">
+                    <div class="rounded-xl border border-dashed border-slate-800 px-3 py-4 text-[11px] text-slate-500">
+                      No terminal sessions yet. Create one to run guarded commands.
+                    </div>
+                  </template>
+                  <template x-for="session in terminal.sessions" :key="session.id">
+                    <button @click="loadTerminalSessionDetail(session.id)"
+                            class="w-full rounded-xl border px-3 py-2 text-left transition"
+                            :class="Number(terminal.activeSessionId) === Number(session.id) ? 'border-amber-500/30 bg-amber-500/10' : 'border-slate-800 bg-slate-900/50 hover:border-slate-700'">
+                      <div class="flex items-start justify-between gap-2">
+                        <div class="min-w-0">
+                          <div class="truncate text-sm text-slate-100" x-text="session.title"></div>
+                          <div class="mt-1 text-[10px] text-slate-500" x-text="session.workspace_name || session.cwd || 'Home scope'"></div>
+                        </div>
+                        <span class="rounded-full border px-2 py-0.5 text-[9px]"
+                              :class="terminalStatusClass(session.status)"
+                              x-text="session.status"></span>
+                      </div>
+                    </button>
+                  </template>
+                </div>
+              </div>
+              <div class="space-y-3">
+                <div class="flex flex-wrap items-center gap-2">
+                  <template x-for="mode in terminalModeOptions()" :key="mode.value">
+                    <button @click="terminal.mode = mode.value"
+                            class="rounded-xl px-3 py-2 text-[11px] transition"
+                            :class="terminal.mode === mode.value ? 'border border-amber-500/30 bg-amber-500/10 text-amber-200' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'">
+                      <span x-text="mode.label"></span>
+                    </button>
+                  </template>
+                  <span x-show="terminal.sessionDetail?.cwd" class="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[10px] text-slate-400" x-text="terminal.sessionDetail?.cwd"></span>
+                </div>
+                <div class="flex gap-2">
+                  <input x-model="terminal.command"
+                         placeholder="Run a safe command like pwd, ls, rg, git status, or npm test"
+                         class="flex-1 rounded-2xl border border-slate-700 bg-slate-950/80 px-3 py-2.5 text-sm text-slate-100 placeholder-slate-500 transition focus:border-amber-400/50" />
+                  <button @click="executeTerminalCommand(false)"
+                          :disabled="terminal.executing || !terminal.command.trim()"
+                          class="rounded-2xl bg-amber-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-amber-400 disabled:opacity-40">
+                    <span x-text="terminal.executing ? 'Running…' : 'Run'"></span>
+                  </button>
+                  <button x-show="terminal.approvalRequired"
+                          @click="executeTerminalCommand(true)"
+                          class="rounded-2xl border border-blue-500/20 bg-blue-500/10 px-4 py-2.5 text-sm font-semibold text-blue-200 transition hover:bg-blue-500/15">
+                    Approve
+                  </button>
+                  <button @click="stopTerminalCommand()"
+                          :disabled="terminal.stopping || !(currentTerminalSession()?.running)"
+                          class="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-2.5 text-sm font-semibold text-rose-200 transition hover:bg-rose-500/15 disabled:opacity-40">
+                    Stop
+                  </button>
+                </div>
+                <div x-show="terminal.approvalRequired" class="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">
+                  Axon is waiting for approval to run:
+                  <span class="mono block mt-1 text-amber-200" x-text="terminal.pendingCommand"></span>
+                </div>
+
+                <div class="axon-terminal-stage axon-terminal-stage--console">
+                  <div class="axon-terminal-stage__chrome">
+                    <div>
+                      <div class="axon-terminal-stage__eyebrow">Interactive shell</div>
+                      <div class="axon-terminal-stage__title" x-text="terminalViewportSessionLabel('console')"></div>
+                    </div>
+                    <div class="axon-terminal-stage__chips">
+                      <span class="axon-terminal-stage__chip"
+                            :class="terminalViewportConnected('console') ? 'axon-terminal-stage__chip--live' : (terminalViewportError('console') ? 'axon-terminal-stage__chip--fallback' : 'axon-terminal-stage__chip--boot')"
+                            x-text="terminalViewportStatusLabel('console')"></span>
+                    </div>
+                  </div>
+                  <div class="axon-terminal-stage__frame">
+                    <div class="axon-terminal-stage__screen">
+                      <div x-ref="consoleXtermMount" class="axon-xterm-shell axon-xterm-shell--console"></div>
+                      <div class="axon-terminal-stage__overlay" x-show="!terminalViewportConnected('console') || terminalViewportError('console')" x-transition.opacity>
+                        <div class="axon-terminal-stage__overlay-title" x-text="terminalViewportOverlayTitle('console')"></div>
+                        <div class="axon-terminal-stage__overlay-copy" x-text="terminalViewportOverlayDetail('console')"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="axon-terminal-stage__footer">
+                    <div class="axon-terminal-stage__hint" x-text="terminalViewportCaption('console')"></div>
+                    <div class="axon-terminal-stage__actions">
+                      <button class="axon-terminal-stage__action" @click="focusInteractiveTerminalViewport('console')">Focus</button>
+                      <button class="axon-terminal-stage__action" @click="copyInteractiveTerminalViewport('console')">Copy</button>
+                      <button class="axon-terminal-stage__action" @click="clearInteractiveTerminalViewport('console')">Clear</button>
+                    </div>
+                  </div>
+                  <div x-effect="syncInteractiveTerminalViewport('console')"></div>
+                </div>
+
+                <div class="rounded-2xl border border-slate-800 bg-slate-950/80 px-3 py-3">
+                  <div class="flex items-center justify-between gap-2">
+                    <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Session log</div>
+                    <div class="text-[10px] text-slate-500" x-text="terminal.sessionDetail?.last_output_at ? 'Updated ' + timeAgo(terminal.sessionDetail.last_output_at) : ''"></div>
+                  </div>
+                  <div class="mt-2 max-h-64 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/70 p-3 font-mono text-[11px] leading-5 text-slate-300">
+                    <template x-if="!terminal.sessionDetail?.recent_events?.length">
+                      <div class="text-slate-500">Terminal session events will appear here.</div>
+                    </template>
+                    <template x-for="event in terminal.sessionDetail?.recent_events || []" :key="event.id">
+                      <div class="mb-2">
+                        <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500" x-text="event.event_type"></div>
+                        <div class="whitespace-pre-wrap break-words" x-text="event.content"></div>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>

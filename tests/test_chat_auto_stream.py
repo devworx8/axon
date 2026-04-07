@@ -16,10 +16,11 @@ def _run_node_script(script_body: str):
     result = subprocess.run(
         ["node", "-e", textwrap.dedent(script_body)],
         cwd=ROOT,
-        check=True,
         capture_output=True,
         text=True,
     )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr or result.stdout or "node script failed")
     return json.loads(result.stdout)
 
 
@@ -34,6 +35,7 @@ class ChatAutoStreamTests(unittest.TestCase):
             const ctx = {{
               window: {{}},
               console,
+              encodeURIComponent,
               requestAnimationFrame: (cb) => cb(),
             }};
             ctx.window.requestAnimationFrame = ctx.requestAnimationFrame;
@@ -159,6 +161,65 @@ class ChatAutoStreamTests(unittest.TestCase):
         self.assertEqual(payload["title"], "Auto session ready for review")
         self.assertEqual(payload["feedCount"], 1)
         self.assertEqual(payload["feedTitle"], "Auto session ready for review")
+
+    def test_stop_active_workspace_run_stops_auto_session_and_stream_state(self):
+        payload = _run_node_script(
+            f"""
+            const fs = require('fs');
+            const vm = require('vm');
+
+            const code = fs.readFileSync({json.dumps(str(CHAT_AUTO_STREAM_JS))}, 'utf8');
+            const ctx = {{ window: {{}}, console, encodeURIComponent }};
+            vm.createContext(ctx);
+            vm.runInContext(code, ctx);
+
+            const mixin = ctx.window.axonChatAutoStreamMixin();
+            const controller = {{ aborted: false, abort() {{ this.aborted = true; }} }};
+            const app = {{
+              chatProjectId: '42',
+              chatLoading: true,
+              _chatAbortController: controller,
+              liveOperator: {{ autoSessionId: 'auto-42' }},
+              chatMessages: [{{ id: 'm1', streaming: true }}, {{ id: 'm2', streaming: false }}],
+              autoSessions: [{{ session_id: 'auto-42', workspace_id: '42', status: 'running' }}],
+              workspaceAutoSessionFor() {{ return this.autoSessions[0]; }},
+              currentWorkspaceAutoSession() {{ return this.autoSessions[0]; }},
+              async api(method, path) {{
+                this.stopCall = {{ method, path }};
+                return {{ session: {{ session_id: 'auto-42', workspace_id: '42', status: 'error', last_error: 'Stopped by user.' }} }};
+              }},
+              updateAutoSessionRecord(session) {{ this.updatedSession = session; this.autoSessions[0] = session; }},
+              stopWorkspaceRun() {{ this.workspaceRunStopped = true; this.chatLoading = false; }},
+              clearLiveOperator(delay, workspaceId) {{ this.cleared = {{ delay, workspaceId }}; }},
+              showToast(message) {{ this.toast = message; }},
+              loadWorkspacePreview() {{ this.previewReloaded = true; }},
+            }};
+            Object.assign(app, mixin);
+            (async () => {{
+              await app.stopActiveWorkspaceRun('42');
+              console.log(JSON.stringify({{
+                aborted: controller.aborted,
+                apiPath: app.stopCall?.path || '',
+                workspaceRunStopped: !!app.workspaceRunStopped,
+                streamingCleared: app.chatMessages[0].streaming,
+                toast: app.toast || '',
+                sessionStatus: app.autoSessions[0]?.status || '',
+                clearedWorkspaceId: app.cleared?.workspaceId || '',
+              }}));
+            }})().catch((error) => {{
+              console.error(error);
+              process.exit(1);
+            }});
+            """
+        )
+
+        self.assertTrue(payload["aborted"])
+        self.assertEqual(payload["apiPath"], "/api/auto/auto-42/stop")
+        self.assertTrue(payload["workspaceRunStopped"])
+        self.assertFalse(payload["streamingCleared"])
+        self.assertEqual(payload["toast"], "Run stopped")
+        self.assertEqual(payload["sessionStatus"], "error")
+        self.assertEqual(payload["clearedWorkspaceId"], "42")
 
 
 if __name__ == "__main__":

@@ -157,6 +157,91 @@ class DashboardLiveFeedTests(unittest.TestCase):
         self.assertFalse(payload["terminalDetailLoaded"])
         self.assertEqual(payload["activityCount"], 1)
 
+    def test_live_feed_snapshot_keeps_extended_operator_history(self):
+        payload = _run_node_script(
+            f"""
+            const fs = require('fs');
+            const vm = require('vm');
+
+            const ctx = {{
+              window: {{}},
+              console,
+              queueMicrotask: (cb) => cb(),
+              requestAnimationFrame: (cb) => cb(),
+            }};
+            ctx.window.requestAnimationFrame = ctx.requestAnimationFrame;
+            vm.createContext(ctx);
+            for (const path of [
+              {json.dumps(str(WORKSPACE_RUNS_JS))},
+              {json.dumps(str(CHAT_AUTO_STREAM_JS))},
+              {json.dumps(str(DASHBOARD_LIVE_FEED_JS))},
+            ]) {{
+              vm.runInContext(fs.readFileSync(path, 'utf8'), ctx);
+            }}
+
+            const app = {{
+              chatProjectId: '42',
+              chatMessages: [],
+              autoSessions: [],
+              liveFeed: {{}},
+              terminal: {{ sessions: [], activeSessionId: 0 }},
+              browserActions: {{}},
+              connectionState: {{}},
+              dashRecentActivity: [],
+              workspacePreview: {{ loading: false }},
+              isMobile: false,
+              currentWorkspaceAutoSession() {{ return null; }},
+              currentWorkspacePreview() {{ return null; }},
+              autonomousConsoleActive() {{ return true; }},
+              ensureWorkspacePreview() {{}},
+              sortAutoSessions(rows) {{ return rows; }},
+              stopDesktopPreview() {{}},
+              scrollChat() {{}},
+              $nextTick(callback) {{
+                if (callback) callback();
+              }},
+            }};
+
+            Object.assign(
+              app,
+              ctx.window.axonWorkspaceRunsMixin(),
+              ctx.window.axonChatAutoStreamMixin(),
+              ctx.window.axonDashboardLiveFeedMixin(),
+            );
+
+            const feed = Array.from({{ length: 8 }}, (_value, index) => ({{
+              id: `feed-${{index}}`,
+              phase: index % 2 === 0 ? 'observe' : 'execute',
+              title: `Step ${{index}}`,
+              detail: `Detail ${{index}}`,
+              at: `2026-04-06T00:0${{index}}:00Z`,
+            }}));
+
+            app.handleLiveFeedSnapshot({{
+              operator: {{
+                active: true,
+                mode: 'auto',
+                phase: 'execute',
+                title: 'Running Auto session',
+                detail: 'Axon is applying a verified sandbox change.',
+                workspace_id: '42',
+                auto_session_id: 'auto-42',
+                updated_at: '2026-04-06T00:05:00Z',
+                feed,
+              }},
+            }});
+
+            const runState = app.workspaceRunStateFor('42');
+            console.log(JSON.stringify({{
+              feedCount: runState.liveOperatorFeed.length,
+              newestTitle: runState.liveOperatorFeed[runState.liveOperatorFeed.length - 1]?.title || '',
+            }}));
+            """
+        )
+
+        self.assertEqual(payload["feedCount"], 8)
+        self.assertEqual(payload["newestTitle"], "Step 7")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,23 +1,22 @@
 """Auto-session handlers extracted from server.py."""
 from __future__ import annotations
-
 import asyncio
 import time
 from typing import Any, Awaitable, Callable, Optional
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-
 from axon_api.routes.task_sandbox_routes import TaskSandboxRunRequest
-
-
+from axon_api.services.auto_session_route_support import (
+    auto_resume_prompt,
+    auto_session_title,
+    refresh_listed_auto_sessions,
+    stopped_auto_session_meta,
+)
 class AutoSessionStartRequest(TaskSandboxRunRequest):
     message: str
     project_id: Optional[int] = None
     resource_ids: Optional[list[int]] = None
     composer_options: Optional[dict] = None
-
-
 class AutoSessionHandlers:
     def __init__(
         self,
@@ -79,25 +78,16 @@ class AutoSessionHandlers:
         self._auto_session_live_operator = auto_session_live_operator
         self._composer_options_dict = composer_options_dict
         self._task_sandbox_runtime_override = task_sandbox_runtime_override
-
-    def auto_session_title(self, message: str, workspace_name: str = "") -> str:
-        text = " ".join(str(message or "").strip().split())
-        return text[:120] if text else f"{workspace_name or 'Workspace'} Auto session".strip()
-
-    def auto_resume_prompt(self, session_meta: dict, resume_message: str = "") -> str:
-        text = " ".join(str(resume_message or "").strip().split())
-        prompt_lines = [
-            "Continue the existing Axon Auto session in this sandbox.",
-            "Do not ask whether to continue or start over.",
-            "Stay inside the sandbox and either make the next concrete change or report a real blocker with receipts.",
-        ]
-        if text and text.lower() not in {"continue", "please continue", "resume", "retry"}:
-            prompt_lines.extend(["", f"Resume instruction: {text}"])
-        prior = str(session_meta.get("report_markdown") or session_meta.get("final_output") or "").strip()
-        if prior:
-            prompt_lines.extend(["", "Previous session state:", prior[:4000]])
-        return "\n".join(prompt_lines).strip()
-
+    async def cancel_auto_session_run(self, session_id: str) -> bool:
+        task = self._auto_session_runs.get(session_id)
+        if not task or task.done():
+            return False
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return True
     async def run_auto_session_background(
         self,
         workspace: dict,
@@ -113,7 +103,7 @@ class AutoSessionHandlers:
         workspace_name = str(workspace.get("name") or "")
         sandbox_path = str(session_meta.get("sandbox_path") or "")
         start_prompt = str(session_meta.get("start_prompt") or "")
-        prompt = self.auto_resume_prompt(session_meta, resume_message) if resume else self._auto_session_prompt(start_prompt, session_meta)
+        prompt = auto_resume_prompt(session_meta, resume_message) if resume else self._auto_session_prompt(start_prompt, session_meta)
         final_output_parts: list[str] = []
         approval_message = ""
         run_error = ""
@@ -326,6 +316,24 @@ class AutoSessionHandlers:
                 self._set_live_operator(active=False, mode="auto", phase="recover", title="Auto session awaiting approval", detail=str(refreshed.get("last_error") or approval_message or "")[:180], summary=str(refreshed.get("title") or "")[:120], workspace_id=workspace_id, auto_session_id=session_id, changed_files_count=changed_files_count)
             else:
                 self._set_live_operator(active=False, mode="auto", phase="recover" if current_status == "error" else "verify", title="Auto session needs attention" if current_status == "error" else "Auto session updated", detail=str(refreshed.get("last_error") or refreshed.get("final_output") or "")[:180], summary=str(refreshed.get("title") or "")[:120], workspace_id=workspace_id, auto_session_id=session_id, changed_files_count=changed_files_count)
+        except asyncio.CancelledError:
+            meta = stopped_auto_session_meta(session_meta, self._now_iso)
+            meta.update(
+                {
+                    "workspace_id": workspace_id,
+                    "workspace_name": workspace_name,
+                    "source_name": workspace_name,
+                    "source_path": workspace.get("path") or "",
+                    "resolved_runtime": session_meta.get("resolved_runtime") or {},
+                    "resource_ids": list(session_meta.get("resource_ids") or []),
+                    "composer_options": dict(composer_options or {}),
+                    "command_receipts": command_receipts,
+                    "verification_receipts": verification_receipts,
+                }
+            )
+            self._auto_session_service.write_auto_session(meta)
+            self._auto_session_service.refresh_auto_session(session_id)
+            self._set_live_operator(active=False, mode="auto", phase="recover", title="Auto session stopped", detail="Stopped by user."[:180], summary=str(session_meta.get("title") or "")[:120], workspace_id=workspace_id, auto_session_id=session_id, changed_files_count=len(meta.get("changed_files") or []))
         except Exception as exc:
             meta = dict(session_meta or {})
             meta.update({"status": "error", "last_error": str(exc), "final_output": "".join(final_output_parts).strip(), "last_run_completed_at": self._now_iso(), "command_receipts": command_receipts, "verification_receipts": verification_receipts})
@@ -401,7 +409,7 @@ class AutoSessionHandlers:
             session_meta = self._auto_session_service.ensure_auto_session(
                 target_id,
                 workspace_dict,
-                title=self.auto_session_title(body.message, str(workspace_dict.get("name") or "")),
+                title=auto_session_title(body.message, str(workspace_dict.get("name") or "")),
                 detail=str(body.message or "").strip()[:300],
                 runtime_override=runtime_override,
                 start_prompt=str(body.message or "").strip(),
@@ -427,41 +435,33 @@ class AutoSessionHandlers:
         )
         self._auto_session_runs[target_id] = run_task
         return {"started": True, "resume": resume, "session": self._serialize_auto_session(session_meta, include_report=True)}
-
     async def start_auto_session(self, body: AutoSessionStartRequest):
         return await self.queue_auto_session_run(body, resume=False)
-
     async def list_auto_sessions(self):
-        refreshed_rows: list[dict] = []
-        for row in self._auto_session_service.list_auto_sessions():
-            session_id = str(row.get("session_id") or "").strip()
-            if not session_id:
-                continue
-            status = str(row.get("status") or "").strip().lower()
-            if status in {"running", "completed", "ready", "error", "approval_required"} or row.get("last_run_completed_at"):
-                try:
-                    refreshed = self._auto_session_service.refresh_auto_session(session_id)
-                except Exception as exc:
-                    degraded = dict(row)
-                    degraded["status"] = "error"
-                    degraded["last_error"] = str(exc)
-                    refreshed_rows.append(degraded)
-                else:
-                    refreshed_rows.append(refreshed or row)
-            else:
-                refreshed_rows.append(row)
+        refreshed_rows = refresh_listed_auto_sessions(
+            self._auto_session_service.list_auto_sessions(),
+            self._auto_session_service.refresh_auto_session,
+        )
         return {"sessions": [self._serialize_auto_session(item) for item in refreshed_rows]}
-
     async def get_auto_session(self, session_id: str):
         session = self._auto_session_service.refresh_auto_session(session_id)
         if not session:
             raise HTTPException(404, "Auto session not found.")
         return {"session": self._serialize_auto_session(session, include_report=True)}
-
     async def continue_auto_session(self, session_id: str, body: AutoSessionStartRequest | None = None):
         payload = body or AutoSessionStartRequest(message="please continue")
         return await self.queue_auto_session_run(payload, resume=True, session_id=session_id)
-
+    async def stop_auto_session(self, session_id: str):
+        session = self._auto_session_service.refresh_auto_session(session_id)
+        if not session:
+            raise HTTPException(404, "Auto session not found.")
+        await self.cancel_auto_session_run(session_id)
+        refreshed = self._auto_session_service.refresh_auto_session(session_id) or session
+        if str(refreshed.get("status") or "").strip().lower() in {"running", "approval_required"}:
+            refreshed = self._auto_session_service.write_auto_session(stopped_auto_session_meta(refreshed, self._now_iso))
+            refreshed = self._auto_session_service.refresh_auto_session(session_id) or refreshed
+        self._set_live_operator(active=False, mode="auto", phase="recover", title="Auto session stopped", detail=str(refreshed.get("last_error") or "Stopped by user.")[:180], summary=str(refreshed.get("title") or "")[:120], workspace_id=int(refreshed.get("workspace_id") or 0) or None, auto_session_id=session_id, changed_files_count=len(refreshed.get("changed_files") or []))
+        return {"stopped": True, "session": self._serialize_auto_session(refreshed, include_report=True)}
     async def apply_auto_session(self, session_id: str):
         try:
             result = self._auto_session_service.apply_auto_session(session_id)
@@ -471,14 +471,12 @@ class AutoSessionHandlers:
             raise HTTPException(400, str(exc))
         session = self._auto_session_service.refresh_auto_session(session_id)
         return {"applied": True, "summary": result.get("summary", ""), "session": self._serialize_auto_session(session, include_report=True)}
-
     async def discard_auto_session(self, session_id: str):
         try:
+            await self.cancel_auto_session_run(session_id)
             return self._auto_session_service.discard_auto_session(session_id)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
-
-
 def build_auto_session_router(**deps: Any) -> tuple[APIRouter, AutoSessionHandlers]:
     handlers = AutoSessionHandlers(**deps)
     router = APIRouter(tags=["auto-session"])
@@ -486,6 +484,7 @@ def build_auto_session_router(**deps: Any) -> tuple[APIRouter, AutoSessionHandle
     router.add_api_route("/api/auto/start", handlers.start_auto_session, methods=["POST"])
     router.add_api_route("/api/auto/{session_id}", handlers.get_auto_session, methods=["GET"])
     router.add_api_route("/api/auto/{session_id}/continue", handlers.continue_auto_session, methods=["POST"])
+    router.add_api_route("/api/auto/{session_id}/stop", handlers.stop_auto_session, methods=["POST"])
     router.add_api_route("/api/auto/{session_id}/apply", handlers.apply_auto_session, methods=["POST"])
     router.add_api_route("/api/auto/{session_id}", handlers.discard_auto_session, methods=["DELETE"])
     return router, handlers

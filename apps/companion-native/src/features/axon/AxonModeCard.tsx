@@ -5,6 +5,7 @@ import { MetricCard } from '@/components/MetricCard';
 import { StatusPill } from '@/components/StatusPill';
 import { SurfaceCard, SurfaceHeader } from '@/components/SurfaceCard';
 import type { AxonModeStatus } from '@/types/companion';
+import { isVoiceTranscriptionReady } from '@/features/voice/voiceReadiness';
 import { AxonHudDial } from './AxonHudDial';
 
 function toneForState(state: string): 'neutral' | 'accent' | 'ok' | 'warn' | 'danger' {
@@ -43,7 +44,7 @@ export function AxonModeCard({
   onDisarm?: () => void;
 }) {
   const monitoringState = String(axon?.monitoring_state || 'idle');
-  const localVoiceReady = Boolean(axon?.local_voice_ready);
+  const voiceReady = isVoiceTranscriptionReady(axon);
   const providerLabel = String(
     axon?.voice_identity_label
     || axon?.voice_identity
@@ -65,7 +66,7 @@ export function AxonModeCard({
       </View>
       <View style={styles.metrics}>
         <MetricCard label="Wake phrase" value={wakePhrase || 'Axon'} accent="accent" />
-        <MetricCard label="Voice" value={localVoiceReady ? 'Ready' : 'Blocked'} accent={localVoiceReady ? 'success' : 'warn'} />
+        <MetricCard label="Voice" value={voiceReady ? 'Ready' : 'Blocked'} accent={voiceReady ? 'success' : 'warn'} />
         <MetricCard label="Reply path" value={String(axon?.voice_provider || 'unavailable').toUpperCase()} accent={axon?.voice_provider_ready ? 'accent' : 'warn'} />
         <MetricCard label="Last wake" value={formatStamp(axon?.last_wake_at)} accent={axon?.last_wake_at ? 'accent' : 'neutral'} />
       </View>
@@ -108,8 +109,8 @@ export function AxonModeCard({
         ) : (
           <Pressable
             onPress={onArm}
-            disabled={busy || !localVoiceReady}
-            style={[styles.primaryAction, (busy || !localVoiceReady) ? styles.disabled : null]}
+            disabled={busy || !voiceReady}
+            style={[styles.primaryAction, (busy || !voiceReady) ? styles.disabled : null]}
           >
             <Text style={styles.primaryText}>{busy ? 'Arming…' : 'Arm Axon'}</Text>
           </Pressable>

@@ -274,12 +274,19 @@ export function AppNavigatorBody({
           recording={liveVoice.isRecording}
           transcribing={liveVoice.transcribing}
           recordingDuration={liveVoice.durationLabel}
+          handsFree={settings.settings.alwaysListening}
           liveTranscript={liveVoice.lastTranscript}
           liveEngine={liveVoice.lastEngine}
           liveError={liveVoice.error}
-          onStartLiveVoice={() => liveVoice.startRecording().catch(() => undefined)}
-          onStopLiveVoice={() => liveVoice.stopAndSubmit().catch(() => undefined)}
-          onRefreshLiveVoice={() => liveVoice.refreshVoiceStatus().catch(() => undefined)}
+          onStartLiveVoice={() => liveVoice.startRecording().catch((nextError: unknown) => {
+            console.error('[Axon] Live voice start failed:', nextError);
+          })}
+          onStopLiveVoice={() => liveVoice.stopAndSubmit().catch((nextError: unknown) => {
+            console.error('[Axon] Live voice stop failed:', nextError);
+          })}
+          onRefreshLiveVoice={() => liveVoice.refreshVoiceStatus().catch((nextError: unknown) => {
+            console.error('[Axon] Live voice refresh failed:', nextError);
+          })}
           axon={axon.status}
           axonWakePhrase={settings.settings.axonWakePhrase}
           onChangeAxonWakePhrase={(value) => settings.setSettings(current => ({ ...current, axonWakePhrase: value }))}

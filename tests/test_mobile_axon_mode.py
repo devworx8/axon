@@ -34,6 +34,10 @@ class MobileAxonModeServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_arm_mobile_axon_mode_marks_degraded_when_transcription_missing(self):
         with patch.object(
             mobile_axon_mode,
+            "get_all_settings",
+            AsyncMock(return_value={}),
+        ), patch.object(
+            mobile_axon_mode,
             "local_voice_snapshot",
             AsyncMock(return_value={"available": False, "transcription_available": False, "detail": "Local transcription unavailable"}),
         ), patch.object(
@@ -51,6 +55,39 @@ class MobileAxonModeServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["state_patch"]["monitoring_state"], "degraded")
         self.assertIn("Local transcription unavailable", kwargs["state_patch"]["last_error"])
         self.assertEqual(snapshot["monitoring_state"], "degraded")
+
+    async def test_arm_mobile_axon_mode_accepts_cloud_transcription_when_local_is_missing(self):
+        with patch.object(
+            mobile_axon_mode,
+            "get_all_settings",
+            AsyncMock(return_value={"azure_speech_key": "test", "azure_speech_region": "eastus"}),
+        ), patch.object(
+            mobile_axon_mode,
+            "local_voice_snapshot",
+            AsyncMock(
+                return_value={
+                    "available": False,
+                    "transcription_available": False,
+                    "synthesis_available": False,
+                    "ffmpeg_available": True,
+                    "detail": "Whisper backend missing",
+                }
+            ),
+        ), patch.object(
+            mobile_axon_mode,
+            "_persist_axon_state",
+            AsyncMock(return_value=({"device_id": 7}, {"monitoring_state": "armed", "last_error": ""})),
+        ) as persist:
+            _presence, snapshot = await mobile_axon_mode.arm_mobile_axon_mode(
+                object(),
+                device_id=7,
+                wake_phrase="Axon",
+            )
+
+        kwargs = persist.await_args.kwargs
+        self.assertEqual(kwargs["state_patch"]["monitoring_state"], "armed")
+        self.assertEqual(kwargs["state_patch"]["last_error"], "")
+        self.assertEqual(snapshot["monitoring_state"], "armed")
 
     async def test_build_mobile_axon_snapshot_resolves_cloud_voice_identity(self):
         presence = {
@@ -79,6 +116,10 @@ class MobileAxonModeServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_arm_mobile_axon_mode_treats_active_state_as_foreground(self):
         with patch.object(
+            mobile_axon_mode,
+            "get_all_settings",
+            AsyncMock(return_value={}),
+        ), patch.object(
             mobile_axon_mode,
             "local_voice_snapshot",
             AsyncMock(return_value={"available": True, "transcription_available": True, "synthesis_available": True, "detail": "ready"}),

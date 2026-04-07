@@ -81,21 +81,60 @@
   color: rgba(203, 213, 225, 0.86);
 }
 
+@keyframes mission-rail-materialise {
+  0%   { opacity: 0; transform: perspective(800px) rotateX(6deg) translateY(16px); filter: blur(4px); }
+  100% { opacity: 1; transform: perspective(800px) rotateX(1.5deg) translateY(0); filter: none; }
+}
+@keyframes mission-step-slide-in {
+  0%   { opacity: 0; transform: translateY(12px) scale(0.94); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes mission-dot-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; }
+  50%      { box-shadow: 0 0 8px 2px currentColor; }
+}
+@keyframes mission-connector-flow {
+  0%   { background-position: -20px center; }
+  100% { background-position: 20px center; }
+}
+
 .voice-mission-rail {
+  position: relative;
   width: min(1080px, 100%);
-  margin-top: 0;
-  padding: 10px 14px 12px;
-  border-radius: 20px;
-  border: 1px solid rgba(34, 211, 238, 0.12);
+  margin-top: auto;
+  padding: 14px 18px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(34, 211, 238, 0.28);
   background:
-    linear-gradient(180deg, rgba(8, 15, 32, 0.84), rgba(2, 6, 23, 0.92));
+    radial-gradient(ellipse at 20% 80%, rgba(34, 211, 238, 0.05), transparent 50%),
+    linear-gradient(180deg, rgba(8, 15, 32, 0.9), rgba(2, 6, 23, 0.96));
   box-shadow:
-    0 14px 60px rgba(2, 6, 23, 0.46),
-    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    0 0 1px rgba(34, 211, 238, 0.5),
+    0 0 30px rgba(34, 211, 238, 0.06),
+    0 14px 60px rgba(2, 6, 23, 0.5),
+    inset 0 1px 0 rgba(186, 230, 253, 0.06);
   backdrop-filter: blur(20px);
   flex-shrink: 0;
-  max-height: 140px;
+  max-height: 180px;
   overflow: hidden;
+  transform: perspective(800px) rotateX(1.5deg);
+  transform-origin: bottom center;
+  animation: mission-rail-materialise 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+/* Scanline overlay */
+.voice-mission-rail::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(34, 211, 238, 0.025) 0px,
+    transparent 1px,
+    transparent 3px
+  );
 }
 
 .voice-mission-rail__header {
@@ -110,7 +149,8 @@
   font-size: 10px;
   letter-spacing: 0.28em;
   text-transform: uppercase;
-  color: rgba(103, 232, 249, 0.76);
+  color: rgba(103, 232, 249, 0.85);
+  text-shadow: 0 0 8px rgba(34, 211, 238, 0.2);
 }
 
 .voice-mission-rail__summary {
@@ -122,29 +162,43 @@
 .voice-mission-rail__grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
+  gap: 10px;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  position: relative;
+  z-index: 2;
 }
 
 .voice-mission-step {
   position: relative;
-  padding: 10px 10px 12px;
+  padding: 10px 12px 12px;
   border-radius: 14px;
-  border: 1px solid rgba(51, 65, 85, 0.74);
-  background: rgba(2, 6, 23, 0.72);
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  background:
+    radial-gradient(ellipse at 30% 20%, rgba(34, 211, 238, 0.03), transparent 60%),
+    rgba(2, 6, 23, 0.8);
   min-height: 80px;
   min-width: 140px;
+  animation: mission-step-slide-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  transition: border-color 0.3s, box-shadow 0.3s;
 }
+.voice-mission-step:nth-child(1) { animation-delay: 0.05s; }
+.voice-mission-step:nth-child(2) { animation-delay: 0.12s; }
+.voice-mission-step:nth-child(3) { animation-delay: 0.19s; }
+.voice-mission-step:nth-child(4) { animation-delay: 0.26s; }
+.voice-mission-step:nth-child(5) { animation-delay: 0.33s; }
 
 .voice-mission-step::after {
   content: '';
   position: absolute;
   top: 20px;
-  right: -8px;
-  width: 16px;
-  height: 1px;
-  background: rgba(51, 65, 85, 0.84);
+  right: -10px;
+  width: 20px;
+  height: 2px;
+  background:
+    repeating-linear-gradient(90deg, rgba(34, 211, 238, 0.35) 0px, rgba(34, 211, 238, 0.35) 4px, transparent 4px, transparent 8px);
+  background-size: 20px 2px;
+  animation: mission-connector-flow 1.2s linear infinite;
 }
 
 .voice-mission-step:last-child::after {
@@ -152,20 +206,32 @@
 }
 
 .voice-mission-step--cyan {
-  border-color: rgba(34, 211, 238, 0.26);
-  box-shadow: inset 0 0 0 1px rgba(34, 211, 238, 0.05);
+  border-color: rgba(34, 211, 238, 0.3);
+  box-shadow:
+    0 0 1px rgba(34, 211, 238, 0.4),
+    inset 0 0 0 1px rgba(34, 211, 238, 0.05),
+    0 0 16px rgba(34, 211, 238, 0.05);
 }
 
 .voice-mission-step--amber {
-  border-color: rgba(251, 191, 36, 0.26);
+  border-color: rgba(251, 191, 36, 0.3);
+  box-shadow:
+    0 0 1px rgba(251, 191, 36, 0.35),
+    0 0 16px rgba(251, 191, 36, 0.04);
 }
 
 .voice-mission-step--emerald {
-  border-color: rgba(52, 211, 153, 0.24);
+  border-color: rgba(52, 211, 153, 0.28);
+  box-shadow:
+    0 0 1px rgba(52, 211, 153, 0.35),
+    0 0 16px rgba(52, 211, 153, 0.04);
 }
 
 .voice-mission-step--rose {
-  border-color: rgba(251, 113, 133, 0.24);
+  border-color: rgba(251, 113, 133, 0.28);
+  box-shadow:
+    0 0 1px rgba(251, 113, 133, 0.35),
+    0 0 16px rgba(251, 113, 133, 0.04);
 }
 
 .voice-mission-step__phase {
@@ -183,22 +249,31 @@
   height: 8px;
   border-radius: 999px;
   background: rgba(148, 163, 184, 0.52);
+  transition: background 0.3s, box-shadow 0.3s;
 }
 
 .voice-mission-step--cyan .voice-mission-step__dot {
-  background: rgba(34, 211, 238, 0.88);
+  background: rgba(34, 211, 238, 0.92);
+  color: rgba(34, 211, 238, 0.5);
+  animation: mission-dot-pulse 2s ease-in-out infinite;
 }
 
 .voice-mission-step--amber .voice-mission-step__dot {
   background: rgba(251, 191, 36, 0.92);
+  color: rgba(251, 191, 36, 0.5);
+  animation: mission-dot-pulse 2s ease-in-out 0.3s infinite;
 }
 
 .voice-mission-step--emerald .voice-mission-step__dot {
   background: rgba(52, 211, 153, 0.92);
+  color: rgba(52, 211, 153, 0.5);
+  animation: mission-dot-pulse 2s ease-in-out 0.6s infinite;
 }
 
 .voice-mission-step--rose .voice-mission-step__dot {
-  background: rgba(251, 113, 133, 0.9);
+  background: rgba(251, 113, 133, 0.92);
+  color: rgba(251, 113, 133, 0.5);
+  animation: mission-dot-pulse 2s ease-in-out 0.9s infinite;
 }
 
 .voice-mission-step__title {

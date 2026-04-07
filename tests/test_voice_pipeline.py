@@ -93,11 +93,27 @@ class TestTTSVoiceSelection(unittest.TestCase):
 
     def test_speech_text_cleaning(self):
         """Markdown and special characters should be stripped before TTS."""
+        from axon_api.services.tts_sanitizer import clean_for_speech
+
         raw = "**Hello** `world` [link](http://example.com)"
-        # Basic cleaning: strip markdown markers
-        cleaned = raw.replace("**", "").replace("`", "")
+        cleaned = clean_for_speech(raw)
+        self.assertIn("Hello", cleaned)
+        self.assertIn("world", cleaned)
+        self.assertIn("link", cleaned)
         self.assertNotIn("**", cleaned)
         self.assertNotIn("`", cleaned)
+
+    def test_speech_text_cleaning_humanizes_code_commands(self):
+        """Short code and CLI snippets should sound human, not like markdown narration."""
+        from axon_api.services.tts_sanitizer import clean_for_speech
+
+        cleaned = clean_for_speech("```bash\nGIT status --short\n```\nThen run `git commit --amend` with `vault.py` and `AXON_DEV_LOCAL_VAULT_BYPASS`.")
+        self.assertIn("In shell, git status short flag.", cleaned)
+        self.assertIn("git commit amend flag", cleaned)
+        self.assertIn("vault python file", cleaned.lower())
+        self.assertIn("axon dev local vault bypass", cleaned.lower())
+        self.assertNotIn("inline code", cleaned)
+        self.assertNotIn("minus minus", cleaned)
 
 
 class TestWakePhraseDetection(unittest.TestCase):

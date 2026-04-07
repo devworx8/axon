@@ -3,7 +3,6 @@
    Conversational turn-taking, text fallback dock, and cinematic
    terminal/mission overlays for the voice command center.
    ============================================================= */
-
 function axonVoiceConversationMixin() {
   const phaseToneMap = {
     observe: 'slate',
@@ -12,8 +11,24 @@ function axonVoiceConversationMixin() {
     verify: 'emerald',
     recover: 'rose',
   };
-
   const trimText = (value = '') => String(value || '').trim();
+  const escapeHtml = (value = '') => String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+  const phaseLabel = (value = 'observe') => {
+    const normalized = trimText(value).toLowerCase() || 'observe';
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  };
+  const renderResponsePreview = (ctx, value = '') => {
+    const text = trimText(value);
+    if (!text) return '';
+    if (typeof ctx.renderMd === 'function') {
+      try { return ctx.renderMd(text); } catch (_) {}
+    }
+    return escapeHtml(text).replace(/\n/g, '<br>');
+  };
 
   const sessionLabel = (session = null) => trimText(
     session?.title
@@ -78,7 +93,7 @@ function axonVoiceConversationMixin() {
       this.voiceConversation = {
         textDockOpen: false,
         textDraft: '',
-        handsFree: false,
+        handsFree: true,
         awaitingReply: false,
         awaitingReplySince: '',
         awaitingReplySource: '',
@@ -124,13 +139,9 @@ function axonVoiceConversationMixin() {
         ? [...this.voiceConversation.quickPrompts]
         : [];
       const command = trimText(this.dashboardLiveTerminalSession?.()?.active_command);
-      if (command) {
-        prompts.unshift(`Explain the active command: ${command}`);
-      }
+      if (command) prompts.unshift(`Explain the active command: ${command}`);
       const workspaceName = trimText(this.chatProject?.name);
-      if (workspaceName) {
-        prompts.unshift(`Give me a status update on ${workspaceName}`);
-      }
+      if (workspaceName) prompts.unshift(`Give me a status update on ${workspaceName}`);
       return prompts.slice(0, 4);
     },
 
@@ -178,18 +189,30 @@ function axonVoiceConversationMixin() {
     async submitVoiceTextDock() {
       this.ensureVoiceConversationState();
       const text = trimText(this.voiceConversation.textDraft || this.voiceTranscript || this.chatInput);
-      if (!text || this.chatLoading) return;
-      this.syncVoiceTranscript?.(text);
-      this.voiceConversation.lastCommand = text;
-      await this.sendVoiceCommand?.();
-      this.voiceConversation.textDockOpen = false;
+      if (!text) return false;
+      if (typeof this.syncVoiceTranscript === 'function') this.syncVoiceTranscript(text);
+      else {
+        this.voiceTranscript = text;
+        this.chatInput = text;
+      }
+
+      let dispatched = false;
+      if (typeof this.dispatchVoiceCommand === 'function') dispatched = await this.dispatchVoiceCommand(text);
+      else if (typeof this.sendVoiceCommand === 'function') {
+        await this.sendVoiceCommand(text);
+        dispatched = true;
+      }
+
+      if (dispatched !== false) this.voiceConversation.textDockOpen = false;
+      return dispatched !== false;
     },
 
     voiceMissionTimeline() {
-      const entries = typeof this.dashboardLiveEntries === 'function'
-        ? this.dashboardLiveEntries()
-        : [...(Array.isArray(this.liveOperatorFeed) ? this.liveOperatorFeed : [])].slice(-6).reverse();
-      return entries.slice(0, 5).map((entry, index) => ({
+      const operatorEntries = this.voiceLiveOperatorHistory(8).slice().reverse();
+      const fallbackEntries = operatorEntries.length
+        ? operatorEntries
+        : (typeof this.dashboardLiveEntries === 'function' ? this.dashboardLiveEntries() : []);
+      return fallbackEntries.slice(0, 6).map((entry, index) => ({
         id: entry.id || `${entry.phase || 'observe'}-${index}`,
         phase: trimText(entry.phase || 'observe').toLowerCase() || 'observe',
         title: trimText(entry.title || 'Timeline update'),
@@ -206,6 +229,53 @@ function axonVoiceConversationMixin() {
       const current = this.voiceMissionTimeline()[0] || null;
       if (!current) return 'No live mission yet';
       return `${current.title}${current.detail ? ` - ${current.detail}` : ''}`;
+    },
+
+    voiceLiveOperatorHistory(limit = 10) {
+      const feed = Array.isArray(this.liveOperatorFeed) ? this.liveOperatorFeed : [];
+      return feed.slice(-Math.max(1, limit));
+    },
+
+    voiceLiveOperatorFeedHtml() {
+      const steps = this.voiceLiveOperatorHistory(10);
+      if (!steps.length) return '';
+      const latestStep = steps[steps.length - 1] || {};
+      const message = typeof this.latestAssistantMessage === 'function'
+        ? this.latestAssistantMessage()
+        : [...(Array.isArray(this.chatMessages) ? this.chatMessages : [])].reverse().find((item) => item?.role === 'assistant');
+      const draft = trimText(message?.content);
+      const phase = phaseLabel(this.liveOperator?.phase || latestStep.phase || 'observe');
+      const updatedAt = trimText(this.liveOperator?.updatedAt || latestStep.at || '');
+      const updatedLabel = updatedAt && typeof this.timeAgo === 'function' ? this.timeAgo(updatedAt) : '';
+      const lines = steps.map((entry, index) => {
+        const latest = index === steps.length - 1;
+        const detail = trimText(entry.detail);
+        const stamp = trimText(entry.at || entry.created_at);
+        const stampLabel = stamp && typeof this.timeAgo === 'function' ? this.timeAgo(stamp) : '';
+        return `<div class="voice-step ${latest ? 'voice-step--latest' : 'voice-step--past'}" style="animation-delay:${index * 0.06}s">`
+          + `<div class="voice-step__row">`
+          + `<span class="voice-step__phase voice-step__phase--${escapeHtml(trimText(entry.phase || 'observe').toLowerCase())}">${escapeHtml(phaseLabel(entry.phase || 'observe'))}</span>`
+          + `<span class="voice-step__title">${escapeHtml(entry.title || 'Working')}</span>`
+          + (stampLabel ? `<span class="voice-step__meta">${escapeHtml(stampLabel)}</span>` : '')
+          + `</div>`
+          + (detail ? `<div class="voice-step__detail">${escapeHtml(detail)}</div>` : '')
+          + `</div>`;
+      }).join('');
+      const draftHtml = draft
+        ? `<div class="voice-agent-feed__draft">`
+          + `<div class="voice-agent-feed__draft-label">Draft reply</div>`
+          + `<div class="voice-agent-feed__draft-body">${renderResponsePreview(this, draft)}</div>`
+          + `</div>`
+        : '';
+      return `<div class="voice-agent-feed">`
+        + `<div class="voice-agent-feed__header">`
+        + `<span class="voice-agent-feed__dot"></span>`
+        + `<span>Live execution</span>`
+        + `<span class="voice-agent-feed__meta">${escapeHtml(`${steps.length} steps · ${phase}${updatedLabel ? ` · ${updatedLabel}` : ''}`)}</span>`
+        + `</div>`
+        + `<div class="voice-agent-feed__stack">${lines}</div>`
+        + draftHtml
+        + `</div>`;
     },
 
     voiceTerminalSession() {
@@ -229,6 +299,16 @@ function axonVoiceConversationMixin() {
       return this.voiceTerminalEvents(limit)
         .map(mapTerminalLine)
         .filter(Boolean);
+    },
+
+    voiceOperatorTraceLines(limit = 12) {
+      return Array.isArray(this.hudOperatorTraceLines)
+        ? this.hudOperatorTraceLines.slice(-Math.max(1, limit))
+        : [];
+    },
+
+    voiceOperatorTraceTitle() {
+      return trimText(this.hudOperatorTraceTitle || this.liveOperator?.title || 'Live operator telemetry');
     },
 
     voiceTerminalStatusLabel() {
@@ -391,15 +471,23 @@ function axonVoiceConversationMixin() {
       if (!this.showVoiceOrb) return;
 
       const session = this.voiceTerminalSession();
-      const lines = this.voiceTerminalLines(10);
-      const shouldShowTerminal = !!(session && (
-        isTerminalRunning(session)
-        || this.voiceConversation.terminalPinned
-        || this.terminal?.approvalRequired
-      ));
+      const lines = session ? this.voiceTerminalLines(12) : this.voiceOperatorTraceLines(12);
+      const wantsInteractiveShell = !!this.interactiveTerminalPreferred?.('voice');
+      const shouldShowTerminal = session
+        ? !!(
+          isTerminalRunning(session)
+          || this.voiceConversation.terminalPinned
+          || this.terminal?.approvalRequired
+        )
+        : !!((lines.length || wantsInteractiveShell) && (
+          this.liveOperator?.active
+          || this.chatLoading
+          || this.voiceConversation.terminalPinned
+        ));
       if (shouldShowTerminal) {
-        const status = this.voiceTerminalStatusLabel();
-        const title = `${sessionLabel(session)}${status ? ` - ${status}` : ''}`;
+        const title = session
+          ? `${sessionLabel(session)}${this.voiceTerminalStatusLabel() ? ` - ${this.voiceTerminalStatusLabel()}` : ''}`
+          : this.voiceOperatorTraceTitle();
         this.hudShowTerminal?.(title, lines);
       } else if (this.hudTerminalVisible) {
         this.hudHideTerminal?.();
