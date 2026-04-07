@@ -328,6 +328,8 @@ def build_tool_registry(
             return f"ERROR: Permission denied: {resolved}"
 
     def _tool_delete_file(path: str) -> str:
+        if not current_agent_runtime_context_fn().get("allow_delete"):
+            return "ERROR: delete_file requires an explicit user request."
         resolved = os.path.realpath(os.path.expanduser(path))
         approval_action = _file_approval_action("delete", resolved)
         if not action_is_allowed_fn(approval_action):

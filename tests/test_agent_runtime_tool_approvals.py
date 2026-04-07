@@ -7,9 +7,10 @@ from pathlib import Path
 from axon_core import agent_runtime_tools, approval_actions
 
 
-def _build_registry(*, tool_path_allowed, action_is_allowed):
+def _build_registry(*, tool_path_allowed, action_is_allowed, runtime_context=None):
+    runtime_context = dict(runtime_context or {})
     return agent_runtime_tools.build_tool_registry(
-        current_agent_runtime_context_fn=lambda: {"workspace_id": 7, "agent_session_id": "agent-7"},
+        current_agent_runtime_context_fn=lambda: {"workspace_id": 7, "agent_session_id": "agent-7", **runtime_context},
         tool_path_allowed_fn=tool_path_allowed,
         action_is_allowed_fn=action_is_allowed,
         workspace_root_fn=lambda: "/home/edp/.devbrain",
@@ -56,6 +57,7 @@ class AgentRuntimeToolApprovalTests(unittest.TestCase):
         registry = _build_registry(
             tool_path_allowed=lambda _path: False,
             action_is_allowed=lambda action: captured.append(dict(action)) or False,
+            runtime_context={"allow_delete": True},
         )
 
         target = "/home/edp/Documents/demo.txt"
@@ -64,6 +66,17 @@ class AgentRuntimeToolApprovalTests(unittest.TestCase):
         self.assertEqual(result, f"BLOCKED_EDIT:delete:{target}")
         self.assertEqual(captured[0]["action_type"], "file_delete")
         self.assertEqual(captured[0]["path"], target)
+
+    def test_delete_file_requires_explicit_user_request(self):
+        registry = _build_registry(
+            tool_path_allowed=lambda _path: True,
+            action_is_allowed=lambda _action: True,
+            runtime_context={"allow_delete": False},
+        )
+
+        result = registry["delete_file"]("/home/edp/Documents/demo.txt")
+
+        self.assertEqual(result, "ERROR: delete_file requires an explicit user request.")
 
     def test_edit_file_updates_content_after_approval(self):
         with tempfile.TemporaryDirectory() as tmpdir:

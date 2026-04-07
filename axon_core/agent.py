@@ -427,7 +427,11 @@ async def run_agent(
 
     if _brain_mod is not None and hasattr(_brain_mod, "_update_agent_runtime_context"):
         try:
-            _brain_mod._update_agent_runtime_context(agent_session_id=session_id)
+            allow_delete = bool(_re.search(r"\b(delete|remove|rm|wipe|trash)\b", str(user_message or "").lower()))
+            _brain_mod._update_agent_runtime_context(
+                agent_session_id=session_id,
+                allow_delete=allow_delete,
+            )
         except Exception:
             pass
 
