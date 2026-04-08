@@ -2104,6 +2104,8 @@ class AgentPromptRegressionTests(unittest.TestCase):
         self.assertIn("Never wrap shell commands with `cd ... && ...`", prompt)
         self.assertNotIn('cd ~/.devbrain &&', prompt)
         self.assertIn("Document Operator Patterns", prompt)
+        self.assertIn("Visual Document Patterns", prompt)
+        self.assertIn("Treat the request as document design first", prompt)
         self.assertIn("official or public-primary sources", prompt)
         self.assertIn("30-60-90 day execution sequence", prompt)
 

@@ -1,0 +1,34 @@
+        <div class="voice-surface-spotlight"
+             x-show="voiceSurfaceSpotlight().active && !voiceConversation.textDockOpen"
+             x-transition.opacity>
+          <div class="voice-surface-spotlight__header">
+            <div class="voice-surface-spotlight__eyebrow" x-text="voiceSurfaceSpotlight().eyebrow || 'Surface spotlight'"></div>
+            <div class="voice-surface-spotlight__status" x-text="voiceSurfaceSpotlight().status || 'Tracking live surfaces'"></div>
+          </div>
+
+          <button type="button"
+                  class="voice-surface-spotlight__card"
+                  :class="'voice-surface-spotlight__card--' + voiceSurfaceSpotlightTone()"
+                  @click="focusVoiceSurfaceSpotlight()"
+                  :disabled="!voiceSurfaceSpotlight().path">
+            <div class="voice-surface-spotlight__title" x-text="voiceSurfaceSpotlight().title"></div>
+            <div class="voice-surface-spotlight__detail" x-text="voiceSurfaceSpotlight().detail"></div>
+            <div class="voice-surface-spotlight__meta">
+              <span x-text="voiceSurfaceSpotlight().type || 'operator'"></span>
+              <span x-text="voiceSurfaceSpotlight().action || 'Live'"></span>
+            </div>
+          </button>
+
+          <div class="voice-surface-spotlight__history" x-show="voiceSurfaceHistory(4).length">
+            <div class="voice-surface-spotlight__history-label">Recent transitions</div>
+            <div class="voice-surface-spotlight__history-list">
+              <template x-for="entry in voiceSurfaceHistory(4)" :key="entry.key + ':' + entry.at">
+                <button type="button"
+                        class="voice-surface-spotlight__history-chip"
+                        @click="focusVoiceSurfaceSpotlight(entry)"
+                        :disabled="!entry.path"
+                        x-text="entry.title"></button>
+              </template>
+            </div>
+          </div>
+        </div>

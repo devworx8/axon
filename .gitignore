@@ -28,6 +28,7 @@ apps/companion-native/node_modules/
 .cache/
 brain.db
 .claude/
+.agent-browser/
 BKK_Operating_Fundraising_Team_Deck_fixed.pptx
 tmp_probe.txt
 UNIVERSAL_OPERATOR_PLAN.md

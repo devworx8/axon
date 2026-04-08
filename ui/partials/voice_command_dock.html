@@ -24,13 +24,22 @@
             <button class="voice-command-dock__btn" @click="toggleVoiceTextDock(false)">Close</button>
           </div>
 
-          <textarea
-            x-ref="voiceTextDockInput"
-            class="voice-command-dock__textarea"
-            x-model="voiceConversation.textDraft"
-            :placeholder="voiceTextDockPlaceholder()"
-            @keydown.meta.enter.prevent="submitVoiceTextDock()"
-            @keydown.ctrl.enter.prevent="submitVoiceTextDock()"></textarea>
+          <div class="voice-command-dock__input-wrap" style="position:relative;">
+            <textarea
+              x-ref="voiceTextDockInput"
+              class="voice-command-dock__textarea"
+              x-model="voiceConversation.textDraft"
+              :placeholder="voiceTextDockPlaceholder()"
+              @keydown.meta.enter.prevent="submitVoiceTextDock()"
+              @keydown.ctrl.enter.prevent="submitVoiceTextDock()"
+              @keydown.escape.prevent="toggleVoiceTextDock(false)"
+              @keydown.tab.prevent="voiceTextDockAutocomplete()"
+              rows="3"
+              maxlength="4000"></textarea>
+            <span class="voice-command-dock__char-count"
+                  :class="(voiceConversation.textDraft || '').length > 3600 ? ((voiceConversation.textDraft || '').length > 3900 ? 'voice-command-dock__char-count--over' : 'voice-command-dock__char-count--warn') : ''"
+                  x-text="(voiceConversation.textDraft || '').length + ' / 4000'"></span>
+          </div>
 
           <div class="voice-command-dock__prompts">
             <template x-for="prompt in voiceQuickPrompts()" :key="prompt">
@@ -44,7 +53,7 @@
               <button class="voice-command-dock__btn" @click="startVoiceListening()">Listen</button>
               <button class="voice-command-dock__btn" @click="clearVoiceTextDock(true)">Clear</button>
               <button class="voice-command-dock__btn voice-command-dock__btn--primary"
-                      :disabled="chatLoading"
+                      :disabled="chatLoading || !(voiceConversation.textDraft || '').trim()"
                       @click="submitVoiceTextDock()"
                       x-text="voiceCommandDeckSubmitLabel()"></button>
             </div>

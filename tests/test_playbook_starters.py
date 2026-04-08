@@ -91,6 +91,7 @@ class PlaybookStarterTests(unittest.TestCase):
         self.assertIn("Saved prompt", payload["titles"])
         self.assertIn("Execution playbook", payload["titles"])
         self.assertIn("Grounded brief", payload["titles"])
+        self.assertIn("ECD visual layout", payload["titles"])
         self.assertGreaterEqual(payload["starterCount"], 8)
         self.assertEqual(payload["count"], payload["starterCount"] + 1)
 
@@ -126,6 +127,42 @@ class PlaybookStarterTests(unittest.TestCase):
         self.assertEqual(payload["title"], "Docs drop")
         self.assertIn("docs/*.md file", payload["content"])
         self.assertIn("docs,readme,handoff", payload["tags"])
+        self.assertTrue(payload["showAddPrompt"])
+        self.assertEqual(payload["toast"], "Starter playbook loaded")
+
+    def test_seed_starter_playbook_loads_ecd_visual_layout_template(self):
+        payload = _run_resources_script(
+            """
+            (async () => {
+              const mixin = ctx.window.axonResourcesMixin();
+              const app = {
+                newPrompt: { title: '', content: '', tags: '' },
+                showAddPrompt: false,
+                toast: '',
+                showToast(message) {
+                  this.toast = message;
+                },
+              };
+              Object.assign(app, mixin);
+              await app.seedStarterPlaybook('ecd-visual-layout');
+              console.log(JSON.stringify({
+                title: app.newPrompt.title,
+                tags: app.newPrompt.tags,
+                content: app.newPrompt.content,
+                showAddPrompt: app.showAddPrompt,
+                toast: app.toast,
+              }));
+            })().catch(error => {
+              console.error(error);
+              process.exit(1);
+            });
+            """
+        )
+
+        self.assertEqual(payload["title"], "ECD visual layout")
+        self.assertIn("design/ecd/", payload["content"])
+        self.assertIn("single-page A4 PDF", payload["content"])
+        self.assertIn("ecd,design,svg,pdf,education", payload["tags"])
         self.assertTrue(payload["showAddPrompt"])
         self.assertEqual(payload["toast"], "Starter playbook loaded")
 

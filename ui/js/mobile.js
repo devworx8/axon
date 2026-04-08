@@ -30,10 +30,12 @@ function axonMobileMixin() {
       this.showVoiceOrb = true;
       this.switchTab('chat');
       this.refreshVoiceCapability?.();
+      this.ensureVoiceDefaultConversationMode?.();
       Promise.resolve()
         .then(() => this.loadVoiceStatus?.())
         .catch(() => {});
       this.ensureVoiceConversationState?.();
+      this.initVoiceSurfaceDirector?.();
       if (this.chatInput && !this.voiceTranscript) {
         this.voiceTranscript = this.chatInput;
       }
@@ -42,13 +44,31 @@ function axonMobileMixin() {
       }
       this._scheduleBootGreeting?.();
       this.syncVoiceCommandCenterRuntime?.();
+      this.syncVoiceSurfaceDirector?.({ force: true });
       this.syncMobileVoiceChrome();
       requestAnimationFrame?.(() => this.syncMobileVoiceChrome());
+      // Pre-check mic permission on mobile so the browser prompts early
+      if (this.isMobile || window.innerWidth < 768) {
+        navigator.permissions?.query({ name: 'microphone' }).then(status => {
+          if (status.state === 'prompt') {
+            // Trigger the browser permission dialog proactively
+            navigator.mediaDevices?.getUserMedia({ audio: true })
+              .then(s => { s.getTracks().forEach(t => t.stop()); })
+              .catch(() => {});
+          } else if (status.state === 'denied') {
+            this.showToast?.('Microphone blocked — enable it in Android Settings → Apps → Chrome → Permissions');
+          }
+        }).catch(() => {});
+      }
     },
     closeVoiceCommandCenter(stopCapture = true) {
       this.showVoiceOrb = false;
+      this.stopVoiceSurfaceDirector?.();
       this.syncMobileVoiceChrome();
       requestAnimationFrame?.(() => this.syncMobileVoiceChrome());
+      this._cancelNarrationQueue?.();
+      this.clearVoiceAwaitingReply?.();
+      if (typeof this.stopSpeech === 'function') this.stopSpeech();
       this.closeVoiceConversationRuntime?.();
       if (stopCapture && this.voiceActive) {
         this.startVoice();
@@ -63,6 +83,9 @@ function axonMobileMixin() {
       this.speechInputSupported = hasBrowserRecognition || (hasAzureSdk && azureSpeechReady) || (hasRecorder && recorderReady);
       this.speechOutputSupported = !!window.speechSynthesis || azureSpeechReady;
       this.speechSupported = this.speechInputSupported || this.speechOutputSupported;
+      if (this.showVoiceOrb && this.voiceShouldDefaultToAgentMode?.()) {
+        this.ensureVoiceDefaultConversationMode?.();
+      }
     },
     voiceCanRecordInBrowser() {
       return !!(window.MediaRecorder && navigator.mediaDevices?.getUserMedia);
@@ -94,7 +117,7 @@ function axonMobileMixin() {
       } catch (e) {
         const name = String(e?.name || '').toLowerCase();
         if (name.includes('notallowed') || name.includes('permission')) {
-          this.showToast('Microphone access was blocked');
+          this.showToast('Microphone blocked — open Android Settings → Apps → Chrome → Permissions → Microphone → Allow, then retry');
         } else {
           this.showToast('Could not access the microphone');
         }
@@ -120,7 +143,8 @@ function axonMobileMixin() {
         const blob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
         const form = new FormData();
         form.append('file', blob, `axon-voice.${voiceRecorderExtension(mimeType)}`);
-        const response = await fetch(`/api/voice/transcribe?language=${encodeURIComponent(this.speechLocale?.() || 'en-US')}`, {
+        const url = `/api/voice/transcribe?language=${encodeURIComponent(this.speechLocale?.() || 'en-US')}`;
+        const response = await fetch(url, {
           method: 'POST',
           headers: this.authHeaders ? this.authHeaders() : {},
           body: form,
@@ -138,7 +162,8 @@ function axonMobileMixin() {
           this.showToast('No speech was detected');
           return '';
         }
-        this.syncVoiceTranscript?.(text);
+        const consumed = !!this.handleVoiceCaptureTranscript?.(text, { final: true, source: 'recorded' });
+        if (!consumed) this.syncVoiceTranscript?.(text);
         return text;
       } catch (e) {
         this.showToast(e?.message || 'Voice transcription failed');
@@ -180,12 +205,14 @@ function axonMobileMixin() {
         this._voiceRecorderResolve = null;
         this._voiceRecorderPromise = null;
         resolve?.(transcript);
+        this.handleVoiceCaptureLifecycle?.('end', { reason: transcribe ? 'result' : 'cancelled' });
       };
       recorder.ondataavailable = (event) => {
         if (event?.data?.size) chunks.push(event.data);
       };
       recorder.onerror = async (event) => {
         this.showToast(trimText(event?.error?.message || event?.message || 'Voice recording failed'));
+        this.handleVoiceCaptureLifecycle?.('error', { code: 'recording-error', event });
         await finish(false);
       };
       recorder.onstop = async () => {
@@ -252,11 +279,16 @@ function axonMobileMixin() {
       } catch (_) {}
       const SpeechRec = browserSpeechRecognition();
       if (this.voiceShouldUseRecordedCapture()) {
-        await this.startRecordedVoiceCapture();
+        const started = await this.startRecordedVoiceCapture();
+        if (!started) {
+          this.showToast('Could not start voice recording — check microphone permission');
+        }
         return '';
       }
       const stream = await this.requestVoiceMicrophoneStream?.();
-      if (!stream) return '';
+      if (!stream) {
+        return '';
+      }
       stream.getTracks().forEach(track => track.stop());
       if (!SpeechRec && window.SpeechSDK && this.azureSpeechConfigured?.()) {
         await this.startAzureVoiceRecognition();
@@ -290,19 +322,27 @@ function axonMobileMixin() {
         }
         const combined = `${finalTranscript}${interimTranscript}`.trim();
         if (!combined) {
-          this.showToast('No speech was detected');
+          const handledNoSpeech = this.handleVoiceCaptureLifecycle?.('error', { code: 'no-speech' });
+          if (!handledNoSpeech) this.showToast('No speech was detected');
         } else {
-          this.syncVoiceTranscript(combined);
+          const finalOnly = !!(finalTranscript.trim() && !interimTranscript.trim());
+          const consumed = finalOnly
+            ? !!this.handleVoiceCaptureTranscript?.(combined, { final: true, source: 'browser' })
+            : false;
+          if (!consumed) this.syncVoiceTranscript(combined);
         }
         if (finalTranscript.trim() && !interimTranscript.trim()) {
           this.voiceActive = false;
           this._speechRecognizer = null;
+          this.handleVoiceCaptureLifecycle?.('end', { reason: 'result' });
         }
       };
       recog.onerror = (event) => {
         this.voiceActive = false;
         this._speechRecognizer = null;
         const code = String(event?.error || '').toLowerCase();
+        const handled = this.handleVoiceCaptureLifecycle?.('error', { code, event });
+        if (handled && ['no-speech', 'aborted'].includes(code)) return;
         if (code === 'not-allowed' || code === 'service-not-allowed') {
           this.showToast('Microphone permission was denied');
         } else if (code === 'network') {
@@ -318,6 +358,7 @@ function axonMobileMixin() {
       recog.onend = () => {
         this.voiceActive = false;
         this._speechRecognizer = null;
+        this.handleVoiceCaptureLifecycle?.('end', { reason: 'end' });
       };
       try {
         recog.start();

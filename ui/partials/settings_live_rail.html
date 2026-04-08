@@ -20,8 +20,8 @@
                 <div class="rounded-2xl border border-slate-800 bg-slate-900/55 px-3 py-3">
                   <div class="text-[10px] uppercase tracking-[0.16em] text-slate-500">Voice readiness</div>
                   <div class="mt-1 text-sm font-medium text-white"
-                       x-text="voice.server?.transcription_available || voice.server?.synthesis_available ? 'Local voice present' : 'Voice pending'"></div>
-                  <div class="mt-1 text-[11px] text-slate-500" x-text="voice.server?.detail || 'No local voice telemetry yet.'"></div>
+                       x-text="voiceStatus?.transcription_available || voiceStatus?.synthesis_available ? 'Local voice present' : 'Voice pending'"></div>
+                  <div class="mt-1 text-[11px] text-slate-500" x-text="voiceStatus?.detail || 'No local voice telemetry yet.'"></div>
                 </div>
               </div>
             </div>
@@ -33,7 +33,7 @@
                         class="w-full rounded-2xl border border-cyan-400/30 bg-cyan-400/12 px-3 py-2 text-left text-xs font-medium text-cyan-100 transition hover:bg-cyan-400/18 disabled:opacity-40">
                   <span x-text="settingsSaving ? 'Saving configuration…' : 'Save current draft'"></span>
                 </button>
-                <button @click="loadSettings(); loadRuntimeStatus(); loadSystemActions(); refreshVaultProviderKeys(); loadVoiceStatus(true)"
+                <button @click="loadSettings(); loadRuntimeStatus(); loadSystemActions(); refreshVaultProviderKeys(); loadVoiceStatus(true); refreshRuntimeCliDeck?.(true)"
                         class="w-full rounded-2xl border border-slate-700 bg-slate-900/70 px-3 py-2 text-left text-xs font-medium text-slate-300 transition hover:border-slate-500 hover:text-white">
                   Refresh all telemetry
                 </button>

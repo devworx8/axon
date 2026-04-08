@@ -99,6 +99,23 @@ class TerminalFrontendTests(unittest.TestCase):
         self.assertTrue(payload["preferred"])
         self.assertTrue(payload["shouldMount"])
 
+    def test_terminal_xterm_surfaces_auth_failure_detail(self):
+        payload = _run_terminal_script(
+            """
+            const mixin = ctx.window.axonTerminalXtermMixin();
+            const app = { authenticated: false, authToken: '' };
+            Object.assign(app, mixin);
+            console.log(JSON.stringify({
+              detail: app.terminalViewportCloseFailureDetail('voice', { code: 1006, reason: '' }),
+            }));
+            """
+        )
+
+        self.assertEqual(
+            payload["detail"],
+            "Authentication required. Unlock Axon again to attach the interactive shell.",
+        )
+
     def test_chat_terminal_panel_contains_console_xterm_mount(self):
         template = CHAT_TERMINAL_PANEL.read_text(encoding="utf-8")
 
@@ -112,6 +129,8 @@ class TerminalFrontendTests(unittest.TestCase):
         self.assertIn("x-ref=\"voiceXtermMount\"", template)
         self.assertIn("syncInteractiveTerminalViewport('voice')", template)
         self.assertIn("Voice dock", template)
+        self.assertIn("interactiveTerminalRenderable('voice')", template)
+        self.assertIn("terminalViewportError('voice')", template)
 
 
 if __name__ == "__main__":

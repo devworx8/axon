@@ -6,7 +6,7 @@
             <span class="hud-terminal__title" x-text="hudTerminalTitle || 'Terminal'"></span>
           </div>
 
-          <template x-if="interactiveTerminalPreferred('voice')">
+          <template x-if="interactiveTerminalRenderable('voice')">
             <div class="hud-terminal__body">
               <div class="axon-terminal-stage axon-terminal-stage--voice">
                 <div class="axon-terminal-stage__chrome">
@@ -41,18 +41,19 @@
                     <div class="axon-terminal-stage__telemetry-line" x-text="line"></div>
                   </template>
                 </div>
-                <div x-effect="syncInteractiveTerminalViewport('voice')"></div>
               </div>
             </div>
           </template>
 
-          <template x-if="!interactiveTerminalPreferred('voice')">
+          <template x-if="!interactiveTerminalRenderable('voice')">
             <div class="hud-terminal__body hud-terminal__body--fallback">
+              <div class="hud-terminal__line hud-terminal__line--new" x-show="terminalViewportError('voice')" x-text="terminalViewportError('voice')"></div>
               <template x-for="(line, i) in hudTerminalLines" :key="i">
                 <div class="hud-terminal__line" :class="i === hudTerminalLines.length - 1 ? 'hud-terminal__line--new' : ''" x-text="line"></div>
               </template>
               <span class="hud-terminal__cursor"></span>
             </div>
           </template>
+          <div x-effect="syncInteractiveTerminalViewport('voice')"></div>
         </div>
       </template>

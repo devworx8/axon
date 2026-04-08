@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="794" height="1123" viewBox="0 0 794 1123" role="img" aria-labelledby="title desc">
+  <title id="title">ECD Cover Page for Annatjie Makunyane</title>
+  <desc id="desc">A playful Early Childhood Development workbook cover page for Annatjie Makunyane with centre, theme, dates, and ECD learning focus areas.</desc>
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="6" dy="8" stdDeviation="0" flood-color="#d7e4ea" flood-opacity="1"/>
+    </filter>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#d7d0c6" flood-opacity="0.35"/>
+    </filter>
+    <style>
+      .heading { font-family: "Trebuchet MS", "Verdana", sans-serif; font-weight: 700; fill: #27446d; }
+      .subhead { font-family: "Trebuchet MS", "Verdana", sans-serif; font-weight: 700; fill: #2f8892; }
+      .body { font-family: "Trebuchet MS", "Verdana", sans-serif; font-weight: 400; fill: #334a62; }
+      .label { font-family: "Trebuchet MS", "Verdana", sans-serif; font-weight: 700; fill: #27446d; }
+      .small { font-size: 13px; }
+      .bullet { fill: #2f8892; }
+    </style>
+  </defs>
+
+  <rect width="794" height="1123" fill="#fbf5ea"/>
+
+  <circle cx="48" cy="126" r="208" fill="#bfe6f5"/>
+  <circle cx="702" cy="118" r="185" fill="#fee7a8"/>
+  <circle cx="105" cy="1040" r="190" fill="#d6efc2"/>
+  <circle cx="686" cy="1054" r="214" fill="#f5d0db"/>
+
+  <path d="M72 76 H735" stroke="#2f8892" stroke-width="3"/>
+  <path d="M72 76 L108 112 L145 76 Z" fill="#c45c4d"/>
+  <path d="M145 76 L182 112 L218 76 Z" fill="#dc9a2b"/>
+  <path d="M218 76 L255 112 L292 76 Z" fill="#2f8892"/>
+  <path d="M292 76 L329 112 L366 76 Z" fill="#6a9e3d"/>
+  <path d="M366 76 L403 112 L440 76 Z" fill="#7a67b9"/>
+  <path d="M440 76 L477 112 L514 76 Z" fill="#c45c4d"/>
+  <path d="M514 76 L551 112 L588 76 Z" fill="#dc9a2b"/>
+  <path d="M588 76 L625 112 L662 76 Z" fill="#2f8892"/>
+  <path d="M662 76 L699 112 L735 76 Z" fill="#6a9e3d"/>
+
+  <path d="M78 214 A135 135 0 0 1 324 214" fill="none" stroke="#c45c4d" stroke-width="8"/>
+  <path d="M83 214 A130 130 0 0 1 319 214" fill="none" stroke="#dc9a2b" stroke-width="8"/>
+  <path d="M88 214 A125 125 0 0 1 314 214" fill="none" stroke="#6a9e3d" stroke-width="8"/>
+  <path d="M93 214 A120 120 0 0 1 309 214" fill="none" stroke="#2f8892" stroke-width="8"/>
+  <path d="M98 214 A115 115 0 0 1 304 214" fill="none" stroke="#7a67b9" stroke-width="8"/>
+
+  <g fill="#ffffff">
+    <circle cx="160" cy="205" r="26"/>
+    <circle cx="194" cy="192" r="38"/>
+    <circle cx="233" cy="203" r="29"/>
+    <rect x="150" y="203" width="118" height="34" rx="17"/>
+  </g>
+
+  <g fill="#ffffff">
+    <circle cx="606" cy="182" r="26"/>
+    <circle cx="635" cy="170" r="39"/>
+    <circle cx="677" cy="182" r="29"/>
+    <rect x="594" y="180" width="114" height="35" rx="18"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="60" y="178" width="672" height="688" rx="30" fill="#ffffff" stroke="#f0d7b3" stroke-width="2"/>
+  </g>
+
+  <rect x="100" y="211" width="292" height="34" rx="12" fill="#27446d"/>
+  <text x="118" y="233" font-family="Trebuchet MS, Verdana, sans-serif" font-size="16" font-weight="700" fill="#ffffff">ECD ASSESSMENT PORTFOLIO</text>
+
+  <text x="396" y="333" class="heading" font-size="58" text-anchor="middle">
+    <tspan x="396" dy="0">Workbook Answers and</tspan>
+    <tspan x="396" dy="56">Evidence Pack</tspan>
+  </text>
+
+  <text x="396" y="442" class="subhead" font-size="27" text-anchor="middle">
+    <tspan x="396" dy="0">Unit Standard 13853: Mediate active learning in ECD</tspan>
+    <tspan x="396" dy="30">programmes</tspan>
+  </text>
+
+  <text x="396" y="512" class="body" font-size="21" text-anchor="middle">
+    <tspan x="396" dy="0">Play-based learning, observation, mediation and reflection in an ECD classroom</tspan>
+    <tspan x="396" dy="24">setting</tspan>
+  </text>
+
+  <g filter="url(#softShadow)">
+    <rect x="98" y="560" width="598" height="216" rx="22" fill="#fffdfa" stroke="#ead8bf" stroke-width="2"/>
+  </g>
+
+  <rect x="120" y="588" width="145" height="30" rx="10" fill="#d9e7f7" stroke="#b2c9e4"/>
+  <rect x="120" y="624" width="145" height="30" rx="10" fill="#d9e7f7" stroke="#b2c9e4"/>
+  <rect x="120" y="660" width="145" height="30" rx="10" fill="#d9e7f7" stroke="#b2c9e4"/>
+  <rect x="120" y="696" width="145" height="30" rx="10" fill="#d9e7f7" stroke="#b2c9e4"/>
+  <rect x="120" y="732" width="145" height="30" rx="10" fill="#d9e7f7" stroke="#b2c9e4"/>
+
+  <text x="136" y="608" class="label" font-size="18">Prepared for</text>
+  <text x="136" y="644" class="label" font-size="18">Centre</text>
+  <text x="136" y="680" class="label" font-size="18">Theme</text>
+  <text x="136" y="716" class="label" font-size="18">Activity date</text>
+  <text x="136" y="752" class="label" font-size="18">Compilation date</text>
+
+  <text x="286" y="609" class="body" font-size="19">Annatjie Makunyane</text>
+  <text x="286" y="645" class="body" font-size="19">Young Eagles Home Care Centre</text>
+  <text x="286" y="681" class="body" font-size="19">My Body and Healthy Habits</text>
+  <text x="286" y="717" class="body" font-size="19">04 April 2026</text>
+  <text x="286" y="753" class="body" font-size="19">07 April 2026</text>
+
+  <rect x="106" y="806" width="152" height="36" rx="14" fill="#c45c4d"/>
+  <rect x="276" y="806" width="136" height="36" rx="14" fill="#2f8892"/>
+  <rect x="428" y="806" width="120" height="36" rx="14" fill="#6a9e3d"/>
+  <rect x="563" y="806" width="129" height="36" rx="14" fill="#7a67b9"/>
+  <text x="182" y="829" font-family="Trebuchet MS, Verdana, sans-serif" font-size="15" font-weight="700" fill="#ffffff" text-anchor="middle">Play-based learning</text>
+  <text x="344" y="829" font-family="Trebuchet MS, Verdana, sans-serif" font-size="15" font-weight="700" fill="#ffffff" text-anchor="middle">Observation</text>
+  <text x="488" y="829" font-family="Trebuchet MS, Verdana, sans-serif" font-size="15" font-weight="700" fill="#ffffff" text-anchor="middle">Mediation</text>
+  <text x="627" y="829" font-family="Trebuchet MS, Verdana, sans-serif" font-size="15" font-weight="700" fill="#ffffff" text-anchor="middle">Reflection</text>
+
+  <path d="M178 958 H616" stroke="#ead8bf" stroke-width="2" stroke-linecap="round"/>
+  <text x="397" y="998" class="heading" font-size="17" text-anchor="middle">Young children learn best through talk, play, movement, repetition and caring adult guidance.</text>
+</svg>

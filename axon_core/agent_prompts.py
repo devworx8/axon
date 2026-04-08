@@ -4,6 +4,7 @@ import os
 from typing import Optional
 
 from .agent_document_guidance import document_operator_guidance_block
+from .agent_visual_guidance import visual_document_guidance_block
 
 
 def _build_react_system(context_block: str, project_name: Optional[str], tool_names: list[str]) -> str:  # pyright: ignore[reportUnusedFunction]
@@ -326,6 +327,6 @@ exceptional engineer.
 - For voice interactions: be concise. Speak naturally with contractions.
   Never include markdown formatting characters in spoken responses.
 
-{document_operator_guidance_block()}{self_awareness}{axon_ctx}
+{document_operator_guidance_block()}{visual_document_guidance_block()}{self_awareness}{axon_ctx}
 {('Context: ' + context_block[:800]) if context_block else ''}
 {('Project: ' + project_name) if project_name else ''}"""

@@ -44,31 +44,73 @@ function axonVoiceCommandCenterMixin() {
     });
   };
 
+  const pickBootGreeting = (ctx) => {
+    if (ctx.currentWorkspaceRunActive?.() || ctx.chatLoading || ctx.liveOperator?.active) {
+      const headline = trimText(ctx.voiceOperatorHeadline?.() || ctx.liveOperator?.title || 'the active task');
+      const nextStep = trimText(ctx.voiceOperatorNextStep?.() || ctx.liveOperator?.detail || '');
+      const busyLine = nextStep && nextStep !== headline
+        ? `Resuming the active task, Sir. ${headline}. ${nextStep}`
+        : `Resuming the active task, Sir. ${headline}`;
+      return busyLine.slice(0, 220);
+    }
+    if (ctx.voiceConversation?.awaitingReply) {
+      return "I'm still with you, Sir. Awaiting your next instruction.";
+    }
+
+    const hour = new Date().getHours();
+    const timeWord = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
+    const greetings = [
+      `Good ${timeWord}, Sir. All systems are online.`,
+      `Reactor online. Standing by, Sir.`,
+      `Good ${timeWord}, Sir. Axon is ready for your command.`,
+      `Systems nominal. How can I help you, Sir?`,
+      `Online and operational. Good ${timeWord}, Sir.`,
+    ];
+    return greetings[Math.floor(Math.random() * greetings.length)];
+  };
+
+  const pickSleepGoodbye = () => {
+    const goodbyes = [
+      'Going offline, Sir. I\'ll be here when you need me.',
+      'Reactor powering down. Rest well, Sir.',
+      'Standing down, Sir. Systems on standby.',
+    ];
+    return goodbyes[Math.floor(Math.random() * goodbyes.length)];
+  };
+
   return {
 
     /** Sleep state — when true the reactor goes dark */
     reactorAsleep: false,
 
-    /** Tap the ORB: asleep → wake, awake → sleep */
+    /** Tap the ORB: asleep → wake, awake → toggle voice listen */
     toggleReactorOrbAction() {
       if (this.reactorAsleep) {
         this.wakeReactor();
         return;
       }
-      // Any awake state — tap puts reactor to sleep
+      // On mobile: tap starts/stops voice listening (more intuitive)
+      if (this.isMobile || window.innerWidth < 768) {
+        this.startVoiceListening();
+        return;
+      }
+      // Desktop: tap puts reactor to sleep
       this.sleepReactor();
     },
 
-    /** Put reactor to sleep — play power-down sound, speak goodbye, then dim */
+    /** Put reactor to sleep — hard-stop capture/speech, play power-down sound, then dim */
     sleepReactor() {
+      this.reactorAsleep = true;
       clearTimeout(this._bootGreetingTimer);
       this._cancelNarrationQueue?.();
+      this.clearVoiceAwaitingReply?.();
+      if (this.voiceActive) {
+        Promise.resolve(this.startVoice?.()).catch(() => {});
+      }
       if (typeof this.stopSpeech === 'function') this.stopSpeech();
       if (window.axonVoiceSleepSound) {
         window.axonVoiceSleepSound.play();
       }
-      this._speakGreeting(this._pickSleepGoodbye());
-      this.reactorAsleep = true;
     },
 
     /** Wake reactor — re-ignite glow + boot sound */
@@ -88,7 +130,10 @@ function axonVoiceCommandCenterMixin() {
       this._scheduleBootGreeting();
     },
 
-    /** Speak a contextual greeting once the boot animation settles */
+    /**
+     * Compatibility wrapper for isolated consumers/tests.
+     * The dedicated greeting mixin overrides this in full app composition.
+     */
     _scheduleBootGreeting() {
       clearTimeout(this._bootGreetingTimer);
       const delay = (this.currentWorkspaceRunActive?.() || this.chatLoading || this.liveOperator?.active) ? 520 : 6800;
@@ -96,51 +141,22 @@ function axonVoiceCommandCenterMixin() {
         if (!this.showVoiceOrb || this.reactorAsleep) return;
         const greeting = this._pickBootGreeting();
         this._speakGreeting(greeting);
+        this._showGreetingToast?.(greeting);
       }, delay);
     },
 
-    /** Speak greeting using the configured voice profile */
     _speakGreeting(text) {
       if (typeof this.speakMessage === 'function') {
         this.speakMessage(text);
       }
     },
 
-    /** Pick a time-aware JARVIS-style greeting */
     _pickBootGreeting() {
-      if (this.currentWorkspaceRunActive?.() || this.chatLoading || this.liveOperator?.active) {
-        const headline = trimText(this.voiceOperatorHeadline?.() || this.liveOperator?.title || 'the active task');
-        const nextStep = trimText(this.voiceOperatorNextStep?.() || this.liveOperator?.detail || '');
-        const busyLine = nextStep && nextStep !== headline
-          ? `Resuming the active task, Sir. ${headline}. ${nextStep}`
-          : `Resuming the active task, Sir. ${headline}`;
-        return busyLine.slice(0, 220);
-      }
-      if (this.voiceConversation?.awaitingReply) {
-        return "I'm still with you, Sir. Awaiting your next instruction.";
-      }
-
-      const hour = new Date().getHours();
-      const timeWord = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
-
-      const greetings = [
-        `Good ${timeWord}, Sir. All systems are online.`,
-        `Reactor online. Standing by, Sir.`,
-        `Good ${timeWord}, Sir. Axon is ready for your command.`,
-        `Systems nominal. How can I help you, Sir?`,
-        `Online and operational. Good ${timeWord}, Sir.`,
-      ];
-      return greetings[Math.floor(Math.random() * greetings.length)];
+      return pickBootGreeting(this);
     },
 
-    /** Pick a JARVIS-style goodbye when going to sleep */
     _pickSleepGoodbye() {
-      const goodbyes = [
-        'Going offline, Sir. I\'ll be here when you need me.',
-        'Reactor powering down. Rest well, Sir.',
-        'Standing down, Sir. Systems on standby.',
-      ];
-      return goodbyes[Math.floor(Math.random() * goodbyes.length)];
+      return pickSleepGoodbye();
     },
 
     async startVoiceListening() {
@@ -158,13 +174,26 @@ function axonVoiceCommandCenterMixin() {
     },
 
     async dispatchVoiceCommand(commandText = '') {
-      const text = String(commandText || this.voiceTranscript || this.chatInput || '').trim();
+      const raw = String(commandText || this.voiceTranscript || this.chatInput || '').trim();
+      const normalize = window.axonVoiceSpeech?.normalizeCommandText;
+      const text = normalize ? normalize(raw) : raw;
       const workspaceBusy = typeof this.currentWorkspaceRunActive === 'function'
         ? this.currentWorkspaceRunActive()
         : !!this.chatLoading;
       if (!text) return false;
 
       this.syncVoiceTranscript?.(text);
+      const permissionCommand = window.axonVoiceSpeech?.permissionCommand;
+      if (permissionCommand) {
+        const handled = await permissionCommand(text, {
+          setPermissionPreset: this.setPermissionPreset?.bind(this),
+          permissionPresetKey: this.permissionPresetKey?.bind(this),
+        });
+        if (handled) {
+          this.clearVoiceTranscript?.();
+          return true;
+        }
+      }
       if (workspaceBusy) {
         this.onVoiceCommandDispatched?.(text);
         const busyAction = await this.handleBusyWorkspaceCommand?.(text);
@@ -209,8 +238,15 @@ function axonVoiceCommandCenterMixin() {
       return content.slice(0, limit);
     },
 
+    voiceTaskSurfaceActive() {
+      return !!(
+        this.voiceShouldRenderOperatorDeck?.()
+        || (this.chatLoading && this.liveOperator?.active)
+      );
+    },
+
     voiceResponseAvailable() {
-      return !!this.voiceLatestResponseText();
+      return !!(this.voiceTaskSurfaceActive() || this.voiceLatestResponseText());
     },
 
     voiceDisplayTranscript() {
@@ -235,13 +271,31 @@ function axonVoiceCommandCenterMixin() {
       return 'The latest voice response will appear here.';
     },
 
+    voiceTaskSurfaceHtml() {
+      const taskSurfaceActive = this.voiceTaskSurfaceActive();
+      if (!taskSurfaceActive) return '';
+      if (typeof this.voiceOperatorDeckHtml === 'function') {
+        const html = this.voiceOperatorDeckHtml();
+        if (html) return html;
+      }
+      if (typeof this.voiceConversationFeedHtml === 'function') {
+        const html = this.voiceConversationFeedHtml();
+        if (html) return html;
+      }
+      if (typeof this.voiceLiveOperatorFeedHtml === 'function') {
+        return this.voiceLiveOperatorFeedHtml() || '';
+      }
+      return '';
+    },
+
+    voiceResponseRenderClass() {
+      return this.voiceTaskSurfaceActive() ? '' : 'voice-response-render';
+    },
+
     /** Render response as HTML with markdown + file path chips */
     voiceDisplayResponseHtml() {
-      const liveFeedHtml = typeof this.voiceLiveOperatorFeedHtml === 'function'
-        && (this.voiceShouldRenderOperatorDeck?.() || (this.chatLoading && this.liveOperator?.active))
-        ? this.voiceLiveOperatorFeedHtml()
-        : '';
-      if (liveFeedHtml) return liveFeedHtml;
+      const taskSurfaceHtml = this.voiceTaskSurfaceHtml();
+      if (taskSurfaceHtml) return taskSurfaceHtml;
 
       const raw = this.voiceDisplayResponse();
 
@@ -413,8 +467,11 @@ function axonVoiceCommandCenterMixin() {
 
       const now = Date.now();
       const elapsed = now - (this._lastNarrationAt || 0);
+      const speechBusy = typeof this.voiceSpeechBusy === 'function'
+        ? this.voiceSpeechBusy()
+        : !!(this._currentAudio || this._speechSynthActive);
 
-      if (elapsed >= 6000 && !this._currentAudio && !this._speechSynthActive) {
+      if (elapsed >= 6000 && !speechBusy) {
         this._lastNarrationAt = now;
         this._speakNarration(line);
       } else {
@@ -425,8 +482,11 @@ function axonVoiceCommandCenterMixin() {
           this._narrationTimer = setTimeout(() => {
             this._narrationTimer = null;
             const queued = this._narrationQueue.shift();
+            const queueSpeechBusy = typeof this.voiceSpeechBusy === 'function'
+              ? this.voiceSpeechBusy()
+              : !!(this._currentAudio || this._speechSynthActive);
             if (queued && this.showVoiceOrb && this.voiceMode
-                && !this.voiceActive && !this._currentAudio && !this._speechSynthActive) {
+                && !this.voiceActive && !queueSpeechBusy) {
               this._lastNarrationAt = Date.now();
               this._speakNarration(queued);
             }

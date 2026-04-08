@@ -3,6 +3,8 @@
    Rich task-mode telemetry, blocker states, and command-deck UX.
    ============================================================= */
 function axonVoiceOperatorDeckMixin() {
+  const OPERATOR_DECK_HOLD_MS = 3200;
+  const RECENT_OPERATOR_FEED_MS = 6000;
   const phaseToneMap = {
     observe: 'slate',
     plan: 'cyan',
@@ -44,6 +46,18 @@ function axonVoiceOperatorDeckMixin() {
   const hasStreamingBlocks = (ctx) => {
     const message = typeof ctx.latestAssistantMessage === 'function' ? ctx.latestAssistantMessage() : null;
     return !!(message?.streaming && ((message?.thinkingBlocks || []).length || (message?.workingBlocks || []).length));
+  };
+  const hasActiveAgentStream = (ctx) => {
+    const message = typeof ctx.latestAssistantMessage === 'function' ? ctx.latestAssistantMessage() : null;
+    return !!(message?.streaming && trimText(message?.mode).toLowerCase() === 'agent');
+  };
+  const hasRecentOperatorFeed = (ctx) => {
+    const feed = Array.isArray(ctx.liveOperatorFeed) ? ctx.liveOperatorFeed : [];
+    const latest = feed[feed.length - 1];
+    if (!latest) return false;
+    const stamp = Date.parse(String(latest.at || ''));
+    if (!Number.isFinite(stamp)) return true;
+    return (Date.now() - stamp) <= RECENT_OPERATOR_FEED_MS;
   };
   const sessionRunning = (session = null) => {
     if (!session || typeof session !== 'object') return false;
@@ -150,6 +164,13 @@ function axonVoiceOperatorDeckMixin() {
         this.voiceConversation.terminalPinnedTouched = false;
         this.voiceConversation.terminalPinned = false;
       }
+      if (!this.voiceOperatorDeck || typeof this.voiceOperatorDeck !== 'object') {
+        this.voiceOperatorDeck = {};
+      }
+      const holdUntil = Number(this.voiceOperatorDeck.holdUntil || 0);
+      this.voiceOperatorDeck = {
+        holdUntil: Number.isFinite(holdUntil) ? holdUntil : 0,
+      };
     },
     voiceOperationalIntent(commandText = '') {
       this.ensureVoiceOperatorDeckState();
@@ -167,14 +188,22 @@ function axonVoiceOperatorDeckMixin() {
 
     voiceShouldRenderOperatorDeck() {
       this.ensureVoiceOperatorDeckState();
-      return !!(
+      const activeNow = !!(
         this.chatLoading
+        || this.currentWorkspaceRunActive?.()
         || this.liveOperator?.active
         || activeAutoSession(this)
         || this.voiceOperatorBlocker()
         || this.voiceOperatorActiveCommand()
         || hasStreamingBlocks(this)
+        || hasActiveAgentStream(this)
+        || hasRecentOperatorFeed(this)
       );
+      if (activeNow) {
+        this.voiceOperatorDeck.holdUntil = Date.now() + OPERATOR_DECK_HOLD_MS;
+        return true;
+      }
+      return Number(this.voiceOperatorDeck?.holdUntil || 0) > Date.now();
     },
 
     voiceResponsePanelLabel() {
@@ -423,9 +452,10 @@ function axonVoiceOperatorDeckMixin() {
       else if (this.hudApprovalPending) this.hudDismissApproval?.();
 
       const provider = trimText(this.consoleProviderIdentity?.().providerLabel);
-      if (provider && (this.chatLoading || this.voiceActive || this._currentAudio || this._speechSynthActive)) {
+      const speechBusy = this.voiceSpeechBusy?.() || false;
+      if (provider && (this.chatLoading || this.voiceActive || speechBusy)) {
         this.hudShowBeam?.(provider);
-      } else if (!this.chatLoading && !this.voiceActive && !this._currentAudio && !this._speechSynthActive) {
+      } else if (!this.chatLoading && !this.voiceActive && !speechBusy) {
         this.hudHideBeam?.();
       }
     },
@@ -438,9 +468,10 @@ function axonVoiceOperatorDeckMixin() {
       const chip = escapeHtml(this.voiceOperatorSurfaceChip());
       const headline = escapeHtml(this.voiceOperatorHeadline());
       const scope = escapeHtml(this.voiceOperatorScope());
-      const streamBlocksHtml = typeof this.voiceStreamingBlocksHtml === 'function'
-        ? this.voiceStreamingBlocksHtml()
-        : '';
+      const streamBlocksHtml = typeof this.voiceStreamingBlocksHtml === 'function' ? this.voiceStreamingBlocksHtml() : '';
+      const surfacesHtml = this.voiceOperatorSurfaceCardsHtml?.() || '';
+      const artifactRailHtml = this.voiceArtifactRailHtml?.() || '';
+      const activityFeedHtml = this.voiceActivityFeedHtml?.(5) || '';
       const activeCommand = escapeHtml(
         this.voiceOperatorActiveCommand()
         || (streamBlocksHtml ? 'Reasoning before tool execution' : 'No shell command running yet')
@@ -464,10 +495,7 @@ function axonVoiceOperatorDeckMixin() {
         + `</div>`
       )).join('');
       const responsePreview = !this.chatLoading && this.voiceResponseAvailable?.()
-        ? `<div class="voice-operator-deck__reply">`
-          + `<div class="voice-operator-deck__reply-label">Latest response</div>`
-          + `<div class="voice-operator-deck__reply-body">${renderResponsePreview(this, this.voiceLatestResponseText?.(420) || '')}</div>`
-          + `</div>`
+        ? `<div class="voice-operator-deck__reply"><div class="voice-operator-deck__reply-label">Latest response</div><div class="voice-operator-deck__reply-body">${renderResponsePreview(this, this.voiceLatestResponseText?.(420) || '')}</div></div>`
         : '';
 
       return `<div class="voice-operator-deck voice-operator-deck--${tone}">`
@@ -487,8 +515,11 @@ function axonVoiceOperatorDeckMixin() {
         + `<div class="voice-operator-deck__metric"><div class="voice-operator-deck__label">Command</div><div class="voice-operator-deck__value voice-operator-deck__value--mono">${activeCommand}</div></div>`
         + `<div class="voice-operator-deck__metric"><div class="voice-operator-deck__label">Next</div><div class="voice-operator-deck__value">${nextStep}</div></div>`
         + `</div>`
+        + surfacesHtml
+        + artifactRailHtml
         + streamBlocksHtml
         + blockerHtml
+        + activityFeedHtml
         + `<div class="voice-operator-deck__timeline">${timelineHtml || '<div class="voice-operator-deck__empty">Axon is waiting for live execution events.</div>'}</div>`
         + responsePreview
         + `</div>`;

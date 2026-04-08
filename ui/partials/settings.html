@@ -110,7 +110,7 @@
                           class="rounded-2xl border border-cyan-400/30 bg-cyan-400/15 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100 transition hover:bg-cyan-400/20 disabled:opacity-40">
                     <span x-text="settingsSaving ? 'Committing…' : 'Save Systems'"></span>
                   </button>
-                  <button @click="loadSettings(); loadRuntimeStatus(); loadSystemActions(); refreshVaultProviderKeys(); loadVoiceStatus(true)"
+                  <button @click="loadSettings(); loadRuntimeStatus(); loadSystemActions(); refreshVaultProviderKeys(); loadVoiceStatus(true); refreshRuntimeCliDeck?.(true)"
                           class="rounded-2xl border border-slate-700 bg-slate-950/60 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300 transition hover:border-slate-500 hover:text-white">
                     Refresh Telemetry
                   </button>
@@ -136,8 +136,8 @@
                 <button @click="settingsSection = 'voice'" class="rounded-2xl border border-slate-800/80 bg-slate-950/70 p-4 text-left transition hover:border-cyan-400/25">
                   <div class="text-[10px] uppercase tracking-[0.22em] text-slate-500">Voice Stack</div>
                   <div class="mt-2 text-lg font-semibold text-white"
-                       x-text="voice.server?.transcription_available || voice.server?.synthesis_available ? 'Voice Ready' : 'Voice Pending'"></div>
-                  <div class="mt-1 text-[11px] text-slate-400" x-text="voice.server?.detail || 'Refresh the local voice runtime to inspect readiness.'"></div>
+                       x-text="voiceStatus?.transcription_available || voiceStatus?.synthesis_available ? 'Voice Ready' : 'Voice Pending'"></div>
+                  <div class="mt-1 text-[11px] text-slate-400" x-text="voiceStatus?.detail || 'Refresh the local voice runtime to inspect readiness.'"></div>
                 </button>
                 <button @click="settingsSection = 'operator'" class="rounded-2xl border border-slate-800/80 bg-slate-950/70 p-4 text-left transition hover:border-cyan-400/25">
                   <div class="text-[10px] uppercase tracking-[0.22em] text-slate-500">Operator Guardrails</div>
@@ -148,6 +148,7 @@
             </div>
 
             <!-- @include partials/settings_runtime_deck.html -->
+            <!-- @include partials/settings_runtime_cli_deck.html -->
             <!-- @include partials/settings_workspace_deck.html -->
             <!-- @include partials/settings_operator_deck.html -->
             <!-- @include partials/settings_edge_deck.html -->

@@ -14,6 +14,7 @@ function axonCompanionMixin() {
       return { ...fallback };
     }
   };
+  const trimText = (value = '') => String(value || '').trim();
 
   return {
     companionStatus: {
@@ -241,11 +242,111 @@ function axonCompanionMixin() {
       this.switchTab?.('chat');
     },
 
+    missionWorkspaceState() {
+      const direct = String(this.chatProjectId || this.chatProject?.id || '').trim();
+      const current = typeof this.workspaceRunStateFor === 'function'
+        ? this.workspaceRunStateFor(direct || null)
+        : null;
+      const entries = typeof this.workspaceRunEntries === 'function'
+        ? this.workspaceRunEntries()
+        : [];
+      const hasSignals = (state = null) => !!(
+        state
+        && typeof state === 'object'
+        && (
+          state.loading
+          || state.liveOperator?.active
+          || (Array.isArray(state.liveOperatorFeed) && state.liveOperatorFeed.length)
+        )
+      );
+
+      if (hasSignals(current)) return current;
+
+      const preferredLoading = entries.find(entry => entry.loading && String(entry.key || '').trim() === direct);
+      if (preferredLoading) return preferredLoading;
+
+      const activeSpecific = entries.find(entry => entry.loading && String(entry.key || '').trim() !== '__all__');
+      if (activeSpecific) return activeSpecific;
+
+      const activeGlobal = entries.find(entry => entry.loading);
+      if (activeGlobal) return activeGlobal;
+
+      const operatorSpecific = entries.find(entry => entry.liveOperator?.active && String(entry.key || '').trim() !== '__all__');
+      if (operatorSpecific) return operatorSpecific;
+
+      const operatorGlobal = entries.find(entry => entry.liveOperator?.active);
+      if (operatorGlobal) return operatorGlobal;
+
+      const feedSpecific = entries.find(
+        entry => Array.isArray(entry.liveOperatorFeed) && entry.liveOperatorFeed.length && String(entry.key || '').trim() !== '__all__',
+      );
+      if (feedSpecific) return feedSpecific;
+
+      const feedGlobal = entries.find(entry => Array.isArray(entry.liveOperatorFeed) && entry.liveOperatorFeed.length);
+      if (feedGlobal) return feedGlobal;
+
+      return current || null;
+    },
+
+    missionLiveOperator() {
+      const state = this.missionWorkspaceState?.();
+      const key = trimText(state?.key);
+      const workspaceId = trimText(
+        state?.liveOperator?.workspaceId
+        || state?.liveOperator?.workspace_id
+        || (key && key !== '__all__' ? key : ''),
+      );
+      const workspaceName = workspaceId
+        ? (
+          this.chatProject?.name
+          || this.workspaceTabLabel?.(workspaceId)
+          || (this.projects || []).find(project => String(project?.id || '') === workspaceId)?.name
+          || ''
+        )
+        : 'Global';
+      return {
+        active: false,
+        mode: 'chat',
+        phase: 'observe',
+        title: '',
+        detail: '',
+        tool: '',
+        startedAt: '',
+        workspaceId,
+        workspaceName,
+        ...(this.liveOperator || {}),
+        ...(state?.liveOperator || {}),
+      };
+    },
+
+    missionLiveOperatorFeed() {
+      const state = this.missionWorkspaceState?.();
+      if (Array.isArray(state?.liveOperatorFeed) && state.liveOperatorFeed.length) {
+        return [...state.liveOperatorFeed];
+      }
+      return Array.isArray(this.liveOperatorFeed) ? [...this.liveOperatorFeed] : [];
+    },
+
+    missionWorkspaceRunActive() {
+      return !!this.missionWorkspaceState?.()?.loading;
+    },
+
     missionWorkspaceId() {
       const direct = String(this.chatProjectId || this.chatProject?.id || '').trim();
       if (direct) {
         const parsed = parseInt(direct, 10);
         return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+      }
+      const state = this.missionWorkspaceState?.();
+      const stateWorkspaceId = Number(
+        state?.liveOperator?.workspaceId
+        || state?.liveOperator?.workspace_id
+        || (trimText(state?.key) !== '__all__' ? trimText(state?.key) : 0)
+        || 0,
+      );
+      if (stateWorkspaceId > 0) return stateWorkspaceId;
+      if (state?.loading || state?.liveOperator?.active || (Array.isArray(state?.liveOperatorFeed) && state.liveOperatorFeed.length)) {
+        return null;
       }
       const fallback = this.dashboardWeakestWorkspace?.();
       const fallbackId = Number(fallback?.id || 0);
@@ -253,9 +354,23 @@ function axonCompanionMixin() {
     },
 
     missionWorkspaceLabel() {
-      return this.chatProject?.name
-        || this.dashboardWeakestWorkspace?.()?.name
-        || 'Global';
+      if (this.chatProject?.name) return this.chatProject.name;
+      const state = this.missionWorkspaceState?.();
+      const key = trimText(state?.key);
+      const workspaceId = trimText(
+        state?.liveOperator?.workspaceId
+        || state?.liveOperator?.workspace_id
+        || (key && key !== '__all__' ? key : ''),
+      );
+      if (workspaceId) {
+        return this.workspaceTabLabel?.(workspaceId)
+          || (this.projects || []).find(project => String(project?.id || '') === workspaceId)?.name
+          || `Workspace ${workspaceId}`;
+      }
+      if (state?.loading || state?.liveOperator?.active || (Array.isArray(state?.liveOperatorFeed) && state.liveOperatorFeed.length)) {
+        return 'Global';
+      }
+      return this.dashboardWeakestWorkspace?.()?.name || 'Global';
     },
 
     missionPosture() {

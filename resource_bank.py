@@ -52,11 +52,11 @@ def ensure_storage_root(settings: dict | None = None) -> Path:
 
 
 def upload_limit_bytes(settings: dict | None = None) -> int:
-    raw = (settings or {}).get("resource_upload_max_mb") or "20"
+    raw = (settings or {}).get("resource_upload_max_mb") or "50"
     try:
-        mb = max(1, min(100, int(str(raw).strip())))
+        mb = max(1, min(200, int(str(raw).strip())))
     except Exception:
-        mb = 20
+        mb = 50
     return mb * 1024 * 1024
 
 

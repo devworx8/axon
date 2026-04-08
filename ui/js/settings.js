@@ -4,6 +4,23 @@
 
 function axonSettingsMixin() {
   return {
+    // ── Console zoom state ─────────────────────────────────────────
+    _consoleZoom: 1.0,
+    vaultUnlocked: false,
+    vaultProviderKeys: {},
+
+    consoleZoomPercent() {
+      return Math.round((this._consoleZoom || 1) * 100) + '%';
+    },
+    adjustConsoleZoom(delta) {
+      this._consoleZoom = Math.min(2, Math.max(0.5, (this._consoleZoom || 1) + delta));
+      document.documentElement.style.setProperty('--console-zoom', this._consoleZoom);
+    },
+    resetConsoleZoom() {
+      this._consoleZoom = 1.0;
+      document.documentElement.style.setProperty('--console-zoom', '1');
+    },
+
     currentRuntimeBackend() {
       const explicit = String(this.settingsForm?.ai_backend || '').trim().toLowerCase();
       if (explicit) return explicit;
@@ -14,17 +31,14 @@ function axonSettingsMixin() {
       if (this.runtimeStatus?.ollama_runtime_mode) return 'ollama';
       return 'api';
     },
-
     currentBackendSupportsAgent() {
       const backend = this.currentRuntimeBackend?.() || '';
       return backend === 'ollama' || backend === 'cli';
     },
-
     usesOllamaBackend() {
       const backend = this.currentRuntimeBackend?.() || '';
       return backend === 'ollama' || backend === 'cli';
     },
-
     activeChatModel() {
       const backend = this.currentRuntimeBackend?.() || '';
       if (backend === 'cli') {
@@ -45,7 +59,6 @@ function axonSettingsMixin() {
         || ''
       ).trim();
     },
-
     assistantRuntimeLabel() {
       const backend = this.currentRuntimeBackend?.() || '';
       if (backend === 'cli') {
@@ -61,7 +74,6 @@ function axonSettingsMixin() {
       }
       return this.activeChatModel?.() || 'Runtime';
     },
-
     async loadSettings() {
       try {
         const s = await this.api('GET', '/api/settings');
@@ -146,6 +158,7 @@ function axonSettingsMixin() {
           max_history_turns: s.max_history_turns || s.max_chat_history || '10',
         };
         this.selectedChatModel = s.code_model || s.ollama_model || this.selectedChatModel || '';
+        this.syncPermissionChrome?.();
         if (s.ai_backend === 'ollama') { this.checkOllamaStatus(); this.loadOllamaModels(); }
         this.loadSystemActions();
         if (s.api_key_set) {
@@ -175,7 +188,6 @@ function axonSettingsMixin() {
         this.refreshVaultProviderKeys();
       } catch(e) {}
     },
-
     async refreshVaultProviderKeys() {
       try {
         const r = await this.api('GET', '/api/vault/provider-keys');
@@ -186,7 +198,6 @@ function axonSettingsMixin() {
         this.vaultProviderKeys = {};
       }
     },
-
     async saveSettings() {
       this.settingsSaving = true;
       this.settingsSaved = false;
@@ -306,14 +317,12 @@ function axonSettingsMixin() {
       } catch(e) { this.showToast('Failed to save'); }
       this.settingsSaving = false;
     },
-
     async saveSettingsQuiet() {
       try {
         await this.api('POST', '/api/settings', { api_provider: this.settingsForm.api_provider || 'deepseek' });
         await this.loadRuntimeStatus();
       } catch(e) { this.showToast('Failed to switch provider'); }
     },
-
     async loadSystemActions() {
       this.systemActionsLoading = true;
       try {
@@ -334,7 +343,6 @@ function axonSettingsMixin() {
       }
       this.systemActionsLoading = false;
     },
-
     openSystemAction(action) {
       if (!action || !action.supported) return;
       this.systemActionModal = {
@@ -346,7 +354,6 @@ function axonSettingsMixin() {
         result: null,
       };
     },
-
     closeSystemAction() {
       this.systemActionModal = {
         open: false,
@@ -357,7 +364,6 @@ function axonSettingsMixin() {
         result: null,
       };
     },
-
     async executeSystemAction() {
       const action = this.systemActionModal.action;
       if (!action || this.systemActionModal.submitting) return;
@@ -420,6 +426,8 @@ function axonSettingsMixin() {
           this.loadRuntimeStatus();
           this.connectLiveFeed();
           if (this.activeTab === 'chat') this.loadChatHistory();
+          // JARVIS-style greeting on reconnect
+          if (typeof this.onAxonReconnected === 'function') this.onAxonReconnected();
         } else {
           this.showToast('Server not reachable');
         }
@@ -436,6 +444,12 @@ function axonSettingsMixin() {
       setTimeout(() => this.pollUsage(), 15000);  // refresh every 15s
     },
 
+    syncPermissionChrome() {
+      if (typeof document === 'undefined') return;
+      const fullAccess = this.permissionPresetKey() === 'full_access';
+      document.documentElement?.classList?.toggle('axon-full-access', fullAccess);
+      document.body?.classList?.toggle('axon-full-access', fullAccess);
+    },
     permissionPresetKey() {
       const mode = String(this.settingsForm?.runtime_permissions_mode || '').trim().toLowerCase();
       if (mode === 'ask_first' || mode === 'full_access') return mode;
@@ -508,6 +522,7 @@ function axonSettingsMixin() {
         this.settingsForm.autonomy_profile = autonomyProfile;
         this.settingsForm.runtime_permissions_mode = normalized === 'full_access' ? 'full_access' : (normalized === 'ask_first' ? 'ask_first' : 'default');
         this.permissionPresetOpen = false;
+        this.syncPermissionChrome?.();
         await this.loadRuntimeStatus();
         this.showToast(
           normalized === 'full_access'

@@ -18,7 +18,7 @@ import tempfile
 import time as _time
 import wave
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from urllib import error as _urlerror, request as _urlrequest
@@ -73,8 +73,9 @@ from axon_api.services import runtime_login_sessions
 from axon_api.services import runtime_truth as runtime_truth_service
 from axon_api.services import settings_runtime_state as settings_runtime_state_service
 from axon_api.services import task_sandboxes as task_sandbox_service
+from axon_api.services import terminal_pty_runtime as terminal_pty_runtime_service
 from axon_api.services import workspace_sandbox_state as workspace_sandbox_service
-from axon_api.routes import agent_control, agent_routes, auto_session_routes, chat_routes, integration_tools, runtime_cli as runtime_cli_routes, settings_memory, task_sandbox_routes, voice_status, workspace_projects
+from axon_api.routes import agent_control, agent_routes, auto_session_routes, chat_routes, integration_tools, runtime_cli as runtime_cli_routes, settings_memory, task_sandbox_routes, terminal_routes, voice_status, workspace_projects
 from axon_core import agent_fast_path, agent_runtime_state, approval_actions
 from axon_core.chat_context import select_history_for_chat
 from axon_core.cli_command import cli_session_persistence_enabled
@@ -93,6 +94,7 @@ STOP_SH = DEVBRAIN_DIR / "stop.sh"
 OLLAMA_SH = DEVBRAIN_DIR / "ollama-start.sh"
 PIDFILE = DEVBRAIN_DIR / ".pid"
 DEVBRAIN_LOG = DEVBRAIN_DIR / "devbrain.log"
+AUTH_SESSIONS_FILE = DEVBRAIN_DIR / "runtime_login_sessions" / "web_auth_sessions.json"
 
 SYSTEM_ACTION_CONFIRMATIONS = {
     "restart_devbrain": "RESTART AXON",
@@ -156,6 +158,7 @@ _live_operator_snapshot = {
     "updated_at": "",
 }
 _terminal_processes: dict[int, dict] = {}
+_pty_sessions: dict[str, dict] = {}
 _domain_probe_cache = {
     "url": "",
     "active": False,
@@ -494,6 +497,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Raise Starlette multipart upload limits (default is 1MB)
+from starlette.formparsers import MultiPartParser
+MultiPartParser.max_file_size = 200 * 1024 * 1024   # 200 MB
+MultiPartParser.max_part_size = 200 * 1024 * 1024   # 200 MB
+
 _ALLOWED_ORIGINS = [
     "http://localhost:7777",
     "http://127.0.0.1:7777",
@@ -524,6 +532,14 @@ async def global_exception_handler(request, exc):
         content={"error": "internal_error", "detail": "Internal server error"},
     )
 
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request, exc):
+    if exc.status_code == 404:
+        _logger.warning("404 Not Found: %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
 
 # ─── Auth — PIN-based session authentication ─────────────────────────────────
 
@@ -533,6 +549,63 @@ import secrets as _secrets
 # In-memory session store: { token_str: expiry_datetime }
 _auth_sessions: dict[str, datetime] = {}
 _AUTH_SESSION_HOURS = 72  # sessions last 3 days
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_auth_session_expiry(raw: str) -> Optional[datetime]:
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    try:
+        expiry = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    return expiry.astimezone(timezone.utc)
+
+
+def _write_auth_sessions() -> None:
+    AUTH_SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        token: expiry.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        for token, expiry in sorted(_auth_sessions.items())
+    }
+    AUTH_SESSIONS_FILE.write_text(_json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _prune_auth_sessions(*, persist: bool = True) -> None:
+    now = _utc_now()
+    expired = [token for token, expiry in _auth_sessions.items() if expiry <= now]
+    if not expired:
+        return
+    for token in expired:
+        _auth_sessions.pop(token, None)
+    if persist:
+        _write_auth_sessions()
+
+
+def _load_auth_sessions() -> dict[str, datetime]:
+    if not AUTH_SESSIONS_FILE.exists():
+        return {}
+    try:
+        payload = _json.loads(AUTH_SESSIONS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    sessions: dict[str, datetime] = {}
+    now = _utc_now()
+    for token, raw_expiry in dict(payload or {}).items():
+        expiry = _parse_auth_session_expiry(raw_expiry)
+        if not expiry or expiry <= now:
+            continue
+        sessions[str(token)] = expiry
+    return sessions
+
+
+_auth_sessions.update(_load_auth_sessions())
 
 
 def _extract_session_token(request: Request) -> str:
@@ -551,22 +624,21 @@ def _hash_pin(pin: str) -> str:
 
 def _create_session() -> str:
     """Create a new session token, store it, and return it."""
+    _prune_auth_sessions(persist=False)
     token = _secrets.token_hex(32)
-    _auth_sessions[token] = datetime.utcnow() + timedelta(hours=_AUTH_SESSION_HOURS)
-    # Prune expired sessions
-    now = datetime.utcnow()
-    expired = [k for k, v in _auth_sessions.items() if v < now]
-    for k in expired:
-        del _auth_sessions[k]
+    _auth_sessions[token] = _utc_now() + timedelta(hours=_AUTH_SESSION_HOURS)
+    _write_auth_sessions()
     return token
 
 def _valid_session(token: str) -> bool:
     """Check if a session token is valid and not expired."""
+    _prune_auth_sessions(persist=False)
     exp = _auth_sessions.get(token)
     if not exp:
         return False
-    if datetime.utcnow() > exp:
+    if _utc_now() > exp:
         del _auth_sessions[token]
+        _write_auth_sessions()
         return False
     return True
 
@@ -576,6 +648,13 @@ _AUTH_EXEMPT = set(auth_runtime_state_service.AUTH_EXEMPT) | {
     "/api/tunnel/stop",
 }
 _AUTH_EXEMPT_PREFIXES = auth_runtime_state_service.AUTH_EXEMPT_PREFIXES
+
+@app.middleware("http")
+async def permissions_policy_middleware(request: Request, call_next):
+    """Set Permissions-Policy header so installed PWAs can access microphone."""
+    response = await call_next(request)
+    response.headers["Permissions-Policy"] = "microphone=(self)"
+    return response
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -602,14 +681,14 @@ class PinLogin(BaseModel):
 @app.get("/api/auth/status")
 async def auth_status(request: Request):
     """Check if auth is enabled and if current session is valid."""
-    if auth_runtime_state_service.dev_local_auth_bypass_active(request):
+    async with devdb.get_db() as conn:
+        pin_hash = await devdb.get_setting(conn, "auth_pin_hash")
+    if not pin_hash and auth_runtime_state_service.dev_local_auth_bypass_active(request):
         return {
             "auth_enabled": False,
             "session_valid": True,
             "dev_bypass": True,
         }
-    async with devdb.get_db() as conn:
-        pin_hash = await devdb.get_setting(conn, "auth_pin_hash")
     token = _extract_session_token(request)
     return {
         "auth_enabled": bool(pin_hash),
@@ -646,6 +725,7 @@ async def auth_logout(request: Request):
     token = _extract_session_token(request)
     if token and token in _auth_sessions:
         del _auth_sessions[token]
+        _write_auth_sessions()
     return {"status": "ok"}
 
 @app.post("/api/auth/remove")
@@ -661,6 +741,7 @@ async def auth_remove(body: PinLogin):
         await devdb.set_setting(conn, "auth_pin_hash", "")
     # Clear all sessions
     _auth_sessions.clear()
+    _write_auth_sessions()
     return {"status": "ok"}
 
 
@@ -2839,6 +2920,24 @@ async def list_tts_voices():
     ]}
 
 
+@app.post("/api/voice/transcribe")
+async def voice_transcribe(file: UploadFile = File(...), language: str = Query(default="en")):
+    """Compatibility alias for uploaded-audio transcription used by the PWA voice recorder."""
+    return await _build_integration_tools_handlers().voice_transcribe(file=file, language=language)
+
+
+@app.post("/api/voice/speak")
+async def voice_speak(body: integration_tools.VoiceSpeakRequest):
+    """Compatibility alias for local speech synthesis."""
+    return await _build_integration_tools_handlers().voice_speak(body)
+
+
+@app.post("/api/voice/stop")
+async def voice_stop():
+    """Compatibility alias for stopping local speech playback state."""
+    return await _build_integration_tools_handlers().voice_stop()
+
+
 @app.get("/api/github/status")
 async def github_status():
     """Check if gh CLI is available and authenticated."""
@@ -3033,6 +3132,22 @@ def _terminal_timeout_seconds(settings: dict, requested: Optional[int]) -> int:
     return max(5, min(300, int(requested)))
 
 
+_terminal_ws_handlers = terminal_routes.TerminalRouteHandlers(
+    db_module=devdb,
+    terminal_processes=_terminal_processes,
+    pty_sessions=_pty_sessions,
+    resolve_terminal_cwd=_resolve_terminal_cwd,
+    terminal_mode_value=_terminal_mode_value,
+    terminal_execute_request=lambda *args, **kwargs: _terminal_execute_request(*args, **kwargs),
+    serialize_terminal_session=_serialize_terminal_session,
+    serialize_terminal_event=_serialize_terminal_event,
+    set_live_operator=_set_live_operator,
+    valid_session=_valid_session,
+    local_tool_scope_label=lambda: str(Path.home()),
+)
+app.add_api_websocket_route("/ws/pty/{session_id}", _terminal_ws_handlers.pty_websocket)
+
+
 async def _terminal_capture(session_id: int, process, command: str, timeout_seconds: int):
     info = _terminal_processes.get(session_id, {})
     timed_out = False
@@ -3142,6 +3257,20 @@ async def _start_terminal_command(
     cwd: Path,
     timeout_seconds: int,
 ):
+    pty_result = await terminal_pty_runtime_service.dispatch_command_to_attached_pty(
+        session_id=session_id,
+        command=command,
+        cwd=cwd,
+        timeout_seconds=timeout_seconds,
+        pty_sessions=_pty_sessions,
+        terminal_processes=_terminal_processes,
+        db_module=devdb,
+        set_live_operator=_set_live_operator,
+        now_iso=_now_iso,
+    )
+    if pty_result is not None:
+        return pty_result
+
     process = await asyncio.create_subprocess_shell(
         command,
         cwd=str(cwd),
@@ -3341,6 +3470,16 @@ async def terminal_stop(session_id: int):
             if not row:
                 raise HTTPException(404, "Terminal session not found")
         return {"status": "idle", "message": "No running command to stop."}
+
+    if entry.get("kind") == "pty":
+        await terminal_pty_runtime_service.interrupt_tracked_pty_command(
+            session_id,
+            terminal_processes=_terminal_processes,
+            pty_sessions=_pty_sessions,
+            db_module=devdb,
+            set_live_operator=_set_live_operator,
+        )
+        return {"status": "stopped", "message": "Command stopped."}
 
     process = entry.get("process")
     if process and process.returncode is None:
@@ -4077,9 +4216,11 @@ async def pwa_manifest():
         "start_url": "/",
         "scope": "/",
         "display": "standalone",
+        "display_override": ["standalone", "minimal-ui"],
         "background_color": "#020617",
-        "theme_color": "#0f172a",
-        "orientation": "portrait-primary",
+        "theme_color": "#0a0e17",
+        "orientation": "any",
+        "prefer_related_applications": False,
         "icons": [
             {
                 "src": "/icons/icon-192.png",
@@ -4096,9 +4237,10 @@ async def pwa_manifest():
         ],
         "categories": ["productivity", "developer-tools"],
         "shortcuts": [
-            {"name": "Console", "url": "/", "description": "Open Axon Console"},
+            {"name": "Console", "url": "/", "description": "Open Axon Console", "icons": [{"src": "/icons/icon-192.png", "sizes": "192x192"}]},
             {"name": "Missions", "url": "/", "description": "Review active missions"},
-        ]
+        ],
+        "edge_side_panel": {"preferred_width": 420},
     })
 
 
@@ -4145,6 +4287,7 @@ async def service_worker():
     Strategy:
       - HTML pages (/): network-first (always fresh, fallback to cache if offline)
       - API calls (/api/*): network-only (never cache live data)
+      - JS/CSS assets: network-first with cache fallback (always fresh, offline capable)
       - Static assets (icons, manifest): cache-first (immutable)
     Cache version is set once at server startup — stable until restart.
     """
@@ -4155,13 +4298,11 @@ const CACHE = '{cache_version}';
 const STATIC = ['/icons/icon-192.png', '/icons/icon-512.png', '/manifest.json'];
 
 self.addEventListener('install', e => {{
-  // Pre-cache only truly static assets (icons never change)
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(STATIC)));
   self.skipWaiting();
 }});
 
 self.addEventListener('activate', e => {{
-  // Delete ALL old caches (previous versions)
   e.waitUntil(
     caches.keys().then(keys =>
       Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
@@ -4172,8 +4313,8 @@ self.addEventListener('activate', e => {{
 self.addEventListener('fetch', e => {{
   const url = new URL(e.request.url);
 
-  // API calls: network-only, never cache
-  if (url.pathname.startsWith('/api/')) {{
+  // API calls + SSE: network-only, never cache
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/chat/stream')) {{
     e.respondWith(fetch(e.request));
     return;
   }}
@@ -4186,11 +4327,25 @@ self.addEventListener('fetch', e => {{
     return;
   }}
 
+  // JS/CSS assets: network-first, cache for offline
+  if (url.pathname.startsWith('/js/') || url.pathname.startsWith('/css/')
+      || url.pathname.endsWith('.js') || url.pathname.endsWith('.css')) {{
+    e.respondWith(
+      fetch(e.request)
+        .then(res => {{
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
+          return res;
+        }})
+        .catch(() => caches.match(e.request))
+    );
+    return;
+  }}
+
   // HTML pages: network-first, fall back to cache only if offline
   e.respondWith(
     fetch(e.request)
       .then(res => {{
-        // Update cache with fresh response
         const clone = res.clone();
         caches.open(CACHE).then(c => c.put(e.request, clone));
         return res;
@@ -4210,6 +4365,7 @@ self.addEventListener('fetch', e => {{
 
 _memory_sync_cache: dict[str, object] = {}
 _memory_sync_cache_ttl_seconds = 30.0
+_whisper_model_cache: dict[str, object] = {}
 _piper_voice_cache: dict[str, object] = {}
 _auto_session_runs: dict[str, asyncio.Task] = {}
 _task_sandbox_runs: dict[int, asyncio.Task] = {}
@@ -4761,6 +4917,17 @@ def _local_voice_status(settings: Optional[dict[str, str]] = None) -> dict[str, 
     )
 
 
+def _transcribe_local_audio(wav_path: str, *, model_name: str, language: str) -> tuple[str, str]:
+    return local_voice_execution_service.transcribe_local_audio(
+        wav_path,
+        model_name=model_name,
+        language=language,
+        python_module_available_fn=_python_module_available,
+        whisper_model_cache=_whisper_model_cache,
+        http_exception_cls=HTTPException,
+    )
+
+
 def _speak_local_text(text: str, *, model_path: str, config_path: str = "") -> tuple[bytes, str]:
     return local_voice_execution_service.speak_local_text(
         text,
@@ -4778,13 +4945,37 @@ def _speak_local_text(text: str, *, model_path: str, config_path: str = "") -> t
     )
 
 
+def _build_integration_tools_handlers() -> integration_tools.IntegrationToolsRouteHandlers:
+    return integration_tools.IntegrationToolsRouteHandlers(
+        db_module=devdb,
+        integrations_module=integ,
+        fastapi_response_cls=Response,
+        local_voice_state=_local_voice_state,
+        home_path=Path.home(),
+        now_iso=_now_iso,
+        issue_azure_speech_token=azure_speech_service.issue_azure_speech_token,
+        local_voice_status=_local_voice_status,
+        local_voice_paths=_local_voice_paths,
+        run_ffmpeg_to_wav=lambda input_path, output_path: local_voice_execution_service.run_ffmpeg_to_wav(
+            input_path,
+            output_path,
+            resolve_ffmpeg_path_fn=_resolve_ffmpeg_path,
+            subprocess_module=subprocess,
+            http_exception_cls=HTTPException,
+        ),
+        transcribe_local_audio=_transcribe_local_audio,
+        speak_local_text=_speak_local_text,
+        safe_path=_safe_path,
+    )
+
+
 async def _valid_session_async(token: str) -> bool:
     return await auth_runtime_state_service.valid_session_async(
         token,
         valid_session_fn=_valid_session,
         db_module=devdb,
         resolve_companion_auth_session=companion_auth_service.resolve_companion_auth_session,
-        utc_now_fn=datetime.utcnow,
+        utc_now_fn=_utc_now,
         datetime_cls=datetime,
     )
 

@@ -293,6 +293,13 @@ function axonChatMixin() {
     },
 
     stopGeneration() {
+      // Delegate to the full server-aware stop if available (stops auto
+      // sessions on the backend, aborts the fetch, and clears local state).
+      if (typeof this.stopActiveWorkspaceRun === 'function') {
+        this.stopActiveWorkspaceRun();
+        return;
+      }
+      // Fallback: local-only abort
       if (this._chatAbortController) {
         this._chatAbortController.abort();
         this._chatAbortController = null;
@@ -370,7 +377,7 @@ function axonChatMixin() {
               if (data.type === 'thinking') {
                 this.setAgentStage('plan');
                 this.appendThinkingBlock(this.chatMessages[idx], data.chunk);
-                this.updateLiveOperator(mode, { type: 'text' }, targetWorkspaceId);
+                this.updateLiveOperator(mode, { type: 'thinking' }, targetWorkspaceId);
                 this.scrollChat();
               } else if (data.type === 'text') {
                 this.finalizeThinkingBlocks(this.chatMessages[idx]);

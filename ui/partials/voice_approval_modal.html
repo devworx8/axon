@@ -1,0 +1,42 @@
+      <template x-if="hudApprovalPending">
+        <div class="voice-approval-modal">
+          <div class="voice-approval-modal__backdrop" @click="denyVoiceCenterAction()"></div>
+          <div class="voice-approval-modal__panel" role="dialog" aria-modal="true" aria-labelledby="voice-approval-title">
+            <div class="voice-approval-modal__eyebrow">Permission prompt</div>
+            <div class="voice-approval-modal__header">
+              <div>
+                <div id="voice-approval-title" class="voice-approval-modal__title" x-text="approvalPromptTitle(currentPendingAgentApproval())"></div>
+                <div class="voice-approval-modal__body" x-text="voiceApprovalSummary()"></div>
+              </div>
+              <span class="voice-approval-modal__chip"
+                    x-text="approvalPromptChipLabel(currentPendingAgentApproval())"></span>
+            </div>
+
+            <div class="voice-approval-modal__meta"
+                 x-show="approvalPromptMeta(currentPendingAgentApproval())"
+                 x-text="approvalPromptMeta(currentPendingAgentApproval())"></div>
+
+            <div class="voice-approval-modal__preview"
+                 x-show="hudApprovalDetail || approvalCommandPreview(currentPendingAgentApproval())"
+                 x-text="hudApprovalDetail || approvalCommandPreview(currentPendingAgentApproval())"></div>
+
+            <div class="voice-approval-modal__actions">
+              <button class="voice-approval-modal__btn voice-approval-modal__btn--deny"
+                      @click="denyVoiceCenterAction()">
+                Deny
+              </button>
+              <button class="voice-approval-modal__btn"
+                      x-show="approvalSupportsScope(currentPendingAgentApproval(), 'session')"
+                      @click="approveVoiceCenterAction('session')"
+                      :disabled="approvalActionBusy"
+                      x-text="approvalPromptActionLabel('session', currentPendingAgentApproval())">
+              </button>
+              <button class="voice-approval-modal__btn voice-approval-modal__btn--approve"
+                      @click="approveVoiceCenterAction('once')"
+                      :disabled="approvalActionBusy"
+                      x-text="voiceApprovalLabel()">
+              </button>
+            </div>
+          </div>
+        </div>
+      </template>

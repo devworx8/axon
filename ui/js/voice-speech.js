@@ -35,6 +35,9 @@ const AXON_VOICE_COMMAND_RE = /\b(?:git|npm|npx|pnpm|yarn|node|python|python3|pi
 const AXON_VOICE_ENV_VAR_RE = /\b[A-Z][A-Z0-9]+(?:_[A-Z0-9]+)+\b/g;
 const AXON_VOICE_DOTTED_FILE_RE = /\b([A-Za-z0-9_-]+)\.(py|js|ts|tsx|jsx|json|md|css|html|sh|yaml|yml|env)\b/g;
 const AXON_VOICE_DOTTED_IDENTIFIER_RE = /\b([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\b/g;
+const AXON_VOICE_PERMISSION_ENABLE_RE = /\b(?:enable|turn on|activate|grant|enter|switch to|use)\b/i;
+const AXON_VOICE_PERMISSION_DISABLE_RE = /\b(?:disable|turn off|deactivate|exit|leave|switch off|switch back)\b/i;
+const AXON_VOICE_PERMISSION_TOGGLE_RE = /\b(?:toggle|flip)\b/i;
 const AXON_VOICE_FILE_LABELS = {
   py: 'Python file',
   js: 'JavaScript file',
@@ -131,6 +134,67 @@ function cleanVoiceSpeechText(text) {
     .trim();
 }
 
+function normalizeVoiceCommandText(text = '') {
+  const raw = String(text || '').trim();
+  if (!raw) return raw;
+  const lower = raw.toLowerCase();
+  if (!/(slash|backslash|dot|point|path|file|folder|directory|\/|\\)/.test(lower)) return raw;
+  let next = raw;
+  next = next.replace(/\s+(back\s*slash|backslash)\s+/gi, '\\');
+  next = next.replace(/\s+slash\s+/gi, '/');
+  next = next.replace(/\s+(dot|point)\s+/gi, '.');
+  next = next.replace(/\s+(dash|hyphen)\s+/gi, '-');
+  next = next.replace(/\s+underscore\s+/gi, '_');
+  next = next.replace(/\s*\/\s*/g, '/');
+  next = next.replace(/\s*\\\s*/g, '\\');
+  return next.replace(/\s+/g, ' ').trim();
+}
+
+function detectVoicePermissionPreset(text = '') {
+  const lower = String(text || '').trim().toLowerCase();
+  if (!lower) return '';
+  if (/(?:full access|full-access|fullaccess)\b/.test(lower)) return 'full_access';
+  if (/(?:ask first|ask-first)\b/.test(lower)) return 'ask_first';
+  if (/(?:default permissions|default mode|safe mode|normal mode|\bdefault\b)/.test(lower)) return 'default';
+  return '';
+}
+
+async function voicePermissionCommand(text = '', options = {}) {
+  const lower = String(text || '').trim().toLowerCase();
+  if (!lower) return false;
+  const setPermissionPreset = typeof options.setPermissionPreset === 'function'
+    ? options.setPermissionPreset
+    : null;
+  if (!setPermissionPreset) return false;
+  const permissionPresetKey = typeof options.permissionPresetKey === 'function'
+    ? options.permissionPresetKey
+    : null;
+  const preset = detectVoicePermissionPreset(lower);
+  if (!preset) return false;
+  const action = AXON_VOICE_PERMISSION_DISABLE_RE.test(lower)
+    ? 'disable'
+    : AXON_VOICE_PERMISSION_ENABLE_RE.test(lower)
+      ? 'enable'
+      : AXON_VOICE_PERMISSION_TOGGLE_RE.test(lower)
+        ? 'toggle'
+        : '';
+
+  let target = preset;
+  if (action === 'toggle') {
+    const current = permissionPresetKey ? String(permissionPresetKey() || '').trim().toLowerCase() : '';
+    target = current === preset
+      ? (preset === 'default' ? 'ask_first' : 'default')
+      : preset;
+  } else if (action === 'disable') {
+    target = preset === 'default' ? 'ask_first' : 'default';
+  } else if (action === 'enable') {
+    target = preset;
+  }
+
+  await setPermissionPreset(target);
+  return true;
+}
+
 function splitVoiceSpeechText(text, maxChunkLength = 420) {
   const clean = cleanVoiceSpeechText(text);
   if (!clean) return [];
@@ -190,5 +254,7 @@ function splitVoiceSpeechText(text, maxChunkLength = 420) {
 
 window.axonVoiceSpeech = {
   cleanText: cleanVoiceSpeechText,
+  normalizeCommandText: normalizeVoiceCommandText,
+  permissionCommand: voicePermissionCommand,
   splitText: splitVoiceSpeechText,
 };

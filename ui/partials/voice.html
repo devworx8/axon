@@ -42,7 +42,7 @@
           </button>
         </div>
         <!-- ── Mobile: compact stacked layout ── -->
-        <div class="md:hidden flex flex-col items-center gap-4 w-full">
+        <div class="md:hidden flex flex-col items-center gap-3 w-full" style="padding-bottom: 100px;">
           <!-- Reactor (compact on mobile) -->
           <div class="voice-visual-wrap-mobile">
             <!-- HUD: Scan Ring -->
@@ -130,6 +130,23 @@
             <div class="text-[11px] tracking-[0.12em] uppercase text-slate-500 mt-1" x-text="voiceStateCaption()"></div>
           </div>
 
+          <!-- Mic & action buttons (mobile) -->
+          <div class="flex items-center gap-3 mt-1">
+            <button @click="startVoiceListening()"
+                    class="voice-mobile-mic-btn"
+                    :class="voiceActive ? 'voice-mobile-mic-btn--active' : ''">
+              <svg x-show="!voiceActive" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+              <svg x-show="voiceActive" class="w-5 h-5 animate-pulse" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+              <span class="text-[10px] font-semibold tracking-wide" x-text="voiceActive ? 'Stop' : 'Listen'"></span>
+            </button>
+            <button @click="dispatchVoiceCommand()"
+                    x-show="!!(voiceTranscript || '').trim() && !chatLoading"
+                    class="voice-mobile-send-btn">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+              <span class="text-[10px] font-semibold tracking-wide">Send</span>
+            </button>
+          </div>
+
           <div x-show="voiceConversation.awaitingReply" class="voice-awaiting-banner w-full max-w-[24rem]" x-transition>
             <div class="voice-awaiting-banner__label">Conversation hold</div>
             <div class="voice-awaiting-banner__detail" x-text="voiceStatusHint()"></div>
@@ -151,8 +168,8 @@
               <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="voiceResponseAvailable() ? 'bg-cyan-400 shadow-[0_0_6px_rgba(34,211,238,0.6)]' : 'bg-slate-600'"></span>
               <span class="text-[10px] tracking-[0.2em] uppercase font-semibold" :class="voiceResponseAvailable() ? 'text-cyan-400' : 'text-slate-500'">Response</span>
             </div>
-            <div class="text-sm leading-relaxed min-h-[48px] max-h-[180px] overflow-y-auto voice-response-render"
-                 :class="voiceResponseAvailable() ? 'text-slate-200' : 'text-slate-500'"
+            <div class="text-sm leading-relaxed min-h-[48px] max-h-[180px] overflow-y-auto"
+                 :class="[voiceResponseAvailable() ? 'text-slate-200' : 'text-slate-500', voiceResponseRenderClass()].join(' ').trim()"
                  x-html="voiceDisplayResponseHtml()"></div>
           </div>
         </div>
@@ -275,6 +292,7 @@
             <div class="voice-awaiting-banner__detail" x-text="voiceStatusHint()"></div>
           </div>
         </div>
+        <!-- @include partials/voice_surface_spotlight.html -->
           </div><!-- /voice-arena__center -->
 
           <!-- @include partials/voice_response_panel.html -->
@@ -306,22 +324,7 @@
       <!-- @include partials/voice_terminal_hud.html -->
 
       <!-- ── HUD: Approval Gate Overlay ── -->
-      <template x-if="hudApprovalPending">
-        <div class="hud-approval">
-          <div class="hud-approval__card">
-            <div class="hud-approval__header">
-              <div class="hud-approval__icon">⚠</div>
-              <div class="hud-approval__title">Approval Required</div>
-            </div>
-            <div class="hud-approval__body" x-text="voiceApprovalSummary()"></div>
-            <div class="hud-approval__preview" x-show="hudApprovalDetail" x-text="hudApprovalDetail"></div>
-            <div class="hud-approval__actions">
-              <button class="hud-approval__btn hud-approval__btn--deny" @click="denyVoiceCenterAction()">Deny</button>
-              <button class="hud-approval__btn hud-approval__btn--approve" @click="approveVoiceCenterAction()" x-text="voiceApprovalLabel()"></button>
-            </div>
-          </div>
-        </div>
-      </template>
+      <!-- @include partials/voice_approval_modal.html -->
 
       <!-- @include partials/voice_command_dock.html -->
     </div>

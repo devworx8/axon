@@ -49,6 +49,7 @@ function axonWorkspaceRunsMixin() {
           liveOperator: defaultLiveOperator(key === '__all__' ? '' : key),
           liveOperatorFeed: [],
           liveOperatorTimer: null,
+          stopRequestedAt: 0,
         };
       }
       return registry[key];
@@ -156,6 +157,9 @@ function axonWorkspaceRunsMixin() {
       }
       state.abortController = null;
       state.loading = false;
+      // Block live-feed re-activation for 8 seconds so the server has time
+      // to acknowledge the stop and stop pushing active=true snapshots.
+      state.stopRequestedAt = Date.now();
       this.refreshWorkspaceRunBindings();
     },
 
@@ -266,11 +270,21 @@ function axonWorkspaceRunsMixin() {
       const workspaceId = String(snapshot.workspace_id || '').trim();
       const state = this.workspaceRunStateFor(workspaceId);
       const autoSessionId = String(snapshot.auto_session_id || '').trim();
+      // If the user recently requested a stop, ignore server-side
+      // active=true snapshots for a grace period so the stop sticks.
+      const stopGrace = 8000;
+      const recentlyStoppedByUser = state.stopRequestedAt && (Date.now() - state.stopRequestedAt) < stopGrace;
       if (!snapshot.active && !autoSessionId) {
         state.loading = false;
+        state.stopRequestedAt = 0;
         this.clearWorkspaceLiveOperator(workspaceId, 0);
         return;
       }
+      if (recentlyStoppedByUser && snapshot.active) {
+        // Server hasn't caught up yet — keep local stopped state
+        return;
+      }
+      state.stopRequestedAt = 0;
       state.loading = !!snapshot.active;
       this.patchWorkspaceLiveOperator(workspaceId, {
         active: !!snapshot.active,

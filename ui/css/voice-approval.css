@@ -1,0 +1,161 @@
+/* =============================================================
+   Axon - Voice Approval Prompt
+   Clear modal-style permission prompt used by voice and chat.
+   ============================================================= */
+
+.approval-prompt,
+.voice-approval-modal__panel {
+  border-radius: 1.5rem;
+  border: 1px solid rgba(251, 191, 36, 0.2);
+  background:
+    radial-gradient(circle at top left, rgba(251, 191, 36, 0.12), transparent 42%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(2, 6, 23, 0.96));
+  box-shadow: 0 26px 78px rgba(15, 23, 42, 0.52);
+}
+
+.approval-prompt {
+  padding: 1rem;
+}
+
+.approval-prompt__header,
+.voice-approval-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.approval-prompt__eyebrow,
+.voice-approval-modal__eyebrow {
+  font-size: 0.62rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: rgba(253, 230, 138, 0.88);
+}
+
+.approval-prompt__title,
+.voice-approval-modal__title {
+  margin-top: 0.3rem;
+  font-size: 1rem;
+  line-height: 1.4;
+  color: rgba(255, 247, 237, 0.98);
+}
+
+.approval-prompt__body,
+.voice-approval-modal__body {
+  margin-top: 0.45rem;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: rgba(226, 232, 240, 0.92);
+}
+
+.approval-prompt__chip,
+.voice-approval-modal__chip {
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  background: rgba(69, 26, 3, 0.32);
+  padding: 0.3rem 0.7rem;
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(253, 230, 138, 0.98);
+}
+
+.approval-prompt__meta,
+.voice-approval-modal__meta {
+  margin-top: 0.8rem;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: rgba(148, 163, 184, 0.92);
+}
+
+.approval-prompt__preview,
+.voice-approval-modal__preview {
+  margin-top: 0.8rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(251, 191, 36, 0.16);
+  background: rgba(2, 6, 23, 0.76);
+  padding: 0.8rem 0.9rem;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.72rem;
+  line-height: 1.6;
+  color: rgba(254, 240, 138, 0.94);
+  word-break: break-word;
+}
+
+.approval-prompt__actions,
+.voice-approval-modal__actions {
+  margin-top: 0.9rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.approval-prompt__btn,
+.voice-approval-modal__btn {
+  border-radius: 0.95rem;
+  border: 1px solid rgba(71, 85, 105, 0.9);
+  background: rgba(15, 23, 42, 0.84);
+  padding: 0.6rem 0.9rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.94);
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.approval-prompt__btn:hover,
+.voice-approval-modal__btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(251, 191, 36, 0.35);
+  color: rgba(255, 251, 235, 0.98);
+}
+
+.approval-prompt__btn--approve,
+.voice-approval-modal__btn--approve {
+  border-color: rgba(16, 185, 129, 0.28);
+  background: rgba(6, 78, 59, 0.34);
+  color: rgba(110, 231, 183, 0.98);
+}
+
+.approval-prompt__btn--approve:hover,
+.voice-approval-modal__btn--approve:hover {
+  border-color: rgba(52, 211, 153, 0.4);
+}
+
+.approval-prompt__btn--deny,
+.voice-approval-modal__btn--deny {
+  border-color: rgba(244, 63, 94, 0.22);
+  background: rgba(76, 5, 25, 0.26);
+  color: rgba(254, 202, 202, 0.96);
+}
+
+.approval-prompt__btn--deny:hover,
+.voice-approval-modal__btn--deny:hover {
+  border-color: rgba(251, 113, 133, 0.4);
+}
+
+.voice-approval-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+
+.voice-approval-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.voice-approval-modal__panel {
+  position: relative;
+  z-index: 1;
+  width: min(34rem, calc(100vw - 2rem));
+  padding: 1.1rem 1.15rem 1.05rem;
+}

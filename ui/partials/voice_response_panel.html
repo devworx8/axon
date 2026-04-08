@@ -7,6 +7,8 @@
                 <span class="voice-float__dot voice-float__dot--cyan"></span>
                 <span x-text="voiceResponsePanelLabel()"></span>
               </div>
-              <div class="voice-float__body voice-float__body--response voice-response-render" x-html="voiceDisplayResponseHtml()"></div>
+              <div class="voice-float__body voice-float__body--response"
+                   :class="voiceResponseRenderClass()"
+                   x-html="voiceDisplayResponseHtml()"></div>
             </div>
           </div>

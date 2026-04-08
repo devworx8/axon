@@ -33,13 +33,18 @@ function axonVoiceMixin() {
       this.speechInputSupported = hasBrowserRecognition || (hasAzureSdk && this.azureSpeechConfigured());
       this.speechOutputSupported = !!window.speechSynthesis || this.azureSpeechConfigured();
       this.speechSupported = this.speechInputSupported || this.speechOutputSupported;
+      if (this.showVoiceOrb && this.voiceShouldDefaultToAgentMode?.()) {
+        this.ensureVoiceDefaultConversationMode?.();
+      }
     },
 
     async loadVoiceStatus(force = false) {
-      if (!force && this.voiceStatus?.detail) return this.voiceStatus;
+      if (!force && this._voiceStatusLoaded && !this._voiceStatusLoadFailed) return this.voiceStatus;
       try {
         const status = await this.api('GET', '/api/voice/status');
         this.voiceStatus = status || this.voiceStatus;
+        this._voiceStatusLoaded = true;
+        this._voiceStatusLoadFailed = false;
       } catch (e) {
         this.voiceStatus = {
           available: false,
@@ -49,6 +54,8 @@ function axonVoiceMixin() {
           detail: e?.message || 'Voice status unavailable',
           state: {},
         };
+        this._voiceStatusLoaded = true;
+        this._voiceStatusLoadFailed = true;
       }
       this.refreshVoiceCapability();
       return this.voiceStatus;
@@ -94,11 +101,34 @@ function axonVoiceMixin() {
       return content ? content.substring(0, limit) : '';
     },
 
+    voiceShouldDefaultToAgentMode(commandText = '') {
+      if (!this.currentBackendSupportsAgent?.()) return false;
+      if (this.businessMode) return false;
+      const activeMode = typeof this.activePrimaryConversationMode === 'function'
+        ? this.activePrimaryConversationMode()
+        : (this.agentMode ? 'agent' : 'ask');
+      if (activeMode !== 'ask') return false;
+      const text = String(commandText || '').trim();
+      if (!text) return true;
+      if (typeof this.shouldAutoUseAgent === 'function') return !!this.shouldAutoUseAgent(text);
+      return true;
+    },
+
+    ensureVoiceDefaultConversationMode(commandText = '') {
+      if (!this.voiceShouldDefaultToAgentMode?.(commandText)) {
+        return this.activePrimaryConversationMode?.() || (this.agentMode ? 'agent' : 'ask');
+      }
+      this.chooseConversationModeAgent?.();
+      return this.activePrimaryConversationMode?.() || 'agent';
+    },
+
     openVoiceCommandCenter() {
       this.showVoiceOrb = true;
       this.switchTab('chat');
       this.refreshVoiceCapability();
+      this.ensureVoiceDefaultConversationMode?.();
       this.ensureVoiceConversationState?.();
+      this.initVoiceSurfaceDirector?.();
       if (this.chatInput && !this.voiceTranscript) {
         this.voiceTranscript = this.chatInput;
       }
@@ -107,10 +137,15 @@ function axonVoiceMixin() {
       }
       this._scheduleBootGreeting?.();
       this.syncVoiceCommandCenterRuntime?.();
+      this.syncVoiceSurfaceDirector?.({ force: true });
     },
 
     closeVoiceCommandCenter(stopCapture = true) {
       this.showVoiceOrb = false;
+      this.stopVoiceSurfaceDirector?.();
+      this._cancelNarrationQueue?.();
+      this.clearVoiceAwaitingReply?.();
+      if (typeof this.stopSpeech === 'function') this.stopSpeech();
       this.closeVoiceConversationRuntime?.();
       if (stopCapture && this.voiceActive) {
         this.startVoice();
@@ -136,6 +171,7 @@ function axonVoiceMixin() {
         ? this.currentWorkspaceRunActive()
         : !!this.chatLoading;
       if (!text || workspaceBusy) return;
+      this.ensureVoiceDefaultConversationMode?.(text);
       this.onVoiceCommandDispatched?.(text);
       if (this.voiceActive) {
         this.startVoice();
@@ -228,19 +264,27 @@ function axonVoiceMixin() {
         }
         const combined = `${finalTranscript}${interimTranscript}`.trim();
         if (!combined) {
-          this.showToast('No speech was detected');
+          const handledNoSpeech = this.handleVoiceCaptureLifecycle?.('error', { code: 'no-speech' });
+          if (!handledNoSpeech) this.showToast('No speech was detected');
         } else {
-          this.syncVoiceTranscript(combined);
+          const finalOnly = !!(finalTranscript.trim() && !interimTranscript.trim());
+          const consumed = finalOnly
+            ? !!this.handleVoiceCaptureTranscript?.(combined, { final: true, source: 'browser' })
+            : false;
+          if (!consumed) this.syncVoiceTranscript(combined);
         }
         if (finalTranscript.trim() && !interimTranscript.trim()) {
           this.voiceActive = false;
           this._speechRecognizer = null;
+          this.handleVoiceCaptureLifecycle?.('end', { reason: 'result' });
         }
       };
       recog.onerror = (event) => {
         this.voiceActive = false;
         this._speechRecognizer = null;
         const code = String(event?.error || '').toLowerCase();
+        const handled = this.handleVoiceCaptureLifecycle?.('error', { code, event });
+        if (handled && ['no-speech', 'aborted'].includes(code)) return;
         if (code === 'not-allowed' || code === 'service-not-allowed') {
           this.showToast('Microphone permission was denied');
         } else if (code === 'network') {
@@ -256,6 +300,7 @@ function axonVoiceMixin() {
       recog.onend = () => {
         this.voiceActive = false;
         this._speechRecognizer = null;
+        this.handleVoiceCaptureLifecycle?.('end', { reason: 'end' });
       };
       try {
         recog.start();
@@ -285,19 +330,23 @@ function axonVoiceMixin() {
           (result) => {
             const text = String(result?.text || '').trim();
             if (!text) {
-              this.showToast('No speech was detected');
+              const handledNoSpeech = this.handleVoiceCaptureLifecycle?.('error', { code: 'no-speech' });
+              if (!handledNoSpeech) this.showToast('No speech was detected');
             } else {
-              this.syncVoiceTranscript(text);
+              const consumed = !!this.handleVoiceCaptureTranscript?.(text, { final: true, source: 'azure' });
+              if (!consumed) this.syncVoiceTranscript(text);
             }
             try { recognizer.close(); } catch (_) {}
             this.voiceActive = false;
             this._speechRecognizer = null;
+            this.handleVoiceCaptureLifecycle?.('end', { reason: 'result' });
           },
           (err) => {
             try { recognizer.close(); } catch (_) {}
             this.voiceActive = false;
             this._speechRecognizer = null;
             const message = typeof err === 'string' ? err : (err?.message || err?.errorDetails || '');
+            this.handleVoiceCaptureLifecycle?.('error', { code: 'azure-error', message });
             this.showToast(message ? `Azure voice failed: ${message}` : 'Azure voice input failed');
           },
         );

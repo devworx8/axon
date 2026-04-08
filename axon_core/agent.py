@@ -28,6 +28,7 @@ from .agent_file_actions import (
     _strip_wrapping_quotes,
     _wants_diff,
 )
+from .agent_delete_intent import has_explicit_delete_intent
 from .agent_intent import (
     _contains_phrase,
     _filtered_general_history,
@@ -425,9 +426,9 @@ async def run_agent(
             yield {"type": "done", "iterations": 0}
             return
 
+    allow_delete = has_explicit_delete_intent(user_message)
     if _brain_mod is not None and hasattr(_brain_mod, "_update_agent_runtime_context"):
         try:
-            allow_delete = bool(_re.search(r"\b(delete|remove|rm|wipe|trash)\b", str(user_message or "").lower()))
             _brain_mod._update_agent_runtime_context(
                 agent_session_id=session_id,
                 allow_delete=allow_delete,
@@ -438,6 +439,8 @@ async def run_agent(
     active_tool_names = sorted(deps.tool_registry.keys()) if tools is None else [
         tool_name for tool_name in tools if tool_name in deps.tool_registry
     ]
+    if not allow_delete:
+        active_tool_names = [tool_name for tool_name in active_tool_names if tool_name != "delete_file"]
     # Browser tools are dispatched outside the sync registry — include them
     from .agent_browser_tools import BROWSER_TOOL_NAMES as _BTN
     for _bt in sorted(_BTN):
@@ -888,11 +891,34 @@ async def run_agent(
 
         if action:
             tool_name, tool_args = action
+            canonical_tool_name = _canonical_tool_name(tool_name, tool_args)
             if not found_action_live:
                 think_text = full_text[: full_text.find("ACTION:")].strip()
                 think_text = _filter_thinking_chunk(_sanitize_agent_text(think_text))
                 if think_text:
                     yield {"type": "thinking", "chunk": think_text}
+
+            if canonical_tool_name not in active_tool_names:
+                unavailable_result = (
+                    f"ERROR: Tool `{canonical_tool_name}` is unavailable for this task. "
+                    f"Use one of: {', '.join(active_tool_names)}"
+                )
+                yield {"type": "tool_result", "name": canonical_tool_name, "result": unavailable_result[:2500]}
+                tool_log.append({"name": canonical_tool_name, "args": tool_args, "result": unavailable_result[:500]})
+                messages.append({"role": "assistant", "content": full_text})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Your last tool call used an unavailable tool.\n\n"
+                            f"Tool: {canonical_tool_name}\n"
+                            f"Available tools: {', '.join(active_tool_names)}\n\n"
+                            "Re-emit exactly one valid tool call now. "
+                            "Do not use delete_file unless the user explicitly asked to delete a file."
+                        ),
+                    }
+                )
+                continue
 
             yield {"type": "tool_call", "name": tool_name, "args": tool_args}
             result = await run_sync_agent_call(_execute_tool, tool_name, tool_args, deps)

@@ -19,6 +19,11 @@
   50% { box-shadow: 0 30px 72px rgba(34, 211, 238, 0.22); }
 }
 
+@keyframes axon-terminal-glow-hot {
+  0%, 100% { box-shadow: 0 28px 60px rgba(190, 18, 60, 0.28); }
+  50% { box-shadow: 0 34px 88px rgba(244, 63, 94, 0.3); }
+}
+
 .axon-terminal-stage {
   position: relative;
   overflow: hidden;
@@ -28,6 +33,24 @@
     radial-gradient(circle at top, rgba(34, 211, 238, 0.14), transparent 52%),
     linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(2, 6, 23, 0.96));
   animation: axon-terminal-enter 0.42s cubic-bezier(0.16, 1, 0.3, 1), axon-terminal-glow 4.8s ease-in-out infinite;
+}
+
+.axon-full-access .axon-terminal-stage {
+  border-color: rgba(248, 113, 113, 0.36);
+  background:
+    radial-gradient(circle at top, rgba(248, 113, 113, 0.16), transparent 52%),
+    linear-gradient(180deg, rgba(30, 11, 18, 0.92), rgba(2, 6, 23, 0.96));
+  animation: axon-terminal-enter 0.42s cubic-bezier(0.16, 1, 0.3, 1), axon-terminal-glow-hot 4.8s ease-in-out infinite;
+}
+
+.axon-full-access .axon-terminal-stage::before {
+  background:
+    linear-gradient(90deg, rgba(244, 63, 94, 0.06), transparent 20%, transparent 80%, rgba(244, 63, 94, 0.06)),
+    radial-gradient(circle at center, rgba(248, 113, 113, 0.08), transparent 62%);
+}
+
+.axon-full-access .axon-terminal-stage::after {
+  background: radial-gradient(circle, rgba(248, 113, 113, 0.2), transparent 72%);
 }
 
 .axon-terminal-stage::before {

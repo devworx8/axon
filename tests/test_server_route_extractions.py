@@ -194,6 +194,16 @@ class RouterRegistrationTests(unittest.TestCase):
         paths = {route.path for route in server.app.routes}
         self.assertIn("/api/voice/status", paths)
 
+    def test_server_app_registers_terminal_pty_websocket(self):
+        paths = {route.path for route in server.app.routes}
+        self.assertIn("/ws/pty/{session_id}", paths)
+
+    def test_server_app_registers_voice_command_routes(self):
+        paths = {route.path for route in server.app.routes}
+        self.assertIn("/api/voice/transcribe", paths)
+        self.assertIn("/api/voice/speak", paths)
+        self.assertIn("/api/voice/stop", paths)
+
 
 class FileLinkRouteTests(unittest.TestCase):
     def test_safe_local_path_allows_temp_files(self):

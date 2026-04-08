@@ -1,41 +1,41 @@
       <div x-show="currentPendingAgentApproval()" class="shrink-0 px-3 md:px-5 pb-2">
-        <div class="rounded-2xl border border-amber-500/25 bg-amber-500/8 px-4 py-3">
-          <div class="flex flex-wrap items-start justify-between gap-3">
-            <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-2">
-                <span class="text-amber-300 text-sm">⚠️</span>
-                <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-200">Approval Required</div>
-              </div>
-              <div class="mt-2 text-sm text-slate-100" x-text="currentPendingAgentApproval()?.message || 'Axon is waiting for approval.'"></div>
-              <div x-show="currentPendingAgentApproval()?.workspaceName" class="mt-1 text-[11px] text-slate-400" x-text="'Workspace: ' + currentPendingAgentApproval().workspaceName"></div>
+        <div class="approval-prompt">
+          <div class="approval-prompt__header">
+            <div class="min-w-0">
+              <div class="approval-prompt__eyebrow">Permission prompt</div>
+              <div class="approval-prompt__title" x-text="approvalPromptTitle(currentPendingAgentApproval())"></div>
+              <div class="approval-prompt__body" x-text="approvalPromptBody(currentPendingAgentApproval())"></div>
             </div>
-            <span class="rounded-full border border-amber-500/20 bg-slate-950/60 px-2.5 py-1 text-[10px] text-amber-200"
-                  x-text="currentPendingAgentApproval()?.summary || 'Review action'"></span>
+            <span class="approval-prompt__chip"
+                  x-text="approvalPromptChipLabel(currentPendingAgentApproval())"></span>
           </div>
-          <div x-show="approvalCommandPreview(currentPendingAgentApproval())"
-               class="mt-3 rounded-xl border border-amber-500/20 bg-slate-950/70 px-3 py-2 font-mono text-[11px] text-amber-200 break-all"
+          <div class="approval-prompt__meta"
+               x-show="approvalPromptMeta(currentPendingAgentApproval())"
+               x-text="approvalPromptMeta(currentPendingAgentApproval())"></div>
+          <div class="approval-prompt__preview"
+               x-show="approvalCommandPreview(currentPendingAgentApproval())"
                x-text="approvalCommandPreview(currentPendingAgentApproval())"></div>
-          <div x-show="currentPendingAgentApproval()?.draftCommitMessage"
-               class="mt-2 text-[11px] text-slate-300">
+          <div class="mt-2 text-[11px] text-slate-400"
+               x-show="currentPendingAgentApproval()?.draftCommitMessage">
             Draft commit:
             <span class="font-mono text-slate-100" x-text="currentPendingAgentApproval()?.draftCommitMessage"></span>
           </div>
-          <div class="mt-3 flex flex-wrap gap-2">
+          <div class="approval-prompt__actions">
             <button @click="approvePendingAgentAction('once')"
                     :disabled="approvalActionBusy"
-                    class="rounded-xl bg-emerald-600/20 border border-emerald-500/30 px-3 py-2 text-[11px] font-semibold text-emerald-300 transition hover:bg-emerald-600/30 disabled:opacity-50">
-              <span x-text="approvalActionBusy ? 'Approving…' : 'Approve once'"></span>
+                    class="approval-prompt__btn approval-prompt__btn--approve">
+              <span x-text="approvalActionBusy ? 'Allowing…' : approvalPromptActionLabel('once', currentPendingAgentApproval())"></span>
             </button>
             <button x-show="approvalSupportsScope(currentPendingAgentApproval(), 'session')"
                     @click="approvePendingAgentAction('session')"
                     :disabled="approvalActionBusy"
-                    class="rounded-xl border border-blue-500/20 bg-blue-500/10 px-3 py-2 text-[11px] font-semibold text-blue-200 transition hover:bg-blue-500/15 disabled:opacity-50">
-              Approve for session
+                    class="approval-prompt__btn">
+              <span x-text="approvalPromptActionLabel('session', currentPendingAgentApproval())"></span>
             </button>
             <button @click="dismissPendingAgentApproval()"
                     :disabled="approvalActionBusy"
-                    class="rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2 text-[11px] text-slate-300 transition hover:border-slate-500 disabled:opacity-50">
-              Dismiss
+                    class="approval-prompt__btn approval-prompt__btn--deny">
+              Deny
             </button>
           </div>
         </div>

@@ -272,6 +272,42 @@ button, [role="button"], a {
   position: relative;
   z-index: 1;
 }
+
+/* ── Console-focus mobile: full-bleed, no bottom nav ─────────── */
+@media (max-width: 767px) {
+  .console-focus-shell .page-content {
+    padding-bottom: 0;
+  }
+  .console-focus-shell .app-shell-main {
+    padding-bottom: 0;
+  }
+}
+
+/* ── PWA standalone mode ─────────────────────────────────────── */
+@media (display-mode: standalone) {
+  body {
+    overscroll-behavior-y: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  /* Allow text selection in chat, code blocks, inputs */
+  .chat-bubble, pre, code, textarea, input,
+  [contenteditable] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  /* Slightly larger touch targets in PWA */
+  :root {
+    --touch-target: 48px;
+  }
+}
+
+/* ── Console zoom (controlled from settings) ─────────────────── */
+.chat-bubble,
+.prose-dark {
+  font-size: calc(1em * var(--console-zoom, 1));
+}
+
 .console-command-header {
   background:
     linear-gradient(90deg, rgba(0, 212, 255, 0.10), transparent 24%, transparent 72%, rgba(255, 159, 28, 0.08)),

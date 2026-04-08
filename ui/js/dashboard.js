@@ -6,6 +6,7 @@ function axonDashboardMixin() {
   return Object.assign(
     axonDashboardPreviewMixin(),
     typeof axonDashboardLiveFeedMixin === 'function' ? axonDashboardLiveFeedMixin() : {},
+    typeof axonDashboardMiniVoiceMixin === 'function' ? axonDashboardMiniVoiceMixin() : {},
     {
 
     async loadCurrentUser() {

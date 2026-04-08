@@ -15,19 +15,30 @@
 
   <div class="mission-hud-grid">
     <div class="mission-ring-shell">
-      <div class="mission-ring" :style="missionRingStyle()">
-        <div class="mission-ring-health"></div>
-        <div class="mission-ring-inner">
-          <div class="mission-ring-kicker">Posture</div>
-          <div class="mission-ring-value" x-text="missionPostureLabel()"></div>
-          <div class="mission-ring-meta" x-text="missionPostureDetail()"></div>
-          <div class="mission-ring-health-label">
-            <span class="mission-ring-health-value" x-text="dashStats.health_avg || 0"></span>
-            <span class="mission-ring-health-unit">%</span>
-            <div class="mission-ring-health-caption">System health</div>
+      <button class="mission-ring-control"
+              :class="dashboardMiniVoiceRingClass()"
+              @click="dashboardMiniVoicePrimaryAction()"
+              :aria-pressed="dashboardMiniVoicePassiveArmed() ? 'true' : 'false'"
+              :title="dashboardMiniVoicePassiveArmed() ? 'Disarm always listening' : 'Arm always listening'">
+        <div class="mission-ring" :style="missionRingStyle()" :data-voice-state="dashboardMiniVoiceVisualState()">
+          <div class="mission-ring-health"></div>
+          <div class="mission-ring-inner">
+            <div class="mission-ring-kicker">Posture</div>
+            <div class="mission-ring-value" x-text="missionPostureLabel()"></div>
+            <div class="mission-ring-meta">
+              <span x-text="missionPostureDetail()"></span>
+              <span class="mission-ring-voice-caption" x-text="dashboardMiniVoiceListeningModeLabel()"></span>
+            </div>
+            <div class="mission-ring-health-label">
+              <span class="mission-ring-health-value" x-text="dashStats.health_avg || 0"></span>
+              <span class="mission-ring-health-unit">%</span>
+              <div class="mission-ring-health-caption">System health</div>
+            </div>
           </div>
+          <span class="mission-ring-voice-badge" x-text="dashboardMiniVoiceStatusLabel()"></span>
         </div>
-      </div>
+      </button>
+      <!-- @include partials/dashboard_mini_voice.html -->
       <div class="mission-sector-grid">
         <div class="mission-sector mission-sector-now">
           <div class="mission-sector-label">Now</div>
@@ -51,15 +62,15 @@
       <div class="mission-focus-card">
         <div class="mission-focus-header">
           <span class="mission-focus-label">Live Operator</span>
-          <span class="stark-heartbeat" :class="liveOperator.active ? '' : 'idle'" style="margin-right: 4px;"></span>
-          <span class="mission-focus-dot" :class="liveOperator.active ? 'active' : ''"></span>
+          <span class="stark-heartbeat" :class="missionLiveOperator().active ? '' : 'idle'" style="margin-right: 4px;"></span>
+          <span class="mission-focus-dot" :class="missionLiveOperator().active ? 'active' : ''"></span>
         </div>
-        <div class="mission-focus-title" x-text="liveOperator.title || lastOperatorOutcome.title || 'Standing by'"></div>
-        <div class="mission-focus-detail" x-text="liveOperator.detail || lastOperatorOutcome.summary || 'Axon is holding position until the next command.'"></div>
+        <div class="mission-focus-title" x-text="missionLiveOperator().title || lastOperatorOutcome.title || 'Standing by'"></div>
+        <div class="mission-focus-detail" x-text="missionLiveOperator().detail || lastOperatorOutcome.summary || 'Axon is holding position until the next command.'"></div>
         <div class="mission-focus-meta">
           <span x-text="missionWorkspaceLabel()"></span>
           <span class="mission-focus-divider">-</span>
-          <span x-text="liveOperator.startedAt ? 'Started ' + timeAgo(liveOperator.startedAt) : 'Ready now'"></span>
+          <span x-text="missionLiveOperator().startedAt ? 'Started ' + timeAgo(missionLiveOperator().startedAt) : 'Ready now'"></span>
         </div>
       </div>
 

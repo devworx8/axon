@@ -28,6 +28,10 @@ function axonLiveOperatorMixin() {
       if (typeof ctx.narrateAgentStep === 'function') {
         try { ctx.narrateAgentStep(feed.phase, feed.title, feed.detail); } catch (_) {}
       }
+      // Push to live activity feed for JARVIS-style stream
+      if (typeof ctx.pushActivityEntry === 'function') {
+        try { ctx.pushActivityEntry(feed.phase, feed.title, feed.detail, { tool: patch?.tool }); } catch (_) {}
+      }
     }
   };
 
@@ -38,6 +42,9 @@ function axonLiveOperatorMixin() {
 
     beginLiveOperator(mode = 'chat', msg = '', workspaceId = null) {
       const target = scopedWorkspaceId(this, workspaceId);
+      // Clear the activity feed on new task start
+      if (typeof this.clearActivityFeed === 'function') this.clearActivityFeed();
+      this.clearVoiceSurfaceHistory?.(false);
       const operator = this.beginWorkspaceLiveOperator?.(target, mode, msg);
       this.hudResetOperatorTrace?.(mode === 'agent' ? 'Live operator telemetry' : 'Reply telemetry');
       if (mode === 'agent') this.setAgentStage?.('observe');
@@ -63,6 +70,7 @@ function axonLiveOperatorMixin() {
         try { this.hudProcessAgentEvent(event); } catch (_) {}
       }
       this.syncVoiceCommandCenterRuntime?.();
+      this.syncVoiceSurfaceDirector?.();
 
       const current = scopedOperator(this, target);
       if (mode !== 'agent') {
@@ -102,6 +110,23 @@ function axonLiveOperatorMixin() {
           title: 'Writing the reply',
           detail: 'Live response is flowing into the console now.',
         });
+        return;
+      }
+
+      if (event.type === 'thinking') {
+        // Thinking chunks arrive rapidly — only patch if phase changed
+        if (current.phase === 'observe' || current.phase !== 'plan') {
+          patchOperator(this, target, {
+            active: true,
+            phase: 'plan',
+            title: 'Reasoning through approach',
+            detail: 'Axon is analysing the request and forming a plan.',
+          }, {
+            phase: 'plan',
+            title: 'Reasoning through approach',
+            detail: 'Axon is analysing the request and forming a plan.',
+          });
+        }
         return;
       }
 

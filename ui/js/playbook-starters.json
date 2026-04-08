@@ -55,6 +55,13 @@
       "tags": "docs,readme,handoff",
       "group": "operator-docs",
       "content": "Take a rough note or strategy draft and turn it into a repo-ready docs drop. Create or update the appropriate docs/*.md file, add a short summary to docs/README.md or the closest docs index if present, and report the exact file path(s) touched plus the follow-on missions implied by the document."
+    },
+    {
+      "key": "ecd-visual-layout",
+      "title": "ECD visual layout",
+      "tags": "ecd,design,svg,pdf,education",
+      "group": "visual-docs",
+      "content": "Create a submission-ready ECD visual document such as a cover page, weekly learning programme overview, evidence figure, or classroom poster. Treat this as structured document design, not generic AI art. Inspect any relevant workspace examples first, especially files under design/ecd/ when they exist. For text-heavy layouts with headings, tables, labels, or exact wording, prefer editable SVG or HTML/CSS output and export a single-page A4 PDF with an explicit print wrapper when needed. Use a warm child-friendly palette, rounded cards, strong title hierarchy, clear spacing, and highly readable typography. Preserve exact names, themes, dates, and source wording from the user's material. Verify the result with a local preview render and confirm the PDF page count before calling it final."
     }
   ]
 }

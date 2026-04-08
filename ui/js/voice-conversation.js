@@ -186,6 +186,23 @@ function axonVoiceConversationMixin() {
       if (resetTranscript) this.clearVoiceTranscript?.();
     },
 
+    /** Tab-key autocomplete: fill from quick prompts or last command */
+    voiceTextDockAutocomplete() {
+      this.ensureVoiceConversationState();
+      const draft = String(this.voiceConversation.textDraft || '').trim().toLowerCase();
+      if (!draft) return;
+      const prompts = this.voiceQuickPrompts?.() || [];
+      const match = prompts.find(p => p.toLowerCase().startsWith(draft));
+      if (match) {
+        this.voiceConversation.textDraft = match;
+        return;
+      }
+      const lastCmd = String(this.voiceConversation.lastCommand || '').trim();
+      if (lastCmd && lastCmd.toLowerCase().startsWith(draft)) {
+        this.voiceConversation.textDraft = lastCmd;
+      }
+    },
+
     async submitVoiceTextDock() {
       this.ensureVoiceConversationState();
       const text = trimText(this.voiceConversation.textDraft || this.voiceTranscript || this.chatInput);
@@ -374,7 +391,7 @@ function axonVoiceConversationMixin() {
       if (this.voiceConversation.handsFree && this.voiceInputAvailable?.()) {
         this._voiceHandsFreeResumeTimer = setTimeout(async () => {
           if (!this.showVoiceOrb || this.reactorAsleep || this.chatLoading || this.voiceActive) return;
-          if (this._currentAudio || this._speechSynthActive) return;
+          if (this.voiceSpeechBusy?.()) return;
           try {
             await this.startVoice?.();
           } catch (_) {}
@@ -414,30 +431,30 @@ function axonVoiceConversationMixin() {
     },
 
     voiceApprovalLabel() {
-      if (this.terminal?.approvalRequired) return 'Approve terminal command';
+      if (this.terminal?.approvalRequired) return 'Allow command';
       const pending = this.currentPendingAgentApproval?.();
       if (String(pending?.action?.action_type || '').trim().toLowerCase().startsWith('file_')) {
-        return 'Approve file access';
+        return 'Allow once';
       }
-      if (pending) return 'Approve agent action';
-      return 'Approve';
+      if (pending) return 'Allow once';
+      return 'Allow';
     },
 
     voiceApprovalSummary() {
       if (this.terminal?.approvalRequired) {
-        return 'Axon paused before executing a guarded terminal command.';
+        return 'Axon paused before executing a guarded terminal command. Explicit permission is required to continue.';
       }
       const pending = this.currentPendingAgentApproval?.();
       if (String(pending?.action?.action_type || '').trim().toLowerCase().startsWith('file_')) {
-        return 'Axon paused before inspecting a file or folder outside the current workspace.';
+        return 'Axon paused before inspecting a file or folder outside the current workspace. Please approve or deny the access request.';
       }
       if (pending) {
-        return 'Axon paused before continuing an approval-gated task.';
+        return 'Axon paused before continuing an approval-gated task. Please approve or deny the request.';
       }
       return 'Axon needs your permission to proceed.';
     },
 
-    async approveVoiceCenterAction() {
+    async approveVoiceCenterAction(scope = 'once') {
       if (this.terminal?.approvalRequired) {
         await this.executeTerminalCommand?.(true);
         this.syncVoiceCommandCenterRuntime?.();
@@ -445,7 +462,7 @@ function axonVoiceConversationMixin() {
       }
       const pending = this.currentPendingAgentApproval?.();
       if (!pending) return;
-      const ok = await this.approvePendingAgentAction?.('once');
+      const ok = await this.approvePendingAgentAction?.(scope);
       if (ok) this.syncVoiceCommandCenterRuntime?.();
     },
 
@@ -498,9 +515,10 @@ function axonVoiceConversationMixin() {
       else if (this.hudApprovalPending) this.hudDismissApproval?.();
 
       const provider = trimText(this.consoleProviderIdentity?.().providerLabel);
-      if (provider && (this.chatLoading || this.voiceActive || this._currentAudio || this._speechSynthActive)) {
+      const speechBusy = this.voiceSpeechBusy?.() || false;
+      if (provider && (this.chatLoading || this.voiceActive || speechBusy)) {
         this.hudShowBeam?.(provider);
-      } else if (!this.chatLoading && !this.voiceActive && !this._currentAudio && !this._speechSynthActive) {
+      } else if (!this.chatLoading && !this.voiceActive && !speechBusy) {
         this.hudHideBeam?.();
       }
     },

@@ -5,6 +5,10 @@
 function axonVoicePlaybackMixin() {
   return {
 
+    voiceSpeechBusy() {
+      return !!(this._speechPlaybackPending || this._currentAudio || this._speechSynthActive);
+    },
+
     voiceSpeechRate() {
       const raw = Number.parseFloat(this.settingsForm?.voice_speech_rate);
       if (!Number.isFinite(raw)) return 0.85;
@@ -63,6 +67,12 @@ function axonVoicePlaybackMixin() {
     stopSpeech() {
       this._speechPlaybackSession = Number(this._speechPlaybackSession || 0) + 1;
       this._speechSynthActive = false;
+      this._speechPlaybackPending = false;
+      const abortController = this._speechPlaybackAbortController;
+      this._speechPlaybackAbortController = null;
+      if (abortController && typeof abortController.abort === 'function') {
+        try { abortController.abort(); } catch (_) {}
+      }
       const resolveCurrent = this._speechPlaybackResolveCurrent;
       this._speechPlaybackResolveCurrent = null;
       if (typeof resolveCurrent === 'function') {
@@ -115,12 +125,15 @@ function axonVoicePlaybackMixin() {
 
     async _playAzureSpeechChunks(chunks, sessionId) {
       let playedChunks = 0;
+      const abortController = typeof AbortController === 'function' ? new AbortController() : null;
+      this._speechPlaybackAbortController = abortController;
       try {
         for (const chunk of chunks) {
-          if (sessionId !== this._speechPlaybackSession) return playedChunks;
+          if (sessionId !== this._speechPlaybackSession || abortController?.signal?.aborted) return playedChunks;
           const res = await fetch('/api/tts', {
             method: 'POST',
             headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+            signal: abortController?.signal,
             body: JSON.stringify({
               text: chunk,
               voice: this.settingsForm.azure_voice || 'en-GB-RyanNeural',
@@ -129,10 +142,12 @@ function axonVoicePlaybackMixin() {
               pitch: this.voiceSpeechPitch(),
             }),
           });
+          if (sessionId !== this._speechPlaybackSession || abortController?.signal?.aborted) return playedChunks;
           if (!res.ok) {
             throw new Error(`Azure TTS failed (${res.status})`);
           }
           const blob = await res.blob();
+          if (sessionId !== this._speechPlaybackSession || abortController?.signal?.aborted) return playedChunks;
           const url = URL.createObjectURL(blob);
           const audio = new Audio(url);
           await this._playAudioChunk(audio, sessionId, () => URL.revokeObjectURL(url));
@@ -140,8 +155,15 @@ function axonVoicePlaybackMixin() {
         }
         return playedChunks;
       } catch (error) {
+        if (sessionId !== this._speechPlaybackSession || abortController?.signal?.aborted || error?.name === 'AbortError') {
+          return playedChunks;
+        }
         error.playedChunks = playedChunks;
         throw error;
+      } finally {
+        if (this._speechPlaybackAbortController === abortController) {
+          this._speechPlaybackAbortController = null;
+        }
       }
     },
 
@@ -199,29 +221,36 @@ function axonVoicePlaybackMixin() {
       this.onVoiceReplyPlaybackStarted?.(spokenText);
       const sessionId = Number(this._speechPlaybackSession || 0) + 1;
       this._speechPlaybackSession = sessionId;
+      this._speechPlaybackPending = true;
 
-      if (this.azureSpeechConfigured() && this.settingsForm.azure_speech_region) {
-        try {
-          await this._playAzureSpeechChunks(chunks, sessionId);
-          if (sessionId === this._speechPlaybackSession) {
-            this.onVoiceReplyPlaybackComplete?.(spokenText);
-          }
-          return;
-        } catch (error) {
-          if (sessionId !== this._speechPlaybackSession) return;
-          if (Number(error?.playedChunks || 0) > 0) {
-            this.showToast?.('Voice playback stopped before the full reply finished');
+      try {
+        if (this.azureSpeechConfigured() && this.settingsForm.azure_speech_region) {
+          try {
+            await this._playAzureSpeechChunks(chunks, sessionId);
+            if (sessionId === this._speechPlaybackSession) {
+              this.onVoiceReplyPlaybackComplete?.(spokenText);
+            }
             return;
+          } catch (error) {
+            if (sessionId !== this._speechPlaybackSession) return;
+            if (Number(error?.playedChunks || 0) > 0) {
+              this.showToast?.('Voice playback stopped before the full reply finished');
+              return;
+            }
           }
         }
-      }
 
-      const spoke = await this._speakBrowserChunks(chunks, sessionId);
-      if (spoke && sessionId === this._speechPlaybackSession) {
-        this.onVoiceReplyPlaybackComplete?.(spokenText);
-      }
-      if (!spoke && sessionId === this._speechPlaybackSession) {
-        this.showToast?.('Speech playback is not available in this browser');
+        const spoke = await this._speakBrowserChunks(chunks, sessionId);
+        if (spoke && sessionId === this._speechPlaybackSession) {
+          this.onVoiceReplyPlaybackComplete?.(spokenText);
+        }
+        if (!spoke && sessionId === this._speechPlaybackSession) {
+          this.showToast?.('Speech playback is not available in this browser');
+        }
+      } finally {
+        if (sessionId === this._speechPlaybackSession) {
+          this._speechPlaybackPending = false;
+        }
       }
     },
 
@@ -232,7 +261,7 @@ function axonVoicePlaybackMixin() {
 
     orbState() {
       if (this.voiceActive) return 'listening';
-      if (this._currentAudio || this._speechSynthActive) return 'speaking';
+      if (this.voiceSpeechBusy()) return 'speaking';
       if (this.chatLoading) return 'thinking';
       if (this.agentMode) return 'agent';
       return 'idle';

@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CHAT_DEPLOY_GUIDANCE_JS = ROOT / "ui/js/chat-deploy-guidance.js"
+WORKSPACE_RUNS_JS = ROOT / "ui/js/workspace-runs.js"
 COMPANION_JS = ROOT / "ui/js/companion.js"
 
 
@@ -24,6 +25,7 @@ def _run_script(body: str):
         }};
         vm.createContext(ctx);
         for (const path of [
+          {json.dumps(str(WORKSPACE_RUNS_JS))},
           {json.dumps(str(CHAT_DEPLOY_GUIDANCE_JS))},
           {json.dumps(str(COMPANION_JS))},
         ]) {{
@@ -43,6 +45,93 @@ def _run_script(body: str):
 
 
 class ChatDeployGuidanceTests(unittest.TestCase):
+    def test_mission_helpers_prefer_active_global_run_when_no_workspace_is_selected(self):
+        payload = _run_script(
+            """
+            const app = {
+              chatProjectId: '',
+              chatProject: null,
+              projects: [{ id: 7, name: 'Hope' }],
+              dashTopProjects: [{ id: 7, name: 'Hope', health: 58 }],
+              liveOperator: {},
+              liveOperatorFeed: [],
+              workspaceTabLabel(id) {
+                if (String(id) === '42') return 'Companion Native';
+                return `Workspace ${id}`;
+              },
+              dashboardWeakestWorkspace() {
+                return this.dashTopProjects[0];
+              },
+            };
+            Object.assign(app, ctx.window.axonWorkspaceRunsMixin(), ctx.window.axonCompanionMixin());
+            app.setWorkspaceRunLoading('', true);
+            app.beginWorkspaceLiveOperator('', 'agent', 'Inspect runtime health');
+            app.patchWorkspaceLiveOperator('', {
+              active: true,
+              phase: 'plan',
+              title: 'Inspecting the task',
+              detail: 'Axon is checking the runtime lane before acting.',
+            });
+
+            console.log(JSON.stringify({
+              missionWorkspaceId: app.missionWorkspaceId(),
+              missionWorkspaceLabel: app.missionWorkspaceLabel(),
+              missionWorkspaceRunActive: app.missionWorkspaceRunActive(),
+              missionLiveOperator: app.missionLiveOperator(),
+            }));
+            """
+        )
+
+        self.assertIsNone(payload["missionWorkspaceId"])
+        self.assertEqual(payload["missionWorkspaceLabel"], "Global")
+        self.assertTrue(payload["missionWorkspaceRunActive"])
+        self.assertEqual(payload["missionLiveOperator"]["title"], "Inspecting the task")
+        self.assertEqual(payload["missionLiveOperator"]["workspaceName"], "Global")
+
+    def test_mission_helpers_follow_active_workspace_run_when_present(self):
+        payload = _run_script(
+            """
+            const app = {
+              chatProjectId: '',
+              chatProject: null,
+              projects: [{ id: 42, name: 'Companion Native' }],
+              dashTopProjects: [{ id: 7, name: 'Hope', health: 58 }],
+              liveOperator: {},
+              liveOperatorFeed: [],
+              workspaceTabLabel(id) {
+                if (String(id) === '42') return 'Companion Native';
+                return `Workspace ${id}`;
+              },
+              dashboardWeakestWorkspace() {
+                return this.dashTopProjects[0];
+              },
+            };
+            Object.assign(app, ctx.window.axonWorkspaceRunsMixin(), ctx.window.axonCompanionMixin());
+            app.setWorkspaceRunLoading('42', true);
+            app.beginWorkspaceLiveOperator('42', 'agent', 'Inspect workspace');
+            app.patchWorkspaceLiveOperator('42', {
+              active: true,
+              phase: 'execute',
+              title: 'Running workspace verification',
+              detail: 'Axon is validating the selected workspace.',
+              workspaceId: '42',
+            });
+
+            console.log(JSON.stringify({
+              missionWorkspaceId: app.missionWorkspaceId(),
+              missionWorkspaceLabel: app.missionWorkspaceLabel(),
+              missionWorkspaceRunActive: app.missionWorkspaceRunActive(),
+              missionLiveOperator: app.missionLiveOperator(),
+            }));
+            """
+        )
+
+        self.assertEqual(payload["missionWorkspaceId"], 42)
+        self.assertEqual(payload["missionWorkspaceLabel"], "Companion Native")
+        self.assertTrue(payload["missionWorkspaceRunActive"])
+        self.assertEqual(payload["missionLiveOperator"]["title"], "Running workspace verification")
+        self.assertEqual(payload["missionLiveOperator"]["workspaceName"], "Companion Native")
+
     def test_prepare_deploy_lane_promotes_agent_cli_and_full_access(self):
         payload = _run_script(
             """

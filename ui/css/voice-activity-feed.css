@@ -1,0 +1,358 @@
+/* ══════════════════════════════════════════════════════════════
+   Axon — Voice Activity Feed & Enhanced Operator Deck CSS
+   JARVIS / STARK NET–style animated activity stream
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Activity Feed ───────────────────────────────────────────── */
+
+@keyframes activity-entry-in {
+  0%   { opacity: 0; transform: translateX(-18px) scale(0.92); filter: blur(3px); }
+  60%  { opacity: 1; transform: translateX(4px) scale(1.01); filter: blur(0); }
+  100% { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes activity-latest-glow {
+  0%   { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.4), inset 0 0 0 0 rgba(34, 211, 238, 0.08); }
+  50%  { box-shadow: 0 0 22px 2px rgba(34, 211, 238, 0.18), inset 0 0 20px 0 rgba(34, 211, 238, 0.06); }
+  100% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0), inset 0 0 0 0 rgba(34, 211, 238, 0); }
+}
+@keyframes activity-pulse-dot {
+  0%, 100% { opacity: 1; box-shadow: 0 0 6px 1px rgba(34, 211, 238, 0.7); }
+  50%      { opacity: 0.5; box-shadow: 0 0 2px 0 rgba(34, 211, 238, 0.3); }
+}
+@keyframes activity-file-flash {
+  0%   { background: rgba(34, 211, 238, 0.22); color: rgba(165, 243, 252, 1); }
+  100% { background: rgba(34, 211, 238, 0.08); color: rgba(125, 211, 252, 0.92); }
+}
+@keyframes activity-scanline {
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(300%); }
+}
+
+.activity-feed {
+  position: relative;
+  border-radius: 1rem;
+  border: 1px solid rgba(34, 211, 238, 0.14);
+  background:
+    radial-gradient(ellipse at 15% 10%, rgba(34, 211, 238, 0.04), transparent 55%),
+    rgba(2, 6, 23, 0.72);
+  padding: 0.8rem 0.9rem;
+  overflow: hidden;
+}
+/* Scanline overlay */
+.activity-feed::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(34, 211, 238, 0.018) 0px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+/* Moving scanline beam */
+.activity-feed::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  height: 40px;
+  pointer-events: none;
+  z-index: 2;
+  background: linear-gradient(180deg, transparent, rgba(34, 211, 238, 0.04), transparent);
+  animation: activity-scanline 4s linear infinite;
+}
+
+.activity-feed__header {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.65rem;
+  position: relative;
+  z-index: 3;
+}
+
+.activity-feed__pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(34, 211, 238, 0.92);
+  animation: activity-pulse-dot 1.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.activity-feed__label {
+  font-size: 0.62rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(103, 232, 249, 0.82);
+  font-weight: 600;
+}
+
+.activity-feed__count {
+  margin-left: auto;
+  font-size: 0.58rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(100, 116, 139, 0.72);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+.activity-feed__list {
+  display: grid;
+  gap: 0.45rem;
+  position: relative;
+  z-index: 3;
+}
+
+.activity-feed__entry {
+  display: grid;
+  grid-template-columns: 1.8rem minmax(0, 1fr) auto;
+  gap: 0.55rem;
+  align-items: start;
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(30, 41, 59, 0.7);
+  background: rgba(2, 6, 23, 0.55);
+  animation: activity-entry-in 0.38s cubic-bezier(0.16, 1, 0.3, 1) both;
+  transition: border-color 0.3s, background 0.3s, box-shadow 0.3s;
+}
+.activity-feed__entry:hover {
+  border-color: rgba(34, 211, 238, 0.22);
+  background: rgba(8, 15, 32, 0.7);
+}
+
+.activity-feed__entry--latest {
+  border-color: rgba(34, 211, 238, 0.28);
+  animation: activity-entry-in 0.38s cubic-bezier(0.16, 1, 0.3, 1) both,
+             activity-latest-glow 1.8s ease-out 0.4s both;
+}
+
+/* Phase-specific left border accent */
+.activity-feed__entry--execute { border-left: 2px solid rgba(251, 191, 36, 0.55); }
+.activity-feed__entry--plan    { border-left: 2px solid rgba(56, 189, 248, 0.55); }
+.activity-feed__entry--verify  { border-left: 2px solid rgba(52, 211, 153, 0.55); }
+.activity-feed__entry--recover { border-left: 2px solid rgba(251, 113, 133, 0.55); }
+.activity-feed__entry--observe { border-left: 2px solid rgba(148, 163, 184, 0.4); }
+
+.activity-feed__icon {
+  font-size: 1rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.8rem;
+  height: 1.8rem;
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(51, 65, 85, 0.6);
+}
+
+.activity-feed__body {
+  min-width: 0;
+}
+
+.activity-feed__title {
+  font-size: 0.78rem;
+  color: rgba(226, 232, 240, 0.96);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.activity-feed__detail {
+  margin-top: 0.2rem;
+  font-size: 0.7rem;
+  line-height: 1.5;
+  color: rgba(148, 163, 184, 0.82);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-feed__time {
+  font-size: 0.6rem;
+  color: rgba(100, 116, 139, 0.6);
+  white-space: nowrap;
+  padding-top: 0.15rem;
+}
+
+.activity-feed__file {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  background: rgba(34, 211, 238, 0.08);
+  color: rgba(125, 211, 252, 0.92);
+  border: 1px solid rgba(34, 211, 238, 0.18);
+  animation: activity-file-flash 0.6s ease-out;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-feed__tool {
+  display: inline-flex;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: rgba(251, 191, 36, 0.08);
+  color: rgba(253, 230, 138, 0.88);
+  border: 1px solid rgba(251, 191, 36, 0.16);
+}
+
+/* ── Enhanced Operator Deck Animations ───────────────────────── */
+
+@keyframes operator-deck-entrance {
+  0%   { opacity: 0; transform: translateY(12px) scale(0.97); filter: blur(4px); }
+  100% { opacity: 1; transform: translateY(0) scale(1); filter: none; }
+}
+@keyframes operator-metric-reveal {
+  0%   { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes command-line-typewriter {
+  0%   { width: 0; }
+  100% { width: 100%; }
+}
+@keyframes deck-border-glow {
+  0%, 100% { border-color: rgba(34, 211, 238, 0.14); box-shadow: 0 0 0 rgba(34, 211, 238, 0); }
+  50%      { border-color: rgba(34, 211, 238, 0.3);  box-shadow: 0 0 22px rgba(34, 211, 238, 0.06); }
+}
+@keyframes voice-step-enter {
+  0%   { opacity: 0; transform: translateX(-10px) scale(0.95); }
+  100% { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+.voice-operator-deck {
+  animation: operator-deck-entrance 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.voice-operator-deck__metric {
+  animation: operator-metric-reveal 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.voice-operator-deck__metric:nth-child(1) { animation-delay: 0.08s; }
+.voice-operator-deck__metric:nth-child(2) { animation-delay: 0.14s; }
+.voice-operator-deck__metric:nth-child(3) { animation-delay: 0.20s; }
+.voice-operator-deck__metric:nth-child(4) { animation-delay: 0.26s; }
+
+/* Pulsing border on active deck */
+.voice-operator-deck--cyan  { animation: operator-deck-entrance 0.5s cubic-bezier(0.16, 1, 0.3, 1) both, deck-border-glow 3s ease-in-out 0.6s infinite; border-radius: 1rem; }
+.voice-operator-deck--amber { animation: operator-deck-entrance 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+/* Command field typewriter effect */
+.voice-operator-deck__value--mono {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  border-right: 2px solid rgba(34, 211, 238, 0.5);
+  animation: command-line-typewriter 0.4s steps(20) both, hud-cursor-blink 1s step-end 0.4s infinite;
+  animation-fill-mode: both;
+}
+
+/* ── Enhanced Text Command Dock ──────────────────────────────── */
+
+@keyframes dock-slide-up {
+  0%   { opacity: 0; transform: translateY(20px) scale(0.97); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.voice-command-dock__panel {
+  animation: dock-slide-up 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.voice-command-dock__textarea {
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+.voice-command-dock__textarea:focus {
+  border-color: rgba(34, 211, 238, 0.35) !important;
+  box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.08), 0 0 20px rgba(34, 211, 238, 0.06) !important;
+  outline: none;
+}
+
+/* Character counter */
+.voice-command-dock__char-count {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 0.5rem;
+  font-size: 0.58rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: rgba(100, 116, 139, 0.5);
+  pointer-events: none;
+  transition: color 0.2s;
+}
+.voice-command-dock__char-count--warn {
+  color: rgba(251, 191, 36, 0.7);
+}
+.voice-command-dock__char-count--over {
+  color: rgba(251, 113, 133, 0.8);
+}
+
+/* ── Enhanced Response Panel Float ───────────────────────────── */
+
+@keyframes response-panel-enter {
+  0%   { opacity: 0; transform: translateX(20px) scale(0.96); filter: blur(3px); }
+  100% { opacity: 1; transform: translateX(0) scale(1); filter: none; }
+}
+
+.voice-float--response {
+  animation: response-panel-enter 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── Greeting Toast ──────────────────────────────────────────── */
+
+@keyframes greeting-materialize {
+  0%   { opacity: 0; transform: translateY(10px) scale(0.94); filter: blur(6px); }
+  40%  { opacity: 1; filter: blur(0); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes greeting-fade-out {
+  0%   { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-6px); }
+}
+
+.voice-greeting-toast {
+  position: absolute;
+  bottom: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1020;
+  padding: 0.55rem 1.2rem;
+  border-radius: 999px;
+  border: 1px solid rgba(34, 211, 238, 0.18);
+  background: rgba(2, 6, 23, 0.82);
+  backdrop-filter: blur(16px);
+  color: rgba(186, 230, 253, 0.94);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-align: center;
+  white-space: nowrap;
+  box-shadow: 0 0 30px rgba(34, 211, 238, 0.08);
+  animation: greeting-materialize 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  pointer-events: none;
+}
+.voice-greeting-toast--exit {
+  animation: greeting-fade-out 0.4s ease-in forwards;
+}
+
+/* ── Responsive tweaks ───────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .activity-feed__entry {
+    grid-template-columns: 1.5rem minmax(0, 1fr);
+  }
+  .activity-feed__time {
+    display: none;
+  }
+  .activity-feed__detail {
+    white-space: normal;
+  }
+}

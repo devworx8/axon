@@ -22,6 +22,7 @@ from .agent_commit_intents import (
     looks_like_commit_request as _looks_like_commit_request,
     looks_like_push_request as _looks_like_push_request,
 )
+from .agent_delete_intent import has_explicit_delete_intent
 from .github_orchestrator import (
     extract_quoted_value,
     push_branch,
@@ -727,13 +728,12 @@ def _direct_agent_action(
     )
     append_phrases = ("append the line", "append line", "append ")
     replace_phrases = ("replace ", "change ")
-    delete_phrases = ("delete file", "remove file", "delete ", "remove ", "rm ")
     wants_append = any(phrase in lower for phrase in append_phrases)
     wants_create = any(phrase in lower for phrase in create_phrases)
     wants_write = any(phrase in lower for phrase in write_phrases)
     wants_overwrite = any(phrase in lower for phrase in overwrite_phrases)
     wants_replace = any(phrase in lower for phrase in replace_phrases)
-    wants_delete = any(phrase in lower for phrase in delete_phrases)
+    wants_delete = has_explicit_delete_intent(user_message)
     workspace_root_requested = _mentions_workspace_root(user_message)
     filename_hint = _extract_named_file_hint(user_message)
 

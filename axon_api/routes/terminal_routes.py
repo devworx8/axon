@@ -5,12 +5,13 @@ import asyncio
 import base64
 import json
 import os
-import re
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
+
+from axon_api.services import terminal_pty_runtime
 
 
 class TerminalSessionCreate(BaseModel):
@@ -176,12 +177,13 @@ class TerminalRouteHandlers:
         return {"status": "closed", "message": "Session closed."}
 
     async def pty_websocket(self, websocket: WebSocket, session_id: str):
-        # Authenticate BEFORE accepting the WebSocket connection
         async with self._db.get_db() as conn:
             pin_hash = await self._db.get_setting(conn, "auth_pin_hash")
         if pin_hash:
             token = websocket.query_params.get("token", "")
             if not token or not self._valid_session(token):
+                await websocket.accept()
+                await websocket.send_json({"type": "error", "message": "Authentication required to attach the interactive shell."})
                 await websocket.close(code=4001, reason="Authentication required")
                 return
         await websocket.accept()
@@ -205,8 +207,7 @@ class TerminalRouteHandlers:
             shell_argv.append("--login")
         home_path = Path.home()
         session_cwd = home_path
-        session_match = re.match(r"^(\d+)", str(session_id or ""))
-        numeric_session_id = int(session_match.group(1)) if session_match else 0
+        numeric_session_id = terminal_pty_runtime.session_numeric_id(session_id)
         if numeric_session_id:
             async with self._db.get_db() as conn:
                 row = await self._db.get_terminal_session(conn, numeric_session_id)
@@ -223,7 +224,15 @@ class TerminalRouteHandlers:
             cwd=str(session_cwd),
         )
 
-        entry = {"pty": pty_proc, "ws": websocket, "alive": True}
+        entry = {
+            "pty": pty_proc,
+            "ws": websocket,
+            "alive": True,
+            "session_id": numeric_session_id,
+            "osc_buffer": "",
+            "line_buffer": "",
+            "tracked_commands": {},
+        }
         self._pty_sessions[session_id] = entry
 
         def write_input(raw: Any):
@@ -245,9 +254,42 @@ class TerminalRouteHandlers:
                     try:
                         data = await loop.run_in_executor(None, pty_proc.read, 4096)
                         if data:
-                            await websocket.send_json(
-                                {"type": "data", "data": base64.b64encode(data if isinstance(data, bytes) else data.encode()).decode()}
-                            )
+                            text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else str(data)
+                            visible_text, lines, events = terminal_pty_runtime.ingest_pty_output(entry, text)
+                            if visible_text:
+                                await websocket.send_json(
+                                    {"type": "data", "data": base64.b64encode(visible_text.encode("utf-8")).decode()}
+                                )
+                            if numeric_session_id:
+                                for line in lines:
+                                    await terminal_pty_runtime.append_tracked_pty_output(
+                                        numeric_session_id,
+                                        line,
+                                        terminal_processes=self._terminal_processes,
+                                        db_module=self._db,
+                                        set_live_operator=self._set_live_operator,
+                                    )
+                                for event in events:
+                                    if event.get("type") != "done":
+                                        continue
+                                    trailing = str(entry.get("line_buffer") or "").rstrip("\r")
+                                    if trailing.strip():
+                                        entry["line_buffer"] = ""
+                                        await terminal_pty_runtime.append_tracked_pty_output(
+                                            numeric_session_id,
+                                            trailing,
+                                            terminal_processes=self._terminal_processes,
+                                            db_module=self._db,
+                                            set_live_operator=self._set_live_operator,
+                                        )
+                                    await terminal_pty_runtime.finalize_tracked_pty_command(
+                                        numeric_session_id,
+                                        terminal_processes=self._terminal_processes,
+                                        pty_sessions=self._pty_sessions,
+                                        db_module=self._db,
+                                        set_live_operator=self._set_live_operator,
+                                        exit_code=event.get("exit_code"),
+                                    )
                     except EOFError:
                         break
                     except Exception:
@@ -293,6 +335,26 @@ class TerminalRouteHandlers:
         finally:
             entry["alive"] = False
             read_task.cancel()
+            if numeric_session_id:
+                trailing = str(entry.get("line_buffer") or "").rstrip("\r")
+                if trailing.strip():
+                    entry["line_buffer"] = ""
+                    await terminal_pty_runtime.append_tracked_pty_output(
+                        numeric_session_id,
+                        trailing,
+                        terminal_processes=self._terminal_processes,
+                        db_module=self._db,
+                        set_live_operator=self._set_live_operator,
+                    )
+                await terminal_pty_runtime.finalize_tracked_pty_command(
+                    numeric_session_id,
+                    terminal_processes=self._terminal_processes,
+                    pty_sessions=self._pty_sessions,
+                    db_module=self._db,
+                    set_live_operator=self._set_live_operator,
+                    exit_code=130,
+                    stopped=True,
+                )
             try:
                 pty_proc.terminate(force=True)
             except Exception:

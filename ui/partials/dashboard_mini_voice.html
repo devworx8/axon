@@ -1,0 +1,82 @@
+<div class="dashboard-mini-voice dashboard-mini-voice--embedded" x-cloak x-init="ensureDashboardMiniVoiceState?.()">
+  <div class="dashboard-mini-voice__panel" :class="dashboardMiniVoicePanelClass()">
+    <div class="dashboard-mini-voice__header">
+      <div class="min-w-0">
+        <div class="dashboard-mini-voice__eyebrow">Control ring voice</div>
+        <div class="dashboard-mini-voice__title" x-text="dashboardMiniVoiceModeLabel()"></div>
+      </div>
+      <span class="dashboard-mini-voice__badge" x-text="dashboardMiniVoiceStatusLabel()"></span>
+    </div>
+
+    <div class="dashboard-mini-voice__chips">
+      <span class="dashboard-mini-voice__chip" x-text="`Wake phrase · ${dashboardMiniVoiceWakePhrase()}`"></span>
+      <span class="dashboard-mini-voice__chip" x-text="dashboardMiniVoiceCourtesyLabel()"></span>
+      <span class="dashboard-mini-voice__chip"
+            x-show="dashboardMiniVoiceLastDispositionLabel()"
+            x-text="dashboardMiniVoiceLastDispositionLabel()"></span>
+    </div>
+
+    <div class="dashboard-mini-voice__meta">
+      <div class="dashboard-mini-voice__detail" x-text="dashboardMiniVoiceStatusDetail()"></div>
+    </div>
+
+    <div class="dashboard-mini-voice__actions dashboard-mini-voice__actions--triple">
+      <button @click="dashboardMiniVoiceTalkNow()"
+              class="dashboard-mini-voice__button dashboard-mini-voice__button--primary"
+              x-text="dashboardMiniVoiceTalkLabel()"></button>
+      <button @click="dashboardMiniVoicePrimaryAction()"
+              class="dashboard-mini-voice__button"
+              x-text="dashboardMiniVoiceActionLabel()"></button>
+      <button @click="dashboardMiniVoiceOpenFull()"
+              class="dashboard-mini-voice__button dashboard-mini-voice__button--secondary">
+        Full voice mode
+      </button>
+    </div>
+
+    <div class="dashboard-mini-voice__surface">
+      <div class="min-w-0">
+        <div class="dashboard-mini-voice__surface-label">Current surface</div>
+        <div class="dashboard-mini-voice__surface-value" x-text="dashboardMiniVoiceSurfaceLabel()"></div>
+        <div class="dashboard-mini-voice__surface-detail" x-text="dashboardMiniVoiceSurfaceDetail()"></div>
+      </div>
+      <button @click="dashboardMiniVoiceSurfaceAction()"
+              class="dashboard-mini-voice__surface-action"
+              x-text="dashboardMiniVoiceSurfaceActionLabel()"></button>
+    </div>
+
+    <div class="dashboard-mini-voice__heard"
+         x-show="dashboardMiniVoiceLastHeard()">
+      <div class="dashboard-mini-voice__heard-label">Last heard</div>
+      <div class="dashboard-mini-voice__heard-body" x-text="dashboardMiniVoiceLastHeard()"></div>
+    </div>
+
+    <div class="dashboard-mini-voice__reply"
+         x-show="dashboardMiniVoiceLatestReplyPreview()">
+      <div class="dashboard-mini-voice__heard-label">Latest reply</div>
+      <div class="dashboard-mini-voice__heard-body" x-text="dashboardMiniVoiceLatestReplyPreview()"></div>
+    </div>
+
+    <div class="dashboard-mini-voice__approval"
+         x-show="dashboardMiniVoicePendingAdvice()">
+      <div class="dashboard-mini-voice__approval-eyebrow">Permission prompt</div>
+      <div class="dashboard-mini-voice__approval-title">Axon has a suggestion ready</div>
+      <div class="dashboard-mini-voice__approval-body">
+        The ring heard a nearby technical discussion and Axon can weigh in, but it will wait for your approval first.
+      </div>
+      <div class="dashboard-mini-voice__approval-preview"
+           x-text="dashboardMiniVoicePendingAdvice()?.transcript || ''"></div>
+      <div class="dashboard-mini-voice__approval-actions">
+        <button @click="dashboardMiniVoiceDismissAdvice()"
+                class="dashboard-mini-voice__button dashboard-mini-voice__button--secondary">
+          Not now
+        </button>
+        <button @click="dashboardMiniVoiceApproveAdvice()"
+                class="dashboard-mini-voice__button dashboard-mini-voice__button--primary">
+          Let Axon weigh in
+        </button>
+      </div>
+    </div>
+
+    <div class="dashboard-mini-voice__hint" x-text="dashboardMiniVoiceHint()"></div>
+  </div>
+</div>

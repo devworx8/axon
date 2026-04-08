@@ -87,6 +87,69 @@ function axonChatApprovalMixin() {
       return String(item.action?.command_preview || '').trim();
     },
 
+    approvalPromptTitle(pending = null) {
+      const item = pending || this.currentPendingAgentApproval?.() || null;
+      if (!item) return 'Permission required';
+      const actionType = String(item.action?.action_type || item.kind || '').trim().toLowerCase();
+      if (this.terminal?.approvalRequired) return 'Terminal permission required';
+      if (actionType.startsWith('file_')) return 'File access permission required';
+      if (actionType === 'command') return 'Command permission required';
+      return 'Permission required';
+    },
+
+    approvalPromptBody(pending = null) {
+      const item = pending || this.currentPendingAgentApproval?.() || null;
+      if (!item) {
+        return 'Axon needs your permission before it can continue.';
+      }
+      const actionType = String(item.action?.action_type || item.kind || '').trim().toLowerCase();
+      const path = String(item.action?.path || '').trim();
+      if (this.terminal?.approvalRequired) {
+        return String(item.message || 'Axon is paused before it can run a guarded terminal command.').trim();
+      }
+      if (actionType.startsWith('file_') && path) {
+        return `Axon is paused before accessing ${path}.`;
+      }
+      return String(item.message || item.summary || 'Axon is paused before continuing an approval-gated task.').trim();
+    },
+
+    approvalPromptMeta(pending = null) {
+      const item = pending || this.currentPendingAgentApproval?.() || null;
+      if (!item) return '';
+      const bits = [];
+      if (item.workspaceName) bits.push(`Workspace: ${item.workspaceName}`);
+      if (item.sessionId) bits.push(`Session: ${item.sessionId}`);
+      const summary = String(item.summary || '').trim();
+      if (summary) bits.push(summary);
+      return bits.join(' · ');
+    },
+
+    approvalPromptChipLabel(pending = null) {
+      const item = pending || this.currentPendingAgentApproval?.() || null;
+      if (this.terminal?.approvalRequired) return 'Terminal command';
+      if (!item) return 'Review action';
+      const actionType = String(item.action?.action_type || item.kind || '').trim().toLowerCase();
+      if (actionType.startsWith('file_')) return 'File access';
+      return String(item.summary || 'Review action').trim() || 'Review action';
+    },
+
+    approvalPromptActionLabel(scope = 'once', pending = null) {
+      const item = pending || this.currentPendingAgentApproval?.() || null;
+      const normalizedScope = String(scope || 'once').trim().toLowerCase();
+      const isFileAction = String(item?.action?.action_type || item?.kind || '').trim().toLowerCase().startsWith('file_');
+      if (this.terminal?.approvalRequired) return normalizedScope === 'session' ? 'Allow command for session' : 'Allow command';
+      if (isFileAction) {
+        if (normalizedScope === 'session' && this.approvalSupportsScope?.(item, 'session')) {
+          return 'Allow file access for session';
+        }
+        return 'Allow file access once';
+      }
+      if (normalizedScope === 'session' && this.approvalSupportsScope?.(item, 'session')) {
+        return 'Allow for session';
+      }
+      return normalizedScope === 'session' ? 'Allow for session' : 'Allow once';
+    },
+
     async approvePendingAgentAction(scope = 'once') {
       const pending = this.currentPendingAgentApproval?.() || this.pendingAgentApproval || null;
       if (!pending?.action?.action_fingerprint || this.approvalActionBusy) return null;

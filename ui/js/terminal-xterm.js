@@ -34,6 +34,8 @@ function axonTerminalXtermMixin() {
     state.connecting = false;
     state.ready = false;
     state.error = '';
+    state.lastCloseCode = 0;
+    state.lastCloseReason = '';
     state.lastExitCode = null;
     state.lastStartedAt = '';
   };
@@ -56,6 +58,8 @@ function axonTerminalXtermMixin() {
           connecting: false,
           ready: false,
           error: '',
+          lastCloseCode: 0,
+          lastCloseReason: '',
           lastExitCode: null,
           lastStartedAt: '',
         };
@@ -105,6 +109,10 @@ function axonTerminalXtermMixin() {
 
     interactiveTerminalPreferred(view = 'console') {
       return this.terminalXtermSupported() && this.terminalViewportShouldMount(view);
+    },
+
+    interactiveTerminalRenderable(view = 'console') {
+      return this.interactiveTerminalPreferred(view) && !this.terminalViewportError(view);
     },
 
     terminalViewportReady(view = 'console') {
@@ -157,6 +165,19 @@ function axonTerminalXtermMixin() {
       return this.terminalViewportConnected(view)
         ? 'Interactive PTY attached to the current workspace.'
         : 'The guarded terminal now boots a real PTY shell instead of a static event list.';
+    },
+
+    terminalViewportCloseFailureDetail(view = 'console', event = {}) {
+      const code = Number(event?.code || 0);
+      const reason = trimText(event?.reason || '');
+      if (code === 4001 || /authentication required/i.test(reason)) {
+        return 'Authentication required. Unlock Axon again to attach the interactive shell.';
+      }
+      if ((!this.authToken || !this.authenticated) && (code === 1006 || !code)) {
+        return 'Authentication required. Unlock Axon again to attach the interactive shell.';
+      }
+      if (reason) return reason;
+      return 'The PTY websocket handshake failed before Axon could attach the interactive shell.';
     },
 
     terminalViewportCwd(view = 'console') {
@@ -322,6 +343,8 @@ function axonTerminalXtermMixin() {
       state.connected = false;
       state.ready = false;
       state.error = '';
+      state.lastCloseCode = 0;
+      state.lastCloseReason = '';
       state.lastStartedAt = new Date().toISOString();
 
       const term = new TerminalCtor({
@@ -409,16 +432,23 @@ function axonTerminalXtermMixin() {
         } catch (_) {}
       });
 
-      socket.addEventListener('close', () => {
+      socket.addEventListener('close', (event) => {
         state.connecting = false;
         state.connected = false;
+        state.lastCloseCode = Number(event?.code || 0);
+        state.lastCloseReason = trimText(event?.reason || '');
+        if (!state.ready && !state.error) {
+          state.error = this.terminalViewportCloseFailureDetail(view, event);
+        }
       });
 
       socket.addEventListener('error', () => {
         state.connecting = false;
         state.connected = false;
         state.ready = false;
-        state.error = 'The PTY transport failed to connect.';
+        if (!state.error) {
+          state.error = 'The PTY transport failed to connect.';
+        }
       });
 
       term.onData((data) => {

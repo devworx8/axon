@@ -9,9 +9,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 VOICE_STREAM_BLOCKS_JS = ROOT / "ui/js/voice-stream-blocks.js"
+VOICE_ACTIVITY_FEED_JS = ROOT / "ui/js/voice-activity-feed.js"
 VOICE_OPERATOR_DECK_JS = ROOT / "ui/js/voice-operator-deck.js"
 VOICE_COMMAND_DOCK_PARTIAL = ROOT / "ui/partials/voice_command_dock.html"
 VOICE_RESPONSE_PANEL_PARTIAL = ROOT / "ui/partials/voice_response_panel.html"
+CHAT_PENDING_APPROVAL_PARTIAL = ROOT / "ui/partials/chat_pending_approval.html"
 
 
 def _run_operator_deck_script(body: str):
@@ -31,6 +33,7 @@ def _run_operator_deck_script(body: str):
         vm.createContext(ctx);
         for (const path of [
           {json.dumps(str(VOICE_STREAM_BLOCKS_JS))},
+          {json.dumps(str(VOICE_ACTIVITY_FEED_JS))},
           {json.dumps(str(VOICE_OPERATOR_DECK_JS))},
         ]) {{
           vm.runInContext(fs.readFileSync(path, 'utf8'), ctx);
@@ -312,6 +315,7 @@ class VoiceOperatorDeckFrontendTests(unittest.TestCase):
             Object.assign(app, mixin);
             console.log(JSON.stringify({
               html: app.voiceLiveOperatorFeedHtml(),
+              label: app.voiceResponsePanelLabel(),
             }));
             """
         )
@@ -320,16 +324,158 @@ class VoiceOperatorDeckFrontendTests(unittest.TestCase):
         self.assertIn("Command", payload["html"])
         self.assertIn("npx eas-cli build --platform android", payload["html"])
         self.assertIn("Next", payload["html"])
+        self.assertEqual(payload["label"], "Operator deck")
+
+    def test_operator_feed_html_surfaces_live_cards_and_artifacts(self):
+        payload = _run_operator_deck_script(
+            """
+            const activityMixin = ctx.window.axonVoiceActivityFeedMixin();
+            const deckMixin = ctx.window.axonVoiceOperatorDeckMixin();
+            const app = {
+              chatLoading: true,
+              chatProject: { name: 'Companion', path: '/home/edp/Desktop/companion-native' },
+              liveOperator: {
+                active: true,
+                phase: 'execute',
+                title: 'Preparing the preview',
+                detail: 'Axon is wiring the local dev server and terminal together.',
+              },
+              liveOperatorFeed: [
+                { id: '1', phase: 'observe', title: 'Workspace attached', detail: 'Using /home/edp/Desktop/companion-native as the workspace root' },
+              ],
+              latestAssistantMessage() {
+                return {
+                  id: 'resp-2',
+                  role: 'assistant',
+                  content: 'I surfaced [build log](/api/files/open?path=%2Fhome%2Fedp%2FDesktop%2Fcompanion-native%2Flogs%2Fbuild.log) and /home/edp/Desktop/companion-native/docs/release-notes.pdf for review.',
+                };
+              },
+              dashboardLiveTerminalSession() {
+                return {
+                  title: 'Companion shell',
+                  active_command: 'npm run dev',
+                  cwd: '/home/edp/Desktop/companion-native',
+                };
+              },
+              browserFrameUrl() { return 'http://127.0.0.1:3000'; },
+              browserAttachedWorkspaceLabel() { return 'Companion preview'; },
+              browserCommandLabel() { return 'Serving the local preview inside Axon'; },
+              browserPreviewStatusLabel() { return 'Live'; },
+              browserSourcePath() { return '/home/edp/Desktop/companion-native'; },
+              voiceResponseAvailable() { return false; },
+              voiceLatestResponseText() { return ''; },
+            };
+            Object.assign(app, activityMixin, deckMixin);
+            app.pushActivityEntry('execute', 'Opened release notes', 'Inspecting /home/edp/Desktop/companion-native/docs/release-notes.pdf', { tool: 'files.read' });
+            console.log(JSON.stringify({ html: app.voiceLiveOperatorFeedHtml() }));
+            """
+        )
+
+        self.assertIn("Live surfaces", payload["html"])
+        self.assertIn("Artifacts in play", payload["html"])
+        self.assertIn("Console terminal", payload["html"])
+        self.assertIn("Companion preview", payload["html"])
+        self.assertIn("build.log", payload["html"])
+        self.assertIn("release-notes.pdf", payload["html"])
+        self.assertIn("Live Activity", payload["html"])
+
+    def test_operator_deck_holds_visibility_briefly_between_live_updates(self):
+        payload = _run_operator_deck_script(
+            """
+            const mixin = ctx.window.axonVoiceOperatorDeckMixin();
+            const app = {
+              chatLoading: true,
+              liveOperator: {
+                active: true,
+                phase: 'execute',
+                title: 'Running Shell Cmd',
+                detail: 'Axon is verifying the workspace.',
+              },
+            };
+            Object.assign(app, mixin);
+            const visibleDuringRun = app.voiceShouldRenderOperatorDeck();
+            app.chatLoading = false;
+            app.liveOperator = { active: false, phase: 'observe', title: '', detail: '' };
+            const visibleWithinHold = app.voiceShouldRenderOperatorDeck();
+            const holdUntil = app.voiceOperatorDeck.holdUntil;
+            app.voiceOperatorDeck.holdUntil = 0;
+            const visibleAfterHold = app.voiceShouldRenderOperatorDeck();
+            console.log(JSON.stringify({
+              visibleDuringRun,
+              visibleWithinHold,
+              visibleAfterHold,
+              holdUntil,
+            }));
+            """
+        )
+
+        self.assertTrue(payload["visibleDuringRun"])
+        self.assertTrue(payload["visibleWithinHold"])
+        self.assertGreater(payload["holdUntil"], 0)
+        self.assertFalse(payload["visibleAfterHold"])
+
+    def test_operator_deck_stays_visible_for_agent_stream_before_blocks_arrive(self):
+        payload = _run_operator_deck_script(
+            """
+            const mixin = ctx.window.axonVoiceOperatorDeckMixin();
+            const app = {
+              chatLoading: false,
+              currentWorkspaceRunActive() { return true; },
+              liveOperator: {
+                active: false,
+                phase: 'observe',
+                title: '',
+                detail: '',
+              },
+              liveOperatorFeed: [
+                {
+                  id: 'feed-1',
+                  phase: 'observe',
+                  title: 'Observing the task',
+                  detail: 'Goal received: Summarize what you are doing right now.',
+                  at: new Date().toISOString(),
+                },
+              ],
+              chatMessages: [
+                {
+                  id: 'resp-2',
+                  role: 'assistant',
+                  mode: 'agent',
+                  streaming: true,
+                  content: '',
+                  thinkingBlocks: [],
+                  workingBlocks: [],
+                },
+              ],
+              latestAssistantMessage() {
+                return this.chatMessages[this.chatMessages.length - 1];
+              },
+              voiceLatestResponseText() { return ''; },
+            };
+            Object.assign(app, mixin);
+            console.log(JSON.stringify({
+              renderDeck: app.voiceShouldRenderOperatorDeck(),
+              label: app.voiceResponsePanelLabel(),
+            }));
+            """
+        )
+
+        self.assertTrue(payload["renderDeck"])
+        self.assertEqual(payload["label"], "Operator deck")
 
     def test_voice_operator_partials_use_task_deck_bindings(self):
         command_partial = VOICE_COMMAND_DOCK_PARTIAL.read_text(encoding="utf-8")
         response_partial = VOICE_RESPONSE_PANEL_PARTIAL.read_text(encoding="utf-8")
+        approval_partial = CHAT_PENDING_APPROVAL_PARTIAL.read_text(encoding="utf-8")
 
         self.assertIn("voiceCommandDeckTitle()", command_partial)
         self.assertIn("voiceCommandDeckSubmitLabel()", command_partial)
         self.assertIn("voiceOperatorSurfaceChip()", command_partial)
         self.assertIn("voiceResponsePanelLabel()", response_partial)
         self.assertIn("voiceDisplayResponseHtml()", response_partial)
+        self.assertIn("voiceResponseRenderClass()", response_partial)
+        self.assertIn("approvalPromptTitle(currentPendingAgentApproval())", approval_partial)
+        self.assertIn("approvalPromptActionLabel('session'", approval_partial)
 
 
 if __name__ == "__main__":

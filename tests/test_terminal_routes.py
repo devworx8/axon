@@ -97,6 +97,35 @@ class TerminalRouteTests(unittest.IsolatedAsyncioTestCase):
         db_module.get_terminal_session.assert_awaited_once()
         handlers._resolve_terminal_cwd.assert_awaited_once()
 
+    async def test_pty_websocket_reports_auth_failure_before_closing(self):
+        db_module = types.SimpleNamespace(
+            get_db=self._fake_db,
+            get_setting=AsyncMock(return_value="pin-hash"),
+        )
+        handlers = TerminalRouteHandlers(
+            db_module=db_module,
+            terminal_processes={},
+            pty_sessions={},
+            resolve_terminal_cwd=AsyncMock(),
+            terminal_mode_value=lambda raw, fallback="read_only": raw or fallback,
+            terminal_execute_request=AsyncMock(),
+            serialize_terminal_session=lambda *args, **kwargs: {},
+            serialize_terminal_event=lambda row: row,
+            set_live_operator=lambda **kwargs: None,
+            valid_session=lambda token: False,
+            local_tool_scope_label=lambda: str(Path.home()),
+        )
+
+        websocket = _FakeWebSocket()
+        await handlers.pty_websocket(websocket, "12-voice")
+
+        self.assertTrue(websocket.accepted)
+        self.assertEqual(
+            websocket.sent,
+            [{"type": "error", "message": "Authentication required to attach the interactive shell."}],
+        )
+        self.assertEqual(websocket.closed, (4001, "Authentication required"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -151,20 +151,20 @@
 
                 <div class="mt-4 flex flex-wrap gap-2 text-[10px]">
                   <span class="rounded-full border px-2 py-1"
-                        :class="voice.server?.transcription_available ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
-                        x-text="voice.server?.transcription_available ? 'Local STT ready' : 'Local STT pending'"></span>
+                        :class="voiceStatus?.transcription_available ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
+                        x-text="voiceStatus?.transcription_available ? 'Local STT ready' : 'Local STT pending'"></span>
                   <span class="rounded-full border px-2 py-1"
-                        :class="voice.server?.synthesis_available ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
-                        x-text="voice.server?.synthesis_available ? 'Local TTS ready' : 'Local TTS pending'"></span>
+                        :class="voiceStatus?.synthesis_available ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
+                        x-text="voiceStatus?.synthesis_available ? 'Local TTS ready' : 'Local TTS pending'"></span>
                   <span class="rounded-full border px-2 py-1"
-                        :class="voice.server?.ffmpeg_available ? 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
-                        x-text="voice.server?.ffmpeg_available ? 'ffmpeg resolved' : 'ffmpeg missing'"></span>
+                        :class="voiceStatus?.ffmpeg_available ? 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
+                        x-text="voiceStatus?.ffmpeg_available ? 'ffmpeg resolved' : 'ffmpeg missing'"></span>
                   <span class="rounded-full border px-2 py-1"
-                        :class="voice.server?.piper_available ? 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
-                        x-text="voice.server?.piper_available ? `Piper ${voice.server?.piper_engine || ''}`.trim() : 'Piper missing'"></span>
+                        :class="voiceStatus?.piper_available ? 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200' : 'border-slate-700 bg-slate-950/60 text-slate-400'"
+                        x-text="voiceStatus?.piper_available ? `Piper ${voiceStatus?.piper_engine || ''}`.trim() : 'Piper missing'"></span>
                 </div>
 
-                <p class="mt-3 text-[11px] leading-5 text-slate-400" x-text="voice.server?.detail || 'Local voice status will appear here after refresh.'"></p>
+                <p class="mt-3 text-[11px] leading-5 text-slate-400" x-text="voiceStatus?.detail || 'Local voice status will appear here after refresh.'"></p>
               </div>
             </div>
           </section>
