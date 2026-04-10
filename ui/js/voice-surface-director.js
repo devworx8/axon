@@ -164,7 +164,7 @@ function axonVoiceSurfaceDirectorMixin() {
           title: 'Approval required',
           detail,
           status: 'Waiting on you',
-          action: 'Review request',
+          action: this.terminal?.approvalRequired ? 'Open terminal' : 'Review request',
           path: '',
           kind: '',
           phase: 'recover',
@@ -350,7 +350,9 @@ function axonVoiceSurfaceDirectorMixin() {
     focusVoiceSurfaceSpotlight(target = null) {
       const spotlight = target && typeof target === 'object' ? target : this.voiceSurfaceSpotlight?.();
       if (!spotlight) return;
-      if (spotlight.type === 'terminal') {
+      const terminalLikeSpotlight = spotlight.type === 'terminal'
+        || (spotlight.type === 'approval' && this.voiceTerminalAutoDockActive?.());
+      if (terminalLikeSpotlight) {
         if (!this.voiceConversation || typeof this.voiceConversation !== 'object') {
           this.voiceConversation = {};
         }
@@ -385,7 +387,9 @@ function axonVoiceSurfaceDirectorMixin() {
       if (typeof this.voiceConversation.terminalPinned !== 'boolean') {
         this.voiceConversation.terminalPinned = false;
       }
-      if (spotlight?.type !== 'terminal') {
+      const terminalLikeSpotlight = spotlight?.type === 'terminal'
+        || (spotlight?.type === 'approval' && this.voiceTerminalAutoDockActive?.());
+      if (!terminalLikeSpotlight) {
         if (!this.voiceConversation.terminalPinnedTouched && this.voiceConversation.terminalPinned) {
           this.voiceConversation.terminalPinned = false;
           this.syncVoiceCommandCenterRuntime?.();
@@ -404,22 +408,27 @@ function axonVoiceSurfaceDirectorMixin() {
     _maybeAutoSurfaceArtifact(spotlight = null) {
       const state = this.ensureVoiceSurfaceDirectorState();
       if (!this.showVoiceOrb) return;
+      if (this.terminal?.approvalRequired || this.currentPendingAgentApproval?.() || this.voiceTerminalAutoDockActive?.()) return;
       const runActive = !!(
         this.chatLoading
         || this.liveOperator?.active
         || this.currentWorkspaceRunActive?.()
       );
       if (!runActive) return;
-      const artifact = spotlight?.type === 'artifact' || spotlight?.type === 'workspace'
+      const phase = trimText(spotlight?.phase || this._voiceSurfacePhase?.()).toLowerCase() || 'observe';
+      if (phase === 'observe' || phase === 'plan') return;
+      const artifact = spotlight?.type === 'artifact'
         ? spotlight
-        : this._voicePhaseArtifact?.(this._voiceSurfacePhase?.());
+        : this._voicePhaseArtifact?.(phase);
       if (!artifact) return;
       const key = trimText(artifact.key || artifact.path || artifact.title || 'artifact');
       if (!key || state.lastAutoArtifactKey === key) return;
-      state.lastAutoArtifactKey = key;
       const path = trimText(artifact.path);
       if (!path) return;
-      this.openVoiceFileViewer?.(path, trimText(artifact.kind || ''));
+      if (this.voiceFileViewer?.open && !this.voiceFileViewer?.autoOpened) return;
+      if (trimText(this.voiceFileViewer?.path) === path) return;
+      state.lastAutoArtifactKey = key;
+      this.openVoiceFileViewer?.(path, trimText(artifact.kind || ''), { auto: true });
     },
 
     _maybeAutoFocusBrowser(spotlight) {
@@ -436,6 +445,9 @@ function axonVoiceSurfaceDirectorMixin() {
       this._maybeAutoDockTerminal?.(spotlight);
       if (spotlight?.type === 'browser') {
         this._maybeAutoFocusBrowser?.(spotlight);
+        return;
+      }
+      if (spotlight?.type === 'terminal' || spotlight?.type === 'approval') {
         return;
       }
       if (spotlight?.type === 'artifact' || spotlight?.type === 'workspace') {

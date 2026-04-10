@@ -20,7 +20,10 @@
               @click="dashboardMiniVoicePrimaryAction()"
               :aria-pressed="dashboardMiniVoicePassiveArmed() ? 'true' : 'false'"
               :title="dashboardMiniVoicePassiveArmed() ? 'Disarm always listening' : 'Arm always listening'">
-        <div class="mission-ring" :style="missionRingStyle()" :data-voice-state="dashboardMiniVoiceVisualState()">
+        <div class="mission-ring"
+             :style="missionRingStyle()"
+             :data-voice-state="dashboardMiniVoiceVisualState()"
+             :class="(missionLiveOperator().active || dashboardMiniVoicePassiveArmed()) ? 'mission-ring--active' : ''">
           <div class="mission-ring-health"></div>
           <div class="mission-ring-inner">
             <div class="mission-ring-kicker">Posture</div>

@@ -78,10 +78,14 @@
   position: relative;
   z-index: 1;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.9rem 1rem 0.55rem;
+}
+
+.axon-terminal-stage__title-stack {
+  min-width: 0;
 }
 
 .axon-terminal-stage__eyebrow {
@@ -97,6 +101,14 @@
   font-size: 0.96rem;
   font-weight: 600;
   color: rgba(226, 232, 240, 0.94);
+}
+
+.axon-terminal-stage__headline {
+  margin-top: 0.32rem;
+  max-width: 46rem;
+  font-size: 0.72rem;
+  line-height: 1.55;
+  color: rgba(148, 163, 184, 0.86);
 }
 
 .axon-terminal-stage__chips {
@@ -154,6 +166,70 @@
   color: rgba(103, 232, 249, 1);
   background: rgba(8, 47, 73, 0.34);
   transform: translateY(-1px);
+}
+
+.axon-terminal-stage__meta-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(144px, 1fr));
+  gap: 0.65rem;
+  padding: 0 0.95rem 0.85rem;
+}
+
+.axon-terminal-stage__meta-card {
+  min-width: 0;
+  border-radius: 0.95rem;
+  border: 1px solid rgba(51, 65, 85, 0.8);
+  background: rgba(2, 6, 23, 0.42);
+  padding: 0.7rem 0.78rem;
+  box-shadow: inset 0 1px 0 rgba(191, 219, 254, 0.04);
+}
+
+.axon-terminal-stage__meta-card--live {
+  border-color: rgba(34, 197, 94, 0.22);
+  background: rgba(2, 44, 34, 0.26);
+}
+
+.axon-terminal-stage__meta-card--boot {
+  border-color: rgba(96, 165, 250, 0.22);
+  background: rgba(15, 23, 42, 0.56);
+}
+
+.axon-terminal-stage__meta-card--warning {
+  border-color: rgba(251, 191, 36, 0.22);
+  background: rgba(69, 26, 3, 0.28);
+}
+
+.axon-terminal-stage__meta-card--danger {
+  border-color: rgba(251, 113, 133, 0.24);
+  background: rgba(76, 5, 25, 0.26);
+}
+
+.axon-terminal-stage__meta-card--idle {
+  border-color: rgba(51, 65, 85, 0.8);
+}
+
+.axon-terminal-stage__meta-label {
+  font-size: 0.56rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(103, 232, 249, 0.7);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+.axon-terminal-stage__meta-value {
+  margin-top: 0.36rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: rgba(226, 232, 240, 0.94);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.axon-terminal-stage__meta-value--mono {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.72rem;
 }
 
 .axon-terminal-stage__frame {
@@ -301,6 +377,10 @@
   .axon-terminal-stage__chrome {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .axon-terminal-stage__meta-grid {
+    grid-template-columns: 1fr;
   }
 
   .axon-terminal-stage__chips,

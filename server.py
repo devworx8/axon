@@ -73,7 +73,7 @@ from axon_api.services import runtime_login_sessions
 from axon_api.services import runtime_truth as runtime_truth_service
 from axon_api.services import settings_runtime_state as settings_runtime_state_service
 from axon_api.services import task_sandboxes as task_sandbox_service
-from axon_api.services import terminal_pty_runtime as terminal_pty_runtime_service
+from axon_api.services import terminal_execution, terminal_pty_runtime as terminal_pty_runtime_service
 from axon_api.services import workspace_sandbox_state as workspace_sandbox_service
 from axon_api.routes import agent_control, agent_routes, auto_session_routes, chat_routes, integration_tools, runtime_cli as runtime_cli_routes, settings_memory, task_sandbox_routes, terminal_routes, voice_status, workspace_projects
 from axon_core import agent_fast_path, agent_runtime_state, approval_actions
@@ -3052,8 +3052,8 @@ async def files_read(path: str):
     if p.is_dir():
         raise HTTPException(400, "Path is a directory — use /browse")
     size = p.stat().st_size
-    if size > 512 * 1024:
-        raise HTTPException(413, f"File too large ({size // 1024}KB > 512KB limit)")
+    if size > 5 * 1024 * 1024:
+        raise HTTPException(413, f"File too large ({size // 1024}KB > 5120KB limit)")
     try:
         content = p.read_text(encoding="utf-8", errors="replace")
     except PermissionError:
@@ -3088,12 +3088,7 @@ class TerminalSessionCreate(BaseModel):
     cwd: Optional[str] = None
 
 
-class TerminalCommandBody(BaseModel):
-    command: str
-    cwd: Optional[str] = None
-    timeout_seconds: Optional[int] = None
-    mode: Optional[str] = None
-    approved: Optional[bool] = False
+TerminalCommandBody = terminal_routes.TerminalCommandBody
 
 
 async def _resolve_terminal_cwd(conn, session_row, requested_cwd: Optional[str] = None) -> Path:
@@ -3148,256 +3143,40 @@ _terminal_ws_handlers = terminal_routes.TerminalRouteHandlers(
 app.add_api_websocket_route("/ws/pty/{session_id}", _terminal_ws_handlers.pty_websocket)
 
 
-async def _terminal_capture(session_id: int, process, command: str, timeout_seconds: int):
-    info = _terminal_processes.get(session_id, {})
-    timed_out = False
-    deadline = _time.monotonic() + timeout_seconds
-    try:
-        while True:
-            if _time.monotonic() >= deadline and process.returncode is None:
-                timed_out = True
-                process.terminate()
-                await asyncio.sleep(0.5)
-                if process.returncode is None:
-                    process.kill()
-            if process.stdout is None:
-                break
-            try:
-                line = await asyncio.wait_for(process.stdout.readline(), timeout=0.8)
-            except asyncio.TimeoutError:
-                if process.returncode is not None:
-                    break
-                continue
-            if not line:
-                if process.returncode is not None:
-                    break
-                continue
-            text = line.decode("utf-8", errors="replace").rstrip()
-            if not text:
-                continue
-            async with devdb.get_db() as conn:
-                await devdb.add_terminal_event(
-                    conn,
-                    session_id=session_id,
-                    event_type="output",
-                    content=text[:4000],
-                )
-            _set_live_operator(
-                active=True,
-                mode="terminal",
-                phase="execute",
-                title="Streaming terminal output",
-                detail=text[:180],
-                summary=f"Running: {command}",
-                preserve_started=True,
-            )
-
-        return_code = await process.wait()
-        status = "completed" if return_code == 0 and not timed_out else "failed"
-        final_message = "Command completed successfully." if status == "completed" else (
-            "Command timed out and was stopped safely." if timed_out else "Command finished with an error."
-        )
-        async with devdb.get_db() as conn:
-            await devdb.update_terminal_session(
-                conn,
-                session_id,
-                status=status,
-                pending_command="",
-                active_command="",
-                pid=0,
-            )
-            await devdb.add_terminal_event(
-                conn,
-                session_id=session_id,
-                event_type="status",
-                content=final_message,
-                exit_code=return_code,
-            )
-        _set_live_operator(
-            active=False,
-            mode="terminal",
-            phase="verify" if status == "completed" else "recover",
-            title="Terminal command finished",
-            detail=final_message,
-            summary=f"{command} · exit {return_code}",
-            preserve_started=False,
-        )
-    except Exception as exc:
-        async with devdb.get_db() as conn:
-            await devdb.update_terminal_session(
-                conn,
-                session_id,
-                status="failed",
-                pending_command="",
-                active_command="",
-                pid=0,
-            )
-            await devdb.add_terminal_event(
-                conn,
-                session_id=session_id,
-                event_type="error",
-                content=str(exc),
-            )
-        _set_live_operator(
-            active=False,
-            mode="terminal",
-            phase="recover",
-            title="Terminal command failed",
-            detail=str(exc),
-            summary=command,
-        )
-    finally:
-        _terminal_processes.pop(session_id, None)
-
-
 async def _start_terminal_command(
     *,
     session_id: int,
     command: str,
     cwd: Path,
     timeout_seconds: int,
+    require_pty: bool,
 ):
-    pty_result = await terminal_pty_runtime_service.dispatch_command_to_attached_pty(
+    return await terminal_execution.start_terminal_command(
         session_id=session_id,
         command=command,
         cwd=cwd,
         timeout_seconds=timeout_seconds,
+        require_pty=require_pty,
+        dispatch_pty_fn=terminal_pty_runtime_service.dispatch_command_to_attached_pty,
         pty_sessions=_pty_sessions,
         terminal_processes=_terminal_processes,
         db_module=devdb,
         set_live_operator=_set_live_operator,
         now_iso=_now_iso,
     )
-    if pty_result is not None:
-        return pty_result
-
-    process = await asyncio.create_subprocess_shell(
-        command,
-        cwd=str(cwd),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        env=os.environ.copy(),
-    )
-    _terminal_processes[session_id] = {
-        "process": process,
-        "command": command,
-        "cwd": str(cwd),
-        "started_at": _now_iso(),
-    }
-    async with devdb.get_db() as conn:
-        await devdb.update_terminal_session(
-            conn,
-            session_id,
-            status="running",
-            active_command=command,
-            pending_command="",
-            cwd=str(cwd),
-            pid=process.pid or 0,
-        )
-        await devdb.add_terminal_event(
-            conn,
-            session_id=session_id,
-            event_type="command",
-            content=f"$ {command}",
-        )
-    _set_live_operator(
-        active=True,
-        mode="terminal",
-        phase="execute",
-        title="Running terminal command",
-        detail=f"{command} · {cwd}",
-        summary=f"Running: {command}",
-    )
-    asyncio.create_task(_terminal_capture(session_id, process, command, timeout_seconds))
-    return {
-        "status": "running",
-        "command": command,
-        "cwd": str(cwd),
-        "pid": process.pid or 0,
-        "timeout_seconds": timeout_seconds,
-    }
 
 
-async def _terminal_execute_request(session_id: int, body: TerminalCommandBody, *, approved: bool = False):
-    command = (body.command or "").strip()
-    if not command:
-        raise HTTPException(400, "Command is required")
-    if _command_is_blocked(command):
-        raise HTTPException(400, "That command is blocked in Axon terminal mode.")
-
-    async with devdb.get_db() as conn:
-        settings = await devdb.get_all_settings(conn)
-        session_row = await devdb.get_terminal_session(conn, session_id)
-        if not session_row:
-            raise HTTPException(404, "Terminal session not found")
-        if session_row["status"] == "running" and session_id in _terminal_processes:
-            raise HTTPException(409, "A command is already running in this session.")
-
-        mode = _terminal_mode_value(body.mode, session_row["mode"] or settings.get("terminal_default_mode", "read_only"))
-        cwd = await _resolve_terminal_cwd(conn, session_row, body.cwd)
-        timeout_seconds = _terminal_timeout_seconds(settings, body.timeout_seconds)
-
-        if mode == "simulation":
-            await devdb.update_terminal_session(conn, session_id, mode=mode, cwd=str(cwd), status="idle", pending_command="")
-            await devdb.add_terminal_event(
-                conn,
-                session_id=session_id,
-                event_type="status",
-                content=f"Simulation only: {command}",
-            )
-            return {
-                "status": "simulation",
-                "mode": mode,
-                "command": command,
-                "cwd": str(cwd),
-                "message": "Simulation mode is on. Axon planned the command but did not run it.",
-            }
-
-        if mode == "read_only" and not _command_is_read_only(command):
-            await devdb.add_terminal_event(
-                conn,
-                session_id=session_id,
-                event_type="approval",
-                content=f"Read-only mode blocked: {command}",
-            )
-            return {
-                "status": "blocked",
-                "mode": mode,
-                "command": command,
-                "cwd": str(cwd),
-                "message": "Read-only mode only allows inspection commands like ls, pwd, rg, cat, and git status.",
-            }
-
-        if mode == "approval_required" and not approved:
-            await devdb.update_terminal_session(
-                conn,
-                session_id,
-                mode=mode,
-                cwd=str(cwd),
-                status="pending_approval",
-                pending_command=command,
-            )
-            await devdb.add_terminal_event(
-                conn,
-                session_id=session_id,
-                event_type="approval",
-                content=f"Approval requested for: {command}",
-            )
-            return {
-                "status": "approval_required",
-                "mode": mode,
-                "command": command,
-                "cwd": str(cwd),
-                "message": "Approval is required before Axon runs this command.",
-            }
-
-        await devdb.update_terminal_session(conn, session_id, mode=mode, cwd=str(cwd), status="idle")
-    return await _start_terminal_command(
-        session_id=session_id,
-        command=command,
-        cwd=cwd,
-        timeout_seconds=timeout_seconds,
-    )
+_terminal_execute_request = terminal_execution.build_terminal_execute_request(
+    db_module=devdb,
+    terminal_processes=_terminal_processes,
+    http_exception_cls=HTTPException,
+    resolve_terminal_cwd=_resolve_terminal_cwd,
+    terminal_timeout_seconds=_terminal_timeout_seconds,
+    terminal_mode_value=_terminal_mode_value,
+    command_is_blocked=_command_is_blocked,
+    command_is_read_only=_command_is_read_only,
+    start_terminal_command_fn=_start_terminal_command,
+)
 
 
 @app.get("/api/terminal/sessions")

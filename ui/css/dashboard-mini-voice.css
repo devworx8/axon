@@ -20,6 +20,29 @@
   transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease;
 }
 
+@keyframes mission-ring-command-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 28px rgba(56, 189, 248, 0.18),
+      0 0 60px rgba(34, 211, 238, 0.12),
+      inset 0 0 22px rgba(2, 6, 23, 0.6);
+  }
+  50% {
+    box-shadow:
+      0 0 42px rgba(56, 189, 248, 0.32),
+      0 0 86px rgba(34, 211, 238, 0.22),
+      inset 0 0 26px rgba(8, 47, 73, 0.72);
+  }
+}
+
+.mission-ring--active {
+  box-shadow:
+    0 0 34px rgba(56, 189, 248, 0.3),
+    0 0 80px rgba(34, 211, 238, 0.18),
+    inset 0 0 24px rgba(8, 47, 73, 0.7);
+  animation: mission-ring-command-pulse 2.4s ease-in-out infinite;
+}
+
 .mission-ring-control:hover .mission-ring,
 .mission-ring-control:focus-visible .mission-ring {
   transform: scale(1.018);

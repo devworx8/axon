@@ -377,7 +377,7 @@ function axonChatMixin() {
               if (data.type === 'thinking') {
                 this.setAgentStage('plan');
                 this.appendThinkingBlock(this.chatMessages[idx], data.chunk);
-                this.updateLiveOperator(mode, { type: 'thinking' }, targetWorkspaceId);
+                this.updateLiveOperator(mode, data, targetWorkspaceId);
                 this.scrollChat();
               } else if (data.type === 'text') {
                 this.finalizeThinkingBlocks(this.chatMessages[idx]);
@@ -519,12 +519,31 @@ function axonChatMixin() {
       const mode = this.resolveChatMode(msg);
       const researchPack = this.currentResearchPack();
       const packResources = researchPack?.resources || [];
-      const attachedResources = this.mergeUniqueResources([...packResources, ...this.selectedResources]);
-      const attachedResourceIds = attachedResources.map(resource => Number(resource.id)).filter(Boolean);
+      const pendingImageAttachments = [...(this.imageAttachments || [])];
       if (mode === 'agent' && !this.usesOllamaBackend()) {
         this.showToast('Agent mode requires the Ollama backend.');
         return;
       }
+
+      let uploadedImageResources = [];
+      if (pendingImageAttachments.length && typeof this.uploadImageAttachments === 'function') {
+        try {
+          uploadedImageResources = await this.uploadImageAttachments({
+            workspaceId: this.chatProjectId,
+            attachments: pendingImageAttachments,
+          });
+        } catch (e) {
+          this.showToast(`Image upload failed: ${e.message || e}`);
+          return;
+        }
+      }
+
+      const attachedResources = this.mergeUniqueResources([
+        ...packResources,
+        ...this.selectedResources,
+        ...uploadedImageResources,
+      ]);
+      const attachedResourceIds = attachedResources.map(resource => Number(resource.id)).filter(Boolean);
       this.setAgentStage(mode === 'agent' ? 'observe' : 'observe');
       this.rememberComposerHistory?.(msg);
 
@@ -542,7 +561,7 @@ function axonChatMixin() {
         created_at: new Date().toISOString(),
         mode,
         resources: attachedResources,
-        imageAttachments: [...(this.imageAttachments || [])],
+        imageAttachments: pendingImageAttachments,
       });
       const workspaceId = String(this.chatProjectId || '').trim();
       this.setWorkspaceRunLoading?.(workspaceId, true);

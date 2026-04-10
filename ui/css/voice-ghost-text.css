@@ -158,6 +158,10 @@
   transition: all 0.25s;
   text-decoration: none;
 }
+.voice-file-chip[data-voice-animate="1"] {
+  animation: voice-chip-materialise 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: var(--voice-stagger, 0ms);
+}
 .voice-file-chip:hover {
   background: rgba(34, 211, 238, 0.12);
   border-color: rgba(34, 211, 238, 0.35);
@@ -185,6 +189,11 @@
 @keyframes voice-step-slide-in {
   0%   { opacity: 0; transform: translateX(-8px); }
   100% { opacity: 1; transform: translateX(0); }
+}
+@keyframes voice-chip-materialise {
+  0%   { opacity: 0; transform: translateY(6px) scale(0.94); filter: blur(5px); }
+  65%  { opacity: 0.92; transform: translateY(-1px) scale(1.01); filter: blur(0.4px); }
+  100% { opacity: 1; transform: translateY(0) scale(1); filter: none; }
 }
 @keyframes voice-step-pulse {
   0%, 100% { opacity: 1; }
@@ -318,6 +327,12 @@
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   white-space: normal;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-file-chip[data-voice-animate="1"] {
+    animation: none !important;
+  }
 }
 
 /* ── Mobile responsive ────────────────────────────────────── */

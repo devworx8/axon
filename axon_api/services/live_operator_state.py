@@ -29,7 +29,6 @@ LIVE_OPERATOR_SNAPSHOT: dict[str, Any] = {
     "feed": [],
 }
 
-
 def set_live_operator(
     *,
     active: bool,
@@ -52,6 +51,8 @@ def set_live_operator(
         started_at = _now_iso()
     updated_at = _now_iso()
     tracked_auto_session_id = auto_session_id if auto_session_id else (snapshot.get("auto_session_id") if mode == "auto" else "")
+    if active and not preserve_started and str(phase or "").strip().lower() == "observe":
+        snapshot["feed"] = []
     snapshot.update(
         {
             "active": active,
@@ -79,7 +80,20 @@ def set_live_operator(
         }
         feed = list(snapshot.get("feed") or [])
         last = feed[-1] if feed else None
-        if not last or any(str(last.get(key) or "") != str(entry.get(key) or "") for key in ("phase", "title", "detail")):
+        last_matches = bool(
+            last
+            and str(last.get("phase") or "") == str(entry.get("phase") or "")
+            and str(last.get("title") or "") == str(entry.get("title") or "")
+        )
+        if last_matches:
+            feed[-1] = {
+                **last,
+                "id": entry["id"],
+                "detail": entry["detail"],
+                "at": entry["at"],
+            }
+            snapshot["feed"] = feed[-12:]
+        elif not last or any(str(last.get(key) or "") != str(entry.get(key) or "") for key in ("phase", "title", "detail")):
             feed.append(entry)
             snapshot["feed"] = feed[-12:]
     else:

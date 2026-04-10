@@ -215,6 +215,46 @@ class MobileVoiceFrontendTests(unittest.TestCase):
       self.assertTrue(payload["agentMode"])
       self.assertEqual(payload["mode"], "agent")
 
+    def test_mobile_open_voice_command_center_closes_lingering_file_viewer(self):
+      payload = _run_mobile_voice_script(
+          [MOBILE_JS],
+          """
+          const mobileMixin = ctx.window.axonMobileMixin();
+          const app = {
+            showVoiceOrb: false,
+            isMobile: true,
+            chatLoading: false,
+            liveOperator: { active: false },
+            voiceConversation: {},
+            voiceFileViewer: { open: true, path: '/home/edp/.devbrain/ui/partials/voice_command_dock.html#L27' },
+            closeVoiceFileViewer() {
+              this.viewerClosed = true;
+              this.voiceFileViewer.open = false;
+            },
+            switchTab(tab) { this.tab = tab; },
+            refreshVoiceCapability() {},
+            ensureVoiceDefaultConversationMode() {},
+            ensureVoiceConversationState() {},
+            initVoiceSurfaceDirector() {},
+            syncVoiceCommandCenterRuntime() {},
+            syncVoiceSurfaceDirector() {},
+            async loadVoiceStatus() { return {}; },
+          };
+          Object.assign(app, mobileMixin);
+          app.openVoiceCommandCenter();
+          await new Promise(resolve => setTimeout(resolve, 0));
+          console.log(JSON.stringify({
+            viewerClosed: !!app.viewerClosed,
+            viewerOpen: !!app.voiceFileViewer.open,
+            showVoiceOrb: app.showVoiceOrb,
+          }));
+          """,
+      )
+
+      self.assertTrue(payload["viewerClosed"])
+      self.assertFalse(payload["viewerOpen"])
+      self.assertTrue(payload["showVoiceOrb"])
+
     def test_mobile_close_voice_command_center_stops_speech_and_clears_runtime(self):
       payload = _run_mobile_voice_script(
           [MOBILE_JS],
@@ -230,6 +270,11 @@ class MobileVoiceFrontendTests(unittest.TestCase):
             _cancelNarrationQueue() { this.narrationCancelled = true; },
             clearVoiceAwaitingReply() { this.awaitingCleared = true; },
             stopSpeech() { this.speechStopped = true; },
+            voiceFileViewer: { open: true, path: '/home/edp/.devbrain/ui/partials/voice_command_dock.html#L27' },
+            closeVoiceFileViewer() {
+              this.viewerClosed = true;
+              this.voiceFileViewer.open = false;
+            },
           };
           Object.assign(app, mobileMixin);
           app.closeVoiceCommandCenter(false);
@@ -241,6 +286,8 @@ class MobileVoiceFrontendTests(unittest.TestCase):
             narrationCancelled: !!app.narrationCancelled,
             awaitingCleared: !!app.awaitingCleared,
             speechStopped: !!app.speechStopped,
+            viewerClosed: !!app.viewerClosed,
+            viewerOpen: !!app.voiceFileViewer.open,
           }));
           """,
       )
@@ -251,6 +298,8 @@ class MobileVoiceFrontendTests(unittest.TestCase):
       self.assertTrue(payload["narrationCancelled"])
       self.assertTrue(payload["awaitingCleared"])
       self.assertTrue(payload["speechStopped"])
+      self.assertTrue(payload["viewerClosed"])
+      self.assertFalse(payload["viewerOpen"])
 
     def test_busy_open_skips_boot_sound_and_keeps_resume_flow(self):
       payload = _run_mobile_voice_script(

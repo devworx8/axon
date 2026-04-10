@@ -94,6 +94,7 @@ class VoiceSurfaceDirectorFrontendTests(unittest.TestCase):
             const app = {
               showVoiceOrb: true,
               chatLoading: true,
+              liveOperator: { active: true, phase: 'verify', title: 'Checking result', detail: 'Inspecting the generated report.' },
               opened: [],
               voiceFileViewer: { open: false },
               voiceOperatorSurfaceCards() { return []; },
@@ -108,8 +109,8 @@ class VoiceSurfaceDirectorFrontendTests(unittest.TestCase):
                   },
                 ];
               },
-              openVoiceFileViewer(path, kind) {
-                this.opened.push({ path, kind });
+              openVoiceFileViewer(path, kind, options = {}) {
+                this.opened.push({ path, kind, auto: !!options.auto });
               },
             };
             Object.assign(app, mixin);
@@ -119,7 +120,41 @@ class VoiceSurfaceDirectorFrontendTests(unittest.TestCase):
             """
         )
 
-        self.assertEqual(payload["opened"], [{"path": "/tmp/report.pdf", "kind": "pdf"}])
+        self.assertEqual(payload["opened"], [{"path": "/tmp/report.pdf", "kind": "pdf", "auto": True}])
+
+    def test_sync_surface_director_does_not_auto_open_artifact_during_plan_phase(self):
+        payload = _run_voice_surface_director_script(
+            """
+            const mixin = ctx.window.axonVoiceSurfaceDirectorMixin();
+            const app = {
+              showVoiceOrb: true,
+              chatLoading: true,
+              liveOperator: { active: true, phase: 'plan', title: 'Thinking through the task', detail: 'Reviewing the files to inspect next.' },
+              opened: [],
+              voiceFileViewer: { open: false },
+              voiceOperatorSurfaceCards() { return []; },
+              voiceArtifactEntries() {
+                return [
+                  {
+                    key: 'code:/tmp/brain.py',
+                    kind: 'code',
+                    path: '/tmp/brain.py',
+                    title: 'brain.py',
+                    detail: '/tmp/brain.py',
+                  },
+                ];
+              },
+              openVoiceFileViewer(path, kind, options = {}) {
+                this.opened.push({ path, kind, auto: !!options.auto });
+              },
+            };
+            Object.assign(app, mixin);
+            app.syncVoiceSurfaceDirector({ force: true });
+            console.log(JSON.stringify({ opened: app.opened }));
+            """
+        )
+
+        self.assertEqual(payload["opened"], [])
 
     def test_sync_surface_director_prioritizes_approval_gate(self):
         payload = _run_voice_surface_director_script(
@@ -155,6 +190,75 @@ class VoiceSurfaceDirectorFrontendTests(unittest.TestCase):
 
         self.assertEqual(payload["type"], "approval")
         self.assertEqual(payload["title"], "Approval required")
+        self.assertEqual(payload["action"], "Open terminal")
+
+    def test_sync_surface_director_approval_gate_keeps_terminal_primary_and_skips_artifact_autopen(self):
+        payload = _run_voice_surface_director_script(
+            """
+            const mixin = ctx.window.axonVoiceSurfaceDirectorMixin();
+            const app = {
+              showVoiceOrb: true,
+              chatLoading: true,
+              terminal: { approvalRequired: true },
+              voiceConversation: {},
+              opened: [],
+              focusCalls: [],
+              runtimeSyncs: 0,
+              voiceApprovalSummary() {
+                return 'Terminal approval required before Axon can continue.';
+              },
+              voiceTerminalAutoDockActive() { return true; },
+              syncVoiceCommandCenterRuntime() { this.runtimeSyncs += 1; },
+              focusInteractiveTerminalViewport(view) { this.focusCalls.push(view); },
+              voiceOperatorSurfaceCards() {
+                return [
+                  {
+                    key: 'terminal:/tmp/project',
+                    surface: 'terminal',
+                    kind: 'folder',
+                    path: '/tmp/project',
+                    eyebrow: 'Console terminal',
+                    title: 'Live PTY shell',
+                    detail: 'git add -A',
+                    status: 'Approval required',
+                    action: 'Focus terminal',
+                  },
+                ];
+              },
+              voiceArtifactEntries() {
+                return [
+                  {
+                    key: 'txt:/tmp/status.txt',
+                    kind: 'code',
+                    path: '/tmp/status.txt',
+                    title: 'status.txt',
+                    detail: '/tmp/status.txt',
+                  },
+                ];
+              },
+              openVoiceFileViewer(path, kind) {
+                this.opened.push({ path, kind });
+              },
+            };
+            Object.assign(app, mixin);
+            const spotlight = app.syncVoiceSurfaceDirector({ force: true });
+            console.log(JSON.stringify({
+              type: spotlight.type,
+              action: spotlight.action,
+              pinned: app.voiceConversation.terminalPinned === true,
+              focusCalls: app.focusCalls,
+              runtimeSyncs: app.runtimeSyncs,
+              opened: app.opened,
+            }));
+            """
+        )
+
+        self.assertEqual(payload["type"], "approval")
+        self.assertEqual(payload["action"], "Open terminal")
+        self.assertTrue(payload["pinned"])
+        self.assertEqual(payload["focusCalls"], ["voice"])
+        self.assertEqual(payload["opened"], [])
+        self.assertGreaterEqual(payload["runtimeSyncs"], 1)
 
     def test_sync_surface_director_phase_drives_terminal_then_artifact(self):
         payload = _run_voice_surface_director_script(

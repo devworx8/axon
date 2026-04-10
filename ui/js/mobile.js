@@ -27,6 +27,7 @@ function axonMobileMixin() {
     },
     openVoiceCommandCenter() {
       const resumeActive = !!(this.currentWorkspaceRunActive?.() || this.chatLoading || this.liveOperator?.active);
+      if (this.voiceFileViewer?.open) this.closeVoiceFileViewer?.();
       this.showVoiceOrb = true;
       this.switchTab('chat');
       this.refreshVoiceCapability?.();
@@ -47,22 +48,13 @@ function axonMobileMixin() {
       this.syncVoiceSurfaceDirector?.({ force: true });
       this.syncMobileVoiceChrome();
       requestAnimationFrame?.(() => this.syncMobileVoiceChrome());
-      // Pre-check mic permission on mobile so the browser prompts early
-      if (this.isMobile || window.innerWidth < 768) {
-        navigator.permissions?.query({ name: 'microphone' }).then(status => {
-          if (status.state === 'prompt') {
-            // Trigger the browser permission dialog proactively
-            navigator.mediaDevices?.getUserMedia({ audio: true })
-              .then(s => { s.getTracks().forEach(t => t.stop()); })
-              .catch(() => {});
-          } else if (status.state === 'denied') {
-            this.showToast?.('Microphone blocked — enable it in Android Settings → Apps → Chrome → Permissions');
-          }
-        }).catch(() => {});
-      }
+      // Auto-start listening on mobile/PWA (hands-free capture)
+      this._scheduleVoiceAutoListen?.();
     },
     closeVoiceCommandCenter(stopCapture = true) {
+      this._cleanupVoiceAutoCapture?.();
       this.showVoiceOrb = false;
+      if (this.voiceFileViewer?.open) this.closeVoiceFileViewer?.();
       this.stopVoiceSurfaceDirector?.();
       this.syncMobileVoiceChrome();
       requestAnimationFrame?.(() => this.syncMobileVoiceChrome());
@@ -222,6 +214,7 @@ function axonMobileMixin() {
       this.voiceActive = true;
       try {
         recorder.start();
+        this._initVoiceVAD?.(captureStream);
       } catch (e) {
         captureStream.getTracks().forEach(track => track.stop());
         this.voiceActive = false;
@@ -238,6 +231,7 @@ function axonMobileMixin() {
       return true;
     },
     async stopRecordedVoiceCapture() {
+      this._destroyVoiceVAD?.();
       const recorder = this._voiceRecorder;
       const pending = this._voiceRecorderPromise;
       if (!recorder) return '';

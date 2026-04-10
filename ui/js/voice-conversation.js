@@ -11,6 +11,21 @@ function axonVoiceConversationMixin() {
     verify: 'emerald',
     recover: 'rose',
   };
+  const DEFAULT_SLASH_COMMANDS = [
+    { command: '/help', detail: 'Show the command palette' },
+    { command: '/ask', detail: 'Switch to Ask mode' },
+    { command: '/agent', detail: 'Switch to Agent mode' },
+    { command: '/auto', detail: 'Switch to Autonomous mode' },
+    { command: '/code', detail: 'Switch to Code mode' },
+    { command: '/research', detail: 'Switch to Research mode' },
+    { command: '/voice', detail: 'Open the voice command center' },
+    { command: '/deploy', detail: 'Prepare the Vercel deploy lane' },
+    { command: '/deploy expo', detail: 'Prepare the Expo and EAS deploy lane' },
+    { command: '/preview', detail: 'Start or attach the live preview panel' },
+    { command: '/status', detail: 'Show workspace, runtime, and permissions' },
+    { command: '/login', detail: 'Start the local runtime sign-in flow' },
+    { command: '/install', detail: 'Install the local runtime tooling' },
+  ];
   const trimText = (value = '') => String(value || '').trim();
   const escapeHtml = (value = '') => String(value || '')
     .replace(/&/g, '&amp;')
@@ -99,6 +114,8 @@ function axonVoiceConversationMixin() {
         awaitingReplySource: '',
         lastReplyPreview: '',
         lastCommand: '',
+        historyIndex: -1,
+        historyDraft: '',
         terminalPinned: true,
         quickPrompts: [
           'Run a quick health check for this workspace',
@@ -165,9 +182,16 @@ function axonVoiceConversationMixin() {
       }
     },
 
+    resetVoiceTextDockHistoryCursor() {
+      this.ensureVoiceConversationState();
+      this.voiceConversation.historyIndex = -1;
+      this.voiceConversation.historyDraft = '';
+    },
+
     primeVoiceTextDock(value = '') {
       this.ensureVoiceConversationState();
       this.voiceConversation.textDraft = trimText(value);
+      this.resetVoiceTextDockHistoryCursor();
       this.toggleVoiceTextDock(true);
     },
 
@@ -176,21 +200,137 @@ function axonVoiceConversationMixin() {
       if (!next) return;
       this.ensureVoiceConversationState();
       this.voiceConversation.textDraft = next;
+      this.resetVoiceTextDockHistoryCursor();
       this.syncVoiceTranscript?.(next);
       this.toggleVoiceTextDock(true);
+    },
+
+    applyVoiceSlashCommand(command = '') {
+      const next = trimText(command);
+      if (!next) return;
+      this.ensureVoiceConversationState();
+      this.voiceConversation.textDraft = next;
+      this.resetVoiceTextDockHistoryCursor();
+      this.toggleVoiceTextDock(true);
+      requestAnimationFrame(() => {
+        const input = this.$refs?.voiceTextDockInput || null;
+        const length = String(this.voiceConversation.textDraft || '').length;
+        input?.focus?.();
+        input?.setSelectionRange?.(length, length);
+      });
     },
 
     clearVoiceTextDock(resetTranscript = false) {
       this.ensureVoiceConversationState();
       this.voiceConversation.textDraft = '';
+      this.resetVoiceTextDockHistoryCursor();
+      this.clearImageAttachments?.();
       if (resetTranscript) this.clearVoiceTranscript?.();
+    },
+
+    voiceTextDockSlashCommands() {
+      const provided = typeof this.slashCommandEntries === 'function'
+        ? this.slashCommandEntries()
+        : [];
+      const entries = Array.isArray(provided) && provided.length
+        ? provided
+        : DEFAULT_SLASH_COMMANDS;
+      return entries.map((entry) => ({
+        command: trimText(entry?.command || entry?.name || ''),
+        detail: trimText(entry?.detail || entry?.description || entry?.label || ''),
+      })).filter((entry) => entry.command);
+    },
+
+    voiceTextDockSlashMatches(limit = 5) {
+      this.ensureVoiceConversationState();
+      const draft = trimText(this.voiceConversation.textDraft);
+      if (!draft.startsWith('/')) return [];
+      const query = draft.toLowerCase();
+      return this.voiceTextDockSlashCommands()
+        .filter((entry) => {
+          const haystack = `${entry.command} ${entry.detail}`.toLowerCase();
+          return entry.command.toLowerCase().startsWith(query) || haystack.includes(query);
+        })
+        .slice(0, Math.max(1, limit));
+    },
+
+    voiceTextDockShortcutHint() {
+      return 'Enter send | Shift+Enter newline | Tab complete | Up/Down history | Paste, drop or pick images';
+    },
+
+    voiceTextDockDraftText() {
+      this.ensureVoiceConversationState();
+      return trimText(this.voiceConversation.textDraft || this.voiceTranscript || this.chatInput);
+    },
+
+    voiceTextDockHasImages() {
+      return !!((this.imageAttachments || []).length);
+    },
+
+    voiceTextDockHasContent() {
+      return !!(this.voiceTextDockDraftText() || this.voiceTextDockHasImages());
+    },
+
+    voiceTextDockImageOnlyPrompt() {
+      const count = Math.max(1, (this.imageAttachments || []).length);
+      return count === 1
+        ? 'Review the attached image and tell me what matters.'
+        : `Review the ${count} attached images and tell me what matters.`;
+    },
+
+    voiceTextDockSubmissionText() {
+      return this.voiceTextDockDraftText() || (this.voiceTextDockHasImages() ? this.voiceTextDockImageOnlyPrompt() : '');
+    },
+
+    voiceTextDockPreviewVisible() {
+      return this.voiceTextDockHasContent();
+    },
+
+    voiceTextDockPreviewLabel() {
+      return this.voiceTextDockDraftText() ? 'Live preview' : 'Image handoff';
+    },
+
+    voiceTextDockPreviewNote() {
+      const count = Math.max(0, (this.imageAttachments || []).length);
+      if (!count) return '';
+      return count === 1 ? 'Includes 1 image attachment.' : `Includes ${count} image attachments.`;
+    },
+
+    voiceTextDockPreviewHtml() {
+      if (!this.voiceTextDockPreviewVisible()) return '';
+      const draft = this.voiceTextDockDraftText();
+      const note = this.voiceTextDockPreviewNote();
+      if (!draft) {
+        const prompt = this.voiceTextDockImageOnlyPrompt();
+        return `<p>${escapeHtml(prompt)}</p>${note ? `<div class="voice-command-dock__preview-note">${escapeHtml(note)}</div>` : ''}`;
+      }
+      let html = '';
+      if (typeof this.renderMd === 'function') {
+        try { html = this.renderMd(draft); } catch (_) {}
+      }
+      if (!html) {
+        html = escapeHtml(draft).replace(/\n/g, '<br>');
+      }
+      if (typeof this.decorateVoiceResponseHtml === 'function') {
+        html = this.decorateVoiceResponseHtml(html);
+      }
+      if (note) {
+        html += `<div class="voice-command-dock__preview-note">${escapeHtml(note)}</div>`;
+      }
+      return html;
     },
 
     /** Tab-key autocomplete: fill from quick prompts or last command */
     voiceTextDockAutocomplete() {
       this.ensureVoiceConversationState();
-      const draft = String(this.voiceConversation.textDraft || '').trim().toLowerCase();
+      const rawDraft = String(this.voiceConversation.textDraft || '');
+      const draft = rawDraft.trim().toLowerCase();
       if (!draft) return;
+      const slashMatch = this.voiceTextDockSlashMatches?.(1)?.[0];
+      if (draft.startsWith('/') && slashMatch?.command) {
+        this.voiceConversation.textDraft = slashMatch.command;
+        return;
+      }
       const prompts = this.voiceQuickPrompts?.() || [];
       const match = prompts.find(p => p.toLowerCase().startsWith(draft));
       if (match) {
@@ -203,9 +343,98 @@ function axonVoiceConversationMixin() {
       }
     },
 
+    voiceTextDockHistoryEntries() {
+      const history = Array.isArray(this._composerHistory) ? this._composerHistory : [];
+      return history.map((entry) => String(entry || '').trim()).filter(Boolean);
+    },
+
+    voiceTextDockHistoryStep(event, direction = 'up') {
+      this.ensureVoiceConversationState();
+      const history = this.voiceTextDockHistoryEntries?.() || [];
+      if (!history.length) return;
+
+      const input = this.$refs?.voiceTextDockInput || null;
+      const value = String(this.voiceConversation.textDraft || '');
+      const selectionStart = Number(input?.selectionStart ?? value.length);
+      const selectionEnd = Number(input?.selectionEnd ?? value.length);
+      if (selectionStart !== selectionEnd) return;
+      if (direction === 'up' && this.voiceConversation.historyIndex === -1 && selectionStart !== 0 && value.trim()) return;
+      if (direction === 'down' && selectionEnd !== value.length) return;
+
+      event?.preventDefault?.();
+      if (direction === 'up') {
+        if (this.voiceConversation.historyIndex === -1) {
+          this.voiceConversation.historyDraft = value;
+          this.voiceConversation.historyIndex = history.length - 1;
+        } else if (this.voiceConversation.historyIndex > 0) {
+          this.voiceConversation.historyIndex -= 1;
+        }
+      } else {
+        if (this.voiceConversation.historyIndex === -1) return;
+        if (this.voiceConversation.historyIndex < history.length - 1) {
+          this.voiceConversation.historyIndex += 1;
+        } else {
+          this.voiceConversation.historyIndex = -1;
+          this.voiceConversation.textDraft = this.voiceConversation.historyDraft || '';
+          requestAnimationFrame(() => {
+            const nextInput = this.$refs?.voiceTextDockInput || null;
+            const length = String(this.voiceConversation.textDraft || '').length;
+            nextInput?.focus?.();
+            nextInput?.setSelectionRange?.(length, length);
+          });
+          return;
+        }
+      }
+
+      this.voiceConversation.textDraft = history[this.voiceConversation.historyIndex] || '';
+      requestAnimationFrame(() => {
+        const nextInput = this.$refs?.voiceTextDockInput || null;
+        const length = String(this.voiceConversation.textDraft || '').length;
+        nextInput?.focus?.();
+        nextInput?.setSelectionRange?.(length, length);
+      });
+    },
+
+    async handleVoiceTextDockKeydown(event) {
+      if (!event) return;
+      if (event.isComposing || event.keyCode === 229) return;
+      const key = String(event.key || '');
+      if ((event.metaKey || event.ctrlKey) && key === 'Enter') {
+        event.preventDefault();
+        await this.submitVoiceTextDock();
+        return;
+      }
+      if (key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        await this.submitVoiceTextDock();
+        return;
+      }
+      if (key === 'Escape') {
+        event.preventDefault();
+        this.toggleVoiceTextDock(false);
+        return;
+      }
+      if (key === 'Tab') {
+        event.preventDefault();
+        this.voiceTextDockAutocomplete();
+        return;
+      }
+      if (key === 'ArrowUp') {
+        this.voiceTextDockHistoryStep(event, 'up');
+        return;
+      }
+      if (key === 'ArrowDown') {
+        this.voiceTextDockHistoryStep(event, 'down');
+      }
+    },
+
     async submitVoiceTextDock() {
       this.ensureVoiceConversationState();
-      const text = trimText(this.voiceConversation.textDraft || this.voiceTranscript || this.chatInput);
+      const text = trimText(
+        typeof this.voiceTextDockSubmissionText === 'function'
+          ? this.voiceTextDockSubmissionText()
+          : (this.voiceConversation.textDraft || this.voiceTranscript || this.chatInput)
+      );
       if (!text) return false;
       if (typeof this.syncVoiceTranscript === 'function') this.syncVoiceTranscript(text);
       else {
@@ -214,13 +443,17 @@ function axonVoiceConversationMixin() {
       }
 
       let dispatched = false;
-      if (typeof this.dispatchVoiceCommand === 'function') dispatched = await this.dispatchVoiceCommand(text);
+      if (typeof this.dispatchVoiceCommand === 'function') {
+        dispatched = await this.dispatchVoiceCommand(text, { awaitCompletion: false });
+      }
       else if (typeof this.sendVoiceCommand === 'function') {
-        await this.sendVoiceCommand(text);
-        dispatched = true;
+        dispatched = await this.sendVoiceCommand(text, { awaitCompletion: false });
       }
 
-      if (dispatched !== false) this.voiceConversation.textDockOpen = false;
+      if (dispatched !== false) {
+        this.clearVoiceTextDock(true);
+        this.voiceConversation.textDockOpen = false;
+      }
       return dispatched !== false;
     },
 
@@ -253,7 +486,7 @@ function axonVoiceConversationMixin() {
       return feed.slice(-Math.max(1, limit));
     },
 
-    voiceLiveOperatorFeedHtml() {
+    voiceConversationFeedHtml() {
       const steps = this.voiceLiveOperatorHistory(10);
       if (!steps.length) return '';
       const latestStep = steps[steps.length - 1] || {};
@@ -295,6 +528,10 @@ function axonVoiceConversationMixin() {
         + `</div>`;
     },
 
+    voiceLiveOperatorFeedHtml() {
+      return this.voiceConversationFeedHtml();
+    },
+
     voiceTerminalSession() {
       return this.dashboardLiveTerminalSession?.()
         || this.dashboardLiveTerminalDetail?.()
@@ -334,6 +571,13 @@ function axonVoiceConversationMixin() {
       if (this.terminal?.approvalRequired) return 'Approval required';
       if (isTerminalRunning(session)) return 'Streaming live terminal output';
       return trimText(session.status || 'ready').replace(/[_-]+/g, ' ');
+    },
+
+    voiceTerminalLayoutActive() {
+      return !!(
+        this.hudTerminalVisible
+        && this.interactiveTerminalPreferred?.('voice')
+      );
     },
 
     voiceConversationStatusLabel() {

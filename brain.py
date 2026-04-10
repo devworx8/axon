@@ -1527,6 +1527,65 @@ async def _call_cli(
     return text, tokens
 
 
+def _stream_text_delta(previous: str, current: str) -> tuple[str, str]:
+    previous = str(previous or "")
+    current = str(current or "")
+    if not current:
+        return "", previous
+    if current.startswith(previous):
+        return current[len(previous):], current
+    if previous and previous.startswith(current):
+        return "", previous
+    prefix = os.path.commonprefix([previous, current]) if previous else ""
+    if prefix:
+        return current[len(prefix):], current
+    return current, current
+
+
+def _event_content_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        return _event_content_text(value.get("content"))
+    if not isinstance(value, list):
+        return ""
+    parts: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or "").strip().lower()
+        if kind in {"text", "output_text", "input_text"}:
+            text = str(item.get("text") or "").strip()
+            if text:
+                parts.append(text)
+        elif kind == "content":
+            nested = _event_content_text(item.get("content"))
+            if nested:
+                parts.append(nested)
+    return "".join(parts).strip()
+
+
+def _claude_stream_event_text(event: dict[str, Any]) -> str:
+    etype = str(event.get("type") or "").strip().lower()
+    if etype == "assistant":
+        return _event_content_text((event.get("message") or {}).get("content"))
+    if etype == "result":
+        return str(event.get("result") or "").strip()
+    return ""
+
+
+def _codex_stream_event_text(event: dict[str, Any]) -> str:
+    etype = str(event.get("type") or "").strip().lower()
+    if etype.startswith("item."):
+        item = event.get("item") or {}
+        if isinstance(item, dict) and str(item.get("type") or "").strip().lower() == "agent_message":
+            text = str(item.get("text") or "").strip()
+            if text:
+                return text
+            return _event_content_text(item.get("content"))
+    return ""
+
+
 async def _stream_codex_cli(
     messages: list[dict],
     *,
@@ -1564,12 +1623,13 @@ async def _stream_codex_cli(
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            snapshot = _codex_stream_event_text(event)
+            if snapshot:
+                delta, text = _stream_text_delta(text, snapshot)
+                if delta:
+                    yield delta
             etype = str(event.get("type") or "")
-            if etype == "item.completed":
-                item = event.get("item") or {}
-                if isinstance(item, dict) and item.get("type") == "agent_message":
-                    text = str(item.get("text") or "").strip() or text
-            elif etype == "turn.completed":
+            if etype == "turn.completed":
                 usage = event.get("usage") or {}
                 if isinstance(usage, dict):
                     tokens = int(usage.get("input_tokens", 0) or 0) + int(usage.get("output_tokens", 0) or 0)
@@ -1599,8 +1659,6 @@ async def _stream_codex_cli(
         raise RuntimeError(stderr_text or text or "Codex CLI request failed.")
     if usage_sink is not None:
         usage_sink["tokens"] = int(tokens or 0)
-    if text:
-        yield text
 
 
 async def _stream_cli(
@@ -1641,17 +1699,80 @@ async def _stream_cli(
             system = content
         elif role == "user" and content:
             prompt = content
-    text, tokens = await _call_cli(
-        prompt,
-        system=system,
-        cli_path=binary,
+    full_prompt = prompt
+    if system:
+        full_prompt = f"<system>\n{system}\n</system>\n\n{prompt}"
+    cmd = build_cli_command(
+        binary,
         model=model,
+        stream_json=True,
         allow_session_persistence=allow_session_persistence,
     )
+    cmd.append(full_prompt)
+
+    clean_env = {**os.environ, "NO_COLOR": "1"}
+    clean_env.pop("CLAUDECODE", None)
+    clean_env.pop("CLAUDE_CODE_ENTRYPOINT", None)
+
+    await wait_for_cli_slot(key=_cli_runtime_key(binary))
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=clean_env,
+        limit=_CLI_SUBPROCESS_STREAM_LIMIT_BYTES,
+    )
+    text = ""
+    tokens = 0
+    cost = 0.0
+    try:
+        async for raw_line in proc.stdout:
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            snapshot = _claude_stream_event_text(event)
+            if snapshot:
+                delta, text = _stream_text_delta(text, snapshot)
+                if delta:
+                    yield delta
+            if str(event.get("type") or "").strip().lower() == "result":
+                usage = event.get("usage") or {}
+                if isinstance(usage, dict):
+                    tokens = int(usage.get("input_tokens", 0) or 0) + int(usage.get("output_tokens", 0) or 0)
+                try:
+                    cost = float(event.get("total_cost_usd", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    cost = 0.0
+    except asyncio.LimitOverrunError:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        text, tokens = await _call_cli(
+            prompt,
+            system=system,
+            cli_path=binary,
+            model=model,
+            allow_session_persistence=allow_session_persistence,
+        )
+        if usage_sink is not None:
+            usage_sink["tokens"] = int(tokens or 0)
+        if text:
+            yield text
+        return
+
+    returncode = await proc.wait()
+    stderr_text = (await proc.stderr.read()).decode("utf-8", errors="replace").strip()
+    if tokens:
+        _track_usage(tokens, cost, backend="cli")
+    if returncode != 0:
+        raise RuntimeError(stderr_text or text or "CLI agent request failed.")
     if usage_sink is not None:
         usage_sink["tokens"] = int(tokens or 0)
-    if text:
-        yield text
 
 
 # ─── System Prompts ──────────────────────────────────────────────────────────

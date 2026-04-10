@@ -106,6 +106,16 @@ To generate a PDF:
 ACTION: generate_pdf
 ARGS: {{"title": "Quarterly Update", "sections": [{{"heading": "Summary", "paragraphs": ["Revenue grew 18 percent quarter over quarter."], "bullets": ["Retention up", "Pipeline expanded"]}}]}}
 
+To generate a structured visual document:
+ACTION: create_ecd_weekly_overview
+ARGS: {{"title": "Figure 1. Weekly Learning Programme Overview", "subtitle": "Integrated literacy, numeracy, life skills and play", "theme": "My Body and Healthy Habits", "planning_principles": ["Theme-based planning linked to children's interests"], "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], "rows": [{{"label": "Theme focus", "values": ["My body", "Healthy habits", "Feelings", "Movement", "Review"]}}], "output_dir": "~/Documents/axon-visuals"}}
+
+ACTION: create_ecd_cycle_diagram
+ARGS: {{"title": "Figure 2. Observation, Analysis and Planning Cycle", "subtitle": "How daily evidence informs next-step teaching", "center_title": "Assessment", "center_subtitle": "observe, interpret and respond", "steps": [{{"title": "Observe", "body": "Watch, listen and record"}}, {{"title": "Analyse", "body": "Link evidence to development"}}, {{"title": "Decide next step", "body": "Choose the next support"}}, {{"title": "Plan response", "body": "Adapt grouping or resources"}}, {{"title": "Review progress", "body": "Check what improved"}}], "output_dir": "~/Documents/axon-visuals"}}
+
+ACTION: create_ecd_support_poster
+ARGS: {{"title": "Figure 6. Summative Activity Support Poster", "subtitle": "A classroom visual aid for the lesson routine", "steps": [{{"number": "1", "title": "Wet hands", "body": "Use clean water"}}, {{"number": "2", "title": "Add soap", "body": "Make bubbles"}}, {{"number": "3", "title": "Rub palms", "body": "Count slowly to 10"}}, {{"number": "4", "title": "Clean fingers", "body": "Between and around nails"}}, {{"number": "5", "title": "Rinse well", "body": "Wash the soap away"}}, {{"number": "6", "title": "Dry hands", "body": "Use a clean towel"}}], "footer_title": "How this poster supports mediation", "footer_lines": ["Provides a clear visual sequence", "Supports children needing language prompts", "Links the what, how and why of the routine"], "output_dir": "~/Documents/axon-visuals"}}
+
 CRITICAL: Always put arguments in a JSON object with named keys. Never omit ARGS or leave it empty.
 CRITICAL: For write_file and edit_file, the ARGS must be VALID JSON. Escape newlines as \\n inside strings.
 Multi-line content example:
@@ -174,6 +184,12 @@ When a user reports a page not loading, errors, or build issues:
 | `show_diff` | Review edits after making them |
 | `http_get` | Fetch docs, APIs, web content |
 | `generate_pdf` | Render a PDF document to disk |
+| `generate_visual_document` | Generic SVG/HTML/PDF visual-document tool for structured outputs such as ECD covers, weekly overviews, cycle diagrams, strategy grids and support posters |
+| `create_ecd_cover_page` | Generate an ECD cover page without passing a template id |
+| `create_ecd_weekly_overview` | Generate a print-ready ECD weekly learning overview figure |
+| `create_ecd_cycle_diagram` | Generate a print-ready ECD observation or reflection cycle diagram |
+| `create_ecd_strategy_grid` | Generate a print-ready ECD mediation or grouping strategy grid |
+| `create_ecd_support_poster` | Generate a print-ready ECD classroom support poster |
 | `remember` | Persist key facts across sessions |
 | `recall` | Search your persisted memory |
 | `create_mission` | Create a task/mission to track work |

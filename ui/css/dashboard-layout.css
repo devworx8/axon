@@ -1,0 +1,120 @@
+/* ══════════════════════════════════════════════════════════════
+   Axon — Dashboard Layout (compact + collapsible sidebar)
+   ══════════════════════════════════════════════════════════════ */
+
+.dashboard-shell-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+@media (min-width: 1280px) {
+  .dashboard-shell-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 0.75fr);
+    gap: 20px;
+  }
+}
+
+.dashboard-hud-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1280px) {
+  .dashboard-hud-grid {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  }
+}
+
+.dashboard-surface-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1100px) {
+  .dashboard-surface-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+.dashboard-live-rail-shell {
+  min-width: 0;
+}
+
+.dashboard-live-rail-shell > div {
+  position: sticky;
+  top: 16px;
+}
+
+.dashboard-sidebar {
+  width: 14rem;
+  transition: width 180ms ease, background 180ms ease;
+}
+
+.dashboard-sidebar--collapsed {
+  width: 4.5rem;
+}
+
+.dashboard-sidebar--collapsed .sidebar-label,
+.dashboard-sidebar--collapsed .sidebar-user,
+.dashboard-sidebar--collapsed .sidebar-footer-text {
+  display: none;
+}
+
+.dashboard-sidebar--collapsed .sidebar-nav-button {
+  justify-content: center;
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+
+.dashboard-sidebar--collapsed .sidebar-badges {
+  display: none;
+}
+
+.dashboard-sidebar--collapsed + .app-shell-main .dashboard-page .page-content > div {
+  max-width: 100%;
+  padding-left: 1.25rem;
+  padding-right: 1.25rem;
+}
+
+.dashboard-sidebar--collapsed + .app-shell-main .desktop-header-glass {
+  padding-left: 1.25rem;
+  padding-right: 1.25rem;
+}
+
+.dashboard--compact .dashboard-shell-grid {
+  gap: 12px;
+}
+
+.dashboard--compact .dashboard-hud-grid,
+.dashboard--compact .dashboard-surface-grid {
+  gap: 10px;
+}
+
+.dashboard--compact .stark-dash-panel {
+  padding: 10px !important;
+  border-radius: 16px;
+}
+
+.dashboard--compact .page-content {
+  padding-top: 6px !important;
+  padding-bottom: 10px !important;
+}
+
+.dashboard--compact .stark-dash-header {
+  font-size: 8px;
+}
+
+.dashboard--compact .mission-subtitle {
+  font-size: 11px;
+  line-height: 1.35;
+  max-height: 2.7em;
+  overflow: hidden;
+}
+
+.dashboard--compact .dashboard-live-rail-shell > div {
+  top: 12px;
+}

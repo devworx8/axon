@@ -19,7 +19,7 @@
 
 .hud-terminal {
   position: fixed;
-  bottom: 80px;
+  bottom: var(--voice-terminal-offset, 80px);
   left: 50%;
   transform: translateX(-50%);
   width: min(600px, 92vw);

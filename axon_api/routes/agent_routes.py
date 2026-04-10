@@ -352,6 +352,20 @@ class AgentRouteHandlers:
                 for warning in resource_bundle["warnings"]:
                     collected_text.append(f"⚠️ {warning}\n\n")
                     yield {"data": json.dumps({"type": "text", "chunk": f"⚠️ {warning}\n\n"})}
+                kickoff = {
+                    "type": "thinking",
+                    "chunk": "Axon is analysing the request and forming a plan.",
+                }
+                self._set_live_operator(
+                    active=True,
+                    mode="agent",
+                    phase="plan",
+                    title="Thinking through the task",
+                    detail=str(kickoff["chunk"])[:180],
+                    workspace_id=body.project_id,
+                    preserve_started=True,
+                )
+                yield {"data": json.dumps(kickoff)}
                 async for event in self._brain.run_agent(
                     body.message,
                     history,

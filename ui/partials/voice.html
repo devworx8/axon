@@ -4,11 +4,15 @@
        x-transition:leave="transition ease-in duration-200"
        x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
        class="fixed inset-0 z-[999] bg-slate-950/95 backdrop-blur-xl voice-command-center overflow-hidden"
+       :class="[
+         voiceConversation.textDockOpen ? 'voice-command-center--dock-open' : '',
+         (voiceFileViewer && voiceFileViewer.open) ? 'voice-command-center--file-open' : '',
+         (voiceTerminalLayoutActive?.()) ? 'voice-command-center--terminal-open' : ''
+       ].join(' ').trim()"
        style="padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);"
        x-cloak>
     <button @click="closeVoiceCommandCenter(true)"
-            class="absolute right-3 top-3 md:right-5 md:top-5 z-10 w-11 h-11 md:w-10 md:h-10 rounded-full bg-slate-900/70 text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center transition"
-            style="padding-top: env(safe-area-inset-top);">
+            class="voice-command-center__close absolute z-10 w-11 h-11 md:w-10 md:h-10 rounded-full bg-slate-900/70 text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center transition">
       <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
     </button>
 
@@ -128,16 +132,25 @@
           <div class="text-center -mt-1">
             <div class="voice-stage__state-label-mobile" x-text="voiceStatusLabel()"></div>
             <div class="text-[11px] tracking-[0.12em] uppercase text-slate-500 mt-1" x-text="voiceStateCaption()"></div>
+            <div x-show="voiceActive && _voiceRecorder" class="voice-auto-listening-badge" x-transition>
+              <span class="voice-auto-listening-badge__dot"></span>
+              <span>Listening — speak naturally, Axon will detect when you finish</span>
+            </div>
           </div>
 
-          <!-- Mic & action buttons (mobile) -->
-          <div class="flex items-center gap-3 mt-1">
+          <!-- Mic & action buttons (mobile) — fallback for manual start/stop -->
+          <div class="flex items-center gap-3 mt-1" x-show="!voiceActive">
             <button @click="startVoiceListening()"
                     class="voice-mobile-mic-btn"
                     :class="voiceActive ? 'voice-mobile-mic-btn--active' : ''">
               <svg x-show="!voiceActive" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
               <svg x-show="voiceActive" class="w-5 h-5 animate-pulse" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
               <span class="text-[10px] font-semibold tracking-wide" x-text="voiceActive ? 'Stop' : 'Listen'"></span>
+            </button>
+            <button @click="toggleVoiceTextDock()"
+                    class="voice-mobile-mic-btn">
+              <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              <span class="text-[10px] font-semibold tracking-wide">Type</span>
             </button>
             <button @click="dispatchVoiceCommand()"
                     x-show="!!(voiceTranscript || '').trim() && !chatLoading"
@@ -177,18 +190,21 @@
         <!-- ── Desktop: 3-column arena layout ── -->
         <div class="hidden md:block w-full">
         <div class="voice-arena" :class="chatLoading || (liveOperator && liveOperator.active) ? 'voice-arena--busy' : ''">
-          <!-- Left float: Transcript -->
-          <div class="voice-float voice-float--left"
-               x-show="!voiceConversation.textDockOpen"
-               x-transition.opacity>
-            <div class="voice-float__edge"></div>
-            <div class="voice-float__inner">
-              <div class="voice-float__label">
-                <span class="voice-float__dot"></span>
-                Transcript
+          <div class="voice-rail voice-rail--left">
+            <!-- Left float: Transcript -->
+            <div class="voice-float voice-float--left"
+                 x-show="!voiceConversation.textDockOpen"
+                 x-transition.opacity>
+              <div class="voice-float__edge"></div>
+              <div class="voice-float__inner">
+                <div class="voice-float__label">
+                  <span class="voice-float__dot"></span>
+                  Transcript
+                </div>
+                <div class="voice-float__body" x-text="voiceDisplayTranscript()"></div>
               </div>
-              <div class="voice-float__body" x-text="voiceDisplayTranscript()"></div>
             </div>
+            <!-- @include partials/voice_surface_spotlight.html -->
           </div>
 
           <!-- Center: Reactor + Status -->
@@ -292,7 +308,6 @@
             <div class="voice-awaiting-banner__detail" x-text="voiceStatusHint()"></div>
           </div>
         </div>
-        <!-- @include partials/voice_surface_spotlight.html -->
           </div><!-- /voice-arena__center -->
 
           <!-- @include partials/voice_response_panel.html -->

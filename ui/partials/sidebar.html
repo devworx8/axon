@@ -2,7 +2,8 @@
   <aside x-cloak
          x-show="activeTab !== 'chat'"
          x-transition.opacity.duration.150ms
-         class="hidden md:flex w-56 shrink-0 flex-col bg-slate-900 border-r border-slate-800">
+         class="hidden md:flex shrink-0 flex-col bg-slate-900 border-r border-slate-800"
+         :class="dashboardSidebarClass?.()">
     <!-- Identity block — Axon brand + current user -->
     <div class="px-4 pt-4 pb-3 border-b border-slate-800">
       <div class="flex items-center gap-2.5 mb-3">
@@ -11,13 +12,18 @@
           <div class="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border border-slate-900"
                :class="liveFeed.connected ? 'bg-emerald-400' : 'bg-slate-600'"></div>
         </div>
-        <div>
+        <div class="sidebar-label">
           <div class="font-bold text-white text-sm tracking-tight">Axon</div>
           <div class="text-[10px] text-cyan-400/70 uppercase tracking-[0.22em]">Operator</div>
         </div>
+        <button @click="toggleSidebarCollapsed()"
+                class="ml-auto h-8 w-8 rounded-full border border-slate-800 bg-slate-950/60 text-[10px] text-slate-400 transition hover:text-slate-200 hover:border-cyan-500/30"
+                :title="dashboardSidebarToggleLabel()">
+          <span x-text="sidebarCollapsed ? '»' : '«'"></span>
+        </button>
       </div>
       <!-- Current user chip -->
-      <div x-show="currentUser.name" class="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/60 px-2.5 py-1.5">
+      <div x-show="currentUser.name" class="sidebar-user flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/60 px-2.5 py-1.5">
         <div class="w-5 h-5 rounded-lg bg-gradient-to-br from-violet-500 to-blue-600 flex items-center justify-center text-white text-[9px] font-bold shrink-0"
              x-text="(currentUser.name || 'U').charAt(0).toUpperCase()"></div>
         <div class="min-w-0 flex-1">
@@ -33,13 +39,14 @@
         <button
           @click="switchTab(item.id)"
           :class="activeTab === item.id ? 'bg-blue-600/20 text-blue-400 border-l-2 border-blue-500' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200 border-l-2 border-transparent'"
-          class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all text-left"
+          class="sidebar-nav-button w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all text-left"
+          :title="item.label"
         >
           <span x-text="item.icon" class="text-base"></span>
-          <span x-text="item.label"></span>
+          <span class="sidebar-label" x-text="item.label"></span>
           <!-- Mission badges: active (blue) + urgent/high (red) -->
           <template x-if="item.id === 'tasks'">
-            <span class="ml-auto flex items-center gap-1">
+            <span class="sidebar-badges ml-auto flex items-center gap-1">
               <span x-show="tasks.filter(t => t.status === 'in_progress').length > 0"
                     class="bg-blue-500 text-white text-[9px] font-bold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center animate-pulse"
                     x-text="tasks.filter(t => t.status === 'in_progress').length"
@@ -55,10 +62,10 @@
     </nav>
 
     <!-- Bottom: scan + settings -->
-    <div class="border-t border-slate-800 px-2 py-3 space-y-1">
+    <div class="sidebar-footer border-t border-slate-800 px-2 py-3 space-y-1">
       <!-- Usage badge -->
       <div x-show="usage.calls > 0"
-           class="flex items-center justify-between px-3 py-1.5 text-[10px] text-slate-600 border border-slate-800 rounded-lg">
+           class="sidebar-footer-text flex items-center justify-between px-3 py-1.5 text-[10px] text-slate-600 border border-slate-800 rounded-lg">
         <span>🧮 <span x-text="usage.tokens.toLocaleString()"></span> tokens</span>
         <span x-show="usage.cost_usd > 0" class="text-slate-500">
           $<span x-text="usage.cost_usd.toFixed(4)"></span>
@@ -68,25 +75,25 @@
       <!-- Terminal quick-access -->
       <button @click="switchTab('chat'); toggleTerminalMode(true)"
               class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-amber-400/80 hover:bg-slate-800 hover:text-amber-300 transition border border-amber-500/10 bg-amber-500/5">
-        <span>⌨️</span><span>Terminal</span>
-        <span class="ml-auto text-[10px] text-amber-500/60 uppercase tracking-wider">Safe</span>
+        <span>⌨️</span><span class="sidebar-label">Terminal</span>
+        <span class="sidebar-label ml-auto text-[10px] text-amber-500/60 uppercase tracking-wider">Safe</span>
       </button>
       <button @click="runScan()" :disabled="scanning"
               class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition disabled:opacity-40">
         <span x-text="scanning ? '⏳' : '🔄'"></span>
-        <span x-text="scanning ? 'Scanning...' : 'Axon Scan'"></span>
+        <span class="sidebar-label" x-text="scanning ? 'Scanning...' : 'Axon Scan'"></span>
       </button>
       <button @click="showMobileModal = true; loadMobileInfo()"
               class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition">
-        <span>📱</span><span>Mobile</span>
+        <span>📱</span><span class="sidebar-label">Mobile</span>
       </button>
       <a href="/manual" target="_blank"
          class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition">
-        <span>📖</span><span>Manual</span>
+        <span>📖</span><span class="sidebar-label">Manual</span>
       </a>
       <button @click="activeTab = 'settings'; loadSettings()"
               class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition">
-        <span>⚙️</span><span>Settings</span>
+        <span>⚙️</span><span class="sidebar-label">Settings</span>
       </button>
     </div>
   </aside>

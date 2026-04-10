@@ -5,6 +5,10 @@
 
 function axonTerminalXtermMixin() {
   const trimText = (value = '') => String(value || '').trim();
+  const clipText = (value = '', max = 120) => {
+    const text = trimText(value);
+    return text.length > max ? `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…` : text;
+  };
 
   const xtermCtor = () => (window.Terminal || (typeof Terminal !== 'undefined' ? Terminal : null));
   const fitAddonCtor = () => {
@@ -191,10 +195,106 @@ function axonTerminalXtermMixin() {
       );
     },
 
-    terminalViewportSessionLabel(view = 'console') {
+    terminalViewportSession(view = 'console') {
       const liveSession = view === 'voice' ? this.dashboardLiveTerminalSession?.() : null;
-      const session = liveSession || this.currentTerminalSession?.() || this.terminal?.sessionDetail || null;
+      return liveSession || this.currentTerminalSession?.() || this.terminal?.sessionDetail || null;
+    },
+
+    terminalViewportSessionLabel(view = 'console') {
+      const session = this.terminalViewportSession(view);
       return trimText(session?.title || (view === 'voice' ? 'Voice shell' : 'Console shell')) || 'Terminal';
+    },
+
+    terminalViewportActiveCommand(view = 'console') {
+      const session = this.terminalViewportSession(view);
+      const active = trimText(session?.active_command);
+      if (active) return active;
+      const events = Array.isArray(this.terminal?.sessionDetail?.recent_events)
+        ? this.terminal.sessionDetail.recent_events
+        : [];
+      const latestCommand = [...events].reverse().find((event) => trimText(event?.event_type).toLowerCase() === 'command');
+      return trimText(latestCommand?.content || '');
+    },
+
+    terminalViewportUpdatedAt(view = 'console') {
+      const session = this.terminalViewportSession(view);
+      return trimText(
+        session?.last_output_at
+        || session?.updated_at
+        || this.terminalViewportStateFor(view).lastStartedAt
+        || ''
+      );
+    },
+
+    terminalViewportUpdatedLabel(view = 'console') {
+      const stamp = this.terminalViewportUpdatedAt(view);
+      if (!stamp) return '';
+      if (typeof this.timeAgo === 'function') {
+        try {
+          return this.timeAgo(stamp);
+        } catch (_) {}
+      }
+      return stamp;
+    },
+
+    terminalViewportStatusTone(view = 'console') {
+      const state = this.terminalViewportStateFor(view);
+      const session = this.terminalViewportSession(view);
+      const status = trimText(session?.status).toLowerCase();
+      if (state.error) return 'danger';
+      if (state.connecting) return 'boot';
+      if (state.connected || session?.running) return 'live';
+      if (state.lastExitCode != null || status === 'failed' || status === 'stopped') return 'warning';
+      return 'idle';
+    },
+
+    terminalViewportHeadline(view = 'console') {
+      const command = trimText(this.terminalViewportActiveCommand(view));
+      if (command) return `Live command: ${clipText(command, view === 'voice' ? 72 : 108)}`;
+      const cwd = this.terminalViewportCwd(view);
+      if (cwd) return `Scoped to ${clipText(cwd, view === 'voice' ? 72 : 104)}`;
+      return view === 'voice'
+        ? 'Voice mode keeps the interactive shell ready when a live run needs it.'
+        : 'The guarded PTY shell is ready for live commands and streamed output.';
+    },
+
+    terminalViewportMeta(view = 'console') {
+      const session = this.terminalViewportSession(view);
+      const state = this.terminalViewportStateFor(view);
+      const command = trimText(this.terminalViewportActiveCommand(view));
+      const scope = trimText(this.terminalViewportCwd(view));
+      const mode = trimText(session?.mode || this.terminal?.mode || '').replace(/_/g, ' ');
+      const updated = trimText(this.terminalViewportUpdatedLabel(view));
+      const items = [
+        {
+          label: 'Status',
+          value: this.terminalViewportStatusLabel(view),
+          tone: this.terminalViewportStatusTone(view),
+        },
+        command ? {
+          label: 'Command',
+          value: clipText(command, view === 'voice' ? 50 : 64),
+          tone: state.connected || session?.running ? 'live' : 'idle',
+          mono: true,
+        } : null,
+        scope ? {
+          label: 'Scope',
+          value: clipText(scope, view === 'voice' ? 44 : 56),
+          tone: 'idle',
+          mono: true,
+        } : null,
+        mode ? {
+          label: 'Mode',
+          value: clipText(mode, 20),
+          tone: 'idle',
+        } : null,
+        updated ? {
+          label: 'Updated',
+          value: updated,
+          tone: 'idle',
+        } : null,
+      ].filter(Boolean);
+      return items.slice(0, view === 'voice' ? 3 : 4);
     },
 
     terminalPtySocketKey(view = 'console', sessionId = '') {

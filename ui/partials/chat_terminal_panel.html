@@ -82,15 +82,27 @@
 
                 <div class="axon-terminal-stage axon-terminal-stage--console">
                   <div class="axon-terminal-stage__chrome">
-                    <div>
+                    <div class="axon-terminal-stage__title-stack">
                       <div class="axon-terminal-stage__eyebrow">Interactive shell</div>
                       <div class="axon-terminal-stage__title" x-text="terminalViewportSessionLabel('console')"></div>
+                      <div class="axon-terminal-stage__headline" x-text="terminalViewportHeadline('console')"></div>
                     </div>
                     <div class="axon-terminal-stage__chips">
                       <span class="axon-terminal-stage__chip"
                             :class="terminalViewportConnected('console') ? 'axon-terminal-stage__chip--live' : (terminalViewportError('console') ? 'axon-terminal-stage__chip--fallback' : 'axon-terminal-stage__chip--boot')"
                             x-text="terminalViewportStatusLabel('console')"></span>
                     </div>
+                  </div>
+                  <div class="axon-terminal-stage__meta-grid" x-show="terminalViewportMeta('console').length">
+                    <template x-for="item in terminalViewportMeta('console')" :key="`${item.label}-${item.value}`">
+                      <div class="axon-terminal-stage__meta-card"
+                           :class="item.tone ? `axon-terminal-stage__meta-card--${item.tone}` : ''">
+                        <div class="axon-terminal-stage__meta-label" x-text="item.label"></div>
+                        <div class="axon-terminal-stage__meta-value"
+                             :class="item.mono ? 'axon-terminal-stage__meta-value--mono' : ''"
+                             x-text="item.value"></div>
+                      </div>
+                    </template>
                   </div>
                   <div class="axon-terminal-stage__frame">
                     <div class="axon-terminal-stage__screen">

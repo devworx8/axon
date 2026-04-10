@@ -7,6 +7,8 @@ function axonDashboardMixin() {
     axonDashboardPreviewMixin(),
     typeof axonDashboardLiveFeedMixin === 'function' ? axonDashboardLiveFeedMixin() : {},
     typeof axonDashboardMiniVoiceMixin === 'function' ? axonDashboardMiniVoiceMixin() : {},
+    typeof axonDashboardLayoutMixin === 'function' ? axonDashboardLayoutMixin() : {},
+    typeof axonTerminalCommandDispatchMixin === 'function' ? axonTerminalCommandDispatchMixin() : {},
     {
 
     async loadCurrentUser() {
@@ -1366,47 +1368,6 @@ function axonDashboardMixin() {
         if (!silent) this.showToast(`Terminal detail failed: ${e.message}`);
       }
       if (!silent) this.terminal.detailLoading = false;
-    },
-
-    async executeTerminalCommand(approved = false) {
-      const command = String(approved ? (this.terminal.pendingCommand || this.terminal.command) : this.terminal.command || '').trim();
-      if (!command || this.terminal.executing) return;
-      await this.ensureTerminalSession();
-      if (!this.terminal.activeSessionId) return;
-      this.terminal.executing = true;
-      try {
-        const endpoint = approved
-          ? `/api/terminal/sessions/${this.terminal.activeSessionId}/approve`
-          : `/api/terminal/sessions/${this.terminal.activeSessionId}/execute`;
-        const result = await this.api('POST', endpoint, {
-          command,
-          mode: this.terminal.mode,
-        });
-        if (result.status === 'approval_required') {
-          this.terminal.pendingCommand = result.command || command;
-          this.terminal.approvalRequired = true;
-          this.showToast('Approval required before Axon runs this command');
-        } else if (result.status === 'blocked') {
-          this.terminal.pendingCommand = '';
-          this.terminal.approvalRequired = false;
-          this.showToast(result.message || 'That command is blocked in read-only mode');
-        } else if (result.status === 'simulation') {
-          this.terminal.pendingCommand = '';
-          this.terminal.approvalRequired = false;
-          this.terminal.command = '';
-          this.showToast(result.message || 'Simulation only');
-        } else {
-          this.terminal.pendingCommand = '';
-          this.terminal.approvalRequired = false;
-          this.terminal.command = '';
-          this.showToast('Terminal command started');
-        }
-        await this.loadTerminalSessionDetail(this.terminal.activeSessionId, { silent: true });
-        this.syncVoiceCommandCenterRuntime?.();
-      } catch (e) {
-        this.showToast(`Terminal run failed: ${e.message}`);
-      }
-      this.terminal.executing = false;
     },
 
     async stopTerminalCommand() {

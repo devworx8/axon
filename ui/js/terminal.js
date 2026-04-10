@@ -206,3 +206,111 @@ function axonTerminalMixin() {
 }
 
 window.axonTerminalMixin = axonTerminalMixin;
+
+/* ══════════════════════════════════════════════════════════════
+   Axon — Terminal Command Dispatch (PTY-first)
+   Bounded context: classify shell commands and enforce PTY-first execution.
+   ══════════════════════════════════════════════════════════════ */
+
+function axonTerminalCommandDispatchMixin() {
+  const trimText = (value = '') => String(value || '').trim();
+  const shellPrefix = /^(git|npm|npx|pnpm|yarn|python3?|node|bash|sh|zsh|rg|ripgrep|ls|cat|sed|awk|grep|find|fd|tree|make|go|cargo|pip3?|poetry|uv|pytest|docker|kubectl)\b/i;
+  const shellOperators = /[;&|]/;
+
+  return {
+    terminalCommandRequiresPty(command = '') {
+      const raw = trimText(command);
+      if (!raw) return false;
+      if (shellOperators.test(raw)) return true;
+      return shellPrefix.test(raw);
+    },
+
+    terminalCommandExecutionView() {
+      return this.showVoiceOrb ? 'voice' : 'console';
+    },
+
+    async waitForTerminalViewport(view = 'console', timeoutMs = 1600) {
+      const started = Date.now();
+      return new Promise(resolve => {
+        const tick = () => {
+          if (this.terminalViewportConnected?.(view)) return resolve(true);
+          if (Date.now() - started >= timeoutMs) return resolve(false);
+          requestAnimationFrame(tick);
+        };
+        tick();
+      });
+    },
+
+    async prepareInteractiveTerminal(view = 'console') {
+      if (view === 'voice') {
+        this.ensureVoiceConversationState?.();
+        if (typeof this.voiceConversation.terminalPinnedTouched !== 'boolean') {
+          this.voiceConversation.terminalPinnedTouched = false;
+        }
+        this.voiceConversation.terminalPinned = true;
+        this.hudShowTerminal?.('Terminal');
+        this.syncVoiceCommandCenterRuntime?.();
+        this.focusInteractiveTerminalViewport?.('voice');
+        await this.waitForTerminalViewport('voice', 1800);
+        return;
+      }
+      this.terminal.panelOpen = true;
+      this.composerOptions.terminal_mode = true;
+      this.syncVoiceCommandCenterRuntime?.();
+      this.focusInteractiveTerminalViewport?.('console');
+      await this.waitForTerminalViewport('console', 1800);
+    },
+
+    async executeTerminalCommand(approved = false) {
+      const command = String(approved ? (this.terminal.pendingCommand || this.terminal.command) : this.terminal.command || '').trim();
+      if (!command || this.terminal.executing) return;
+      await this.ensureTerminalSession();
+      if (!this.terminal.activeSessionId) return;
+      const requirePty = this.terminalCommandRequiresPty(command);
+      if (requirePty) {
+        await this.prepareInteractiveTerminal(this.terminalCommandExecutionView());
+      }
+      this.terminal.executing = true;
+      try {
+        const endpoint = approved
+          ? `/api/terminal/sessions/${this.terminal.activeSessionId}/approve`
+          : `/api/terminal/sessions/${this.terminal.activeSessionId}/execute`;
+        const result = await this.api('POST', endpoint, {
+          command,
+          mode: this.terminal.mode,
+          require_pty: requirePty,
+        });
+        if (result.status === 'approval_required') {
+          this.terminal.pendingCommand = result.command || command;
+          this.terminal.approvalRequired = true;
+          this.showToast('Approval required before Axon runs this command');
+        } else if (result.status === 'blocked') {
+          this.terminal.pendingCommand = '';
+          this.terminal.approvalRequired = false;
+          this.showToast(result.message || 'That command is blocked in read-only mode');
+        } else if (result.status === 'simulation') {
+          this.terminal.pendingCommand = '';
+          this.terminal.approvalRequired = false;
+          this.terminal.command = '';
+          this.showToast(result.message || 'Simulation only');
+        } else if (result.status === 'interactive_required') {
+          this.terminal.pendingCommand = result.command || command;
+          this.terminal.approvalRequired = false;
+          this.showToast(result.message || 'Open the interactive terminal to run this command');
+        } else {
+          this.terminal.pendingCommand = '';
+          this.terminal.approvalRequired = false;
+          this.terminal.command = '';
+          this.showToast('Terminal command started');
+        }
+        await this.loadTerminalSessionDetail(this.terminal.activeSessionId, { silent: true });
+        this.syncVoiceCommandCenterRuntime?.();
+      } catch (e) {
+        this.showToast(`Terminal run failed: ${e.message}`);
+      }
+      this.terminal.executing = false;
+    },
+  };
+}
+
+window.axonTerminalCommandDispatchMixin = axonTerminalCommandDispatchMixin;

@@ -197,11 +197,6 @@ class DashboardMiniVoiceFrontendTests(unittest.TestCase):
         payload = _run_dashboard_mini_voice_script(
             """
             const mixin = ctx.window.axonDashboardMiniVoiceMixin();
-            ctx.window.setTimeout = (callback) => {
-              callback();
-              return 1;
-            };
-            ctx.window.clearTimeout = () => {};
             const app = {
               activeTab: 'dashboard',
               chatLoading: false,
@@ -220,10 +215,12 @@ class DashboardMiniVoiceFrontendTests(unittest.TestCase):
             const baselineListens = app.listenCount || 0;
             app.busy = true;
             app._scheduleDashboardMiniVoiceResume(0);
+            await new Promise((resolve) => setTimeout(resolve, 260));
             const listensWhileBusy = (app.listenCount || 0) - baselineListens;
             app._clearDashboardMiniVoiceResume();
             app.busy = false;
             app._scheduleDashboardMiniVoiceResume(0);
+            await new Promise((resolve) => setTimeout(resolve, 260));
             console.log(JSON.stringify({
               listensWhileBusy,
               listensAfterIdle: (app.listenCount || 0) - baselineListens,

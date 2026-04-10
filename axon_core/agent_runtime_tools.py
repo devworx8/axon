@@ -10,6 +10,7 @@ from typing import Any, Callable, Optional
 import httpx
 
 from . import image_generation, pdf_generation
+from .agent_visual_tools import build_visual_tool_registry, normalize_visual_tool_args
 
 
 def normalize_tool_args(name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -119,6 +120,9 @@ def normalize_tool_args(name: str, args: dict[str, Any]) -> dict[str, Any]:
             for key, value in normalized.items()
             if key in {"prompt", "aspect_ratio", "image_size", "workspace_id", "title"}
         }
+
+    if name == "generate_visual_document" or name.startswith("create_ecd_"):
+        return normalize_visual_tool_args(name, normalized)
 
     if name == "http_get":
         return {key: value for key, value in normalized.items() if key in {"url", "headers"}}
@@ -486,6 +490,7 @@ def build_tool_registry(
         "generate_pdf": _tool_generate_pdf,
         "generate_image": _tool_generate_image,
     }
+    registry.update(build_visual_tool_registry(tool_path_allowed_fn=tool_path_allowed_fn))
     if spawn_subagent_fn is not None:
         registry["spawn_subagent"] = spawn_subagent_fn
     return registry

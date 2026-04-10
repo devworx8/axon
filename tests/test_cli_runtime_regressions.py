@@ -1834,6 +1834,7 @@ class ClaudeCliCommandTests(unittest.TestCase):
 
         self.assertIn("--no-session-persistence", cmd)
         self.assertIn("--include-partial-messages", cmd)
+        self.assertEqual(cmd[cmd.index("--input-format") + 1], "text")
 
     def test_stream_cli_can_reuse_sessions_when_enabled(self):
         cmd = brain.build_cli_command(
@@ -1933,6 +1934,111 @@ class ClaudeCliCooldownGuardTests(unittest.IsolatedAsyncioTestCase):
         rendered = "".join(chunks)
         self.assertIn("Falling back to Codex CLI", rendered)
         self.assertIn("fallback stream", rendered)
+
+
+class ClaudeCliStreamingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stream_cli_emits_incremental_chunks_from_stream_json(self):
+        captured: dict[str, object] = {}
+
+        class FakeStdout:
+            def __init__(self, lines):
+                self._lines = iter(lines)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._lines)
+                except StopIteration as exc:
+                    raise StopAsyncIteration from exc
+
+        class FakeStderr:
+            async def read(self):
+                return b""
+
+        class FakeProc:
+            def __init__(self):
+                self.stdout = FakeStdout(
+                    [
+                        (json.dumps({"type": "system", "subtype": "init"}) + "\n").encode("utf-8"),
+                        (
+                            json.dumps(
+                                {
+                                    "type": "assistant",
+                                    "message": {"content": [{"type": "text", "text": "Planning"}]},
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8"),
+                        (
+                            json.dumps(
+                                {
+                                    "type": "assistant",
+                                    "message": {"content": [{"type": "text", "text": "Planning deeper"}]},
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8"),
+                        (
+                            json.dumps(
+                                {
+                                    "type": "result",
+                                    "result": "Planning deeper",
+                                    "usage": {"input_tokens": 2, "output_tokens": 3},
+                                    "total_cost_usd": 1.25,
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8"),
+                    ]
+                )
+                self.stderr = FakeStderr()
+                self.returncode = 0
+
+            def terminate(self):
+                self.returncode = -15
+
+            def kill(self):
+                self.returncode = -9
+
+            async def wait(self):
+                return self.returncode
+
+        async def fake_wait_for_cli_slot(*args, **kwargs):
+            return None
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            captured["limit"] = kwargs.get("limit")
+            return FakeProc()
+
+        usage_sink: dict[str, int] = {}
+        brain.reset_session_usage()
+        try:
+            with patch.object(brain, "_resolve_selected_cli_binary", return_value="/tmp/claude"), \
+                 patch.object(brain, "current_cli_cooldown", return_value={"active": False}), \
+                 patch.object(brain, "wait_for_cli_slot", side_effect=fake_wait_for_cli_slot), \
+                 patch.object(brain.asyncio, "create_subprocess_exec", side_effect=fake_create_subprocess_exec):
+                chunks = [
+                    chunk async for chunk in brain._stream_cli(
+                        [
+                            {"role": "system", "content": "Be helpful."},
+                            {"role": "user", "content": "Reply with a short plan."},
+                        ],
+                        usage_sink=usage_sink,
+                    )
+                ]
+        finally:
+            brain.reset_session_usage()
+
+        self.assertEqual("".join(chunks), "Planning deeper")
+        self.assertEqual(usage_sink["tokens"], 5)
+        self.assertEqual(captured["limit"], brain._CLI_SUBPROCESS_STREAM_LIMIT_BYTES)
+        cmd = captured["cmd"]
+        self.assertIn("--output-format", cmd)
+        self.assertIn("stream-json", cmd)
+        self.assertEqual(cmd[cmd.index("--input-format") + 1], "text")
 
 
 class RuntimeStatusCliSelectionTests(unittest.TestCase):

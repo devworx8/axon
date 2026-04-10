@@ -35,7 +35,16 @@ function axonVoiceActivityFeedMixin() {
   };
   const localPathTokens = (value = '') => {
     const matches = String(value || '').match(/(?:~\/|\/|\.{1,2}\/)[^\s"'`<>]+/g) || [];
-    return [...new Set(matches.map(cleanToken).filter(Boolean))];
+    const filtered = matches
+      .map(cleanToken)
+      .filter(Boolean)
+      .filter(token => (
+        token.startsWith('~/')
+        || token.startsWith('./')
+        || token.startsWith('../')
+        || token.startsWith('/home/')
+      ));
+    return [...new Set(filtered)];
   };
   const openHrefPaths = (value = '') => [
     ...String(value || '').matchAll(/\/api\/(?:files\/open|generate\/(?:pdf|pptx)\/download)\?path=([^)&\s]+)/g),
@@ -169,23 +178,51 @@ function axonVoiceActivityFeedMixin() {
     list.push(item);
   };
 
-  const renderDeckLink = (item, classes, innerHtml) => {
+  const renderDeckLink = (item, classes, innerHtml, index = 0) => {
     const path = trimText(item?.path);
-    if (!path) return `<div class="${classes}">${innerHtml}</div>`;
+    const surface = trimText(item?.surface);
+    const attrs = [];
+    if (surface) attrs.push(`data-voice-surface="${escapeHtml(surface)}"`);
+    if (path) attrs.push(`data-voice-path="${escapeHtml(path)}"`);
     const kind = trimText(item?.kind);
-    return `<button type="button" class="${classes}" data-voice-path="${escapeHtml(path)}"${kind ? ` data-voice-kind="${escapeHtml(kind)}"` : ''}>${innerHtml}</button>`;
+    if (kind) attrs.push(`data-voice-kind="${escapeHtml(kind)}"`);
+    if (!attrs.length) return `<div class="${classes}">${innerHtml}</div>`;
+    return `<button type="button" class="${classes}" ${attrs.join(' ')}>${innerHtml}</button>`;
   };
 
   return {
     voiceActivityFeed: [],
     _activityAnimCounter: 0,
+    _voiceArtifactCache: [],
+    _voiceArtifactCacheSignature: '',
 
     pushActivityEntry(phase, title, detail, opts = {}) {
       const p = trimText(phase) || 'execute';
       const t = trimText(title) || 'Working';
       const d = trimText(detail).slice(0, 200);
+      const filePath = trimText(opts.filePath || extractFilePath(detail));
+      const tool = trimText(opts.tool);
       const last = this.voiceActivityFeed[this.voiceActivityFeed.length - 1];
-      if (last && last.phase === p && last.title === t) {
+      if (
+        last
+        && last.phase === p
+        && last.title === t
+        && last.detail === d
+        && trimText(last.filePath) === filePath
+        && trimText(last.tool) === tool
+      ) {
+        last.at = new Date().toISOString();
+        last.hits = (last.hits || 1) + 1;
+        return;
+      }
+      const mergeWindowOpen = !!(
+        last
+        && last.phase === p
+        && last.title === t
+        && trimText(last.filePath) === filePath
+        && trimText(last.tool) === tool
+      );
+      if (mergeWindowOpen) {
         last.detail = d;
         last.at = new Date().toISOString();
         last.hits = (last.hits || 1) + 1;
@@ -194,7 +231,6 @@ function axonVoiceActivityFeedMixin() {
 
       const id = `af-${++_feedIdCounter}-${Date.now()}`;
       const icon = opts.icon || classifyIcon(p, t, opts.tool);
-      const filePath = opts.filePath || extractFilePath(detail);
       const entry = {
         id,
         phase: p,
@@ -202,7 +238,7 @@ function axonVoiceActivityFeedMixin() {
         detail: d,
         icon,
         filePath,
-        tool: trimText(opts.tool),
+        tool,
         at: new Date().toISOString(),
         hits: 1,
         animIndex: this._activityAnimCounter++,
@@ -216,6 +252,8 @@ function axonVoiceActivityFeedMixin() {
     clearActivityFeed() {
       this.voiceActivityFeed = [];
       this._activityAnimCounter = 0;
+      this._voiceArtifactCache = [];
+      this._voiceArtifactCacheSignature = '';
     },
 
     activityFeedEntries(limit = 8) {
@@ -234,6 +272,7 @@ function axonVoiceActivityFeedMixin() {
       if (terminalSession && (terminalCommand || terminalCwd || this.voiceTerminalSessionActive?.())) {
         pushUnique(cards, {
           key: `terminal:${terminalCwd || terminalCommand || 'session'}`,
+          surface: 'terminal',
           kind: terminalCwd ? 'folder' : '',
           path: terminalCwd,
           icon: ICONS.terminal,
@@ -241,7 +280,7 @@ function axonVoiceActivityFeedMixin() {
           title: clipText(trimText(terminalSession?.title || 'Live PTY shell'), 52),
           detail: clipText(terminalCommand || terminalCwd || 'Interactive shell connected.', 120),
           status: clipText(this.voiceTerminalStatusLabel?.() || 'Live shell', 28),
-          action: terminalCwd ? 'Open folder' : '',
+          action: 'Focus terminal',
         });
       }
 
@@ -294,20 +333,31 @@ function axonVoiceActivityFeedMixin() {
         + '<div class="voice-operator-deck__section-meta">What Axon is moving through right now</div>'
         + '</div>'
         + '<div class="voice-operator-deck__surface-grid">'
-        + cards.map(card => renderDeckLink(
+        + cards.map((card, index) => renderDeckLink(
           card,
           'voice-operator-deck__surface-card',
           `<div class="voice-operator-deck__surface-eyebrow">${escapeHtml(card.eyebrow)}</div>`
           + `<div class="voice-operator-deck__surface-title"><span>${escapeHtml(card.icon)}</span>${escapeHtml(card.title)}</div>`
           + `<div class="voice-operator-deck__surface-detail">${escapeHtml(card.detail)}</div>`
           + `<div class="voice-operator-deck__surface-meta"><span>${escapeHtml(card.status)}</span><span>${escapeHtml(card.action || 'Live')}</span></div>`
-        )).join('')
+        , index)).join('')
         + '</div>'
         + '</section>';
     },
 
     voiceArtifactEntries(limit = 6) {
+      const artifactLimit = Math.max(1, limit);
       const artifacts = [];
+      const latestMessage = typeof this.latestAssistantMessage === 'function'
+        ? this.latestAssistantMessage()
+        : (Array.isArray(this.chatMessages) ? [...this.chatMessages].reverse().find(message => message?.role === 'assistant') : null);
+      const latestMessageStreaming = !!latestMessage?.streaming;
+      const runActive = !!(
+        this.chatLoading
+        || this.liveOperator?.active
+        || latestMessageStreaming
+        || this.currentWorkspaceRunActive?.()
+      );
       const addArtifact = (value, options = {}) => {
         const path = cleanToken(value);
         if (!path) return;
@@ -328,14 +378,15 @@ function axonVoiceActivityFeedMixin() {
         openHrefPaths(value).forEach(path => addArtifact(path, options));
         urlTokens(value).forEach(url => addArtifact(url, { ...options, kind: options.kind || 'web' }));
         extractJsonPaths(value).forEach(path => addArtifact(path, options));
-        localPathTokens(value).forEach(path => addArtifact(path, options));
+        if (!options.explicitOnly) {
+          localPathTokens(value).forEach(path => addArtifact(path, options));
+        }
       };
 
-      const latestMessage = typeof this.latestAssistantMessage === 'function'
-        ? this.latestAssistantMessage()
-        : (Array.isArray(this.chatMessages) ? [...this.chatMessages].reverse().find(message => message?.role === 'assistant') : null);
-      collectArtifacts(latestMessage?.content || '', { source: 'Response' });
-      collectArtifacts(typeof this.voiceLatestResponseText === 'function' ? this.voiceLatestResponseText(800) : '', { source: 'Response' });
+      if (latestMessage && !latestMessageStreaming) {
+        collectArtifacts(latestMessage?.content || '', { source: 'Response' });
+        collectArtifacts(typeof this.voiceLatestResponseText === 'function' ? this.voiceLatestResponseText(800) : '', { source: 'Response' });
+      }
 
       this.activityFeedEntries(12).forEach(entry => {
         if (entry?.filePath) {
@@ -347,6 +398,7 @@ function axonVoiceActivityFeedMixin() {
         collectArtifacts(entry?.detail || '', {
           source: entry?.title || 'Activity',
           detail: entry?.detail || '',
+          explicitOnly: true,
         });
       });
 
@@ -354,10 +406,41 @@ function axonVoiceActivityFeedMixin() {
         collectArtifacts(entry?.detail || '', {
           source: entry?.title || 'Operator',
           detail: entry?.detail || '',
+          explicitOnly: true,
         });
       });
 
-      return artifacts.slice(0, Math.max(1, limit));
+      const nextArtifacts = artifacts.slice(0, artifactLimit);
+      const nextSignature = nextArtifacts.map(item => item.key).join('||');
+
+      if (nextArtifacts.length) {
+        if (runActive && nextSignature === this._voiceArtifactCacheSignature && Array.isArray(this._voiceArtifactCache) && this._voiceArtifactCache.length) {
+          return this._voiceArtifactCache.slice(0, artifactLimit).map(item => ({ ...item }));
+        }
+        if (nextSignature !== this._voiceArtifactCacheSignature || !runActive) {
+          const cachedByKey = new Map((this._voiceArtifactCache || []).map(item => [item.key, item]));
+          this._voiceArtifactCache = nextArtifacts.map((item) => {
+            if (!runActive) return { ...item };
+            const cached = cachedByKey.get(item.key);
+            return cached ? { ...cached } : { ...item };
+          });
+          this._voiceArtifactCacheSignature = nextSignature;
+        }
+        return runActive
+          ? this._voiceArtifactCache.slice(0, artifactLimit).map(item => ({ ...item }))
+          : nextArtifacts;
+      }
+
+      if (runActive && Array.isArray(this._voiceArtifactCache) && this._voiceArtifactCache.length) {
+        return this._voiceArtifactCache.slice(0, artifactLimit).map(item => ({ ...item }));
+      }
+
+      if (!runActive) {
+        this._voiceArtifactCache = [];
+        this._voiceArtifactCacheSignature = '';
+      }
+
+      return [];
     },
 
     voiceArtifactRailHtml(limit = 6) {
@@ -369,13 +452,13 @@ function axonVoiceActivityFeedMixin() {
         + '<div class="voice-operator-deck__section-meta">Documents, folders, and files Axon surfaced</div>'
         + '</div>'
         + '<div class="voice-operator-deck__artifact-rail">'
-        + artifacts.map(artifact => renderDeckLink(
+        + artifacts.map((artifact, index) => renderDeckLink(
           artifact,
           'voice-operator-deck__artifact',
           `<div class="voice-operator-deck__artifact-title"><span>${escapeHtml(artifact.icon)}</span>${escapeHtml(artifact.title)}</div>`
           + `<div class="voice-operator-deck__artifact-detail">${escapeHtml(artifact.detail)}</div>`
           + `<div class="voice-operator-deck__artifact-meta"><span>${escapeHtml(artifact.source)}</span><span>${escapeHtml(artifact.action)}</span></div>`
-        )).join('')
+        , index)).join('')
         + '</div>'
         + '</section>';
     },
@@ -401,7 +484,7 @@ function axonVoiceActivityFeedMixin() {
             const toolChip = e.tool
               ? `<span class="activity-feed__tool">${escapeHtml(e.tool)}</span>`
               : '';
-            return `<div class="activity-feed__entry activity-feed__entry--${phaseClass}${isNew ? ' activity-feed__entry--latest' : ''}" style="animation-delay:${i * 0.05}s">`
+            return `<div class="activity-feed__entry activity-feed__entry--${phaseClass}${isNew ? ' activity-feed__entry--latest' : ''}">`
               + `<div class="activity-feed__icon">${e.icon}</div>`
               + `<div class="activity-feed__body">`
               + `<div class="activity-feed__title">${escapeHtml(e.title)}${toolChip}${fileChip}</div>`

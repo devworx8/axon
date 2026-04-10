@@ -15,6 +15,7 @@ function axonVoiceMixin() {
       detail: '',
       state: {},
     },
+    voiceStatusLoading: false,
 
     // ── Computed-like helpers ──
     azureSpeechConfigured() {
@@ -40,6 +41,7 @@ function axonVoiceMixin() {
 
     async loadVoiceStatus(force = false) {
       if (!force && this._voiceStatusLoaded && !this._voiceStatusLoadFailed) return this.voiceStatus;
+      this.voiceStatusLoading = true;
       try {
         const status = await this.api('GET', '/api/voice/status');
         this.voiceStatus = status || this.voiceStatus;
@@ -56,6 +58,8 @@ function axonVoiceMixin() {
         };
         this._voiceStatusLoaded = true;
         this._voiceStatusLoadFailed = true;
+      } finally {
+        this.voiceStatusLoading = false;
       }
       this.refreshVoiceCapability();
       return this.voiceStatus;
@@ -123,6 +127,7 @@ function axonVoiceMixin() {
     },
 
     openVoiceCommandCenter() {
+      if (this.voiceFileViewer?.open) this.closeVoiceFileViewer?.();
       this.showVoiceOrb = true;
       this.switchTab('chat');
       this.refreshVoiceCapability();
@@ -142,6 +147,7 @@ function axonVoiceMixin() {
 
     closeVoiceCommandCenter(stopCapture = true) {
       this.showVoiceOrb = false;
+      if (this.voiceFileViewer?.open) this.closeVoiceFileViewer?.();
       this.stopVoiceSurfaceDirector?.();
       this._cancelNarrationQueue?.();
       this.clearVoiceAwaitingReply?.();
@@ -165,12 +171,13 @@ function axonVoiceMixin() {
       this.resetChatComposerHeight();
     },
 
-    async sendVoiceCommand(commandText = '') {
+    async sendVoiceCommand(commandText = '', options = {}) {
       const text = String(commandText || this.voiceTranscript || this.chatInput || '').trim();
+      const awaitCompletion = options?.awaitCompletion !== false;
       const workspaceBusy = typeof this.currentWorkspaceRunActive === 'function'
         ? this.currentWorkspaceRunActive()
         : !!this.chatLoading;
-      if (!text || workspaceBusy) return;
+      if (!text || workspaceBusy) return false;
       this.ensureVoiceDefaultConversationMode?.(text);
       this.onVoiceCommandDispatched?.(text);
       if (this.voiceActive) {
@@ -178,8 +185,16 @@ function axonVoiceMixin() {
       }
       this.chatInput = text;
       this.voiceTranscript = text;
-      await this.sendChat();
+      const sendPromise = Promise.resolve()
+        .then(() => this.sendChat());
+      if (!awaitCompletion) {
+        sendPromise.catch(() => {});
+        this.voiceTranscript = '';
+        return true;
+      }
+      await sendPromise;
       this.voiceTranscript = '';
+      return true;
     },
 
     voiceCenterStatusLabel() {

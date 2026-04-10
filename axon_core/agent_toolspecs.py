@@ -400,6 +400,81 @@ AGENT_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "generate_visual_document",
+            "description": "Create an editable SVG visual document with a print wrapper and optional PDF export. Use this for structured visuals like ECD cover pages, weekly learning overview figures, cycle diagrams, strategy grids, and classroom support posters.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "template": {"type": "string", "description": "Template id: ecd_cover_page, ecd_weekly_overview, ecd_cycle_diagram, ecd_strategy_grid, or ecd_support_poster"},
+                    "title": {"type": "string", "description": "Main title for the visual document"},
+                    "subtitle": {"type": "string", "description": "Optional subtitle or supporting line", "default": ""},
+                    "theme": {"type": "string", "description": "Optional theme badge text", "default": ""},
+                    "unit_standard": {"type": "string", "description": "Optional unit standard line for cover pages", "default": ""},
+                    "learner_name": {"type": "string", "description": "Optional learner name for cover pages", "default": ""},
+                    "centre_name": {"type": "string", "description": "Optional centre name for cover pages", "default": ""},
+                    "activity_date": {"type": "string", "description": "Optional activity date for cover pages", "default": ""},
+                    "compilation_date": {"type": "string", "description": "Optional compilation date for cover pages", "default": ""},
+                    "focus_areas": {"type": "array", "items": {"type": "string"}, "description": "Optional colored focus chips for cover pages"},
+                    "summary_lines": {"type": "array", "items": {"type": "string"}, "description": "Optional short summary bullets for cover pages"},
+                    "planning_principles": {"type": "array", "items": {"type": "string"}, "description": "Planning principles for weekly overview side panel"},
+                    "days": {"type": "array", "items": {"type": "string"}, "description": "Exactly five day labels for weekly overview"},
+                    "rows": {
+                        "type": "array",
+                        "description": "Weekly overview table rows",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string"},
+                                "values": {"type": "array", "items": {"type": "string"}},
+                            },
+                            "required": ["label", "values"],
+                        },
+                    },
+                    "center_title": {"type": "string", "description": "Optional center title for cycle diagrams", "default": ""},
+                    "center_subtitle": {"type": "string", "description": "Optional center subtitle for cycle diagrams", "default": ""},
+                    "steps": {
+                        "type": "array",
+                        "description": "Step cards for cycle diagrams or support posters",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "body": {"type": "string"},
+                                "number": {"type": "string"},
+                                "color": {"type": "string"},
+                                "accent": {"type": "string"},
+                            },
+                            "required": ["title", "body"],
+                        },
+                    },
+                    "cards": {
+                        "type": "array",
+                        "description": "Strategy grid cards",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "body": {"type": "string"},
+                                "color": {"type": "string"},
+                                "accent": {"type": "string"},
+                            },
+                            "required": ["title", "body"],
+                        },
+                    },
+                    "footer": {"type": "string", "description": "Optional footer message for strategy grids", "default": ""},
+                    "footer_title": {"type": "string", "description": "Optional footer box title for support posters", "default": ""},
+                    "footer_lines": {"type": "array", "items": {"type": "string"}, "description": "Optional footer bullets for support posters"},
+                    "output_dir": {"type": "string", "description": "Optional output directory", "default": ""},
+                    "file_stem": {"type": "string", "description": "Optional filename stem", "default": ""},
+                    "pdf": {"type": "boolean", "description": "Whether to export a PDF as well as SVG and print HTML", "default": True},
+                },
+                "required": ["template", "title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "remember",
             "description": (
                 "Persist a named note in agent memory. Use this to save important facts, decisions, "

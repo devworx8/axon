@@ -1,7 +1,9 @@
     <!-- ═══════════════════════════════════════════════════════════
          TAB: DASHBOARD
     ════════════════════════════════════════════════════════════ -->
-    <div x-show="activeTab === 'dashboard'" class="dashboard-page flex flex-col h-full">
+    <div x-show="activeTab === 'dashboard'" class="dashboard-page flex flex-col h-full"
+         x-init="ensureDashboardLayoutState?.()"
+         :class="dashboardPageClass?.()">
       <div class="hidden md:flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/50 desktop-header-glass">
         <div class="flex items-center gap-3">
           <span class="stark-heartbeat" :class="missionLiveOperator().active ? '' : 'idle'"></span>
@@ -9,6 +11,12 @@
           <span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] text-slate-400 uppercase tracking-wider">Control Room</span>
         </div>
         <div class="flex items-center gap-3 text-[11px]">
+          <button @click="toggleDashboardCompact()"
+                  class="flex items-center gap-1.5 rounded-full border px-3 py-1 transition press-scale"
+                  :class="dashboardCompact ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300' : 'border-slate-700 bg-slate-950/60 text-slate-400 hover:border-cyan-500/20 hover:text-cyan-300'"
+                  :title="dashboardCompactLabel()">
+            <span class="text-[10px] uppercase tracking-[0.16em]">Compact</span>
+          </button>
           <button @click="openVoiceCommandCenter()"
                   class="flex items-center gap-1.5 rounded-full border px-3 py-1 transition press-scale"
                   :class="showVoiceOrb ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300' : 'border-slate-700 bg-slate-950/60 text-slate-400 hover:border-cyan-500/20 hover:text-cyan-300'"

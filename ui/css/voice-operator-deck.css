@@ -149,7 +149,20 @@
   border-radius: 1rem;
   padding: 0.85rem 0.9rem;
   color: rgba(226, 232, 240, 0.96);
+  position: relative;
+  overflow: hidden;
   transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.voice-operator-deck__surface-card::after,
+.voice-operator-deck__artifact::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 12%, rgba(34, 211, 238, 0.08) 42%, transparent 76%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
 }
 
 .voice-operator-deck__surface-card:hover,
@@ -157,6 +170,11 @@
   transform: translateY(-1px);
   border-color: rgba(34, 211, 238, 0.3);
   box-shadow: 0 14px 34px rgba(8, 47, 73, 0.22);
+}
+
+.voice-operator-deck__surface-card:hover::after,
+.voice-operator-deck__artifact:hover::after {
+  opacity: 1;
 }
 
 .voice-operator-deck__surface-eyebrow {
@@ -259,7 +277,6 @@
   border: 1px solid rgba(30, 41, 59, 0.88);
   background: rgba(2, 6, 23, 0.5);
   padding: 0.75rem 0.85rem;
-  animation: voice-step-enter 320ms ease both;
 }
 
 .voice-operator-deck__step-phase {

@@ -11,6 +11,13 @@
   position: relative;
   backdrop-filter: blur(18px);
 }
+.voice-rail--left .voice-surface-spotlight {
+  width: min(100%, 360px);
+  margin: 0;
+}
+.voice-command-center--dock-open .voice-surface-spotlight {
+  margin-bottom: 8px;
+}
 
 .voice-surface-spotlight::before {
   content: "";

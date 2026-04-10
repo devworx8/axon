@@ -7,18 +7,30 @@ function axonChatSlashCommandsMixin() {
     '/research': { label: 'Research mode', run(app) { app.chooseConversationModeResearch?.(); } },
   };
 
+  const slashCommandEntries = () => [
+    { command: '/help', detail: 'Show the command palette' },
+    { command: '/ask', detail: 'Switch Axon to Ask mode' },
+    { command: '/agent', detail: 'Switch Axon to Agent mode' },
+    { command: '/auto', detail: 'Switch Axon to Autonomous mode' },
+    { command: '/code', detail: 'Switch Axon to Code mode' },
+    { command: '/research', detail: 'Switch Axon to Research mode' },
+    { command: '/voice', detail: 'Open the voice command center and arm auto-speak' },
+    { command: '/deploy', detail: 'Prepare the Vercel deploy lane' },
+    { command: '/deploy expo', detail: 'Prepare the Expo and EAS deploy lane' },
+    { command: '/preview', detail: 'Start or attach the live preview panel' },
+    { command: '/status', detail: 'Show the active workspace, runtime, and permission posture' },
+  ];
+
   const helperCopy = () => [
     'Slash commands:',
-    '- `/help` show the command palette',
-    '- `/ask`, `/agent`, `/auto`, `/code`, `/research` switch Axon modes',
-    '- `/voice` open the voice command center and arm auto-speak',
-    '- `/deploy` prepare the Vercel deploy lane',
-    '- `/deploy expo` prepare the Expo and EAS deploy lane',
-    '- `/preview` start or attach the live preview panel',
-    '- `/status` show the active workspace, runtime, and permission posture',
+    ...slashCommandEntries().map((entry) => `- \`${entry.command}\` ${entry.detail.charAt(0).toLowerCase()}${entry.detail.slice(1)}`),
   ].join('\n');
 
   return {
+    slashCommandEntries() {
+      return slashCommandEntries();
+    },
+
     slashCommandHelpText() {
       return helperCopy();
     },

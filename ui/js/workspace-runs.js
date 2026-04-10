@@ -4,6 +4,35 @@
 
 function axonWorkspaceRunsMixin() {
   const LIVE_OPERATOR_FEED_LIMIT = 12;
+  const collapseLiveOperatorFeed = (rows = []) => {
+    const collapsed = [];
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const entry = {
+        id: String(row?.id || `${row?.at || Date.now()}-${row?.phase || 'observe'}`),
+        phase: String(row?.phase || 'observe'),
+        title: String(row?.title || 'Working'),
+        detail: String(row?.detail || ''),
+        at: String(row?.at || new Date().toISOString()),
+      };
+      const last = collapsed[collapsed.length - 1];
+      const mergeable = !!(
+        last
+        && last.phase === entry.phase
+        && last.title === entry.title
+      );
+      if (mergeable) {
+        collapsed[collapsed.length - 1] = {
+          ...last,
+          id: entry.id,
+          detail: entry.detail,
+          at: entry.at,
+        };
+        return;
+      }
+      collapsed.push(entry);
+    });
+    return collapsed.slice(-LIVE_OPERATOR_FEED_LIMIT);
+  };
 
   const defaultLiveOperator = (workspaceId = '') => ({
     active: false,
@@ -98,6 +127,17 @@ function axonWorkspaceRunsMixin() {
       return match.key;
     },
 
+    canFollowLiveWorkspace() {
+      return !!this.firstOtherActiveWorkspaceId();
+    },
+
+    followLiveWorkspace() {
+      const workspaceId = this.firstOtherActiveWorkspaceId();
+      if (!workspaceId) return '';
+      this.activateWorkspaceTab?.(workspaceId);
+      return workspaceId;
+    },
+
     crossWorkspaceAgentLabel() {
       if (!this.chatLoading || this.isChatLoadingHere()) return '';
       const otherRuns = this.activeWorkspaceRuns().filter(run => run.workspaceId !== String(this.chatProjectId || '').trim());
@@ -189,6 +229,24 @@ function axonWorkspaceRunsMixin() {
       };
       const last = state.liveOperatorFeed[state.liveOperatorFeed.length - 1];
       if (last && last.phase === entry.phase && last.title === entry.title && last.detail === entry.detail) return;
+      const mergeable = !!(
+        last
+        && last.phase === entry.phase
+        && last.title === entry.title
+      );
+      if (mergeable) {
+        state.liveOperatorFeed = [
+          ...state.liveOperatorFeed.slice(0, -1),
+          {
+            ...last,
+            id: entry.id,
+            detail: entry.detail,
+            at: entry.at,
+          },
+        ];
+        this.refreshWorkspaceRunBindings();
+        return;
+      }
       state.liveOperatorFeed = [...state.liveOperatorFeed.slice(-(LIVE_OPERATOR_FEED_LIMIT - 1)), entry];
       this.refreshWorkspaceRunBindings();
     },
@@ -298,13 +356,7 @@ function axonWorkspaceRunsMixin() {
         updatedAt: snapshot.updated_at || state.liveOperator.updatedAt || new Date().toISOString(),
       });
       if (Array.isArray(snapshot.feed) && snapshot.feed.length) {
-        state.liveOperatorFeed = snapshot.feed.slice(-LIVE_OPERATOR_FEED_LIMIT).map(entry => ({
-          id: String(entry?.id || `${entry?.at || Date.now()}-${entry?.phase || 'observe'}`),
-          phase: String(entry?.phase || 'observe'),
-          title: String(entry?.title || 'Working'),
-          detail: String(entry?.detail || ''),
-          at: String(entry?.at || new Date().toISOString()),
-        }));
+        state.liveOperatorFeed = collapseLiveOperatorFeed(snapshot.feed);
       }
       this.refreshWorkspaceRunBindings();
     },

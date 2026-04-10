@@ -28,9 +28,11 @@ function axonVoiceCommandCenterMixin() {
   };
 
   const decorateVoiceResponseLinks = (html = '') => {
+    let chipIndex = 0;
     return String(html || '').replace(/<a\b([^>]*)href="([^"]+)"([^>]*)>([\s\S]*?)<\/a>/gi, (match, beforeHref, href, afterHref, body) => {
       const localPath = extractLocalPathFromHref(href);
       if (!localPath) return match;
+      const stagger = chipIndex++ * 80;
       let attrs = `${beforeHref || ''} href="${escapeAttr(href)}"${afterHref || ''}`;
       if (/class="/i.test(attrs)) {
         attrs = attrs.replace(/class="([^"]*)"/i, (_classMatch, classValue) => `class="${escapeAttr(`${classValue} voice-file-chip`.trim())}"`);
@@ -39,6 +41,16 @@ function axonVoiceCommandCenterMixin() {
       }
       if (!/data-voice-path="/i.test(attrs)) {
         attrs += ` data-voice-path="${escapeAttr(localPath)}"`;
+      }
+      if (!/data-voice-animate="/i.test(attrs)) {
+        attrs += ' data-voice-animate="1"';
+      }
+      if (/style="/i.test(attrs)) {
+        attrs = attrs.replace(/style="([^"]*)"/i, (_styleMatch, styleValue) => (
+          `style="${escapeAttr(`${styleValue}; --voice-stagger:${stagger}ms`.replace(/;;/g, ';'))}"`
+        ));
+      } else {
+        attrs += ` style="--voice-stagger:${stagger}ms"`;
       }
       return `<a${attrs}>${body}</a>`;
     });
@@ -173,7 +185,7 @@ function axonVoiceCommandCenterMixin() {
       await this.startVoice();
     },
 
-    async dispatchVoiceCommand(commandText = '') {
+    async dispatchVoiceCommand(commandText = '', options = {}) {
       const raw = String(commandText || this.voiceTranscript || this.chatInput || '').trim();
       const normalize = window.axonVoiceSpeech?.normalizeCommandText;
       const text = normalize ? normalize(raw) : raw;
@@ -205,8 +217,7 @@ function axonVoiceCommandCenterMixin() {
         return true;
       }
 
-      await this.sendVoiceCommand?.(text);
-      return true;
+      return (await this.sendVoiceCommand?.(text, options)) !== false;
     },
 
     voiceRecordingActive() {
@@ -239,10 +250,15 @@ function axonVoiceCommandCenterMixin() {
     },
 
     voiceTaskSurfaceActive() {
-      return !!(
+      const activeNow = !!(
         this.voiceShouldRenderOperatorDeck?.()
         || (this.chatLoading && this.liveOperator?.active)
       );
+      if (activeNow) {
+        this._voiceTaskSurfaceHoldUntil = Date.now() + 25000;
+        return true;
+      }
+      return Number(this._voiceTaskSurfaceHoldUntil || 0) > Date.now();
     },
 
     voiceResponseAvailable() {
@@ -273,23 +289,33 @@ function axonVoiceCommandCenterMixin() {
 
     voiceTaskSurfaceHtml() {
       const taskSurfaceActive = this.voiceTaskSurfaceActive();
-      if (!taskSurfaceActive) return '';
+      if (!taskSurfaceActive) {
+        this._voiceTaskSurfaceLastHtml = '';
+        return '';
+      }
+      let html = '';
       if (typeof this.voiceOperatorDeckHtml === 'function') {
-        const html = this.voiceOperatorDeckHtml();
-        if (html) return html;
+        html = this.voiceOperatorDeckHtml();
       }
-      if (typeof this.voiceConversationFeedHtml === 'function') {
-        const html = this.voiceConversationFeedHtml();
-        if (html) return html;
+      if (!trimText(html) && typeof this.voiceConversationFeedHtml === 'function') {
+        html = this.voiceConversationFeedHtml();
       }
-      if (typeof this.voiceLiveOperatorFeedHtml === 'function') {
-        return this.voiceLiveOperatorFeedHtml() || '';
+      if (!trimText(html) && typeof this.voiceLiveOperatorFeedHtml === 'function') {
+        html = this.voiceLiveOperatorFeedHtml() || '';
       }
-      return '';
+      if (trimText(html)) {
+        this._voiceTaskSurfaceLastHtml = html;
+        return html;
+      }
+      return trimText(this._voiceTaskSurfaceLastHtml || '') ? this._voiceTaskSurfaceLastHtml : '';
     },
 
     voiceResponseRenderClass() {
       return this.voiceTaskSurfaceActive() ? '' : 'voice-response-render';
+    },
+
+    decorateVoiceResponseHtml(html = '') {
+      return decorateVoiceResponseLinks(html);
     },
 
     /** Render response as HTML with markdown + file path chips */
@@ -324,7 +350,7 @@ function axonVoiceCommandCenterMixin() {
         // Fallback: escape HTML and convert newlines
         html = raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
       }
-      return decorateVoiceResponseLinks(html);
+      return this.decorateVoiceResponseHtml(html);
     },
 
     voiceCanClear() {

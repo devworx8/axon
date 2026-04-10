@@ -3,8 +3,9 @@
    Rich task-mode telemetry, blocker states, and command-deck UX.
    ============================================================= */
 function axonVoiceOperatorDeckMixin() {
-  const OPERATOR_DECK_HOLD_MS = 3200;
-  const RECENT_OPERATOR_FEED_MS = 6000;
+  const OPERATOR_DECK_HOLD_MS = 12000;
+  const RECENT_OPERATOR_FEED_MS = 20000;
+  const RECENT_OPERATOR_UPDATE_MS = 20000;
   const phaseToneMap = {
     observe: 'slate',
     plan: 'cyan',
@@ -58,6 +59,11 @@ function axonVoiceOperatorDeckMixin() {
     const stamp = Date.parse(String(latest.at || ''));
     if (!Number.isFinite(stamp)) return true;
     return (Date.now() - stamp) <= RECENT_OPERATOR_FEED_MS;
+  };
+  const hasRecentOperatorUpdate = (ctx) => {
+    const stamp = Date.parse(String(ctx.liveOperator?.updatedAt || ctx.liveOperator?.startedAt || ''));
+    if (!Number.isFinite(stamp)) return false;
+    return (Date.now() - stamp) <= RECENT_OPERATOR_UPDATE_MS;
   };
   const sessionRunning = (session = null) => {
     if (!session || typeof session !== 'object') return false;
@@ -198,6 +204,8 @@ function axonVoiceOperatorDeckMixin() {
         || hasStreamingBlocks(this)
         || hasActiveAgentStream(this)
         || hasRecentOperatorFeed(this)
+        || hasRecentOperatorUpdate(this)
+        || this.voiceFileRevealActive?.()
       );
       if (activeNow) {
         this.voiceOperatorDeck.holdUntil = Date.now() + OPERATOR_DECK_HOLD_MS;
@@ -219,8 +227,8 @@ function axonVoiceOperatorDeckMixin() {
       const lastCommand = trimText(this.voiceConversation?.lastCommand);
       const feedGoal = extractGoalFromFeed(Array.isArray(this.liveOperatorFeed) ? this.liveOperatorFeed : []);
       const autoSession = activeAutoSession(this);
-      const liveGoal = trimText(this.liveOperator?.summary || this.liveOperator?.detail || this.liveOperator?.title);
-      return feedGoal || liveGoal || trimText(autoSession?.title || autoSession?.detail) || draft || lastCommand || 'Awaiting command';
+      const liveGoal = trimText(this.liveOperator?.summary || this.liveOperator?.title);
+      return feedGoal || draft || lastCommand || liveGoal || trimText(autoSession?.title || autoSession?.detail) || 'Awaiting command';
     },
 
     voiceOperatorPhase() {
@@ -254,7 +262,12 @@ function axonVoiceOperatorDeckMixin() {
       if (active) return active;
       const event = latestCommandEvent(this.voiceTerminalEvents?.(8) || []);
       const content = trimText(event?.content);
-      return content.startsWith('$ ') ? content.slice(2) : content;
+      if (content) return content.startsWith('$ ') ? content.slice(2) : content;
+      const tool = trimText(this.liveOperator?.tool);
+      if (tool) {
+        return this.prettyToolName?.(tool) || tool;
+      }
+      return '';
     },
 
     voiceOperatorBlocker() {
@@ -343,16 +356,32 @@ function axonVoiceOperatorDeckMixin() {
     voiceOperatorTimeline(limit = 5) {
       const feed = Array.isArray(this.liveOperatorFeed) ? this.liveOperatorFeed : [];
       if (!feed.length) return [];
-      return [...feed]
-        .slice(-Math.max(1, limit))
-        .reverse()
-        .map((entry) => ({
+      const collapsed = [];
+      feed.forEach((entry) => {
+        const normalized = {
           id: entry.id || `${entry.at || Date.now()}-${entry.phase || 'observe'}`,
           phase: trimText(entry.phase || 'observe').toLowerCase() || 'observe',
           title: trimText(entry.title || 'Working'),
           detail: trimText(entry.detail || ''),
           at: trimText(entry.at || ''),
-        }));
+        };
+        const last = collapsed[collapsed.length - 1];
+        if (
+          last
+          && last.phase === normalized.phase
+          && last.title === normalized.title
+        ) {
+          last.id = normalized.id;
+          last.detail = normalized.detail || last.detail;
+          last.at = normalized.at || last.at;
+          return;
+        }
+        collapsed.push(normalized);
+      });
+      return collapsed
+        .slice(-Math.max(1, limit))
+        .reverse()
+        .map((entry) => ({ ...entry }));
     },
 
     voiceCommandDeckTitle() {
@@ -387,7 +416,26 @@ function axonVoiceOperatorDeckMixin() {
     voiceCommandDeckSubmitLabel() {
       this.ensureVoiceOperatorDeckState();
       const intent = this.voiceOperationalIntent();
+      if (this.voiceTextDockHasImages?.() && !this.voiceTextDockDraftText?.()) {
+        return (this.imageAttachments || []).length > 1 ? 'Review images' : 'Review image';
+      }
       return intent.active ? 'Run task' : 'Send';
+    },
+
+    voiceCommandDeckSubmitDetail() {
+      this.ensureVoiceOperatorDeckState();
+      const text = trimText(this.voiceTextDockDraftText?.() || '');
+      const count = Math.max(0, (this.imageAttachments || []).length);
+      if (count && !text) {
+        return count === 1
+          ? 'Axon will inspect the attached image'
+          : `Axon will inspect ${count} attached images`;
+      }
+      if (count) {
+        return count === 1 ? 'Includes 1 image' : `Includes ${count} images`;
+      }
+      const intent = this.voiceOperationalIntent();
+      return intent.active ? 'Inspect first, then act' : 'Send to Axon';
     },
 
     voiceTextDockLabel() {
@@ -406,10 +454,10 @@ function axonVoiceOperatorDeckMixin() {
       this.ensureVoiceOperatorDeckState();
       const intent = this.voiceOperationalIntent();
       if (intent.active) {
-        return 'Describe the outcome you want. Axon will inspect first, then act and open the live terminal.';
+        return 'Describe the outcome you want, or add a screenshot for context. Axon will inspect first, then act and open the live terminal.';
       }
-      if (this.voiceActive) return 'Microphone is live. You can still type here.';
-      return 'Type a command for Axon when voice is unavailable...';
+      if (this.voiceActive) return 'Microphone is live. You can still type here or attach an image.';
+      return 'Type a command for Axon, or attach an image for review...';
     },
 
     onVoiceCommandDispatched(text = '') {
@@ -460,7 +508,7 @@ function axonVoiceOperatorDeckMixin() {
       }
     },
 
-    voiceLiveOperatorFeedHtml() {
+    voiceOperatorDeckHtml() {
       if (!this.voiceShouldRenderOperatorDeck()) return '';
       const tone = escapeHtml(this.voiceOperatorTone());
       const goal = escapeHtml(this.voiceOperatorGoal());
@@ -486,7 +534,7 @@ function axonVoiceOperatorDeckMixin() {
           + `</div>`
         : '';
       const timelineHtml = this.voiceOperatorTimeline(5).map((entry, index) => (
-        `<div class="voice-operator-deck__step voice-operator-deck__step--${escapeHtml(entry.phase)}" style="animation-delay:${index * 0.06}s">`
+        `<div class="voice-operator-deck__step voice-operator-deck__step--${escapeHtml(entry.phase)}">`
         + `<div class="voice-operator-deck__step-phase">${escapeHtml(phaseLabel(entry.phase))}</div>`
         + `<div class="voice-operator-deck__step-copy">`
         + `<div class="voice-operator-deck__step-title">${escapeHtml(entry.title)}</div>`
@@ -523,6 +571,10 @@ function axonVoiceOperatorDeckMixin() {
         + `<div class="voice-operator-deck__timeline">${timelineHtml || '<div class="voice-operator-deck__empty">Axon is waiting for live execution events.</div>'}</div>`
         + responsePreview
         + `</div>`;
+    },
+
+    voiceLiveOperatorFeedHtml() {
+      return this.voiceOperatorDeckHtml();
     },
   };
 }

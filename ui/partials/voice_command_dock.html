@@ -1,4 +1,4 @@
-      <div class="voice-command-dock" :class="voiceConversation.textDockOpen ? 'voice-command-dock--active' : ''" x-show="showVoiceOrb" x-transition>
+      <div class="voice-command-dock" :class="voiceConversation.textDockOpen ? 'voice-command-dock--active' : ''" x-show="showVoiceOrb && (voiceConversation.textDockOpen || !isMobile)" x-transition>
         <button class="voice-command-dock__toggle" @click="toggleVoiceTextDock()">
           <span class="voice-control-chip__dot"></span>
           <span class="voice-command-dock__toggle-label">
@@ -24,38 +24,132 @@
             <button class="voice-command-dock__btn" @click="toggleVoiceTextDock(false)">Close</button>
           </div>
 
-          <div class="voice-command-dock__input-wrap" style="position:relative;">
+          <div class="voice-command-dock__toolbar">
+            <div class="voice-command-dock__toolbar-copy">
+              <div class="voice-command-dock__section-label">Attach context</div>
+              <div class="voice-command-dock__tool-hint" x-text="imageAttachmentSummary()"></div>
+            </div>
+            <div class="voice-command-dock__picker-row">
+              <label class="voice-command-dock__tool voice-command-dock__tool--picker">
+                <input class="voice-command-dock__file-input"
+                       type="file"
+                       accept="image/*"
+                       multiple
+                       @change="handleImageFileInput($event)" />
+                <span class="voice-command-dock__tool-icon">▣</span>
+                <span class="voice-command-dock__tool-copy">
+                  <span class="voice-command-dock__tool-title" x-text="imageAttachments.length ? imageAttachments.length + ' image' + (imageAttachments.length === 1 ? '' : 's') + ' ready' : 'Photo library'"></span>
+                  <span class="voice-command-dock__tool-detail">Pick screenshots or saved images</span>
+                </span>
+              </label>
+              <label class="voice-command-dock__tool voice-command-dock__tool--picker voice-command-dock__tool--camera">
+                <input class="voice-command-dock__file-input"
+                       type="file"
+                       accept="image/*"
+                       capture="environment"
+                       @change="handleImageFileInput($event)" />
+                <span class="voice-command-dock__tool-icon">◉</span>
+                <span class="voice-command-dock__tool-copy">
+                  <span class="voice-command-dock__tool-title">Camera</span>
+                  <span class="voice-command-dock__tool-detail">Shoot and attach instantly</span>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <div class="voice-command-dock__attachments" x-show="imageAttachments.length">
+            <template x-for="img in imageAttachments" :key="img.id">
+              <div class="voice-command-dock__attachment">
+                <button class="voice-command-dock__attachment-preview"
+                        @click="openLightbox(img.dataUrl, img.name)">
+                  <img :src="img.dataUrl" :alt="img.name || 'Attached image'" />
+                </button>
+                <div class="voice-command-dock__attachment-copy">
+                  <div class="voice-command-dock__attachment-name" x-text="img.name || 'Image attachment'"></div>
+                  <div class="voice-command-dock__attachment-meta" x-text="imageAttachmentMetaLabel(img)"></div>
+                </div>
+                <button class="voice-command-dock__attachment-remove"
+                        @click="removeImageAttachment(img.id)"
+                        title="Remove image">
+                  Remove
+                </button>
+              </div>
+            </template>
+          </div>
+
+          <div class="voice-command-dock__input-wrap"
+               :class="imageDragOver ? 'voice-command-dock__input-wrap--drag' : ''">
+            <div class="voice-command-dock__composer-hud">
+              <div class="voice-command-dock__signal-row">
+                <span class="voice-command-dock__signal"
+                      :class="(voiceConversation.textDraft || '').trim() ? 'voice-command-dock__signal--active' : ''"
+                      x-text="(voiceConversation.textDraft || '').trim() ? 'Draft ready' : 'Start typing'"></span>
+                <span class="voice-command-dock__signal voice-command-dock__signal--active"
+                      x-show="imageAttachments.length"
+                      x-text="imageAttachments.length + ' image' + (imageAttachments.length === 1 ? '' : 's')"></span>
+              </div>
+              <span class="voice-command-dock__char-count"
+                    :class="(voiceConversation.textDraft || '').length > 3600 ? ((voiceConversation.textDraft || '').length > 3900 ? 'voice-command-dock__char-count--over' : 'voice-command-dock__char-count--warn') : ''"
+                    x-text="(voiceConversation.textDraft || '').length + ' / 4000'"></span>
+            </div>
             <textarea
               x-ref="voiceTextDockInput"
               class="voice-command-dock__textarea"
               x-model="voiceConversation.textDraft"
               :placeholder="voiceTextDockPlaceholder()"
-              @keydown.meta.enter.prevent="submitVoiceTextDock()"
-              @keydown.ctrl.enter.prevent="submitVoiceTextDock()"
-              @keydown.escape.prevent="toggleVoiceTextDock(false)"
-              @keydown.tab.prevent="voiceTextDockAutocomplete()"
+              @keydown="handleVoiceTextDockKeydown($event)"
+              @paste="handleImagePaste($event)"
+              @drop="handleImageDrop($event)"
+              @dragover="handleImageDragOver($event)"
+              @dragleave="handleImageDragLeave()"
               rows="3"
               maxlength="4000"></textarea>
-            <span class="voice-command-dock__char-count"
-                  :class="(voiceConversation.textDraft || '').length > 3600 ? ((voiceConversation.textDraft || '').length > 3900 ? 'voice-command-dock__char-count--over' : 'voice-command-dock__char-count--warn') : ''"
-                  x-text="(voiceConversation.textDraft || '').length + ' / 4000'"></span>
           </div>
 
-          <div class="voice-command-dock__prompts">
+          <div class="voice-command-dock__shortcuts" x-text="voiceTextDockShortcutHint()"></div>
+
+          <div class="voice-command-dock__preview" x-show="voiceTextDockPreviewVisible()">
+            <div class="voice-command-dock__preview-header">
+              <div class="voice-command-dock__section-label" x-text="voiceTextDockPreviewLabel()"></div>
+              <div class="voice-command-dock__preview-meta" x-text="voiceCommandDeckMeta()"></div>
+            </div>
+            <div class="voice-command-dock__preview-body" x-html="voiceTextDockPreviewHtml()"></div>
+          </div>
+
+          <div class="voice-command-dock__slash" x-show="voiceTextDockSlashMatches().length">
+            <div class="voice-command-dock__section-label">Slash commands</div>
+            <div class="voice-command-dock__slash-list">
+              <template x-for="item in voiceTextDockSlashMatches()" :key="item.command">
+                <button class="voice-command-dock__slash-item" @click="applyVoiceSlashCommand(item.command)">
+                  <span class="voice-command-dock__slash-command" x-text="item.command"></span>
+                  <span class="voice-command-dock__slash-detail" x-text="item.detail"></span>
+                </button>
+              </template>
+            </div>
+          </div>
+
+          <div class="voice-command-dock__prompts" x-show="!voiceTextDockSlashMatches().length">
             <template x-for="prompt in voiceQuickPrompts()" :key="prompt">
               <button class="voice-command-dock__prompt" @click="applyVoiceQuickPrompt(prompt)" x-text="prompt"></button>
             </template>
           </div>
 
           <div class="voice-command-dock__actions">
-            <div class="voice-command-dock__meta" x-text="voiceCommandDeckMeta()"></div>
+            <div class="voice-command-dock__meta-block">
+              <div class="voice-command-dock__meta" x-text="voiceCommandDeckMeta()"></div>
+              <div class="voice-command-dock__send-copy">Send clears the dock immediately while Axon continues working in the background.</div>
+            </div>
             <div class="voice-command-dock__buttons">
-              <button class="voice-command-dock__btn" @click="startVoiceListening()">Listen</button>
-              <button class="voice-command-dock__btn" @click="clearVoiceTextDock(true)">Clear</button>
-              <button class="voice-command-dock__btn voice-command-dock__btn--primary"
-                      :disabled="chatLoading || !(voiceConversation.textDraft || '').trim()"
-                      @click="submitVoiceTextDock()"
-                      x-text="voiceCommandDeckSubmitLabel()"></button>
+              <div class="voice-command-dock__buttons-secondary">
+                <button class="voice-command-dock__btn" @click="startVoiceListening()">Listen</button>
+                <button class="voice-command-dock__btn" @click="clearVoiceTextDock(true)">Clear</button>
+              </div>
+              <button class="voice-command-dock__btn voice-command-dock__btn--primary voice-command-dock__btn--send"
+                      :disabled="chatLoading || !voiceTextDockHasContent()"
+                      @click="submitVoiceTextDock()">
+                <span class="voice-command-dock__btn-label" x-text="voiceCommandDeckSubmitLabel()"></span>
+                <span class="voice-command-dock__btn-detail" x-text="voiceCommandDeckSubmitDetail()"></span>
+              </button>
             </div>
           </div>
         </div>

@@ -29,7 +29,7 @@ function axonFilesMixin() {
       if (parent && parent !== this.filePath) this.loadFiles(parent);
     },
     async openFile(item) {
-      if (item.size > 512 * 1024) { this.showToast('File too large (>512KB)'); return; }
+      if (item.size > 5 * 1024 * 1024) { this.showToast('File too large (>5MB)'); return; }
       try {
         const d = await this.api('GET', `/api/files/read?path=${encodeURIComponent(item.path)}`);
         this.fileOpenPath = item.path;

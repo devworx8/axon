@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TERMINAL_XTERM_JS = ROOT / "ui/js/terminal-xterm.js"
+TERMINAL_JS = ROOT / "ui/js/terminal.js"
 CHAT_TERMINAL_PANEL = ROOT / "ui/partials/chat_terminal_panel.html"
 VOICE_TERMINAL_HUD = ROOT / "ui/partials/voice_terminal_hud.html"
 
@@ -30,6 +31,7 @@ def _run_terminal_script(body: str):
         ctx.globalThis = ctx;
         vm.createContext(ctx);
         vm.runInContext(fs.readFileSync({json.dumps(str(TERMINAL_XTERM_JS))}, 'utf8'), ctx);
+        vm.runInContext(fs.readFileSync({json.dumps(str(TERMINAL_JS))}, 'utf8'), ctx);
         {body}
         """
     )
@@ -115,6 +117,61 @@ class TerminalFrontendTests(unittest.TestCase):
             payload["detail"],
             "Authentication required. Unlock Axon again to attach the interactive shell.",
         )
+
+    def test_terminal_xterm_exposes_live_command_and_meta_summary(self):
+        payload = _run_terminal_script(
+            """
+            const mixin = ctx.window.axonTerminalXtermMixin();
+            const app = {
+              terminal: {
+                mode: 'workspace_write',
+                sessionDetail: {
+                  title: 'Deploy shell',
+                  cwd: '/home/edp/.devbrain',
+                  status: 'running',
+                  active_command: 'npm run dev -- --host 0.0.0.0',
+                  last_output_at: '2026-04-10T10:00:00Z',
+                },
+              },
+              currentTerminalSession() {
+                return this.terminal.sessionDetail;
+              },
+              timeAgo(value) {
+                return value === '2026-04-10T10:00:00Z' ? 'just now' : value;
+              },
+            };
+            Object.assign(app, mixin);
+            console.log(JSON.stringify({
+              headline: app.terminalViewportHeadline('console'),
+              meta: app.terminalViewportMeta('console'),
+            }));
+            """
+        )
+
+        self.assertIn("Live command: npm run dev", payload["headline"])
+        self.assertEqual(payload["meta"][0]["label"], "Status")
+        self.assertEqual(payload["meta"][0]["tone"], "live")
+        self.assertTrue(any(item["label"] == "Command" for item in payload["meta"]))
+        self.assertTrue(any(item["label"] == "Scope" for item in payload["meta"]))
+        self.assertTrue(any(item["label"] == "Updated" and item["value"] == "just now" for item in payload["meta"]))
+
+    def test_terminal_command_dispatch_marks_shell_commands_as_pty_required(self):
+        payload = _run_terminal_script(
+            """
+            const mixin = ctx.window.axonTerminalCommandDispatchMixin();
+            const app = {};
+            Object.assign(app, mixin);
+            console.log(JSON.stringify({
+              git: app.terminalCommandRequiresPty('git add -A'),
+              python: app.terminalCommandRequiresPty('python3 -m pytest'),
+              echo: app.terminalCommandRequiresPty('echo hello'),
+            }));
+            """
+        )
+
+        self.assertTrue(payload["git"])
+        self.assertTrue(payload["python"])
+        self.assertFalse(payload["echo"])
 
     def test_chat_terminal_panel_contains_console_xterm_mount(self):
         template = CHAT_TERMINAL_PANEL.read_text(encoding="utf-8")

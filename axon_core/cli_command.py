@@ -22,7 +22,7 @@ def build_cli_command(
     command.append("-p")
     if stream_json:
         command.extend([
-            "--input-format", "stream-json",
+            "--input-format", "text",
             "--output-format", "stream-json",
             "--include-partial-messages",
             "--verbose",

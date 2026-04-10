@@ -315,8 +315,8 @@ class IntegrationToolsRouteHandlers:
         if target.is_dir():
             raise HTTPException(400, "Path is a directory — use /browse")
         size = target.stat().st_size
-        if size > 512 * 1024:
-            raise HTTPException(413, f"File too large ({size // 1024}KB > 512KB limit)")
+        if size > 5 * 1024 * 1024:
+            raise HTTPException(413, f"File too large ({size // 1024}KB > 5120KB limit)")
         try:
             content = target.read_text(encoding="utf-8", errors="replace")
         except PermissionError:

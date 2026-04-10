@@ -27,6 +27,169 @@ function axonVoiceFileViewerMixin() {
       parent: '',
       loading: false,
       error: '',
+      notice: '',
+      lastManualAt: 0,
+      autoOpened: false,
+    },
+    voiceFileReveal: {
+      queue: [],
+      timerId: null,
+      pausedUntil: 0,
+      lastOpenAt: 0,
+      active: false,
+    },
+
+    _ensureVoiceFileRevealState() {
+      if (!this.voiceFileReveal || typeof this.voiceFileReveal !== 'object') {
+        this.voiceFileReveal = {};
+      }
+      const state = this.voiceFileReveal;
+      state.queue = Array.isArray(state.queue) ? state.queue : [];
+      state.timerId = state.timerId || null;
+      state.pausedUntil = Number.isFinite(Number(state.pausedUntil)) ? Number(state.pausedUntil) : 0;
+      state.lastOpenAt = Number.isFinite(Number(state.lastOpenAt)) ? Number(state.lastOpenAt) : 0;
+      state.active = !!state.active;
+      return state;
+    },
+
+    voiceFileRevealActive() {
+      const state = this._ensureVoiceFileRevealState();
+      return !!(state.active || state.queue.length || state.timerId);
+    },
+
+    _resetVoiceFileViewerState() {
+      if (!this.voiceFileViewer || typeof this.voiceFileViewer !== 'object') return;
+      this.voiceFileViewer.open = false;
+      this.voiceFileViewer.path = '';
+      this.voiceFileViewer.type = '';
+      this.voiceFileViewer.content = '';
+      this.voiceFileViewer.items = [];
+      this.voiceFileViewer.parent = '';
+      this.voiceFileViewer.loading = false;
+      this.voiceFileViewer.error = '';
+      this.voiceFileViewer.notice = '';
+      this.voiceFileViewer.autoOpened = false;
+      this._renderFileViewerDOM();
+    },
+
+    resetVoiceFileRevealState(options = {}) {
+      const state = this._ensureVoiceFileRevealState();
+      if (state.timerId) {
+        clearTimeout(state.timerId);
+        state.timerId = null;
+      }
+      state.queue = [];
+      state.pausedUntil = 0;
+      state.active = false;
+      if (options.closeViewer && this.voiceFileViewer?.open && this.voiceFileViewer?.autoOpened) {
+        this._resetVoiceFileViewerState();
+      }
+    },
+
+    _normalizeRevealPath(path = '') {
+      const value = trimText(path);
+      if (!value) return '';
+      return value
+        .replace(/[#?].*$/, '')
+        .replace(/:\d+(?::\d+)?$/, '')
+        .replace(/[),.;:!?]+$/g, '');
+    },
+
+    _normalizeViewerPath(path = '', explicitKind = '') {
+      const value = trimText(path);
+      if (!value) return '';
+      const forced = trimText(explicitKind).toLowerCase();
+      if (forced === 'web' || /^https?:\/\//i.test(value)) return value;
+      return this._normalizeRevealPath(value);
+    },
+
+    pauseVoiceFileReveal(ms = 6000) {
+      const state = this._ensureVoiceFileRevealState();
+      const until = Date.now() + Math.max(0, ms);
+      state.pausedUntil = Math.max(state.pausedUntil || 0, until);
+      if (state.timerId) {
+        clearTimeout(state.timerId);
+        state.timerId = null;
+      }
+    },
+
+    queueVoiceFileReveal(paths, options = {}) {
+      const state = this._ensureVoiceFileRevealState();
+      const items = Array.isArray(paths) ? paths : [paths];
+      const kind = trimText(options.kind || '');
+      const delay = Number.isFinite(Number(options.delayMs)) ? Number(options.delayMs) : 900;
+      const maxItems = Number.isFinite(Number(options.maxItems)) ? Number(options.maxItems) : 6;
+      const dedupe = new Set(state.queue.map(entry => entry.path));
+      const incoming = [];
+
+      items.forEach((item) => {
+        const normalized = this._normalizeRevealPath(item);
+        if (!normalized || dedupe.has(normalized)) return;
+        dedupe.add(normalized);
+        incoming.push({
+          path: normalized,
+          kind,
+          queuedAt: Date.now(),
+        });
+      });
+
+      if (!incoming.length) return;
+      state.queue = [...state.queue, ...incoming].slice(0, maxItems);
+      state.active = true;
+      state.revealDelay = delay;
+      this._drainVoiceFileRevealQueue();
+    },
+
+    _drainVoiceFileRevealQueue() {
+      const state = this._ensureVoiceFileRevealState();
+      if (state.timerId) return;
+      if (!state.queue.length) {
+        state.active = false;
+        return;
+      }
+      const now = Date.now();
+      if (state.pausedUntil && now < state.pausedUntil) {
+        state.timerId = setTimeout(() => {
+          state.timerId = null;
+          this._drainVoiceFileRevealQueue();
+        }, Math.max(200, state.pausedUntil - now));
+        return;
+      }
+      if (this.voiceFileViewer?.lastManualAt && (now - this.voiceFileViewer.lastManualAt) < 5000) {
+        state.timerId = setTimeout(() => {
+          state.timerId = null;
+          this._drainVoiceFileRevealQueue();
+        }, 1200);
+        return;
+      }
+      const next = state.queue.shift();
+      if (!next) {
+        state.active = false;
+        return;
+      }
+      if (typeof this.pushActivityEntry === 'function') {
+        const kind = trimText(next.kind || this._detectFileType(next.path));
+        const title = kind === 'folder' ? 'Opening folder' : 'Surfacing file';
+        try {
+          this.pushActivityEntry('execute', title, next.path, {
+            filePath: next.path,
+            tool: kind === 'folder' ? 'files/browse' : 'files/open',
+          });
+        } catch (_) {}
+      }
+      const alreadyOpen = !!(
+        this.voiceFileViewer?.open
+        && trimText(this.voiceFileViewer.path) === trimText(next.path)
+        && trimText(this.voiceFileViewer.type) === trimText(next.kind || this._detectFileType(next.path))
+      );
+      if (!alreadyOpen) {
+        this.openVoiceFileViewer?.(next.path, next.kind || '', { auto: true });
+      }
+      state.lastOpenAt = now;
+      state.timerId = setTimeout(() => {
+        state.timerId = null;
+        this._drainVoiceFileRevealQueue();
+      }, state.revealDelay || 900);
     },
 
     _detectFileType(path, explicitKind = '') {
@@ -36,6 +199,11 @@ function axonVoiceFileViewerMixin() {
       const raw = trimText(path).replace(/\/+$/, '');
       const ext = raw.split('.').pop().toLowerCase();
       if (!ext || ext === raw.toLowerCase()) return 'folder';
+      if ([
+        'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp',
+        'pages', 'numbers', 'key', 'rtf',
+        'zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2',
+      ].includes(ext)) return 'binary';
       if (ext === 'pdf') return 'pdf';
       if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) return 'image';
       if (['mp4', 'webm', 'mov', 'avi'].includes(ext)) return 'video';
@@ -67,10 +235,10 @@ function axonVoiceFileViewerMixin() {
     },
 
     _voiceFolderRows(items = []) {
-      return items.map(item => {
+      return items.map((item, index) => {
         const kind = item?.is_dir ? 'folder' : this._detectFileType(item?.path);
         const size = item?.is_dir ? 'Folder' : (typeof this.formatBytes === 'function' ? this.formatBytes(item.size || 0) : `${item.size || 0} B`);
-        return `<button type="button" class="voice-file-viewer__folder-entry" data-voice-path="${escapeHtml(item.path || '')}" data-voice-kind="${escapeHtml(kind)}">`
+        return `<button type="button" class="voice-file-viewer__folder-entry" data-voice-path="${escapeHtml(item.path || '')}" data-voice-kind="${escapeHtml(kind)}" data-voice-reveal="1" style="--voice-stagger:${index * 70}ms">`
           + `<div class="voice-file-viewer__folder-icon">${escapeHtml(this._voiceFolderIcon(item))}</div>`
           + `<div class="voice-file-viewer__folder-copy">`
           + `<div class="voice-file-viewer__folder-name">${escapeHtml(item.name || 'Untitled')}</div>`
@@ -95,11 +263,22 @@ function axonVoiceFileViewerMixin() {
       let body = '';
       if (v.loading) {
         body = '<div class="voice-file-viewer__loading"><div class="voice-file-viewer__spinner"></div><span>Loading file…</span></div>';
+      } else if (v.type === 'binary') {
+        const note = trimText(v.notice) || 'Preview unavailable for this file type.';
+        const openUrl = this.voiceFileViewerUrl();
+        body = `<div class="voice-file-viewer__binary">`
+          + `<div class="voice-file-viewer__binary-label">Binary file</div>`
+          + `<div class="voice-file-viewer__binary-note">${escapeHtml(note)}</div>`
+          + `<div class="voice-file-viewer__binary-actions">`
+          + `<a class="voice-file-viewer__binary-btn" href="${escapeHtml(openUrl)}" target="_blank" rel="noreferrer">Open file</a>`
+          + `<a class="voice-file-viewer__binary-btn voice-file-viewer__binary-btn--ghost" href="${escapeHtml(openUrl)}" download>Download</a>`
+          + `</div>`
+          + `</div>`;
       } else if (v.error) {
         body = `<div class="voice-file-viewer__error">${escapeHtml(v.error)}</div>`;
       } else if (v.type === 'folder') {
         const upButton = v.parent
-          ? `<button type="button" class="voice-file-viewer__folder-up" data-voice-path="${escapeHtml(v.parent)}" data-voice-kind="folder">⬑ Up one level</button>`
+          ? `<button type="button" class="voice-file-viewer__folder-up" data-voice-path="${escapeHtml(v.parent)}" data-voice-kind="folder" data-voice-reveal="1" style="--voice-stagger:0ms">⬑ Up one level</button>`
           : '';
         const count = Array.isArray(v.items) ? v.items.length : 0;
         body = '<div class="voice-file-viewer__folder">'
@@ -175,6 +354,11 @@ function axonVoiceFileViewerMixin() {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         const detail = trimText(data?.detail || data?.message);
+        if (response.status === 413 || /file too large/i.test(detail)) {
+          this.voiceFileViewer.type = 'binary';
+          this.voiceFileViewer.notice = detail || 'Preview disabled for large files.';
+          return;
+        }
         if (response.status === 400 && /directory/i.test(detail)) {
           await this._loadVoiceFolder(path);
           return;
@@ -191,28 +375,31 @@ function axonVoiceFileViewerMixin() {
       }
     },
 
-    async openVoiceFileViewer(path, explicitKind = '') {
-      if (!path) return;
+    async openVoiceFileViewer(path, explicitKind = '', options = {}) {
+      const normalizedPath = this._normalizeViewerPath(path, explicitKind);
+      if (!normalizedPath) return;
       const viewer = this.voiceFileViewer;
       viewer.open = true;
-      viewer.path = path;
-      viewer.type = this._detectFileType(path, explicitKind);
+      viewer.path = normalizedPath;
+      viewer.type = this._detectFileType(normalizedPath, explicitKind);
       viewer.content = '';
       viewer.items = [];
       viewer.parent = '';
       viewer.loading = true;
       viewer.error = '';
+      viewer.notice = '';
+      viewer.autoOpened = !!options.auto;
       this._renderFileViewerDOM();
 
       try {
-        if (['pdf', 'image', 'video', 'audio', 'web'].includes(viewer.type)) {
+        if (['pdf', 'image', 'video', 'audio', 'web', 'binary'].includes(viewer.type)) {
           return;
         }
         if (viewer.type === 'folder') {
-          await this._loadVoiceFolder(path);
+          await this._loadVoiceFolder(normalizedPath);
           return;
         }
-        await this._loadVoiceTextFile(path);
+        await this._loadVoiceTextFile(normalizedPath);
       } catch (error) {
         viewer.error = error?.message || 'Failed to load file';
       } finally {
@@ -222,12 +409,12 @@ function axonVoiceFileViewerMixin() {
     },
 
     closeVoiceFileViewer() {
-      this.voiceFileViewer.open = false;
-      this.voiceFileViewer.path = '';
-      this.voiceFileViewer.content = '';
-      this.voiceFileViewer.items = [];
-      this.voiceFileViewer.parent = '';
-      this._renderFileViewerDOM();
+      if (this.voiceFileViewer) {
+        this.voiceFileViewer.lastManualAt = Date.now();
+        this.voiceFileViewer.autoOpened = false;
+      }
+      this.pauseVoiceFileReveal?.(8000);
+      this._resetVoiceFileViewerState();
     },
 
     voiceFileViewerUrl() {
@@ -242,12 +429,47 @@ function axonVoiceFileViewerMixin() {
 
     initVoiceFileViewer() {
       document.addEventListener('click', (event) => {
+        const surfaceTrigger = event.target.closest('[data-voice-surface]');
+        if (surfaceTrigger) {
+          event.preventDefault();
+          if (this.voiceFileViewer) {
+            this.voiceFileViewer.lastManualAt = Date.now();
+          }
+          this.pauseVoiceFileReveal?.(8000);
+          const surface = trimText(surfaceTrigger.getAttribute('data-voice-surface') || '').toLowerCase();
+          const path = surfaceTrigger.getAttribute('data-voice-path') || '';
+          const kind = surfaceTrigger.getAttribute('data-voice-kind') || '';
+          if (surface === 'terminal' || (surface === 'approval' && this.terminal?.approvalRequired)) {
+            this.focusVoiceSurfaceSpotlight?.({
+              type: 'terminal',
+              key: path ? `terminal:${path}` : 'terminal:voice',
+              path,
+              kind,
+              title: 'Live PTY shell',
+            });
+            return;
+          }
+          if (surface === 'browser') {
+            this.focusVoiceSurfaceSpotlight?.({
+              type: 'browser',
+              key: path ? `browser:${path}` : 'browser:voice',
+              path,
+              kind: kind || 'web',
+              title: basename(path) || 'Live page',
+            });
+            return;
+          }
+        }
         const trigger = event.target.closest('.voice-file-chip[data-voice-path], .voice-operator-deck__surface-card[data-voice-path], .voice-operator-deck__artifact[data-voice-path], .activity-feed__file[data-voice-path], .voice-file-viewer__folder-entry[data-voice-path], .voice-file-viewer__folder-up[data-voice-path]');
         if (trigger) {
           event.preventDefault();
+          if (this.voiceFileViewer) {
+            this.voiceFileViewer.lastManualAt = Date.now();
+          }
+          this.pauseVoiceFileReveal?.(8000);
           const path = trigger.getAttribute('data-voice-path') || '';
           const kind = trigger.getAttribute('data-voice-kind') || '';
-          if (path) this.openVoiceFileViewer(path, kind);
+          if (path) this.openVoiceFileViewer(path, kind, { auto: false });
           return;
         }
 
@@ -256,7 +478,11 @@ function axonVoiceFileViewerMixin() {
           const href = link.getAttribute('href') || '';
           if (/^https?:\/\//i.test(href)) {
             event.preventDefault();
-            this.openVoiceFileViewer(href, 'web');
+            if (this.voiceFileViewer) {
+              this.voiceFileViewer.lastManualAt = Date.now();
+            }
+            this.pauseVoiceFileReveal?.(8000);
+            this.openVoiceFileViewer(href, 'web', { auto: false });
           }
         }
       });
@@ -264,7 +490,7 @@ function axonVoiceFileViewerMixin() {
       window.addEventListener('voice-open-file', (event) => {
         const path = event.detail?.path;
         const kind = event.detail?.kind || '';
-        if (path) this.openVoiceFileViewer(path, kind);
+        if (path) this.openVoiceFileViewer(path, kind, { auto: false });
       });
 
       document.addEventListener('keydown', (event) => {

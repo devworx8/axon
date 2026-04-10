@@ -379,6 +379,75 @@ class VoiceOperatorDeckFrontendTests(unittest.TestCase):
         self.assertIn("release-notes.pdf", payload["html"])
         self.assertIn("Live Activity", payload["html"])
 
+    def test_activity_feed_html_uses_stable_rows_without_reveal_animation_attrs(self):
+        payload = _run_operator_deck_script(
+            """
+            const activityMixin = ctx.window.axonVoiceActivityFeedMixin();
+            const app = {};
+            Object.assign(app, activityMixin);
+            app.pushActivityEntry('plan', 'Planning the next step', 'Axon is analysing the workspace.');
+            console.log(JSON.stringify({ html: app.voiceActivityFeedHtml(4) }));
+            """
+        )
+
+        self.assertIn("Live Activity", payload["html"])
+        self.assertNotIn('data-voice-reveal="1"', payload["html"])
+        self.assertNotIn('animation-delay:', payload["html"])
+
+    def test_activity_feed_merges_repeated_plan_updates_in_place(self):
+        payload = _run_operator_deck_script(
+            """
+            const activityMixin = ctx.window.axonVoiceActivityFeedMixin();
+            const app = {};
+            Object.assign(app, activityMixin);
+            app.pushActivityEntry('plan', 'Thinking through the task', 'Checking the live deck stream path.');
+            app.pushActivityEntry('plan', 'Thinking through the task', 'Narrowing the issue to repeated plan updates.');
+            console.log(JSON.stringify({
+              feedCount: app.voiceActivityFeed.length,
+              detail: app.voiceActivityFeed[0]?.detail || '',
+              hits: app.voiceActivityFeed[0]?.hits || 0,
+            }));
+            """
+        )
+
+        self.assertEqual(payload["feedCount"], 1)
+        self.assertEqual(payload["detail"], "Narrowing the issue to repeated plan updates.")
+        self.assertEqual(payload["hits"], 2)
+
+    def test_artifact_entries_hold_stable_copy_during_active_run(self):
+        payload = _run_operator_deck_script(
+            """
+            const activityMixin = ctx.window.axonVoiceActivityFeedMixin();
+            const app = {
+              chatLoading: true,
+              liveOperator: { active: true, phase: 'execute', title: 'Opening file', detail: 'Inspecting the workspace.' },
+            };
+            Object.assign(app, activityMixin);
+            app.pushActivityEntry('execute', 'Opening file', 'Inspecting /home/edp/.devbrain/brain.py', {
+              filePath: '/home/edp/.devbrain/brain.py',
+              tool: 'files.read',
+            });
+            const first = app.voiceArtifactEntries(4);
+            app.voiceActivityFeed[0].detail = 'Updated detail for /home/edp/.devbrain/brain.py that should not churn the rail mid-run.';
+            const second = app.voiceArtifactEntries(4);
+            app.chatLoading = false;
+            app.liveOperator = { active: false, phase: 'verify', title: 'Done', detail: '' };
+            const third = app.voiceArtifactEntries(4);
+            console.log(JSON.stringify({
+              firstDetail: first[0]?.detail || '',
+              secondDetail: second[0]?.detail || '',
+              thirdDetail: third[0]?.detail || '',
+            }));
+            """
+        )
+
+        self.assertEqual(payload["firstDetail"], "Inspecting /home/edp/.devbrain/brain.py")
+        self.assertEqual(payload["secondDetail"], payload["firstDetail"])
+        self.assertEqual(
+            payload["thirdDetail"],
+            "Updated detail for /home/edp/.devbrain/brain.py that should not churn the rail mid-run.",
+        )
+
     def test_operator_deck_holds_visibility_briefly_between_live_updates(self):
         payload = _run_operator_deck_script(
             """
@@ -413,6 +482,41 @@ class VoiceOperatorDeckFrontendTests(unittest.TestCase):
         self.assertTrue(payload["visibleWithinHold"])
         self.assertGreater(payload["holdUntil"], 0)
         self.assertFalse(payload["visibleAfterHold"])
+
+    def test_operator_timeline_collapses_duplicate_plan_steps_without_replay_styles(self):
+        payload = _run_operator_deck_script(
+            """
+            const mixin = ctx.window.axonVoiceOperatorDeckMixin();
+            const app = {
+              chatLoading: true,
+              liveOperator: {
+                active: true,
+                phase: 'plan',
+                title: 'Thinking through the task',
+                detail: 'Checking the stream path.',
+              },
+              liveOperatorFeed: [
+                { id: '1', phase: 'observe', title: 'Inspecting the task', detail: 'Goal received: Fix the live deck', at: new Date().toISOString() },
+                { id: '2', phase: 'plan', title: 'Thinking through the task', detail: 'Checking the live deck stream path.', at: new Date().toISOString() },
+                { id: '3', phase: 'plan', title: 'Thinking through the task', detail: 'Narrowing the issue to repeated plan updates.', at: new Date().toISOString() },
+              ],
+              voiceLatestResponseText() { return ''; },
+              voiceResponseAvailable() { return false; },
+            };
+            Object.assign(app, mixin);
+            const timeline = app.voiceOperatorTimeline(5);
+            const html = app.voiceOperatorDeckHtml();
+            console.log(JSON.stringify({
+              timelineCount: timeline.length,
+              latestDetail: timeline[0]?.detail || '',
+              html,
+            }));
+            """
+        )
+
+        self.assertEqual(payload["timelineCount"], 2)
+        self.assertEqual(payload["latestDetail"], "Narrowing the issue to repeated plan updates.")
+        self.assertNotIn("animation-delay:", payload["html"])
 
     def test_operator_deck_stays_visible_for_agent_stream_before_blocks_arrive(self):
         payload = _run_operator_deck_script(

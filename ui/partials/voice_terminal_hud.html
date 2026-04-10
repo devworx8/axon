@@ -10,15 +10,27 @@
             <div class="hud-terminal__body">
               <div class="axon-terminal-stage axon-terminal-stage--voice">
                 <div class="axon-terminal-stage__chrome">
-                  <div>
+                  <div class="axon-terminal-stage__title-stack">
                     <div class="axon-terminal-stage__eyebrow">Voice dock</div>
                     <div class="axon-terminal-stage__title" x-text="terminalViewportSessionLabel('voice')"></div>
+                    <div class="axon-terminal-stage__headline" x-text="terminalViewportHeadline('voice')"></div>
                   </div>
                   <div class="axon-terminal-stage__chips">
                     <span class="axon-terminal-stage__chip"
                           :class="terminalViewportConnected('voice') ? 'axon-terminal-stage__chip--live' : (terminalViewportError('voice') ? 'axon-terminal-stage__chip--fallback' : 'axon-terminal-stage__chip--boot')"
                           x-text="terminalViewportStatusLabel('voice')"></span>
                   </div>
+                </div>
+                <div class="axon-terminal-stage__meta-grid" x-show="terminalViewportMeta('voice').length">
+                  <template x-for="item in terminalViewportMeta('voice')" :key="`${item.label}-${item.value}`">
+                    <div class="axon-terminal-stage__meta-card"
+                         :class="item.tone ? `axon-terminal-stage__meta-card--${item.tone}` : ''">
+                      <div class="axon-terminal-stage__meta-label" x-text="item.label"></div>
+                      <div class="axon-terminal-stage__meta-value"
+                           :class="item.mono ? 'axon-terminal-stage__meta-value--mono' : ''"
+                           x-text="item.value"></div>
+                    </div>
+                  </template>
                 </div>
                 <div class="axon-terminal-stage__frame">
                   <div class="axon-terminal-stage__screen">

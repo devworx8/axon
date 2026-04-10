@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX_HTML = ROOT / "ui/index.html"
+SETTINGS_VOICE_DECK_PARTIAL = ROOT / "ui/partials/settings_voice_deck.html"
 VOICE_JS = ROOT / "ui/js/voice.js"
 VOICE_SPEECH_JS = ROOT / "ui/js/voice-speech.js"
 VOICE_PLAYBACK_JS = ROOT / "ui/js/voice-playback.js"
@@ -104,6 +105,20 @@ class VoiceFrontendTests(unittest.TestCase):
 
         self.assertIn('@click="openVoiceCommandCenter()"', template)
         self.assertIn('title="Voice command center"', template)
+
+    def test_root_app_composes_voice_stream_blocks_mixin(self):
+        template = INDEX_HTML.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "typeof axonVoiceStreamBlocksMixin === 'function' ? axonVoiceStreamBlocksMixin() : {}",
+            template,
+        )
+
+    def test_settings_voice_deck_uses_root_voice_status_loading_flag(self):
+        template = SETTINGS_VOICE_DECK_PARTIAL.read_text(encoding="utf-8")
+
+        self.assertIn("voiceStatusLoading ? 'Refreshing…' : 'Refresh runtime'", template)
+        self.assertNotIn("voice.statusLoading", template)
 
     def test_voice_speech_helper_splits_long_text_without_truncating(self):
         payload = _run_voice_script(
@@ -1118,6 +1133,44 @@ class VoiceFrontendTests(unittest.TestCase):
         self.assertTrue(payload["responseAvailable"])
         self.assertEqual(payload["renderClass"], "")
         self.assertTrue(payload["htmlHasDeck"])
+
+    def test_voice_task_surface_holds_last_operator_deck_during_brief_idle_gap(self):
+        payload = _run_voice_script(
+            [VOICE_COMMAND_CENTER_JS, ROOT / "ui/js/voice-operator-deck.js"],
+            """
+            const commandMixin = ctx.window.axonVoiceCommandCenterMixin();
+            const deckMixin = ctx.window.axonVoiceOperatorDeckMixin();
+            const app = {
+              chatLoading: false,
+              liveOperator: {
+                active: true,
+                phase: 'execute',
+                title: 'Searching files',
+                detail: 'Axon is walking the workspace.',
+              },
+              liveOperatorFeed: [
+                { id: '1', phase: 'observe', title: 'Inspecting task', detail: 'Goal received: Find the latest files', at: '2026-04-08T09:00:00Z' },
+              ],
+              chatMessages: [{ id: 10, role: 'assistant', content: '' }],
+              voiceConversation: {},
+              latestAssistantMessage() {
+                return this.chatMessages[this.chatMessages.length - 1];
+              },
+            };
+            Object.assign(app, commandMixin, deckMixin);
+            const first = app.voiceDisplayResponseHtml();
+            app.liveOperator = { active: false, phase: '', title: '', detail: '' };
+            app.liveOperatorFeed = [];
+            const second = app.voiceDisplayResponseHtml();
+            console.log(JSON.stringify({
+              firstHasDeck: first.includes('voice-operator-deck'),
+              secondHasDeck: second.includes('voice-operator-deck'),
+            }));
+            """,
+        )
+
+        self.assertTrue(payload["firstHasDeck"])
+        self.assertTrue(payload["secondHasDeck"])
 
 
 if __name__ == "__main__":

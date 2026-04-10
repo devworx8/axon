@@ -25,6 +25,45 @@ def _run_node_script(script_body: str):
 
 
 class DashboardLiveFeedTests(unittest.TestCase):
+    def test_follow_live_workspace_switches_to_other_active_workspace(self):
+        payload = _run_node_script(
+            f"""
+            const fs = require('fs');
+            const vm = require('vm');
+
+            const ctx = {{
+              window: {{}},
+              console,
+            }};
+            vm.createContext(ctx);
+            vm.runInContext(fs.readFileSync({json.dumps(str(WORKSPACE_RUNS_JS))}, 'utf8'), ctx);
+
+            const app = {{
+              chatProjectId: '42',
+              projects: [
+                {{ id: 42, name: 'Axon' }},
+                {{ id: 73, name: 'dashpro' }},
+              ],
+              activateWorkspaceTab(id) {{
+                this.followedWorkspaceId = String(id || '');
+                this.chatProjectId = this.followedWorkspaceId;
+              }},
+            }};
+
+            Object.assign(app, ctx.window.axonWorkspaceRunsMixin());
+            app.setWorkspaceRunLoading('73', true);
+            console.log(JSON.stringify({{
+              canFollow: app.canFollowLiveWorkspace(),
+              followed: app.followLiveWorkspace(),
+              activeWorkspace: app.chatProjectId,
+            }}));
+            """
+        )
+
+        self.assertTrue(payload["canFollow"])
+        self.assertEqual(payload["followed"], "73")
+        self.assertEqual(payload["activeWorkspace"], "73")
+
     def test_live_feed_snapshot_syncs_auto_state_into_workspace_and_preview(self):
         payload = _run_node_script(
             f"""

@@ -27,6 +27,7 @@ class TerminalCommandBody(BaseModel):
     timeout_seconds: Optional[int] = None
     mode: Optional[str] = None
     approved: Optional[bool] = False
+    require_pty: Optional[bool] = False
 
 
 class TerminalRouteHandlers:
