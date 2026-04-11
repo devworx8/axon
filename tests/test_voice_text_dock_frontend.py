@@ -332,6 +332,29 @@ class VoiceTextDockFrontendTests(unittest.TestCase):
         self.assertEqual(payload["autocompleted"], "/deploy")
         self.assertIn("Enter send", payload["shortcutHint"])
 
+    def test_text_dock_preview_clips_long_drafts_but_keeps_full_submission(self):
+        payload = _run_voice_dock_script(
+            """
+            const conversationMixin = ctx.window.axonVoiceConversationMixin();
+            const app = {
+              showVoiceOrb: true,
+              voiceConversation: {},
+            };
+            Object.assign(app, conversationMixin);
+            app.toggleVoiceTextDock(true);
+            app.voiceConversation.textDraft = 'A'.repeat(1450) + '\\nTAIL-MARKER-DO-NOT-SHOW';
+            const html = app.voiceTextDockPreviewHtml();
+            console.log(JSON.stringify({
+              html,
+              submissionEndsWithMarker: app.voiceTextDockSubmissionText().endsWith('TAIL-MARKER-DO-NOT-SHOW'),
+            }));
+            """
+        )
+
+        self.assertIn("Preview clipped while you type. Axon still receives the full draft.", payload["html"])
+        self.assertNotIn("TAIL-MARKER-DO-NOT-SHOW", payload["html"])
+        self.assertTrue(payload["submissionEndsWithMarker"])
+
     def test_text_dock_partial_uses_native_mobile_image_inputs(self):
         template = VOICE_COMMAND_DOCK_PARTIAL.read_text(encoding="utf-8")
 
@@ -352,8 +375,11 @@ class VoiceTextDockFrontendTests(unittest.TestCase):
         self.assertIn("flex: 1 1 auto;", stylesheet)
         self.assertIn("overflow-y: auto;", stylesheet)
         self.assertIn("max-height: min(40dvh, 20rem);", stylesheet)
+        self.assertIn("resize: none;", stylesheet)
         self.assertIn("position: relative;", stylesheet)
+        self.assertIn("display: flex;", stylesheet)
         self.assertIn("max-height: min(28dvh, 14rem);", stylesheet)
+        self.assertIn("overflow: hidden;", stylesheet)
 
     def test_mobile_text_dock_css_reserves_safe_area_and_scrolls(self):
         stylesheet = VOICE_CONVERSATION_CSS.read_text(encoding="utf-8")

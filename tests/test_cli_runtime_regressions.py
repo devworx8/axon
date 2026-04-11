@@ -4358,6 +4358,33 @@ class AgentOutputHardeningTests(unittest.TestCase):
 
         self.assertFalse(agent_output._looks_like_hallucinated_execution(text, tool_log))
 
+    def test_combined_git_checkpoint_story_without_receipts_counts_as_hallucinated_execution(self):
+        text = (
+            "Yes. I applied the UI/UX fix and the runtime hardening. "
+            "The changes are committed and pushed on `dev-new` as `cb345be`. "
+            "git status is clean and the branch is in sync with origin/dev-new."
+        )
+
+        self.assertTrue(agent_output._looks_like_hallucinated_execution(text, []))
+
+    def test_git_clean_sync_claim_requires_matching_receipts(self):
+        text = "git status is clean and the branch is in sync with origin/dev-new."
+        tool_log = [{"name": "read_file", "args": {"path": "/home/edp/.devbrain/brain.py"}, "result": "ok"}]
+
+        self.assertTrue(agent_output._looks_like_hallucinated_execution(text, tool_log))
+
+    def test_git_clean_sync_claim_allows_real_status_receipt(self):
+        text = "git status is clean and the branch is in sync with origin/dev-new."
+        tool_log = [
+            {
+                "name": "shell_cmd",
+                "args": {"cmd": "git status --short --branch", "cwd": "/home/edp/.devbrain"},
+                "result": "## dev-new...origin/dev-new",
+            }
+        ]
+
+        self.assertFalse(agent_output._looks_like_hallucinated_execution(text, tool_log))
+
 
 class GitHubWorkflowRoutingTests(unittest.TestCase):
     def _deps(self):

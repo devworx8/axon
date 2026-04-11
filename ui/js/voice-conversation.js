@@ -4,6 +4,7 @@
    terminal/mission overlays for the voice command center.
    ============================================================= */
 function axonVoiceConversationMixin() {
+  const VOICE_TEXT_DOCK_PREVIEW_LIMIT = 1400;
   const phaseToneMap = {
     observe: 'slate',
     plan: 'cyan',
@@ -311,15 +312,22 @@ function axonVoiceConversationMixin() {
         const prompt = this.voiceTextDockImageOnlyPrompt();
         return `<p>${escapeHtml(prompt)}</p>${note ? `<div class="voice-command-dock__preview-note">${escapeHtml(note)}</div>` : ''}`;
       }
+      const clipped = draft.length > VOICE_TEXT_DOCK_PREVIEW_LIMIT;
+      const previewDraft = clipped
+        ? `${draft.slice(0, VOICE_TEXT_DOCK_PREVIEW_LIMIT).trimEnd()}\n\n…`
+        : draft;
       let html = '';
       if (typeof this.renderMd === 'function') {
-        try { html = this.renderMd(draft); } catch (_) {}
+        try { html = this.renderMd(previewDraft); } catch (_) {}
       }
       if (!html) {
-        html = escapeHtml(draft).replace(/\n/g, '<br>');
+        html = escapeHtml(previewDraft).replace(/\n/g, '<br>');
       }
       if (typeof this.decorateVoiceResponseHtml === 'function') {
         html = this.decorateVoiceResponseHtml(html);
+      }
+      if (clipped) {
+        html += '<div class="voice-command-dock__preview-note">Preview clipped while you type. Axon still receives the full draft.</div>';
       }
       if (note) {
         html += `<div class="voice-command-dock__preview-note">${escapeHtml(note)}</div>`;

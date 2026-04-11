@@ -141,6 +141,15 @@
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
 }
 
+.voice-operator-deck__command-list {
+  grid-template-columns: minmax(0, 1fr);
+  max-height: min(44vh, 18rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.15rem;
+  align-content: start;
+}
+
 .voice-operator-deck__surface-card,
 .voice-operator-deck__artifact,
 .voice-operator-deck__command-card {

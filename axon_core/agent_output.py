@@ -173,6 +173,8 @@ def _contains_git_push_success_claim(sample: str) -> bool:
         "pushed the active branch",
         "pushed this branch",
         "pushed the branch",
+        "committed and pushed",
+        "changes are committed and pushed",
         "pushed to origin",
         "pushed to remote",
         "push completed",
@@ -195,6 +197,9 @@ def _contains_git_commit_success_claim(sample: str) -> bool:
         "successfully committed",
         "committed the changes",
         "committed all changes",
+        "changes are committed",
+        "committed and pushed",
+        "changes are committed and pushed",
         "created a commit",
         "commit created",
         "commit complete",
@@ -219,6 +224,32 @@ def _contains_git_merge_success_claim(sample: str) -> bool:
     if any(marker in sample for marker in explicit_markers):
         return True
     return bool(_re.search(r"\bgit merge\b", sample) and _re.search(r"\b(done|complete|completed|succeeded|successful)\b", sample))
+
+
+def _contains_git_clean_sync_claim(sample: str) -> bool:
+    if not sample:
+        return False
+    explicit_markers = (
+        "git status is clean",
+        "working tree is clean",
+        "working tree clean",
+        "worktree is clean",
+        "worktree clean",
+        "nothing to commit, working tree clean",
+        "branch is in sync",
+        "branch is synced",
+        "branch is up to date",
+        "in sync with origin",
+        "synced with origin",
+        "up to date with origin",
+        "up-to-date with origin",
+    )
+    if any(marker in sample for marker in explicit_markers):
+        return True
+    return bool(
+        _re.search(r"\b(clean|synced|in sync|up[- ]to[- ]date)\b", sample)
+        and _re.search(r"\b(git status|branch|origin|working tree|worktree)\b", sample)
+    )
 
 
 def _has_required_evidence_sections(text: str) -> bool:
@@ -431,11 +462,13 @@ def _looks_like_hallucinated_execution(text: str, tool_log: list[dict]) -> bool:
         if any(phrase in sample for phrase in (
             "repository is clean",
             "git status:",
-        )) and not (
-            _tool_log_has_name(tool_log, {"git_status"})
-            or _tool_log_mentions(tool_log, ("git status", "working tree clean", "nothing to commit"))
-        ):
-            unsupported_claims += 1
+        )) or _contains_git_clean_sync_claim(sample):
+            if not (
+                _tool_log_has_name(tool_log, {"git_status"})
+                or _tool_log_has_successful_shell_command(tool_log, ("git status", "git push", "git fetch", "git pull"))
+                or _tool_log_mentions(tool_log, ("git status", "working tree clean", "nothing to commit", "everything up-to-date", "up to date"))
+            ):
+                unsupported_claims += 1
 
         if any(phrase in sample for phrase in (
             ".git/index.lock",
@@ -485,14 +518,28 @@ def _looks_like_hallucinated_execution(text: str, tool_log: list[dict]) -> bool:
         "changes have been successfully",
         "repository is clean",
         "all changes committed",
+        "changes are committed",
+        "changes are committed and pushed",
         "pushed to origin",
         "pushed to remote",
+        "branch is in sync",
+        "branch is synced",
+        "branch is up to date",
+        "in sync with origin",
+        "synced with origin",
+        "up to date with origin",
+        "up-to-date with origin",
         "git push origin",
         "git commit -m",
         "git add .",
         "$ command",
         "(no output)",
         "changes committed & pushed",
+        "git status is clean",
+        "working tree is clean",
+        "working tree clean",
+        "worktree is clean",
+        "worktree clean",
         "commit messages:",
         "git status:",
         "output:",

@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VOICE_STREAM_BLOCKS_JS = ROOT / "ui/js/voice-stream-blocks.js"
 VOICE_ACTIVITY_FEED_JS = ROOT / "ui/js/voice-activity-feed.js"
 VOICE_OPERATOR_DECK_JS = ROOT / "ui/js/voice-operator-deck.js"
+VOICE_OPERATOR_DECK_CSS = ROOT / "ui/css/voice-operator-deck.css"
 VOICE_COMMAND_DOCK_PARTIAL = ROOT / "ui/partials/voice_command_dock.html"
 VOICE_RESPONSE_PANEL_PARTIAL = ROOT / "ui/partials/voice_response_panel.html"
 CHAT_PENDING_APPROVAL_PARTIAL = ROOT / "ui/partials/chat_pending_approval.html"
@@ -658,6 +659,15 @@ class VoiceOperatorDeckFrontendTests(unittest.TestCase):
         self.assertIn("voiceResponseRenderClass()", response_partial)
         self.assertIn("approvalPromptTitle(currentPendingAgentApproval())", approval_partial)
         self.assertIn("approvalPromptActionLabel('session'", approval_partial)
+
+    def test_command_trace_css_clamps_live_card_list(self):
+        stylesheet = VOICE_OPERATOR_DECK_CSS.read_text(encoding="utf-8")
+
+        self.assertIn(".voice-operator-deck__command-list {", stylesheet)
+        self.assertIn("grid-template-columns: minmax(0, 1fr);", stylesheet)
+        self.assertIn("max-height: min(44vh, 18rem);", stylesheet)
+        self.assertIn("overflow-y: auto;", stylesheet)
+        self.assertIn("overscroll-behavior: contain;", stylesheet)
 
 
 if __name__ == "__main__":
