@@ -4327,6 +4327,37 @@ class AgentOutputHardeningTests(unittest.TestCase):
 
         self.assertTrue(agent_output._looks_like_hallucinated_execution(text, []))
 
+    def test_blocked_git_push_receipt_does_not_support_success_claim(self):
+        text = (
+            "Pushed the active branch from `/home/edp/.devbrain` with `git push -u origin HEAD`.\n\n"
+            "Everything up-to-date"
+        )
+        tool_log = [
+            {
+                "name": "shell_cmd",
+                "args": {"cmd": "git push -u origin HEAD", "cwd": "/home/edp/.devbrain"},
+                "result": "BLOCKED_CMD:git:git push -u origin HEAD",
+            }
+        ]
+
+        self.assertTrue(agent_output._looks_like_hallucinated_execution(text, tool_log))
+
+    def test_successful_git_push_receipt_allows_push_summary(self):
+        text = (
+            "Pushed the active branch from `/home/edp/.devbrain` with `git push -u origin HEAD`.\n\n"
+            "branch 'dev-new' set up to track 'origin/dev-new'.\n"
+            "Everything up-to-date"
+        )
+        tool_log = [
+            {
+                "name": "shell_cmd",
+                "args": {"cmd": "git push -u origin HEAD", "cwd": "/home/edp/.devbrain"},
+                "result": "branch 'dev-new' set up to track 'origin/dev-new'.\nEverything up-to-date",
+            }
+        ]
+
+        self.assertFalse(agent_output._looks_like_hallucinated_execution(text, tool_log))
+
 
 class GitHubWorkflowRoutingTests(unittest.TestCase):
     def _deps(self):

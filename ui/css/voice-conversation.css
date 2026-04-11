@@ -308,6 +308,7 @@
   align-items: flex-start;
   gap: 12px;
   width: min(420px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
   transition: transform 180ms ease, opacity 180ms ease;
 }
 
@@ -348,7 +349,11 @@
 }
 
 .voice-command-dock__panel {
+  display: flex;
+  flex-direction: column;
   width: 100%;
+  max-height: min(44rem, calc(100dvh - 48px));
+  min-height: 0;
   border-radius: 30px;
   border: 1px solid rgba(34, 211, 238, 0.18);
   background:
@@ -369,6 +374,7 @@
   justify-content: space-between;
   gap: 14px;
   align-items: flex-start;
+  flex: 0 0 auto;
 }
 
 .voice-command-dock__eyebrow {
@@ -383,6 +389,18 @@
   font-size: 12px;
   color: rgba(148, 163, 184, 0.74);
   line-height: 1.5;
+}
+
+.voice-command-dock__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.voice-command-dock__body > :first-child {
+  margin-top: 16px;
 }
 
 .voice-command-dock__toolbar {
@@ -557,6 +575,7 @@
 .voice-command-dock__textarea {
   width: 100%;
   min-height: 150px;
+  max-height: min(40dvh, 20rem);
   margin-top: 12px;
   padding: 16px 18px 18px;
   border-radius: 22px;
@@ -565,10 +584,12 @@
   color: rgba(226, 232, 240, 0.96);
   font-size: 14px;
   line-height: 1.6;
+  overflow-y: auto;
   resize: vertical;
 }
 
 .voice-command-dock__input-wrap {
+  position: relative;
   margin-top: 12px;
   padding: 14px;
   border-radius: 24px;
@@ -646,6 +667,8 @@
 
 .voice-command-dock__preview {
   margin-top: 14px;
+  max-height: min(28dvh, 14rem);
+  min-height: 0;
   padding: 14px;
   border-radius: 22px;
   border: 1px solid rgba(34, 211, 238, 0.14);
@@ -671,6 +694,9 @@
 
 .voice-command-dock__preview-body {
   margin-top: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
   color: rgba(226, 232, 240, 0.94);
   font-size: 12px;
   line-height: 1.7;
@@ -814,6 +840,7 @@
 
 .voice-command-dock__actions {
   display: flex;
+  flex: 0 0 auto;
   justify-content: space-between;
   gap: 10px;
   margin-top: 16px;
@@ -978,8 +1005,7 @@
 
   .voice-command-dock__panel {
     max-height: calc(100dvh - var(--voice-mobile-dock-top-clearance) - var(--voice-mobile-bottom-clearance));
-    overflow-y: auto;
-    overscroll-behavior: contain;
+    overflow: hidden;
     -webkit-overflow-scrolling: touch;
     padding: 18px 14px calc(18px + env(safe-area-inset-bottom, 0px));
     border-radius: 28px;
@@ -993,6 +1019,10 @@
 
   .voice-command-dock__header {
     flex-direction: column;
+  }
+
+  .voice-command-dock__body {
+    padding-right: 0;
   }
 
   .voice-command-dock__toolbar {

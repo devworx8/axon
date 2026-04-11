@@ -24,6 +24,7 @@
             <button class="voice-command-dock__btn" @click="toggleVoiceTextDock(false)">Close</button>
           </div>
 
+          <div class="voice-command-dock__body">
           <div class="voice-command-dock__toolbar">
             <div class="voice-command-dock__toolbar-copy">
               <div class="voice-command-dock__section-label">Attach context</div>
@@ -132,6 +133,7 @@
             <template x-for="prompt in voiceQuickPrompts()" :key="prompt">
               <button class="voice-command-dock__prompt" @click="applyVoiceQuickPrompt(prompt)" x-text="prompt"></button>
             </template>
+          </div>
           </div>
 
           <div class="voice-command-dock__actions">

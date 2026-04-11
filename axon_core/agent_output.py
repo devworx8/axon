@@ -144,6 +144,83 @@ def _tool_log_mentions(tool_log: list[dict], keywords: tuple[str, ...]) -> bool:
     return any(any(keyword in _tool_log_entry_text(entry) for keyword in lowered) for entry in tool_log)
 
 
+def _tool_result_indicates_success(result: str) -> bool:
+    lowered = str(result or "").strip().lower()
+    if not lowered:
+        return False
+    return not lowered.startswith(("error:", "blocked_cmd:", "blocked_edit:"))
+
+
+def _tool_log_has_successful_shell_command(tool_log: list[dict], keywords: tuple[str, ...]) -> bool:
+    lowered = tuple(keyword.lower() for keyword in keywords if keyword)
+    for entry in tool_log:
+        if str(entry.get("name", "")).lower() != "shell_cmd":
+            continue
+        args = entry.get("args") or {}
+        command = str(args.get("cmd", "") or "").strip().lower() if isinstance(args, dict) else ""
+        if not command or not any(keyword in command for keyword in lowered):
+            continue
+        if _tool_result_indicates_success(str(entry.get("result", "") or "")):
+            return True
+    return False
+
+
+def _contains_git_push_success_claim(sample: str) -> bool:
+    if not sample:
+        return False
+    explicit_markers = (
+        "successfully pushed",
+        "pushed the active branch",
+        "pushed this branch",
+        "pushed the branch",
+        "pushed to origin",
+        "pushed to remote",
+        "push completed",
+        "push succeeded",
+        "branch was pushed",
+        "git push origin",
+        "set up to track 'origin/",
+        'set up to track "origin/',
+        "everything up-to-date",
+    )
+    if any(marker in sample for marker in explicit_markers):
+        return True
+    return bool(_re.search(r"\bgit push\b", sample) and _re.search(r"\b(done|complete|completed|succeeded|successful)\b", sample))
+
+
+def _contains_git_commit_success_claim(sample: str) -> bool:
+    if not sample:
+        return False
+    explicit_markers = (
+        "successfully committed",
+        "committed the changes",
+        "committed all changes",
+        "created a commit",
+        "commit created",
+        "commit complete",
+        "commit succeeded",
+        "all changes committed",
+        "git commit -m",
+    )
+    if any(marker in sample for marker in explicit_markers):
+        return True
+    return bool(_re.search(r"\bgit commit\b", sample) and _re.search(r"\b(done|complete|completed|succeeded|successful)\b", sample))
+
+
+def _contains_git_merge_success_claim(sample: str) -> bool:
+    if not sample:
+        return False
+    explicit_markers = (
+        "successfully merged",
+        "merge completed",
+        "merge succeeded",
+        "branch was merged",
+    )
+    if any(marker in sample for marker in explicit_markers):
+        return True
+    return bool(_re.search(r"\bgit merge\b", sample) and _re.search(r"\b(done|complete|completed|succeeded|successful)\b", sample))
+
+
 def _has_required_evidence_sections(text: str) -> bool:
     sample = (text or "").lower()
     return all(heading.lower() in sample for heading in _EVIDENCE_SECTION_HEADINGS)
@@ -333,17 +410,22 @@ def _looks_like_hallucinated_execution(text: str, tool_log: list[dict]) -> bool:
         )) and not _tool_log_has_name(tool_log, {"write_file", "append_file", "create_file", "delete_file", "edit_file"}):
             unsupported_claims += 1
 
-        if any(phrase in sample for phrase in (
-            "successfully pushed",
-            "successfully committed",
-            "successfully merged",
-            "all changes committed",
-            "pushed to origin",
-            "pushed to remote",
-            "git push origin",
-            "git commit -m",
-            "changes committed & pushed",
-        )) and not _tool_log_mentions(tool_log, ("git push", "git commit", "git add", "git merge", "pushed", "committed", "merged")):
+        if (
+            _contains_git_push_success_claim(sample)
+            and not _tool_log_has_successful_shell_command(tool_log, ("git push",))
+        ):
+            unsupported_claims += 1
+
+        if (
+            _contains_git_commit_success_claim(sample)
+            and not _tool_log_has_successful_shell_command(tool_log, ("git commit",))
+        ):
+            unsupported_claims += 1
+
+        if (
+            _contains_git_merge_success_claim(sample)
+            and not _tool_log_has_successful_shell_command(tool_log, ("git merge",))
+        ):
             unsupported_claims += 1
 
         if any(phrase in sample for phrase in (

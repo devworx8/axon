@@ -340,7 +340,20 @@ class VoiceTextDockFrontendTests(unittest.TestCase):
         self.assertIn('@change="handleImageFileInput($event)"', template)
         self.assertIn('Photo library', template)
         self.assertIn('Camera', template)
+        self.assertIn('voice-command-dock__body', template)
         self.assertIn('voiceTextDockPreviewHtml()', template)
+
+    def test_desktop_text_dock_css_bounds_panel_preview_and_input(self):
+        stylesheet = VOICE_CONVERSATION_CSS.read_text(encoding="utf-8")
+
+        self.assertIn("max-height: calc(100dvh - 48px);", stylesheet)
+        self.assertIn("max-height: min(44rem, calc(100dvh - 48px));", stylesheet)
+        self.assertIn(".voice-command-dock__body {", stylesheet)
+        self.assertIn("flex: 1 1 auto;", stylesheet)
+        self.assertIn("overflow-y: auto;", stylesheet)
+        self.assertIn("max-height: min(40dvh, 20rem);", stylesheet)
+        self.assertIn("position: relative;", stylesheet)
+        self.assertIn("max-height: min(28dvh, 14rem);", stylesheet)
 
     def test_mobile_text_dock_css_reserves_safe_area_and_scrolls(self):
         stylesheet = VOICE_CONVERSATION_CSS.read_text(encoding="utf-8")
@@ -352,6 +365,7 @@ class VoiceTextDockFrontendTests(unittest.TestCase):
         self.assertIn("justify-content: flex-end;", stylesheet)
         self.assertIn("transform: none;", stylesheet)
         self.assertIn("max-height: calc(100dvh - var(--voice-mobile-dock-top-clearance) - var(--voice-mobile-bottom-clearance));", stylesheet)
+        self.assertIn("overflow: hidden;", stylesheet)
         self.assertIn("overflow-y: auto;", stylesheet)
         self.assertIn("overscroll-behavior: contain;", stylesheet)
         self.assertIn(".voice-command-dock__preview", stylesheet)
