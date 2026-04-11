@@ -1387,7 +1387,7 @@ async def _call_codex_exec_prompt(
     )
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
     raw_output = stdout.decode("utf-8", errors="replace")
-    stderr_text = stderr.decode("utf-8", errors="replace").strip()
+    stderr_text = _clean_cli_text(stderr.decode("utf-8", errors="replace").strip())
     text = ""
     tokens = 0
     for raw_line in raw_output.splitlines():
@@ -1402,7 +1402,7 @@ async def _call_codex_exec_prompt(
         if etype == "item.completed":
             item = event.get("item") or {}
             if isinstance(item, dict) and item.get("type") == "agent_message":
-                text = str(item.get("text") or "").strip() or text
+                text = _clean_cli_text(str(item.get("text") or "").strip()) or text
         elif etype == "turn.completed":
             usage = event.get("usage") or {}
             if isinstance(usage, dict):
@@ -1411,6 +1411,7 @@ async def _call_codex_exec_prompt(
         _track_usage(tokens, 0.0, backend="cli")
     if proc.returncode != 0:
         raise RuntimeError(stderr_text or text or "Codex CLI request failed.")
+    text = _clean_cli_text(text)
     if not text:
         raise RuntimeError(stderr_text or "Codex CLI returned no usable output.")
     return text, tokens
@@ -1494,7 +1495,7 @@ async def _call_cli(
     )
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
     if proc.returncode != 0:
-        err = stderr.decode("utf-8", errors="replace").strip()
+        err = _clean_cli_text(stderr.decode("utf-8", errors="replace").strip())
         raise RuntimeError(f"CLI agent error: {err[:300]}")
 
     raw = stdout.decode("utf-8", errors="replace").strip()
@@ -1522,7 +1523,7 @@ async def _call_cli(
         ln for ln in text.splitlines()
         if not any(ln.strip().startswith(p) or p in ln for p in _SANDBOX_PREFIXES)
     ]
-    text = "\n".join(clean_lines).strip()
+    text = _clean_cli_text("\n".join(clean_lines).strip())
 
     return text, tokens
 
@@ -1540,6 +1541,38 @@ def _stream_text_delta(previous: str, current: str) -> tuple[str, str]:
     if prefix:
         return current[len(prefix):], current
     return current, current
+
+
+_CLI_NOISE_SUBSTRINGS = (
+    "ignoring interface.defaultprompt",
+    "failed to open state db at",
+    "state db discrepancy during",
+    "reading additional input from stdin",
+    "failed to delete shell snapshot",
+    "failed to unwatch",
+)
+
+
+def _is_cli_noise_line(value: str = "") -> bool:
+    line = str(value or "").strip()
+    if not line:
+        return False
+    lower = line.lower()
+    if any(snippet in lower for snippet in _CLI_NOISE_SUBSTRINGS):
+        return True
+    if lower.startswith("warn ") and ("codex" in lower or "sqlite" in lower):
+        return True
+    if _re.match(r"^\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}", lower) and " warn " in lower:
+        return True
+    return False
+
+
+def _clean_cli_text(value: str = "") -> str:
+    text = str(value or "").replace("\r", "")
+    if not text:
+        return ""
+    cleaned_lines = [line for line in text.splitlines() if not _is_cli_noise_line(line)]
+    return "\n".join(cleaned_lines).strip()
 
 
 def _event_content_text(value: Any) -> str:
@@ -1623,7 +1656,7 @@ async def _stream_codex_cli(
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            snapshot = _codex_stream_event_text(event)
+            snapshot = _clean_cli_text(_codex_stream_event_text(event))
             if snapshot:
                 delta, text = _stream_text_delta(text, snapshot)
                 if delta:
@@ -1652,7 +1685,7 @@ async def _stream_codex_cli(
         return
 
     returncode = await proc.wait()
-    stderr_text = (await proc.stderr.read()).decode("utf-8", errors="replace").strip()
+    stderr_text = _clean_cli_text((await proc.stderr.read()).decode("utf-8", errors="replace").strip())
     if tokens:
         _track_usage(tokens, 0.0, backend="cli")
     if returncode != 0:
@@ -1734,7 +1767,7 @@ async def _stream_cli(
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            snapshot = _claude_stream_event_text(event)
+            snapshot = _clean_cli_text(_claude_stream_event_text(event))
             if snapshot:
                 delta, text = _stream_text_delta(text, snapshot)
                 if delta:
@@ -1766,7 +1799,7 @@ async def _stream_cli(
         return
 
     returncode = await proc.wait()
-    stderr_text = (await proc.stderr.read()).decode("utf-8", errors="replace").strip()
+    stderr_text = _clean_cli_text((await proc.stderr.read()).decode("utf-8", errors="replace").strip())
     if tokens:
         _track_usage(tokens, cost, backend="cli")
     if returncode != 0:

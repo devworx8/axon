@@ -332,25 +332,9 @@
   overflow: hidden;
   transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
 }
-.voice-file-viewer__folder-entry[data-voice-reveal="1"],
-.voice-file-viewer__folder-up[data-voice-reveal="1"] {
-  animation: holo-surface-slide-in 0.34s cubic-bezier(0.16, 1, 0.3, 1) both;
-  animation-delay: var(--voice-stagger, 0ms);
-}
 .voice-file-viewer__folder-entry::after,
 .voice-file-viewer__folder-up::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(110deg, transparent 18%, rgba(34, 211, 238, 0.14) 46%, transparent 74%);
-  pointer-events: none;
-  transform: translateX(-120%);
-  opacity: 0;
-}
-.voice-file-viewer__folder-entry[data-voice-reveal="1"]::after,
-.voice-file-viewer__folder-up[data-voice-reveal="1"]::after {
-  animation: holo-surface-sheen 0.9s ease-out both;
-  animation-delay: calc(var(--voice-stagger, 0ms) + 120ms);
+  content: none;
 }
 .voice-file-viewer__folder-entry:hover,
 .voice-file-viewer__folder-up:hover {
@@ -423,11 +407,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .voice-file-viewer,
-  .voice-file-viewer__folder-entry[data-voice-reveal="1"],
-  .voice-file-viewer__folder-up[data-voice-reveal="1"],
-  .voice-file-viewer__folder-entry[data-voice-reveal="1"]::after,
-  .voice-file-viewer__folder-up[data-voice-reveal="1"]::after {
+  .voice-file-viewer {
     animation: none !important;
   }
 }

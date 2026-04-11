@@ -35,6 +35,7 @@ from axon_api.settings_models import SettingsUpdate
 from axon_api.services import claude_cli_runtime
 from axon_api.services import codex_cli_runtime
 from axon_api.services import auto_sessions as auto_session_service
+from axon_api.services import composer_runtime
 from axon_api.services import live_preview_sessions
 from axon_api.services import runtime_login_sessions
 from axon_api.services import runtime_truth as runtime_truth_service
@@ -68,6 +69,17 @@ class SettingsPayloadTests(unittest.TestCase):
 
         self.assertTrue(payload.claude_cli_session_persistence_enabled)
         self.assertEqual(payload.ai_backend, "cli")
+
+    @patch.object(brain, "_find_codex_cli", return_value="/tmp/codex")
+    @patch.object(brain, "normalize_cli_model", return_value="gpt-5.4")
+    def test_selected_cli_path_prefers_codex_binary_for_codex_model_without_override(
+        self,
+        _normalize_cli_model,
+        _find_codex_cli,
+    ):
+        path = composer_runtime.selected_cli_path({"cli_runtime_model": "gpt-5.4"})
+
+        self.assertEqual(path, "/tmp/codex")
 
     def test_normalized_autonomy_profile_rejects_future_modes(self):
         with self.assertRaises(server.HTTPException) as exc:
@@ -1292,6 +1304,36 @@ class RuntimeLoginEndpointTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RuntimeLoginSessionServiceTests(unittest.TestCase):
+    def test_await_login_session_details_returns_browser_prompt_once_available(self):
+        waiting = {
+            "session_id": "sess-1",
+            "family": "codex",
+            "status": "waiting",
+            "browser_url": "",
+            "user_code": "",
+        }
+        opened = {
+            **waiting,
+            "status": "browser_opened",
+            "browser_url": "https://auth.openai.com/codex/device",
+            "user_code": "XF1T-RC1AX",
+        }
+        monotonic_values = iter([100.0, 100.05])
+
+        with patch.object(runtime_login_sessions, "refresh_login_session", side_effect=[waiting, opened]), \
+             patch.object(runtime_login_sessions._time, "sleep", return_value=None), \
+             patch.object(runtime_login_sessions._time, "monotonic", side_effect=lambda: next(monotonic_values)):
+            session = runtime_login_sessions._await_login_session_details(
+                "codex",
+                "sess-1",
+                timeout_seconds=1.0,
+                poll_interval=0.1,
+            )
+
+        self.assertEqual(session["status"], "browser_opened")
+        self.assertEqual(session["browser_url"], "https://auth.openai.com/codex/device")
+        self.assertEqual(session["user_code"], "XF1T-RC1AX")
+
     def test_codex_login_status_uses_device_auth_url_and_extracts_standalone_code(self):
         session = runtime_login_sessions._status_from_meta(
             {"family": "codex", "status": "pending"},
@@ -1709,6 +1751,21 @@ class ClaudeCliRuntimeServiceTests(unittest.TestCase):
         env_paths = [item["path"] for item in snapshot["environments"]]
         self.assertEqual(env_paths, ["/tmp/claude"])
 
+    @patch.object(claude_cli_runtime, "_run_command")
+    def test_auth_status_treats_json_logged_out_payload_as_not_signed_in(self, run_command):
+        run_command.return_value = subprocess.CompletedProcess(
+            args=["/tmp/claude", "auth", "status", "--json"],
+            returncode=1,
+            stdout='{"loggedIn": false, "authMethod": "none", "apiProvider": "firstParty"}',
+            stderr="",
+        )
+
+        status = claude_cli_runtime._auth_status("/tmp/claude")
+
+        self.assertFalse(status["logged_in"])
+        self.assertEqual(status["provider_label"], "Not signed in")
+        self.assertIn("not signed in", status["message"].lower())
+
     @patch.object(claude_cli_runtime, "build_cli_runtime_snapshot")
     def test_prepare_login_returns_manual_command_for_subscription(self, build_snapshot):
         build_snapshot.return_value = {
@@ -2040,6 +2097,89 @@ class ClaudeCliStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("stream-json", cmd)
         self.assertEqual(cmd[cmd.index("--input-format") + 1], "text")
 
+    async def test_stream_codex_cli_filters_runtime_warning_noise(self):
+        class FakeStdout:
+            def __init__(self, lines):
+                self._lines = iter(lines)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._lines)
+                except StopIteration as exc:
+                    raise StopAsyncIteration from exc
+
+        class FakeStderr:
+            async def read(self):
+                return b""
+
+        class FakeProc:
+            def __init__(self):
+                self.stdout = FakeStdout(
+                    [
+                        (
+                            json.dumps(
+                                {
+                                    "type": "item.completed",
+                                    "item": {
+                                        "type": "agent_message",
+                                        "text": (
+                                            "2026-04-10T03:09:41Z WARN codex_core::plugins::manifest: "
+                                            "ignoring interface.defaultPrompt\n"
+                                            "Reading additional input from stdin...\n"
+                                            "Answer ready."
+                                        ),
+                                    },
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8"),
+                        (
+                            json.dumps(
+                                {
+                                    "type": "turn.completed",
+                                    "usage": {"input_tokens": 2, "output_tokens": 3},
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8"),
+                    ]
+                )
+                self.stderr = FakeStderr()
+                self.returncode = 0
+
+            async def wait(self):
+                return self.returncode
+
+        async def fake_wait_for_cli_slot(*args, **kwargs):
+            return None
+
+        async def fake_create_subprocess_exec(*args, **kwargs):
+            return FakeProc()
+
+        with patch.object(brain, "wait_for_cli_slot", side_effect=fake_wait_for_cli_slot), \
+             patch.object(brain.asyncio, "create_subprocess_exec", side_effect=fake_create_subprocess_exec):
+            chunks = [
+                chunk async for chunk in brain._stream_codex_cli(
+                    [{"role": "user", "content": "Reply with OK."}],
+                    binary="/tmp/codex",
+                    model="gpt-5.4",
+                )
+            ]
+
+        self.assertEqual("".join(chunks), "Answer ready.")
+
+    def test_clean_cli_text_filters_timestamped_warning_lines(self):
+        raw = (
+            "2026-04-10T03:09:41Z WARN codex_core::plugins::manifest: ignoring interface.defaultPrompt\n"
+            "Reading additional input from stdin...\n"
+            "Answer ready.\n"
+        )
+
+        self.assertEqual(brain._clean_cli_text(raw), "Answer ready.")
+
 
 class RuntimeStatusCliSelectionTests(unittest.TestCase):
     @patch.object(runtime_manager, "active_agents_count", return_value=1)
@@ -2049,12 +2189,14 @@ class RuntimeStatusCliSelectionTests(unittest.TestCase):
     @patch.object(runtime_manager, "local_model_cards", return_value=[])
     @patch.object(runtime_manager._brain, "discover_cli_environments")
     @patch.object(runtime_manager._brain, "available_cli_models")
+    @patch.object(runtime_manager._brain, "_find_codex_cli", return_value="/tmp/codex")
     @patch.object(runtime_manager._claude_cli_runtime, "build_cli_runtime_snapshot")
     @patch.object(runtime_manager._codex_cli_runtime, "build_codex_runtime_snapshot")
     def test_runtime_status_reports_codex_when_selected(
         self,
         build_codex_snapshot,
         build_claude_snapshot,
+        _find_codex_cli,
         available_cli_models,
         discover_cli_environments,
         _local_model_cards,
@@ -2106,6 +2248,68 @@ class RuntimeStatusCliSelectionTests(unittest.TestCase):
     @patch.object(runtime_manager, "local_model_cards", return_value=[])
     @patch.object(runtime_manager._brain, "discover_cli_environments")
     @patch.object(runtime_manager._brain, "available_cli_models")
+    @patch.object(runtime_manager._brain, "_find_codex_cli", return_value="/tmp/codex")
+    @patch.object(runtime_manager._brain, "normalize_cli_model")
+    @patch.object(runtime_manager._claude_cli_runtime, "build_cli_runtime_snapshot")
+    @patch.object(runtime_manager._codex_cli_runtime, "build_codex_runtime_snapshot")
+    def test_runtime_status_auto_selects_codex_family_for_codex_model_without_path(
+        self,
+        build_codex_snapshot,
+        build_claude_snapshot,
+        normalize_cli_model,
+        _find_codex_cli,
+        available_cli_models,
+        discover_cli_environments,
+        _local_model_cards,
+        _detect_display_gpu_state,
+        _registered_agents,
+        _lifecycle_phases,
+        _active_agents_count,
+    ):
+        build_claude_snapshot.return_value = {
+            "installed": True,
+            "binary": "/tmp/claude",
+            "selected_environment": {"path": "/tmp/claude", "family": "claude"},
+        }
+        build_codex_snapshot.return_value = {
+            "installed": True,
+            "binary": "/tmp/codex",
+            "selected_environment": {"path": "/tmp/codex", "family": "codex"},
+        }
+        discover_cli_environments.return_value = [
+            {"path": "/tmp/claude", "label": "claude", "family": "claude"},
+            {"path": "/tmp/codex", "label": "codex", "family": "codex"},
+        ]
+        available_cli_models.return_value = [{"id": "gpt-5.4", "label": "gpt-5.4"}]
+        normalize_cli_model.side_effect = lambda cli_path, model: model if "codex" in str(cli_path) else ""
+
+        status = runtime_manager.build_runtime_status(
+            settings={
+                "ai_backend": "cli",
+                "cli_runtime_model": "gpt-5.4",
+            },
+            available_models=[],
+            ollama_running=False,
+            vault_unlocked=False,
+            workspace_count=1,
+            usage={"calls": 0},
+            resource_count=0,
+            memory_overview={"total": 0, "layers": {}, "labels": {}},
+        )
+
+        self.assertEqual(status["runtime_label"], "Codex CLI")
+        self.assertEqual(status["cli_runtime"]["runtime_id"], "codex")
+        self.assertEqual(status["cli_binary"], "/tmp/codex")
+        self.assertEqual(status["cli_model"], "gpt-5.4")
+
+    @patch.object(runtime_manager, "active_agents_count", return_value=1)
+    @patch.object(runtime_manager, "lifecycle_phases", return_value=[])
+    @patch.object(runtime_manager, "registered_agents", return_value=[])
+    @patch.object(runtime_manager.gpu_guard, "detect_display_gpu_state", return_value={"warning": "", "connected_outputs": []})
+    @patch.object(runtime_manager, "local_model_cards", return_value=[])
+    @patch.object(runtime_manager._brain, "discover_cli_environments")
+    @patch.object(runtime_manager._brain, "available_cli_models")
+    @patch.object(runtime_manager._brain, "_find_codex_cli", return_value="/tmp/codex")
     @patch.object(runtime_manager._brain, "normalize_cli_model")
     @patch.object(runtime_manager._claude_cli_runtime, "build_cli_runtime_snapshot")
     @patch.object(runtime_manager._codex_cli_runtime, "build_codex_runtime_snapshot")
@@ -2114,6 +2318,7 @@ class RuntimeStatusCliSelectionTests(unittest.TestCase):
         build_codex_snapshot,
         build_claude_snapshot,
         normalize_cli_model,
+        _find_codex_cli,
         available_cli_models,
         discover_cli_environments,
         _local_model_cards,

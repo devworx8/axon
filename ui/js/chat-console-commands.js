@@ -212,6 +212,50 @@ function axonChatConsoleCommandsMixin() {
       ].includes(lower);
     },
 
+    currentWorkspaceRunCommandPreview() {
+      const terminalCommand = String(this.terminalViewportActiveCommand?.('console') || '').trim();
+      if (terminalCommand) return terminalCommand;
+
+      const messages = Array.isArray(this.chatMessages) ? this.chatMessages : [];
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        const workingBlocks = Array.isArray(message?.workingBlocks) ? message.workingBlocks : [];
+        for (let blockIndex = workingBlocks.length - 1; blockIndex >= 0; blockIndex -= 1) {
+          const block = workingBlocks[blockIndex] || {};
+          const args = block.args && typeof block.args === 'object' ? block.args : {};
+          const preview = String(args.cmd || args.command || args.path || '').trim();
+          if (preview) return preview;
+          if (String(block.status || '').trim().toLowerCase() === 'running' && String(block.title || '').trim()) {
+            return String(block.title || '').trim();
+          }
+        }
+      }
+
+      const detail = String(this.liveOperator?.detail || '').trim();
+      if (detail.startsWith('{') && detail.endsWith('}')) {
+        try {
+          const parsed = JSON.parse(detail);
+          const preview = String(parsed?.cmd || parsed?.command || parsed?.path || '').trim();
+          if (preview) return preview;
+        } catch (_) {}
+      }
+
+      const tool = String(this.liveOperator?.tool || '').trim();
+      return tool ? (this.prettyToolName?.(tool) || tool) : '';
+    },
+
+    primeSteerComposer(seed = 'Continue from the current step: ') {
+      this.showConsoleDetails = true;
+      if (!String(this.chatInput || '').trim()) this.chatInput = seed;
+      this.resetChatComposerHeight?.();
+      this.$nextTick?.(() => {
+        const composer = this.$refs?.chatComposer || null;
+        composer?.focus?.();
+        const end = typeof composer?.value === 'string' ? composer.value.length : 0;
+        composer?.setSelectionRange?.(end, end);
+      });
+    },
+
     async handleBusyWorkspaceCommand(message = '', options = {}) {
       const msg = String(message || '').trim();
       const workspaceId = String(

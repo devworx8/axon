@@ -3,6 +3,19 @@
    ══════════════════════════════════════════════════════════════ */
 function axonMobileMixin() {
   const trimText = (value = '') => String(value || '').trim();
+  const canonicalizeWakePhraseTranscript = (value = '', wakePhrase = 'Axon') => {
+    const helper = window.axonVoiceSpeech?.canonicalizeWakePhraseTranscript;
+    if (typeof helper === 'function') {
+      return trimText(helper(value, wakePhrase));
+    }
+    const raw = trimText(value);
+    const phrase = trimText(wakePhrase || 'Axon') || 'Axon';
+    if (!raw || phrase.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() !== 'axon') return raw;
+    return raw.replace(
+      /^((?:hey|hi|hello|ok(?:ay)?|yo|please|listen)\s+)?accent(?=$|[^a-z0-9])/i,
+      (_match, leadIn = '') => `${leadIn}${phrase}`,
+    );
+  };
   const browserSpeechRecognition = () => window.webkitSpeechRecognition || window.SpeechRecognition;
   const isStandaloneVoiceShell = () => !!(
     window.matchMedia?.('(display-mode: standalone)')?.matches
@@ -73,7 +86,7 @@ function axonMobileMixin() {
       const recorderReady = this.voiceRecorderBackendReady?.() || false;
       const azureSpeechReady = typeof this.azureSpeechConfigured === 'function' && this.azureSpeechConfigured();
       this.speechInputSupported = hasBrowserRecognition || (hasAzureSdk && azureSpeechReady) || (hasRecorder && recorderReady);
-      this.speechOutputSupported = !!window.speechSynthesis || azureSpeechReady;
+      this.speechOutputSupported = !!window.speechSynthesis || azureSpeechReady || !!this.voiceStatus?.cloud_synthesis_available || !!this.voiceStatus?.synthesis_ready;
       this.speechSupported = this.speechInputSupported || this.speechOutputSupported;
       if (this.showVoiceOrb && this.voiceShouldDefaultToAgentMode?.()) {
         this.ensureVoiceDefaultConversationMode?.();
@@ -149,7 +162,8 @@ function axonMobileMixin() {
         if (!response.ok) {
           throw new Error(payload?.detail || 'Voice transcription failed');
         }
-        const text = trimText(payload?.text || '');
+        const wakePhrase = trimText(this.companionAxonWakePhrase?.() || 'Axon') || 'Axon';
+        const text = canonicalizeWakePhraseTranscript(trimText(payload?.text || ''), wakePhrase);
         if (!text) {
           this.showToast('No speech was detected');
           return '';

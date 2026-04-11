@@ -9,6 +9,7 @@ import type { AxonModeStatus } from '@/types/axon';
 import type { VoiceTurnResponse } from '@/types/companion-core';
 import { useAxonMode } from './useAxonMode';
 import { useAxonSpeech } from './useAxonSpeech';
+import { buildSpeechRecognitionContext } from './voiceCommandUtils';
 
 type AppTab = 'mission' | 'voice' | 'attention' | 'projects' | 'sessions' | 'settings';
 
@@ -61,6 +62,8 @@ export function useAxonMobileRuntime({
   const liveVoice = useLiveVoiceCapture(config, {
     enabled: Boolean(settings.voiceEnabled),
     language: 'en',
+    wakePhrase: settings.axonWakePhrase,
+    contextualPhrases: buildSpeechRecognitionContext(settings.axonWakePhrase),
     autoSubmitOnSpeechEnd: Boolean(settings.alwaysListening),
     onTranscript: handleVoiceSubmit,
   });

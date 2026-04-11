@@ -309,6 +309,9 @@ button, [role="button"], a {
 }
 
 .console-command-header {
+  position: relative;
+  z-index: 10040;
+  overflow: visible;
   background:
     linear-gradient(90deg, rgba(0, 212, 255, 0.10), transparent 24%, transparent 72%, rgba(255, 159, 28, 0.08)),
     rgba(0, 10, 20, 0.85);
@@ -393,6 +396,7 @@ button, [role="button"], a {
 .console-runtime-popover {
   position: absolute;
   isolation: isolate;
+  z-index: 10050;
   border: 1px solid rgba(71, 85, 105, 0.82);
   background:
     linear-gradient(180deg, rgba(34, 211, 238, 0.09), transparent 20%, transparent 76%, rgba(249, 115, 22, 0.08)),

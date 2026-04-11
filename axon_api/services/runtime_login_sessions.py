@@ -325,6 +325,37 @@ def find_active_login_session(family: str, *, binary: str = "", command_preview:
     return None
 
 
+def _session_has_ready_login_prompt(session: dict[str, Any] | None) -> bool:
+    if not session:
+        return False
+    if str(session.get("browser_url") or "").strip():
+        return True
+    if str(session.get("user_code") or "").strip():
+        return True
+    status = str(session.get("status") or "").strip().lower()
+    return status in {"browser_opened", "authenticated", "failed", "cancelled"}
+
+
+def _await_login_session_details(
+    family: str,
+    session_id: str,
+    *,
+    timeout_seconds: float = 1.5,
+    poll_interval: float = 0.1,
+) -> dict[str, Any] | None:
+    deadline = _time.monotonic() + max(float(timeout_seconds or 0), 0.0)
+    latest: dict[str, Any] | None = None
+    interval = max(float(poll_interval or 0), 0.05)
+
+    while True:
+        latest = refresh_login_session(family, session_id) or latest
+        if _session_has_ready_login_prompt(latest):
+            return latest
+        if _time.monotonic() >= deadline:
+            return latest
+        _time.sleep(interval)
+
+
 def start_login_session(
     family: str,
     *,
@@ -406,7 +437,7 @@ def start_login_session(
         }
     )
     write_login_session(initial)
-    return refresh_login_session(family_name, session_id) or initial
+    return _await_login_session_details(family_name, session_id) or initial
 
 
 def cancel_login_session(family: str, session_id: str) -> dict[str, Any]:

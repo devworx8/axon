@@ -28,11 +28,9 @@ function axonVoiceCommandCenterMixin() {
   };
 
   const decorateVoiceResponseLinks = (html = '') => {
-    let chipIndex = 0;
     return String(html || '').replace(/<a\b([^>]*)href="([^"]+)"([^>]*)>([\s\S]*?)<\/a>/gi, (match, beforeHref, href, afterHref, body) => {
       const localPath = extractLocalPathFromHref(href);
       if (!localPath) return match;
-      const stagger = chipIndex++ * 80;
       let attrs = `${beforeHref || ''} href="${escapeAttr(href)}"${afterHref || ''}`;
       if (/class="/i.test(attrs)) {
         attrs = attrs.replace(/class="([^"]*)"/i, (_classMatch, classValue) => `class="${escapeAttr(`${classValue} voice-file-chip`.trim())}"`);
@@ -41,16 +39,6 @@ function axonVoiceCommandCenterMixin() {
       }
       if (!/data-voice-path="/i.test(attrs)) {
         attrs += ` data-voice-path="${escapeAttr(localPath)}"`;
-      }
-      if (!/data-voice-animate="/i.test(attrs)) {
-        attrs += ' data-voice-animate="1"';
-      }
-      if (/style="/i.test(attrs)) {
-        attrs = attrs.replace(/style="([^"]*)"/i, (_styleMatch, styleValue) => (
-          `style="${escapeAttr(`${styleValue}; --voice-stagger:${stagger}ms`.replace(/;;/g, ';'))}"`
-        ));
-      } else {
-        attrs += ` style="--voice-stagger:${stagger}ms"`;
       }
       return `<a${attrs}>${body}</a>`;
     });
@@ -159,7 +147,7 @@ function axonVoiceCommandCenterMixin() {
 
     _speakGreeting(text) {
       if (typeof this.speakMessage === 'function') {
-        this.speakMessage(text);
+        this.speakMessage(text, { kind: 'status' });
       }
     },
 
@@ -250,13 +238,21 @@ function axonVoiceCommandCenterMixin() {
     },
 
     voiceTaskSurfaceActive() {
+      const HOLD_MS = 6000;
       const activeNow = !!(
         this.voiceShouldRenderOperatorDeck?.()
         || (this.chatLoading && this.liveOperator?.active)
       );
       if (activeNow) {
-        this._voiceTaskSurfaceHoldUntil = Date.now() + 25000;
+        this._voiceTaskSurfaceHoldUntil = Date.now() + HOLD_MS;
         return true;
+      }
+      if (
+        this.voiceConversation?.awaitingReply
+        || (!this.chatLoading && trimText(this.voiceLatestResponseText?.() || ''))
+      ) {
+        this._voiceTaskSurfaceHoldUntil = 0;
+        return false;
       }
       return Number(this._voiceTaskSurfaceHoldUntil || 0) > Date.now();
     },
@@ -291,11 +287,30 @@ function axonVoiceCommandCenterMixin() {
       const taskSurfaceActive = this.voiceTaskSurfaceActive();
       if (!taskSurfaceActive) {
         this._voiceTaskSurfaceLastHtml = '';
+        this._voiceTaskSurfaceSignature = '';
         return '';
       }
       let html = '';
+      const latestMessage = typeof this.latestAssistantMessage === 'function'
+        ? this.latestAssistantMessage()
+        : null;
+      const streamBlocksHtml = typeof this.voiceStreamingBlocksHtml === 'function'
+        ? this.voiceStreamingBlocksHtml()
+        : '';
       if (typeof this.voiceOperatorDeckHtml === 'function') {
         html = this.voiceOperatorDeckHtml();
+      }
+      if (
+        !trimText(html)
+        && trimText(streamBlocksHtml)
+        && (
+          latestMessage?.streaming
+          || this.chatLoading
+          || this.liveOperator?.active
+          || this.currentWorkspaceRunActive?.()
+        )
+      ) {
+        html = streamBlocksHtml;
       }
       if (!trimText(html) && typeof this.voiceConversationFeedHtml === 'function') {
         html = this.voiceConversationFeedHtml();
@@ -304,6 +319,11 @@ function axonVoiceCommandCenterMixin() {
         html = this.voiceLiveOperatorFeedHtml() || '';
       }
       if (trimText(html)) {
+        const signature = trimText(html);
+        if (signature === trimText(this._voiceTaskSurfaceSignature || '') && trimText(this._voiceTaskSurfaceLastHtml || '')) {
+          return this._voiceTaskSurfaceLastHtml;
+        }
+        this._voiceTaskSurfaceSignature = signature;
         this._voiceTaskSurfaceLastHtml = html;
         return html;
       }
@@ -324,12 +344,23 @@ function axonVoiceCommandCenterMixin() {
       if (taskSurfaceHtml) return taskSurfaceHtml;
 
       const raw = this.voiceDisplayResponse();
+      const latestMessage = typeof this.latestAssistantMessage === 'function'
+        ? this.latestAssistantMessage()
+        : null;
 
       if (!raw || raw === 'The latest voice response will appear here.') {
         return '<span class="text-slate-500">' + raw + '</span>';
       }
       if (raw === 'Axon is processing your request…') {
         return '<span class="text-slate-400 voice-typing-cursor">' + raw + '</span>';
+      }
+      if (latestMessage?.streaming) {
+        const safe = raw
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/\n/g, '<br>');
+        return `<div class="voice-response-render">${safe}<span class="voice-typing-cursor"></span></div>`;
       }
       // Use marked.js if available, else escape and linkify
       let html = '';
@@ -475,34 +506,50 @@ function axonVoiceCommandCenterMixin() {
     // ══════════════════════════════════════════════════════════
 
     _lastNarrationAt: 0,
+    _lastNarrationSignature: '',
     _narrationQueue: [],
     _narrationTimer: null,
+
+    voiceAgentNarrationEnabled() {
+      return !!(
+        this.showVoiceOrb
+        && this.voiceMode
+        && (
+          this.voiceConversation?.agentNarration === true
+          || this.settingsForm?.voice_agent_narration === true
+        )
+      );
+    },
 
     /**
      * Called by live-operator whenever a new agent step is pushed.
      * Throttled: max 1 narration per 6s to avoid talking over itself.
      */
     narrateAgentStep(phase, title, detail) {
-      if (!this.showVoiceOrb || !this.voiceMode) return;
+      if (!this.voiceAgentNarrationEnabled?.()) return;
       if (this.reactorAsleep) return;
       // Skip if already speaking a full response or listening
       if (this.voiceActive) return;
 
       const line = this._buildNarrationLine(phase, title, detail);
       if (!line) return;
+      const signature = `${String(phase || '').trim().toLowerCase()}|${line}`;
 
       const now = Date.now();
       const elapsed = now - (this._lastNarrationAt || 0);
+      if (signature === this._lastNarrationSignature && elapsed < 20000) return;
       const speechBusy = typeof this.voiceSpeechBusy === 'function'
         ? this.voiceSpeechBusy()
         : !!(this._currentAudio || this._speechSynthActive);
 
       if (elapsed >= 6000 && !speechBusy) {
         this._lastNarrationAt = now;
+        this._lastNarrationSignature = signature;
         this._speakNarration(line);
       } else {
         // Queue the latest line — only keep the most recent pending
         this._narrationQueue = [line];
+        this._lastNarrationSignature = signature;
         if (!this._narrationTimer) {
           const wait = Math.max(500, 6000 - elapsed);
           this._narrationTimer = setTimeout(() => {
@@ -523,7 +570,7 @@ function axonVoiceCommandCenterMixin() {
 
     _speakNarration(text) {
       if (typeof this.speakMessage === 'function') {
-        this.speakMessage(text);
+        this.speakMessage(text, { kind: 'status' });
       }
     },
 
@@ -548,7 +595,7 @@ function axonVoiceCommandCenterMixin() {
         return '';
       }
       if (phase === 'plan') {
-        return 'Planning the next step.';
+        return '';
       }
       if (phase === 'recover') {
         return "There's an issue. I may need your attention, Sir.";
@@ -564,6 +611,8 @@ function axonVoiceCommandCenterMixin() {
       clearTimeout(this._narrationTimer);
       this._narrationTimer = null;
       this._narrationQueue = [];
+      this._lastNarrationAt = 0;
+      this._lastNarrationSignature = '';
     },
 
   };

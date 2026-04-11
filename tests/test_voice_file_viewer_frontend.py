@@ -214,6 +214,97 @@ class VoiceFileViewerFrontendTests(unittest.TestCase):
         )
         self.assertEqual(payload["error"], "")
 
+    def test_open_voice_file_viewer_ignores_duplicate_open_for_same_path(self):
+        payload = _run_voice_file_viewer_script(
+            """
+            const mixin = ctx.window.axonVoiceFileViewerMixin();
+            const app = { authHeaders() { return {}; } };
+            Object.assign(app, mixin);
+            let fetchCount = 0;
+            ctx.fetch = async () => {
+              fetchCount += 1;
+              return {
+                ok: true,
+                json: async () => ({ content: 'live operator' }),
+              };
+            };
+            await app.openVoiceFileViewer('/home/edp/.devbrain/ui/js/live-operator.js', 'code', { auto: true });
+            await app.openVoiceFileViewer('/home/edp/.devbrain/ui/js/live-operator.js', 'code', { auto: true });
+            console.log(JSON.stringify({
+              fetchCount,
+              open: app.voiceFileViewer.open,
+              path: app.voiceFileViewer.path,
+              type: app.voiceFileViewer.type,
+            }));
+            """
+        )
+
+        self.assertEqual(payload["fetchCount"], 1)
+        self.assertTrue(payload["open"])
+        self.assertEqual(payload["path"], "/home/edp/.devbrain/ui/js/live-operator.js")
+        self.assertEqual(payload["type"], "code")
+
+    def test_queue_voice_file_reveal_skips_recently_opened_path(self):
+        payload = _run_voice_file_viewer_script(
+            """
+            const mixin = ctx.window.axonVoiceFileViewerMixin();
+            const app = { authHeaders() { return {}; } };
+            Object.assign(app, mixin);
+            let fetchCount = 0;
+            ctx.fetch = async () => {
+              fetchCount += 1;
+              return {
+                ok: true,
+                json: async () => ({ content: 'live operator' }),
+              };
+            };
+            await app.openVoiceFileViewer('/home/edp/.devbrain/ui/js/live-operator.js', 'code', { auto: true });
+            app.queueVoiceFileReveal('/home/edp/.devbrain/ui/js/live-operator.js');
+            console.log(JSON.stringify({
+              fetchCount,
+              queueLength: app.voiceFileReveal.queue.length,
+              lastOpenPath: app.voiceFileReveal.lastOpenPath,
+            }));
+            """,
+        )
+
+        self.assertEqual(payload["fetchCount"], 1)
+        self.assertEqual(payload["queueLength"], 0)
+        self.assertEqual(payload["lastOpenPath"], "/home/edp/.devbrain/ui/js/live-operator.js")
+
+    def test_open_voice_file_viewer_resolves_workspace_relative_ui_path_hints(self):
+        payload = _run_voice_file_viewer_script(
+            """
+            const mixin = ctx.window.axonVoiceFileViewerMixin();
+            const app = {
+              authHeaders() { return {}; },
+              chatProject: { path: '/home/edp/.devbrain' },
+            };
+            Object.assign(app, mixin);
+            const calls = [];
+            ctx.fetch = async (url) => {
+              calls.push(url);
+              return {
+                ok: true,
+                json: async () => ({ content: 'stream blocks' }),
+              };
+            };
+            await app.openVoiceFileViewer('/js/voice-stream-blocks.js', 'code');
+            console.log(JSON.stringify({
+              path: app.voiceFileViewer.path,
+              fetchUrl: calls[0] || '',
+              error: app.voiceFileViewer.error || '',
+            }));
+            """
+        )
+
+        self.assertEqual(payload["path"], "/home/edp/.devbrain/ui/js/voice-stream-blocks.js")
+        self.assertIn(
+            "/api/files/read?path=%2Fhome%2Fedp%2F.devbrain%2Fui%2Fjs%2Fvoice-stream-blocks.js",
+            payload["fetchUrl"],
+        )
+        self.assertEqual(payload["error"], "")
+
     def test_terminal_surface_click_focuses_terminal_instead_of_opening_file_viewer(self):
         payload = _run_voice_file_viewer_script(
             """

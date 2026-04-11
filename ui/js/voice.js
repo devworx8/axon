@@ -28,11 +28,36 @@ function axonVoiceMixin() {
       return match ? match[0] : 'en-GB';
     },
 
+    voiceWakePhrase() {
+      return String(this.companionAxonWakePhrase?.() || 'Axon').trim() || 'Axon';
+    },
+
+    normalizeVoiceTranscript(text = '') {
+      const value = String(text || '').trim();
+      const canonicalize = window.axonVoiceSpeech?.canonicalizeWakePhraseTranscript;
+      if (!value || typeof canonicalize !== 'function') return value;
+      return String(canonicalize(value, this.voiceWakePhrase?.() || 'Axon') || '').trim();
+    },
+
     refreshVoiceCapability() {
       const hasBrowserRecognition = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
       const hasAzureSdk = !!window.SpeechSDK;
-      this.speechInputSupported = hasBrowserRecognition || (hasAzureSdk && this.azureSpeechConfigured());
-      this.speechOutputSupported = !!window.speechSynthesis || this.azureSpeechConfigured();
+      const hasRecorder = typeof this.voiceCanRecordInBrowser === 'function'
+        ? this.voiceCanRecordInBrowser()
+        : !!(window.MediaRecorder && navigator.mediaDevices?.getUserMedia);
+      const recorderReady = typeof this.voiceRecorderBackendReady === 'function'
+        ? this.voiceRecorderBackendReady()
+        : !!(
+          this.voiceStatus?.transcription_ready
+          || this.voiceStatus?.transcription_available
+          || this.voiceStatus?.cloud_transcription_available
+        );
+      const cloudSpeechReady = !!(
+        this.voiceStatus?.cloud_synthesis_available
+        || this.voiceStatus?.synthesis_ready
+      );
+      this.speechInputSupported = hasBrowserRecognition || (hasAzureSdk && this.azureSpeechConfigured()) || (hasRecorder && recorderReady);
+      this.speechOutputSupported = !!window.speechSynthesis || cloudSpeechReady || this.azureSpeechConfigured();
       this.speechSupported = this.speechInputSupported || this.speechOutputSupported;
       if (this.showVoiceOrb && this.voiceShouldDefaultToAgentMode?.()) {
         this.ensureVoiceDefaultConversationMode?.();
@@ -132,6 +157,9 @@ function axonVoiceMixin() {
       this.switchTab('chat');
       this.refreshVoiceCapability();
       this.ensureVoiceDefaultConversationMode?.();
+      Promise.resolve()
+        .then(() => this.loadVoiceStatus?.())
+        .catch(() => {});
       this.ensureVoiceConversationState?.();
       this.initVoiceSurfaceDirector?.();
       if (this.chatInput && !this.voiceTranscript) {
@@ -220,6 +248,9 @@ function axonVoiceMixin() {
 
     // ── Voice input ──
     async startVoice() {
+      if (this.voiceActive && this._voiceRecorder) {
+        return this.stopRecordedVoiceCapture?.() || '';
+      }
       if (this.voiceActive && this._speechRecognizer) {
         try {
           if (typeof this._speechRecognizer.stop === 'function') this._speechRecognizer.stop();
@@ -229,6 +260,16 @@ function axonVoiceMixin() {
         this._speechRecognizer = null;
         this.showToast('Voice capture stopped');
         return;
+      }
+      try {
+        await this.loadVoiceStatus?.();
+      } catch (_) {}
+      if (typeof this.voiceShouldUseRecordedCapture === 'function' && this.voiceShouldUseRecordedCapture()) {
+        const started = await this.startRecordedVoiceCapture?.();
+        if (!started) {
+          this.showToast('Could not start voice recording');
+        }
+        return '';
       }
       const SpeechRec = window.webkitSpeechRecognition || window.SpeechRecognition;
       const isTrustedLocal = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
@@ -257,6 +298,18 @@ function axonVoiceMixin() {
         return;
       }
       if (!SpeechRec) {
+        if (
+          typeof this.voiceCanRecordInBrowser === 'function'
+          && this.voiceCanRecordInBrowser()
+          && typeof this.voiceRecorderBackendReady === 'function'
+          && this.voiceRecorderBackendReady()
+        ) {
+          const started = await this.startRecordedVoiceCapture?.();
+          if (!started) {
+            this.showToast('Could not start voice recording');
+          }
+          return '';
+        }
         this.showToast('This browser does not expose live speech recognition here');
         return;
       }
@@ -277,7 +330,7 @@ function axonVoiceMixin() {
           if (result?.isFinal) finalTranscript += `${transcript} `;
           else interimTranscript += `${transcript} `;
         }
-        const combined = `${finalTranscript}${interimTranscript}`.trim();
+        const combined = this.normalizeVoiceTranscript(`${finalTranscript}${interimTranscript}`.trim());
         if (!combined) {
           const handledNoSpeech = this.handleVoiceCaptureLifecycle?.('error', { code: 'no-speech' });
           if (!handledNoSpeech) this.showToast('No speech was detected');
@@ -343,7 +396,7 @@ function axonVoiceMixin() {
         this.voiceActive = true;
         recognizer.recognizeOnceAsync(
           (result) => {
-            const text = String(result?.text || '').trim();
+            const text = this.normalizeVoiceTranscript(String(result?.text || '').trim());
             if (!text) {
               const handledNoSpeech = this.handleVoiceCaptureLifecycle?.('error', { code: 'no-speech' });
               if (!handledNoSpeech) this.showToast('No speech was detected');

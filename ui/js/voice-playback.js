@@ -68,6 +68,7 @@ function axonVoicePlaybackMixin() {
       this._speechPlaybackSession = Number(this._speechPlaybackSession || 0) + 1;
       this._speechSynthActive = false;
       this._speechPlaybackPending = false;
+      this._speechPlaybackKind = '';
       const abortController = this._speechPlaybackAbortController;
       this._speechPlaybackAbortController = null;
       if (abortController && typeof abortController.abort === 'function') {
@@ -213,22 +214,43 @@ function axonVoicePlaybackMixin() {
       }
     },
 
-    async speakMessage(text) {
-      this.stopSpeech();
+    cloudSpeechSynthesisAvailable() {
+      return !!(
+        this.voiceStatus?.cloud_synthesis_available
+        || (typeof this.azureSpeechConfigured === 'function' && this.azureSpeechConfigured())
+      );
+    },
+
+    async speakMessage(text, options = {}) {
       const chunks = this._speechChunks(text);
       if (!chunks.length) return;
+      const kind = String(options?.kind || 'reply').trim().toLowerCase() === 'status' ? 'status' : 'reply';
+      const speakingReply = this._speechPlaybackKind === 'reply' && this.voiceSpeechBusy();
+      if (kind === 'status' && speakingReply) {
+        return false;
+      }
+      if (kind === 'status' && this.voiceSpeechBusy()) {
+        return false;
+      }
+      this.stopSpeech();
       const spokenText = chunks.join(' ');
-      this.onVoiceReplyPlaybackStarted?.(spokenText);
       const sessionId = Number(this._speechPlaybackSession || 0) + 1;
       this._speechPlaybackSession = sessionId;
       this._speechPlaybackPending = true;
+      this._speechPlaybackKind = kind;
+      if (kind === 'reply') {
+        this.onVoiceReplyPlaybackStarted?.(spokenText);
+      }
 
       try {
-        if (this.azureSpeechConfigured() && this.settingsForm.azure_speech_region) {
+        if (this.cloudSpeechSynthesisAvailable?.()) {
           try {
             await this._playAzureSpeechChunks(chunks, sessionId);
             if (sessionId === this._speechPlaybackSession) {
-              this.onVoiceReplyPlaybackComplete?.(spokenText);
+              if (kind === 'reply') {
+                this.onVoiceReplyPlaybackComplete?.(spokenText);
+              }
+              this._speechPlaybackKind = '';
             }
             return;
           } catch (error) {
@@ -242,7 +264,10 @@ function axonVoicePlaybackMixin() {
 
         const spoke = await this._speakBrowserChunks(chunks, sessionId);
         if (spoke && sessionId === this._speechPlaybackSession) {
-          this.onVoiceReplyPlaybackComplete?.(spokenText);
+          if (kind === 'reply') {
+            this.onVoiceReplyPlaybackComplete?.(spokenText);
+          }
+          this._speechPlaybackKind = '';
         }
         if (!spoke && sessionId === this._speechPlaybackSession) {
           this.showToast?.('Speech playback is not available in this browser');
@@ -250,8 +275,12 @@ function axonVoicePlaybackMixin() {
       } finally {
         if (sessionId === this._speechPlaybackSession) {
           this._speechPlaybackPending = false;
+          if (!this._currentAudio && !this._speechSynthActive) {
+            this._speechPlaybackKind = '';
+          }
         }
       }
+      return true;
     },
 
     toggleVoiceMode() {

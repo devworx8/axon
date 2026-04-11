@@ -74,6 +74,16 @@ def _setting_enabled(value) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _auto_selected_cli_path(requested_model: str = "") -> str:
+    requested = str(requested_model or "").strip()
+    if not requested:
+        return ""
+    codex_binary = str(_brain._find_codex_cli() or "").strip()
+    if not codex_binary:
+        return ""
+    return codex_binary if _brain.normalize_cli_model(codex_binary, requested) == requested else ""
+
+
 def build_router_config(settings: dict) -> ModelRouterConfig:
     selected = {
         "code": settings.get("code_model", "") or settings.get("ollama_model", "") or "",
@@ -164,7 +174,10 @@ def build_runtime_status(
         card["safety_warning"] = safety.get("warning", "")
         card["preferred_num_ctx"] = safety.get("preferred_num_ctx")
     runtime_ready = ollama_running or settings.get("ai_backend") in {"api", "cli"}
+    requested_cli_model = str(settings.get("cli_runtime_model", settings.get("claude_cli_model", "")) or "")
     selected_cli_override = str(settings.get("cli_runtime_path", settings.get("claude_cli_path", "")) or "")
+    if not selected_cli_override:
+        selected_cli_override = _auto_selected_cli_path(requested_cli_model)
     selected_cli_family = _brain._cli_runtime_family(selected_cli_override) if selected_cli_override else "claude"
     claude_runtime = {
         **_claude_cli_runtime.build_cli_runtime_snapshot(selected_cli_override if selected_cli_family == "claude" else ""),
@@ -184,7 +197,7 @@ def build_runtime_status(
     cli_models = _brain.available_cli_models(selected_cli_path)
     normalized_cli_model = _brain.normalize_cli_model(
         selected_cli_path,
-        settings.get("cli_runtime_model", settings.get("claude_cli_model", "")),
+        requested_cli_model,
     )
 
     if backend == "api":

@@ -354,7 +354,7 @@ function axonChatMixin() {
       let buf = '';
       if (mode === 'agent') {
         this.setAgentStage('plan');
-        this.updateLiveOperator(mode, { type: 'text' }, targetWorkspaceId);
+        this.updateLiveOperator(mode, { type: 'stream_open' }, targetWorkspaceId);
       } else {
         this.updateLiveOperator(mode, { chunk: 'stream-open' }, targetWorkspaceId);
       }

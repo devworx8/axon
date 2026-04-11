@@ -146,6 +146,48 @@ def _auth_status(binary: str) -> StatusRecord:
         }
 
     raw = (proc.stdout or proc.stderr or "").strip()
+    data: dict[str, Any] | None = None
+    try:
+        candidate = json.loads(raw or "{}")
+        if isinstance(candidate, dict):
+            data = candidate
+    except json.JSONDecodeError:
+        data = None
+
+    if data is not None:
+        logged_in = bool(data.get("loggedIn"))
+        if not logged_in:
+            return {
+                "logged_in": False,
+                "auth_method": "",
+                "subscription_type": "",
+                "email": "",
+                "org_id": "",
+                "org_name": "",
+                "provider_label": "Not signed in",
+                "message": "Claude CLI is installed but not signed in.",
+            }
+        auth_method = str(data.get("authMethod") or "")
+        subscription_type = str(data.get("subscriptionType") or "")
+        provider_label = "Claude subscription" if auth_method == "claude.ai" else (
+            "Anthropic Console" if auth_method == "console" else (auth_method or "Authenticated")
+        )
+        message_parts = [provider_label]
+        if subscription_type:
+            message_parts.append(subscription_type)
+        if data.get("email"):
+            message_parts.append(str(data.get("email")))
+        return {
+            "logged_in": True,
+            "auth_method": auth_method,
+            "subscription_type": subscription_type,
+            "email": str(data.get("email") or ""),
+            "org_id": str(data.get("orgId") or ""),
+            "org_name": str(data.get("orgName") or ""),
+            "provider_label": provider_label,
+            "message": " · ".join(part for part in message_parts if part),
+        }
+
     if proc.returncode != 0:
         lower = raw.lower()
         if any(token in lower for token in ("not logged", "not authenticated", "sign in", "login")):
@@ -170,39 +212,15 @@ def _auth_status(binary: str) -> StatusRecord:
             "message": raw or "Unable to read Claude CLI auth status.",
         }
 
-    try:
-        data = json.loads(raw or "{}")
-    except json.JSONDecodeError:
-        return {
-            "logged_in": False,
-            "auth_method": "",
-            "subscription_type": "",
-            "email": "",
-            "org_id": "",
-            "org_name": "",
-            "provider_label": "Unknown",
-            "message": raw or "Unable to parse Claude CLI auth status.",
-        }
-
-    auth_method = str(data.get("authMethod") or "")
-    subscription_type = str(data.get("subscriptionType") or "")
-    provider_label = "Claude subscription" if auth_method == "claude.ai" else (
-        "Anthropic Console" if auth_method == "console" else (auth_method or "Authenticated")
-    )
-    message_parts = [provider_label]
-    if subscription_type:
-        message_parts.append(subscription_type)
-    if data.get("email"):
-        message_parts.append(str(data.get("email")))
     return {
-        "logged_in": bool(data.get("loggedIn")),
-        "auth_method": auth_method,
-        "subscription_type": subscription_type,
-        "email": str(data.get("email") or ""),
-        "org_id": str(data.get("orgId") or ""),
-        "org_name": str(data.get("orgName") or ""),
-        "provider_label": provider_label,
-        "message": " · ".join(part for part in message_parts if part),
+        "logged_in": False,
+        "auth_method": "",
+        "subscription_type": "",
+        "email": "",
+        "org_id": "",
+        "org_name": "",
+        "provider_label": "Unknown",
+        "message": raw or "Unable to parse Claude CLI auth status.",
     }
 
 

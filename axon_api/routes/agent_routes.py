@@ -408,13 +408,14 @@ class AgentRouteHandlers:
                 ):
                     event_type = event.get("type")
                     if event_type == "text":
-                        collected_text.append(event["chunk"])
+                        chunk = str(event.get("chunk") or "")
+                        collected_text.append(chunk)
                         self._set_live_operator(
                             active=True,
                             mode="agent",
-                            phase="plan",
-                            title="Planning the next step",
-                            detail="Axon is reasoning through the task.",
+                            phase="verify",
+                            title="Writing the result",
+                            detail=chunk[:180] or "Axon is drafting the answer now.",
                             workspace_id=body.project_id,
                             preserve_started=True,
                         )

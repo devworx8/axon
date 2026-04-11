@@ -7,7 +7,7 @@ function axonLiveOperatorMixin() {
   const scopedWorkspaceId = (ctx, workspaceId = null) => String(
     workspaceId == null ? (ctx.chatProjectId || '') : workspaceId,
   ).trim();
-  const SAFE_PATH_PREFIXES = ['~/', './', '../', '/home/'];
+  const SAFE_PATH_PREFIXES = ['~/', './', '../', '/home/', '/tmp/', '/var/tmp/'];
   const trimText = (value = '') => String(value || '').trim();
   const clipText = (value = '', max = LIVE_OPERATOR_TEXT_PREVIEW_LIMIT) => {
     const text = trimText(value);
@@ -18,6 +18,15 @@ function axonLiveOperatorMixin() {
     if (!raw) return false;
     return SAFE_PATH_PREFIXES.some(prefix => raw.startsWith(prefix));
   };
+  const normalizeOperatorPath = (ctx, value = '') => {
+    const raw = trimText(value);
+    if (!raw) return '';
+    const normalized = typeof ctx?._normalizeRevealPath === 'function'
+      ? trimText(ctx._normalizeRevealPath(raw))
+      : '';
+    if (normalized) return normalized;
+    return looksLikeLocalPath(raw) ? raw : '';
+  };
   const extractLocalPathsFromText = (value = '') => {
     const matches = String(value || '').match(/(?:~\/|\/|\.{1,2}\/)[^\s"'`<>]+/g) || [];
     return matches.map(v => String(v || '').replace(/[),.;:!?]+$/g, '')).filter(looksLikeLocalPath);
@@ -25,11 +34,13 @@ function axonLiveOperatorMixin() {
   const safeDecode = (value = '') => {
     try { return decodeURIComponent(value); } catch (_) { return value; }
   };
-  const extractPreviewablePathsFromText = (value = '') => {
-    const localPaths = extractLocalPathsFromText(value);
+  const extractPreviewablePathsFromText = (ctx, value = '') => {
+    const localPaths = extractLocalPathsFromText(value)
+      .map(path => normalizeOperatorPath(ctx, path))
+      .filter(Boolean);
     const openPaths = [
       ...String(value || '').matchAll(/\/api\/files\/open\?path=([^)&\s]+)/g),
-    ].map(match => safeDecode(match?.[1] || '')).filter(looksLikeLocalPath);
+    ].map(match => normalizeOperatorPath(ctx, safeDecode(match?.[1] || ''))).filter(Boolean);
     return [...new Set([...localPaths, ...openPaths])];
   };
   const parseToolArgs = (args) => {
@@ -44,12 +55,13 @@ function axonLiveOperatorMixin() {
     }
     return {};
   };
-  const extractToolContext = (event = {}) => {
-    const ctx = { paths: [], query: '' };
+  const extractToolContext = (app, event = {}) => {
+    const context = { paths: [], query: '' };
     const args = parseToolArgs(event.args);
     const pushPath = (value) => {
       if (!value) return;
-      if (looksLikeLocalPath(value)) ctx.paths.push(value);
+      const normalized = normalizeOperatorPath(app, value);
+      if (normalized) context.paths.push(normalized);
     };
     const scanKeys = (node = {}, key = '') => {
       if (!node || typeof node !== 'object') return;
@@ -59,8 +71,8 @@ function axonLiveOperatorMixin() {
           if (/(^|_)(path|file|cwd|workdir|dir|root|base|workspace_path|source_workspace_path)$/.test(lower)) {
             pushPath(v);
           }
-          if (/(query|pattern|needle|search|filename)$/i.test(lower) && !ctx.query) {
-            ctx.query = trimText(v);
+          if (/(query|pattern|needle|search|filename)$/i.test(lower) && !context.query) {
+            context.query = trimText(v);
           }
           extractLocalPathsFromText(v).forEach(pushPath);
           return;
@@ -68,7 +80,7 @@ function axonLiveOperatorMixin() {
         if (Array.isArray(v)) {
           v.forEach(item => {
             if (typeof item === 'string') {
-              if (!ctx.query && /search|query|pattern|needle/.test(lower)) ctx.query = trimText(item);
+              if (!context.query && /search|query|pattern|needle/.test(lower)) context.query = trimText(item);
               pushPath(item);
               extractLocalPathsFromText(item).forEach(pushPath);
             } else {
@@ -82,10 +94,10 @@ function axonLiveOperatorMixin() {
     };
     scanKeys(args);
     if (args._raw && typeof args._raw === 'string') {
-      extractLocalPathsFromText(args._raw).forEach(path => ctx.paths.push(path));
+      extractLocalPathsFromText(args._raw).forEach(pushPath);
     }
-    ctx.paths = [...new Set(ctx.paths)];
-    return ctx;
+    context.paths = [...new Set(context.paths)];
+    return context;
   };
 
   const scopedOperator = (ctx, workspaceId = null) => {
@@ -201,6 +213,21 @@ function axonLiveOperatorMixin() {
         return;
       }
 
+      if (event.type === 'stream_open') {
+        const detail = 'Axon is analysing the request and forming a plan.';
+        patchOperator(this, target, {
+          active: true,
+          phase: 'plan',
+          title: 'Thinking through the task',
+          detail,
+        }, {
+          phase: 'plan',
+          title: 'Thinking through the task',
+          detail,
+        });
+        return;
+      }
+
       if (event.type === 'thinking') {
         const detail = clipText(
           event.chunk
@@ -210,11 +237,11 @@ function axonLiveOperatorMixin() {
         patchOperator(this, target, {
           active: true,
           phase: 'plan',
-          title: trimText(current.title) || 'Thinking through the task',
+          title: 'Thinking through the task',
           detail,
         }, {
           phase: 'plan',
-          title: trimText(current.title) || 'Thinking through the task',
+          title: 'Thinking through the task',
           detail,
         });
         return;
@@ -222,7 +249,7 @@ function axonLiveOperatorMixin() {
 
       if (event.type === 'tool_call') {
         const toolSlug = String(event.name || '').toLowerCase();
-        const toolContext = extractToolContext(event);
+        const toolContext = extractToolContext(this, event);
         const isSearchTool = /search|find|rg|ripgrep|glob|scan/.test(toolSlug);
         const isBrowseTool = /files\/browse|list|dir|ls/.test(toolSlug);
         const isReadTool = /files\/read|files\/open|open|read/.test(toolSlug);
@@ -276,7 +303,7 @@ function axonLiveOperatorMixin() {
         const resultText = typeof event.result === 'string'
           ? event.result
           : JSON.stringify(event.result || '');
-        const resultPaths = extractPreviewablePathsFromText(resultText)
+        const resultPaths = extractPreviewablePathsFromText(this, resultText)
           .map(path => this._normalizeRevealPath?.(path) || path)
           .filter(Boolean);
         const queued = [...new Set(resultPaths)];
@@ -301,7 +328,7 @@ function axonLiveOperatorMixin() {
         return;
       }
       if (event.type === 'text') {
-        const streamedPaths = extractPreviewablePathsFromText(event.chunk || event.content || '')
+        const streamedPaths = extractPreviewablePathsFromText(this, event.chunk || event.content || '')
           .map(path => this._normalizeRevealPath?.(path) || path)
           .filter(Boolean);
         if (this.showVoiceOrb && streamedPaths.length && !this.voiceTerminalAutoDockActive?.()) {

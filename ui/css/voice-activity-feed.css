@@ -238,9 +238,12 @@
   animation: none;
 }
 
-/* Pulsing border on active deck */
-.voice-operator-deck--cyan  { animation: deck-border-glow 3s ease-in-out infinite; border-radius: 1rem; }
-.voice-operator-deck--amber { animation: deck-border-glow 4.4s ease-in-out infinite; }
+/* Keep the active deck steady while live updates stream in. */
+.voice-operator-deck--cyan,
+.voice-operator-deck--amber {
+  animation: none;
+  border-radius: 1rem;
+}
 
 /* Command field typewriter effect */
 .voice-operator-deck__value--mono {

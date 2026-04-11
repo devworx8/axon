@@ -366,13 +366,32 @@ function axonWorkspaceRunsMixin() {
       if (state.liveOperatorTimer) clearTimeout(state.liveOperatorTimer);
       const normalizedWorkspaceId = state.key === '__all__' ? '' : state.key;
       const reset = () => {
+        const shouldCloseAutoBrowser = !!(this.voiceSurfaceDirector && this.voiceSurfaceDirector.lastAutoBrowserKey);
+        const shouldReleaseAutoTerminal = !!(this.voiceSurfaceDirector && this.voiceSurfaceDirector.lastAutoTerminalKey);
         state.liveOperator = defaultLiveOperator(normalizedWorkspaceId);
         state.liveOperatorFeed = [];
         state.mismatch = null;
+        this.resetVoiceFileRevealState?.({ closeViewer: true });
+        this.clearVoiceSurfaceHistory?.(false);
+        this._voiceTaskSurfaceLastHtml = '';
+        this._voiceTaskSurfaceSignature = '';
+        if (shouldCloseAutoBrowser) {
+          this.panelBrowserOpen = false;
+        }
+        if (
+          shouldReleaseAutoTerminal
+          && this.voiceConversation
+          && !this.voiceConversation.terminalPinnedTouched
+          && this.voiceConversation.terminalPinned
+        ) {
+          this.voiceConversation.terminalPinned = false;
+        }
         if (String(this.chatProjectId || '').trim() === normalizedWorkspaceId) {
           this.stopDesktopPreview?.();
         }
         this.refreshWorkspaceRunBindings();
+        this.syncVoiceCommandCenterRuntime?.();
+        this.syncVoiceSurfaceDirector?.({ force: true });
       };
       if (delay > 0) {
         state.liveOperatorTimer = setTimeout(reset, delay);

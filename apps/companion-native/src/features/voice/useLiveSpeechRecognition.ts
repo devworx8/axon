@@ -5,6 +5,10 @@ import {
   type ExpoSpeechRecognitionErrorEvent,
   type ExpoSpeechRecognitionResultEvent,
 } from 'expo-speech-recognition';
+import {
+  buildSpeechRecognitionContext,
+  canonicalizeWakePhraseTranscript,
+} from '@/features/axon/voiceCommandUtils';
 
 type RecognitionSnapshot = {
   sessionId: number;
@@ -21,8 +25,11 @@ type PendingStop = {
   timeout: ReturnType<typeof setTimeout>;
 };
 
-function readTranscript(event: ExpoSpeechRecognitionResultEvent): string {
-  return String(event.results?.[0]?.transcript || '').trim();
+function readTranscript(event: ExpoSpeechRecognitionResultEvent, wakePhrase: string): string {
+  return canonicalizeWakePhraseTranscript(
+    String(event.results?.[0]?.transcript || '').trim(),
+    wakePhrase,
+  );
 }
 
 function formatError(event: ExpoSpeechRecognitionErrorEvent): string | null {
@@ -53,9 +60,13 @@ function buildSnapshot(state: RecognitionSnapshot): RecognitionSnapshot {
 export function useLiveSpeechRecognition({
   enabled,
   language,
+  wakePhrase = 'Axon',
+  contextualStrings = [],
 }: {
   enabled: boolean;
   language: string;
+  wakePhrase?: string;
+  contextualStrings?: string[];
 }) {
   const [available, setAvailable] = useState(false);
   const [supportsRecording, setSupportsRecording] = useState(false);
@@ -149,7 +160,7 @@ export function useLiveSpeechRecognition({
   });
 
   useSpeechRecognitionEvent('result', (event) => {
-    const nextTranscript = readTranscript(event);
+    const nextTranscript = readTranscript(event, wakePhrase);
     if (!nextTranscript) {
       return;
     }
@@ -206,12 +217,17 @@ export function useLiveSpeechRecognition({
     const nextSessionId = sessionRef.current.sessionId + 1;
     manualStopRef.current = false;
     resetSessionState(nextSessionId);
+    const speechContext = Array.from(new Set([
+      ...buildSpeechRecognitionContext(wakePhrase),
+      ...contextualStrings.map((value) => String(value || '').trim()).filter(Boolean),
+    ]));
 
     ExpoSpeechRecognitionModule.start({
       lang: language === 'en' ? 'en-US' : language,
       interimResults: true,
       continuous: false,
       addsPunctuation: true,
+      contextualStrings: speechContext.length ? speechContext : undefined,
       recordingOptions: ExpoSpeechRecognitionModule.supportsRecording()
         ? { persist: true }
         : undefined,
@@ -221,7 +237,7 @@ export function useLiveSpeechRecognition({
         EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 400,
       },
     });
-  }, [enabled, language, resetSessionState, syncAvailability]);
+  }, [contextualStrings, enabled, language, resetSessionState, syncAvailability, wakePhrase]);
 
   const stopListening = useCallback(async () => {
     if (!sessionRef.current.sessionId) {

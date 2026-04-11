@@ -145,6 +145,7 @@
 
               <div class="console-message-meta flex items-center gap-1 mt-0.5 px-1"
                    :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
+              >
                 <button x-show="msg.role === 'user'"
                         @click="editUserMessage(msg)"
                         class="console-meta-action"
@@ -175,6 +176,10 @@
                         @click="copyToClipboard(msg.content, 'Markdown')"
                         class="console-meta-action"
                         title="Copy markdown">Copy</button>
+                <button x-show="msg.role === 'assistant' && workspaceRunCanSteer()"
+                        @click="primeSteerComposer()"
+                        class="console-meta-action"
+                        title="Steer the active run">Steer</button>
                 <button x-show="msg.error"
                         @click="retryChat(msg)"
                         class="console-meta-action console-meta-action-warn"

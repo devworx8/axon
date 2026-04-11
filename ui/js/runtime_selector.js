@@ -6,6 +6,7 @@ function axonRuntimeSelectorMixin() {
   return {
     runtimePickerSaving: false,
     runtimePickerError: '',
+    runtimePickerDraftBackend: '',
     runtimePickerDraftProvider: '',
     runtimePickerDraftModel: '',
 
@@ -16,12 +17,14 @@ function axonRuntimeSelectorMixin() {
 
     prepareRuntimePicker() {
       this.runtimePickerError = '';
-      const backend = String(this.settingsForm?.ai_backend || 'ollama').toLowerCase();
+      this.runtimePickerDraftBackend = String(this.settingsForm?.ai_backend || 'ollama').toLowerCase();
       this.runtimePickerDraftProvider = String(
         this.settingsForm?.api_provider
         || this.runtimeStatus?.selected_api_provider?.provider_id
         || 'deepseek'
       ).trim() || 'deepseek';
+
+      const backend = this.runtimePickerBackend();
 
       if (backend === 'ollama') {
         if (!this.ollamaModels.length) this.loadOllamaModels?.();
@@ -44,12 +47,69 @@ function axonRuntimeSelectorMixin() {
       ).trim();
     },
 
+    runtimePickerBackends() {
+      const options = [];
+      if (this.runtimeStatus?.local_models_enabled) {
+        options.push({
+          id: 'ollama',
+          label: 'Local Ollama',
+          detail: 'Local models',
+        });
+      }
+      options.push(
+        {
+          id: 'cli',
+          label: 'CLI Agent',
+          detail: 'Codex or Claude',
+        },
+        {
+          id: 'api',
+          label: 'API Models',
+          detail: 'DeepSeek and others',
+        },
+      );
+      return options;
+    },
+
+    runtimePickerBackend() {
+      return String(this.runtimePickerDraftBackend || this.settingsForm?.ai_backend || 'ollama').toLowerCase();
+    },
+
+    selectRuntimePickerBackend(backendId = '') {
+      const nextBackend = String(backendId || '').trim().toLowerCase();
+      if (!['ollama', 'cli', 'api'].includes(nextBackend)) return;
+      if (nextBackend === 'ollama' && !this.runtimeStatus?.local_models_enabled) return;
+      this.runtimePickerDraftBackend = nextBackend;
+
+      if (nextBackend === 'ollama') {
+        if (!this.ollamaModels.length) this.loadOllamaModels?.();
+        return;
+      }
+
+      if (nextBackend === 'cli') {
+        this.runtimePickerDraftModel = this.currentCliRuntimeModel();
+        return;
+      }
+
+      this.runtimePickerDraftProvider = String(
+        this.settingsForm?.api_provider
+        || this.runtimeStatus?.selected_api_provider?.provider_id
+        || 'deepseek'
+      ).trim() || 'deepseek';
+      this.runtimePickerDraftModel = String(
+        this.providerValue?.(this.runtimePickerDraftProvider, 'model')
+        || this.selectedApiProviderModel?.()
+        || ''
+      ).trim();
+    },
+
     async applyOllamaChatModel(modelName) {
       const nextModel = String(modelName || '').trim();
       if (!nextModel || this.runtimePickerSaving) return;
       this.runtimePickerSaving = true;
       this.runtimePickerError = '';
       try {
+        this.runtimePickerDraftBackend = 'ollama';
         this.selectedChatModel = nextModel;
         this.settingsForm.ollama_model = nextModel;
         this.settingsForm.code_model = nextModel;
@@ -78,6 +138,7 @@ function axonRuntimeSelectorMixin() {
       this.runtimePickerSaving = true;
       this.runtimePickerError = '';
       try {
+        this.runtimePickerDraftBackend = 'cli';
         this.settingsForm.ai_backend = 'cli';
         this.settingsForm.cli_runtime_model = nextModel;
         this.runtimePickerDraftModel = nextModel;
@@ -120,6 +181,7 @@ function axonRuntimeSelectorMixin() {
       this.runtimePickerSaving = true;
       this.runtimePickerError = '';
       try {
+        this.runtimePickerDraftBackend = 'api';
         this.settingsForm.ai_backend = 'api';
         this.settingsForm.api_provider = nextProvider;
         this.runtimePickerDraftProvider = nextProvider;
@@ -152,6 +214,7 @@ function axonRuntimeSelectorMixin() {
       this.runtimePickerSaving = true;
       this.runtimePickerError = '';
       try {
+        this.runtimePickerDraftBackend = 'api';
         this.settingsForm.ai_backend = 'api';
         this.settingsForm.api_provider = providerId;
         this.settingsForm[field] = nextModel;

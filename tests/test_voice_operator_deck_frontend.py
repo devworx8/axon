@@ -326,6 +326,55 @@ class VoiceOperatorDeckFrontendTests(unittest.TestCase):
         self.assertIn("Next", payload["html"])
         self.assertEqual(payload["label"], "Operator deck")
 
+    def test_operator_feed_html_includes_command_trace_from_working_blocks(self):
+        payload = _run_operator_deck_script(
+            """
+            const streamMixin = ctx.window.axonVoiceStreamBlocksMixin();
+            const deckMixin = ctx.window.axonVoiceOperatorDeckMixin();
+            const app = {
+              chatLoading: true,
+              liveOperator: {
+                active: true,
+                phase: 'execute',
+                title: 'Running Shell Cmd',
+                detail: 'Axon is checking the workspace.',
+              },
+              liveOperatorFeed: [
+                { id: '1', phase: 'observe', title: 'Understanding the task', detail: 'Goal received: Fix the live operator deck' },
+              ],
+              chatMessages: [
+                {
+                  id: 'resp-1',
+                  role: 'assistant',
+                  streaming: true,
+                  content: '',
+                  workingBlocks: [
+                    {
+                      id: 'work-1',
+                      title: 'Working · Shell Cmd',
+                      args: { cmd: 'npm run build', cwd: '/tmp/mobile' },
+                      result: '[axon] build passed',
+                      status: 'done',
+                    },
+                  ],
+                },
+              ],
+              latestAssistantMessage() {
+                return this.chatMessages[this.chatMessages.length - 1];
+              },
+              voiceResponseAvailable() { return false; },
+              voiceLatestResponseText() { return ''; },
+            };
+            Object.assign(app, streamMixin, deckMixin);
+            console.log(JSON.stringify({ html: app.voiceLiveOperatorFeedHtml() }));
+            """
+        )
+
+        self.assertIn("Command trace", payload["html"])
+        self.assertIn("npm run build", payload["html"])
+        self.assertIn("/tmp/mobile", payload["html"])
+        self.assertIn("[axon] build passed", payload["html"])
+
     def test_operator_feed_html_surfaces_live_cards_and_artifacts(self):
         payload = _run_operator_deck_script(
             """
@@ -447,6 +496,35 @@ class VoiceOperatorDeckFrontendTests(unittest.TestCase):
             payload["thirdDetail"],
             "Updated detail for /home/edp/.devbrain/brain.py that should not churn the rail mid-run.",
         )
+
+    def test_artifact_entries_prefer_resolved_path_over_raw_json_detail(self):
+        payload = _run_operator_deck_script(
+            """
+            const activityMixin = ctx.window.axonVoiceActivityFeedMixin();
+            const app = {
+              chatLoading: true,
+              liveOperator: { active: true, phase: 'execute', title: 'Opening file', detail: 'Inspecting the workspace.' },
+              _normalizeRevealPath(value = '') {
+                return value === '/js/voice-stream-blocks.js'
+                  ? '/home/edp/.devbrain/ui/js/voice-stream-blocks.js'
+                  : value;
+              },
+            };
+            Object.assign(app, activityMixin);
+            app.pushActivityEntry('execute', 'Opening file', '{"path":"/js/voice-stream-blocks.js"}', {
+              filePath: '/js/voice-stream-blocks.js',
+              tool: 'files.read',
+            });
+            const artifact = app.voiceArtifactEntries(4)[0] || {};
+            console.log(JSON.stringify({
+              path: artifact.path || '',
+              detail: artifact.detail || '',
+            }));
+            """
+        )
+
+        self.assertEqual(payload["path"], "/home/edp/.devbrain/ui/js/voice-stream-blocks.js")
+        self.assertEqual(payload["detail"], "/home/edp/.devbrain/ui/js/voice-stream-blocks.js")
 
     def test_operator_deck_holds_visibility_briefly_between_live_updates(self):
         payload = _run_operator_deck_script(

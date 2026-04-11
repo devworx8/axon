@@ -16,6 +16,7 @@ from axon_api.services.mobile_axon_voice import (
     speak_local_mobile_text,
     voice_dependency_snapshot,
 )
+from axon_api.services.openai_audio import synthesize_openai_speech
 from axon_data import get_all_settings, get_companion_presence
 
 
@@ -51,16 +52,25 @@ async def build_mobile_axon_audio_payload(
 
     if provider == "cloud":
         try:
-            audio, media_type = await synthesize_azure_speech(
-                message,
-                voice=str(profile.get("voice_identity") or settings.get("azure_voice") or DEFAULT_AZURE_VOICE),
-                region=str(settings.get("azure_speech_region") or "eastus").strip() or "eastus",
-                key=str(settings.get("azure_speech_key") or "").strip(),
-                rate=settings.get("voice_speech_rate"),
-                pitch=settings.get("voice_speech_pitch"),
-                aiohttp_module=aiohttp,
-                http_exception_cls=HTTPException,
-            )
+            if str(profile.get("cloud_provider") or "") == "openai":
+                audio, media_type = await synthesize_openai_speech(
+                    message,
+                    api_key=str(settings.get("openai_api_key") or "").strip(),
+                    base_url=str(settings.get("openai_base_url") or "").strip(),
+                    voice=str(profile.get("voice_identity") or settings.get("azure_voice") or DEFAULT_AZURE_VOICE),
+                    rate=settings.get("voice_speech_rate"),
+                )
+            else:
+                audio, media_type = await synthesize_azure_speech(
+                    message,
+                    voice=str(profile.get("voice_identity") or settings.get("azure_voice") or DEFAULT_AZURE_VOICE),
+                    region=str(settings.get("azure_speech_region") or "eastus").strip() or "eastus",
+                    key=str(settings.get("azure_speech_key") or "").strip(),
+                    rate=settings.get("voice_speech_rate"),
+                    pitch=settings.get("voice_speech_pitch"),
+                    aiohttp_module=aiohttp,
+                    http_exception_cls=HTTPException,
+                )
         except Exception as exc:
             if profile.get("local_ready"):
                 audio, local_engine = speak_local_mobile_text(settings, message)

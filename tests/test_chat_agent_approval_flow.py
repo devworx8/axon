@@ -60,6 +60,82 @@ def _run_chat_script(body: str):
 
 
 class ChatAgentApprovalFlowTests(unittest.TestCase):
+    def test_agent_stream_open_uses_plan_event_not_result_event(self):
+        payload = _run_chat_script(
+            """
+            (async () => {
+              const encoder = new TextEncoder();
+              const events = [
+                { type: 'done' },
+              ];
+              ctx.fetch = async () => ({
+                ok: true,
+                status: 200,
+                body: {
+                  getReader() {
+                    const chunks = events
+                      .map((event) => `data: ${JSON.stringify(event)}\\n`)
+                      .map((chunk) => encoder.encode(chunk));
+                    let index = 0;
+                    return {
+                      async read() {
+                        if (index >= chunks.length) return { done: true, value: undefined };
+                        return { done: false, value: chunks[index++] };
+                      },
+                    };
+                  },
+                },
+              });
+
+              const liveEvents = [];
+              const app = {
+                chatProjectId: '7',
+                chatMessages: [{
+                  id: 99,
+                  role: 'assistant',
+                  content: '',
+                  streaming: true,
+                  mode: 'agent',
+                  thinkingBlocks: [],
+                  workingBlocks: [],
+                  agentEvents: [],
+                }],
+                liveOperator: { phase: 'observe' },
+                normalizedComposerOptions() { return {}; },
+                authHeaders(headers) { return headers; },
+                usesOllamaBackend() { return false; },
+                setWorkspaceAbortController() {},
+                setAgentStage() {},
+                updateLiveOperator(_mode, data) { liveEvents.push(data); },
+                clearLiveOperator() {},
+                rememberOperatorOutcome() {},
+                scrollChat() {},
+                $nextTick(callback) { if (callback) callback(); return Promise.resolve(); },
+                assistantProviderIdentity() { return { providerId: 'cli', modelLabel: 'Codex CLI · gpt-5.4' }; },
+                assistantRuntimeLabel() { return 'Codex CLI · gpt-5.4'; },
+                workspaceRunStateFor() { return { liveOperator: { phase: 'verify' } }; },
+                ensureWorkspaceTab() {},
+              };
+              Object.assign(app, ctx.window.axonWorkspaceRunsMixin(), ctx.window.axonChatMixin());
+              app.setAgentStage = () => {};
+              app.updateLiveOperator = (_mode, data) => { liveEvents.push(data); };
+              app.clearLiveOperator = () => {};
+              app.rememberOperatorOutcome = () => {};
+              await app.streamChatMessage('Inspect the stream path', 'agent', 99, [], {}, '7');
+              console.log(JSON.stringify({
+                firstType: liveEvents[0]?.type || '',
+                lastType: liveEvents[liveEvents.length - 1]?.type || '',
+              }));
+            })().catch(error => {
+              console.error(error);
+              process.exit(1);
+            });
+            """
+        )
+
+        self.assertEqual(payload["firstType"], "stream_open")
+        self.assertEqual(payload["lastType"], "done")
+
     def test_stream_chat_message_surfaces_pending_agent_approval(self):
         payload = _run_chat_script(
             """

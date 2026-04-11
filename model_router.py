@@ -1,8 +1,8 @@
 """
 Axon model routing primitives.
 
-Cloud-first by default. Local models are gated behind LOCAL_MODELS_ENABLED
-and will be re-enabled once a stronger GPU or dedicated server is available.
+Local models are available by default. Set AXON_LOCAL_MODELS=0 to disable
+Ollama-based routing explicitly on machines where local inference is unwanted.
 """
 
 from __future__ import annotations
@@ -13,10 +13,20 @@ from enum import Enum
 from typing import Iterable
 
 # ── Local model gate ─────────────────────────────────────────────────────────
-# Set AXON_LOCAL_MODELS=1 in .env or environment to enable Ollama-based local
-# model routing. When False, all model resolution returns empty and the system
-# relies entirely on cloud API providers (DeepSeek / Claude / Gemini).
-LOCAL_MODELS_ENABLED: bool = os.environ.get("AXON_LOCAL_MODELS", "").strip().lower() in {"1", "true", "yes", "on"}
+# Local Ollama stays available unless it is explicitly disabled. This keeps
+# the runtime aligned with Axon's local-first posture while still allowing
+# lower-capability machines to opt out.
+def _local_models_enabled_from_env() -> bool:
+    raw = os.environ.get("AXON_LOCAL_MODELS")
+    if raw is None:
+        return True
+    value = str(raw).strip().lower()
+    if not value:
+        return True
+    return value in {"1", "true", "yes", "on"}
+
+
+LOCAL_MODELS_ENABLED: bool = _local_models_enabled_from_env()
 
 
 class ModelRole(str, Enum):

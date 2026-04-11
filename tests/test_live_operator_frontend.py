@@ -90,7 +90,9 @@ class LiveOperatorFrontendTests(unittest.TestCase):
             const runState = app.workspaceRunStateFor('42');
             console.log(JSON.stringify({
               livePhase: runState.liveOperator.phase,
+              liveTitle: runState.liveOperator.title,
               feedPhase: runState.liveOperatorFeed[runState.liveOperatorFeed.length - 1]?.phase || '',
+              feedTitle: runState.liveOperatorFeed[runState.liveOperatorFeed.length - 1]?.title || '',
               runtimePhases: app.voiceRuntimePhases,
               surfacePhases: app.surfacePhases,
             }));
@@ -98,9 +100,58 @@ class LiveOperatorFrontendTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["livePhase"], "plan")
+        self.assertEqual(payload["liveTitle"], "Thinking through the task")
         self.assertEqual(payload["feedPhase"], "plan")
+        self.assertEqual(payload["feedTitle"], "Thinking through the task")
         self.assertEqual(payload["runtimePhases"], ["plan"])
         self.assertEqual(payload["surfacePhases"], ["plan"])
+
+    def test_stream_open_primes_plan_phase_without_fake_result_state(self):
+        payload = _run_live_operator_script(
+            """
+            const app = {
+              chatProjectId: '42',
+              liveOperator: { active: false, phase: '' },
+              liveOperatorFeed: [],
+              desktopPreview: { enabled: false },
+              currentWorkspaceAutoSession() { return null; },
+              prettyToolName(name = '') { return String(name || '').trim() || 'tool'; },
+              resetVoiceFileRevealState() {},
+              clearVoiceSurfaceHistory() {},
+              hudResetOperatorTrace() {},
+              setAgentStage() {},
+              hudProcessAgentEvent() {},
+              syncVoiceCommandCenterRuntime() {},
+              syncVoiceSurfaceDirector() {},
+            };
+
+            Object.assign(
+              app,
+              ctx.window.axonWorkspaceRunsMixin(),
+              ctx.window.axonLiveOperatorMixin(),
+            );
+
+            app.updateLiveOperator('agent', {
+              type: 'stream_open',
+            }, '42');
+
+            const runState = app.workspaceRunStateFor('42');
+            const last = runState.liveOperatorFeed[runState.liveOperatorFeed.length - 1] || {};
+            console.log(JSON.stringify({
+              phase: runState.liveOperator.phase,
+              title: runState.liveOperator.title,
+              detail: runState.liveOperator.detail,
+              feedPhase: last.phase || '',
+              feedTitle: last.title || '',
+            }));
+            """
+        )
+
+        self.assertEqual(payload["phase"], "plan")
+        self.assertEqual(payload["title"], "Thinking through the task")
+        self.assertEqual(payload["detail"], "Axon is analysing the request and forming a plan.")
+        self.assertEqual(payload["feedPhase"], "plan")
+        self.assertEqual(payload["feedTitle"], "Thinking through the task")
 
     def test_repeated_thinking_updates_merge_into_single_feed_entry(self):
         payload = _run_live_operator_script(

@@ -7,12 +7,29 @@ import brain
 from fastapi import HTTPException
 
 
+def _requested_cli_model(settings: dict) -> str:
+    return str(settings.get("cli_runtime_model") or settings.get("claude_cli_model") or "").strip()
+
+
+def _auto_selected_codex_path_for_model(model: str) -> str:
+    requested = str(model or "").strip()
+    if not requested:
+        return ""
+    codex_binary = str(brain._find_codex_cli() or "").strip()
+    if not codex_binary:
+        return ""
+    return codex_binary if brain.normalize_cli_model(codex_binary, requested) == requested else ""
+
+
 def selected_cli_path(settings: dict) -> str:
-    return str(settings.get("cli_runtime_path") or settings.get("claude_cli_path") or "").strip()
+    explicit = str(settings.get("cli_runtime_path") or settings.get("claude_cli_path") or "").strip()
+    if explicit:
+        return explicit
+    return _auto_selected_codex_path_for_model(_requested_cli_model(settings))
 
 
 def selected_cli_model(settings: dict) -> str:
-    return str(settings.get("cli_runtime_model") or settings.get("claude_cli_model") or "").strip()
+    return _requested_cli_model(settings)
 
 
 def selected_cli_family(settings: dict) -> str:
@@ -45,6 +62,8 @@ def apply_cli_runtime_settings(data: dict, current_settings: dict) -> None:
         )
         or ""
     ).strip()
+    if not selected_path and requested_model:
+        selected_path = _auto_selected_codex_path_for_model(requested_model)
     normalized_model = brain.normalize_cli_model(selected_path, requested_model)
     selected_family = brain._cli_runtime_family(selected_path) if selected_path else "claude"
     data["cli_runtime_path"] = selected_path

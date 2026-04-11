@@ -172,6 +172,16 @@ function axonVoiceActivityFeedMixin() {
     return 'Inspect';
   };
 
+  const normalizeArtifactPath = (ctx, value = '') => {
+    const raw = cleanToken(value);
+    if (!raw) return '';
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (typeof ctx?._normalizeRevealPath === 'function') {
+      return trimText(ctx._normalizeRevealPath(raw));
+    }
+    return raw;
+  };
+
   const pushUnique = (list, item) => {
     if (!item || !item.key) return;
     if (list.some(existing => existing.key === item.key)) return;
@@ -200,7 +210,7 @@ function axonVoiceActivityFeedMixin() {
       const p = trimText(phase) || 'execute';
       const t = trimText(title) || 'Working';
       const d = trimText(detail).slice(0, 200);
-      const filePath = trimText(opts.filePath || extractFilePath(detail));
+      const filePath = normalizeArtifactPath(this, opts.filePath || extractFilePath(detail));
       const tool = trimText(opts.tool);
       const last = this.voiceActivityFeed[this.voiceActivityFeed.length - 1];
       if (
@@ -359,10 +369,12 @@ function axonVoiceActivityFeedMixin() {
         || this.currentWorkspaceRunActive?.()
       );
       const addArtifact = (value, options = {}) => {
-        const path = cleanToken(value);
+        const path = normalizeArtifactPath(this, value);
         if (!path) return;
         const kind = artifactKind(path, options.kind);
         const key = `${kind}:${path.toLowerCase()}`;
+        const rawDetail = trimText(options.detail || '');
+        const detail = rawDetail && !/^[{\[]/.test(rawDetail) ? rawDetail : path;
         pushUnique(artifacts, {
           key,
           kind,
@@ -370,7 +382,7 @@ function axonVoiceActivityFeedMixin() {
           icon: artifactIcon(kind),
           title: clipText(options.title || basename(path) || path, 52),
           source: clipText(options.source || 'Live run', 30),
-          detail: clipText(options.detail || path, 100),
+          detail: clipText(detail, 100),
           action: artifactActionLabel(kind),
         });
       };
@@ -402,13 +414,15 @@ function axonVoiceActivityFeedMixin() {
         });
       });
 
-      [...(Array.isArray(this.liveOperatorFeed) ? this.liveOperatorFeed : [])].slice(-12).reverse().forEach(entry => {
-        collectArtifacts(entry?.detail || '', {
-          source: entry?.title || 'Operator',
-          detail: entry?.detail || '',
-          explicitOnly: true,
+      if (runActive) {
+        [...(Array.isArray(this.liveOperatorFeed) ? this.liveOperatorFeed : [])].slice(-12).reverse().forEach(entry => {
+          collectArtifacts(entry?.detail || '', {
+            source: entry?.title || 'Operator',
+            detail: entry?.detail || '',
+            explicitOnly: true,
+          });
         });
-      });
+      }
 
       const nextArtifacts = artifacts.slice(0, artifactLimit);
       const nextSignature = nextArtifacts.map(item => item.key).join('||');

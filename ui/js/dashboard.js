@@ -541,6 +541,7 @@ function axonDashboardMixin() {
 
     providerKeyField(providerId) {
       const map = {
+        deepseek: 'deepseek_api_key',
         anthropic: 'anthropic_api_key',
         openai_gpts: 'openai_api_key',
         gemini_gems: 'gemini_api_key',
@@ -551,6 +552,7 @@ function axonDashboardMixin() {
 
     providerBaseField(providerId) {
       const map = {
+        deepseek: 'deepseek_base_url',
         anthropic: 'anthropic_base_url',
         openai_gpts: 'openai_base_url',
         gemini_gems: 'gemini_base_url',
@@ -561,6 +563,7 @@ function axonDashboardMixin() {
 
     providerModelField(providerId) {
       const map = {
+        deepseek: 'deepseek_api_model',
         anthropic: 'anthropic_api_model',
         openai_gpts: 'openai_api_model',
         gemini_gems: 'gemini_api_model',
@@ -571,6 +574,7 @@ function axonDashboardMixin() {
 
     providerHintField(providerId) {
       const map = {
+        deepseek: '_deepseekKeyHint',
         anthropic: '_anthropicKeyHint',
         openai_gpts: '_openaiKeyHint',
         gemini_gems: '_geminiKeyHint',
@@ -1104,6 +1108,30 @@ function axonDashboardMixin() {
         return;
       }
 
+      if (event.type === 'stream_open') {
+        this.liveOperator = {
+          ...this.liveOperator,
+          active: true,
+          phase: 'plan',
+          title: 'Thinking through the task',
+          detail: 'Axon is analysing the request and forming a plan.',
+        };
+        this.pushLiveOperatorFeed('plan', 'Thinking through the task', 'Axon is analysing the request and forming a plan.');
+        return;
+      }
+      if (event.type === 'thinking') {
+        const detail = (event.chunk || 'Axon is analysing the request and forming a plan.').slice(0, 180);
+        this.liveOperator = {
+          ...this.liveOperator,
+          active: true,
+          phase: 'plan',
+          title: 'Thinking through the task',
+          detail,
+        };
+        this.pushLiveOperatorFeed('plan', 'Thinking through the task', detail);
+        return;
+      }
+
       if (event.type === 'tool_call') {
         this.liveOperator = {
           ...this.liveOperator,
@@ -1129,21 +1157,24 @@ function axonDashboardMixin() {
         return;
       }
       if (event.type === 'text') {
+        const detail = String(
+          event.chunk
+          || event.content
+          || (this.liveOperator.tool
+            ? 'Axon is turning tool output into a final answer.'
+            : 'Axon is drafting the answer now.')
+        ).trim().slice(0, 180);
         this.liveOperator = {
           ...this.liveOperator,
           active: true,
-          phase: this.liveOperator.tool ? 'verify' : 'plan',
-          title: this.liveOperator.tool ? 'Writing the result' : 'Planning the next step',
-          detail: this.liveOperator.tool
-            ? 'Axon is turning tool output into a final answer.'
-            : 'Axon is reasoning through the task before it acts.',
+          phase: 'verify',
+          title: 'Writing the result',
+          detail,
         };
         this.pushLiveOperatorFeed(
-          this.liveOperator.tool ? 'verify' : 'plan',
-          this.liveOperator.tool ? 'Writing the result' : 'Planning the next step',
-          this.liveOperator.tool
-            ? 'Axon is turning tool output into a final answer.'
-            : 'Axon is reasoning through the task before it acts.',
+          'verify',
+          'Writing the result',
+          detail,
         );
         return;
       }
@@ -1745,7 +1776,7 @@ function axonDashboardMixin() {
       let buf = '';
       if (mode === 'agent') {
         this.setAgentStage('plan');
-        this.updateLiveOperator(mode, { type: 'text' });
+        this.updateLiveOperator(mode, { type: 'stream_open' });
       } else {
         this.updateLiveOperator(mode, { chunk: 'stream-open' });
       }

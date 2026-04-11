@@ -53,6 +53,42 @@ const AXON_VOICE_FILE_LABELS = {
   yml: 'YAML file',
   env: 'env file',
 };
+const AXON_WAKE_LEAD_IN_WORDS = ['hey', 'hi', 'hello', 'ok', 'okay', 'yo', 'please', 'listen'];
+const AXON_WAKE_TOKEN_ALIASES = {
+  axon: ['accent'],
+};
+
+function escapeVoiceSpeechRegex(value = '') {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function tokenizeWakePhrase(value = '') {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function canonicalizeWakePhraseTranscript(transcript = '', wakePhrase = 'Axon') {
+  const raw = String(transcript || '').trim();
+  const phrase = String(wakePhrase || 'Axon').trim() || 'Axon';
+  const wakeTokens = tokenizeWakePhrase(phrase);
+  if (!raw || wakeTokens.length !== 1) return raw;
+
+  const aliases = AXON_WAKE_TOKEN_ALIASES[wakeTokens[0]] || [];
+  if (!aliases.length) return raw;
+
+  const escapedLeadIns = AXON_WAKE_LEAD_IN_WORDS.map(escapeVoiceSpeechRegex).join('|');
+  const escapedAliases = aliases.map(escapeVoiceSpeechRegex).join('|');
+  const prefixPattern = new RegExp(
+    `^((?:${escapedLeadIns})\\s+)?(?:${escapedAliases})(?=$|[^a-z0-9])`,
+    'i',
+  );
+  if (!prefixPattern.test(raw)) return raw;
+  return raw.replace(prefixPattern, (_match, leadIn = '') => `${leadIn}${phrase}`);
+}
 
 function voiceCodeLabel(label = '') {
   const normalized = String(label || '')
@@ -254,6 +290,7 @@ function splitVoiceSpeechText(text, maxChunkLength = 420) {
 
 window.axonVoiceSpeech = {
   cleanText: cleanVoiceSpeechText,
+  canonicalizeWakePhraseTranscript,
   normalizeCommandText: normalizeVoiceCommandText,
   permissionCommand: voicePermissionCommand,
   splitText: splitVoiceSpeechText,

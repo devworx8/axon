@@ -326,6 +326,14 @@ function axonVoiceSurfaceDirectorMixin() {
       };
       if (!item.key) return;
       const last = state.history[state.history.length - 1];
+      if (last && last.key === item.key) {
+        state.history[state.history.length - 1] = {
+          ...last,
+          ...item,
+          at: item.at,
+        };
+        return;
+      }
       if (last && last.key === item.key && last.status === item.status && last.detail === item.detail) return;
       state.history.push(item);
       if (state.history.length > 8) {
@@ -425,7 +433,10 @@ function axonVoiceSurfaceDirectorMixin() {
       if (!key || state.lastAutoArtifactKey === key) return;
       const path = trimText(artifact.path);
       if (!path) return;
-      if (this.voiceFileViewer?.open && !this.voiceFileViewer?.autoOpened) return;
+      if (this.voiceFileViewer?.open) {
+        if (!this.voiceFileViewer?.autoOpened) return;
+        if (trimText(this.voiceFileViewer.path) !== path) return;
+      }
       if (trimText(this.voiceFileViewer?.path) === path) return;
       state.lastAutoArtifactKey = key;
       this.openVoiceFileViewer?.(path, trimText(artifact.kind || ''), { auto: true });

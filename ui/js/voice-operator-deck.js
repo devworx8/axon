@@ -14,6 +14,11 @@ function axonVoiceOperatorDeckMixin() {
     recover: 'rose',
   };
   const trimText = (value = '') => String(value || '').trim();
+  const clipText = (value = '', limit = 180) => {
+    const text = trimText(value);
+    if (!text) return '';
+    return text.length > limit ? `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…` : text;
+  };
   const escapeHtml = (value = '') => String(value || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -43,6 +48,63 @@ function axonVoiceOperatorDeckMixin() {
   const latestCommandEvent = (events = []) => {
     const reversed = [...events].reverse();
     return reversed.find((event) => trimText(event?.event_type).toLowerCase() === 'command' && trimText(event?.content));
+  };
+  const commandEntriesFromBlocks = (ctx, blocks = []) => blocks
+    .map((block, index) => {
+      const args = block?.args && typeof block.args === 'object' ? block.args : {};
+      const command = trimText(
+        args.cmd
+        || args.command
+        || args.path
+        || block?.title
+      );
+      const cwd = trimText(args.cwd || args.workdir || '');
+      const result = clipText(block?.result || '', 180);
+      const running = trimText(block?.status).toLowerCase() === 'running';
+      if (!command && !cwd && !result) return null;
+      return {
+        id: trimText(block?.id) || `block-${index}`,
+        title: trimText(block?.title || ctx.prettyToolName?.(block?.name) || 'Working'),
+        command,
+        cwd,
+        result,
+        status: running ? 'Running' : (result ? 'Checked' : 'Done'),
+      };
+    })
+    .filter(Boolean);
+  const commandEntriesFromTrace = (lines = []) => {
+    const entries = [];
+    let current = null;
+    lines.forEach((line, index) => {
+      const text = trimText(line);
+      if (!text) return;
+      if (text.startsWith('$ ') || text.startsWith('> ')) {
+        if (current) entries.push(current);
+        current = {
+          id: `trace-${index}`,
+          title: text.startsWith('$ ') ? 'Terminal command' : 'Tool telemetry',
+          command: trimText(text.slice(2)),
+          cwd: '',
+          result: '',
+          status: 'Running',
+        };
+        return;
+      }
+      if (text.startsWith('@ ') && current) {
+        current.cwd = trimText(text.slice(2));
+        return;
+      }
+      if ((text.startsWith('# ') || text.startsWith('! ') || text.startsWith('? ')) && current) {
+        current.result = clipText(text.slice(2), 180);
+        current.status = text.startsWith('# ')
+          ? 'Checked'
+          : text.startsWith('! ')
+            ? 'Attention'
+            : 'Approval';
+      }
+    });
+    if (current) entries.push(current);
+    return entries;
   };
   const hasStreamingBlocks = (ctx) => {
     const message = typeof ctx.latestAssistantMessage === 'function' ? ctx.latestAssistantMessage() : null;
@@ -211,6 +273,13 @@ function axonVoiceOperatorDeckMixin() {
         this.voiceOperatorDeck.holdUntil = Date.now() + OPERATOR_DECK_HOLD_MS;
         return true;
       }
+      if (
+        this.voiceConversation?.awaitingReply
+        || (!this.chatLoading && trimText(this.voiceLatestResponseText?.() || ''))
+      ) {
+        this.voiceOperatorDeck.holdUntil = 0;
+        return false;
+      }
       return Number(this.voiceOperatorDeck?.holdUntil || 0) > Date.now();
     },
 
@@ -253,6 +322,19 @@ function axonVoiceOperatorDeckMixin() {
     },
 
     voiceOperatorActiveCommand() {
+      const message = typeof this.latestAssistantMessage === 'function' ? this.latestAssistantMessage() : null;
+      const workingBlocks = Array.isArray(message?.workingBlocks) ? message.workingBlocks : [];
+      const runningBlock = [...workingBlocks].reverse().find((block) => {
+        const args = block?.args && typeof block.args === 'object' ? block.args : {};
+        return trimText(args.cmd || args.command || args.path) || trimText(block?.status).toLowerCase() === 'running';
+      });
+      const blockCommand = trimText(
+        runningBlock?.args?.cmd
+        || runningBlock?.args?.command
+        || runningBlock?.args?.path
+      );
+      if (blockCommand) return blockCommand;
+
       const session = this.dashboardLiveTerminalSession?.()
         || this.dashboardLiveTerminalDetail?.()
         || this.currentTerminalSession?.()
@@ -263,6 +345,14 @@ function axonVoiceOperatorDeckMixin() {
       const event = latestCommandEvent(this.voiceTerminalEvents?.(8) || []);
       const content = trimText(event?.content);
       if (content) return content.startsWith('$ ') ? content.slice(2) : content;
+      const detail = trimText(this.liveOperator?.detail);
+      if (detail.startsWith('{') && detail.endsWith('}')) {
+        try {
+          const parsed = JSON.parse(detail);
+          const preview = trimText(parsed?.cmd || parsed?.command || parsed?.path);
+          if (preview) return preview;
+        } catch (_) {}
+      }
       const tool = trimText(this.liveOperator?.tool);
       if (tool) {
         return this.prettyToolName?.(tool) || tool;
@@ -272,6 +362,62 @@ function axonVoiceOperatorDeckMixin() {
 
     voiceOperatorBlocker() {
       return blockerReason(this);
+    },
+
+    voiceOperatorCommandEntries(limit = 4) {
+      const latestMessage = typeof this.latestAssistantMessage === 'function' ? this.latestAssistantMessage() : null;
+      const blockEntries = commandEntriesFromBlocks(this, Array.isArray(latestMessage?.workingBlocks) ? latestMessage.workingBlocks : []);
+      if (blockEntries.length) {
+        return blockEntries.slice(-Math.max(1, limit)).reverse();
+      }
+
+      const traceEntries = commandEntriesFromTrace(this.voiceOperatorTraceLines?.(24) || []);
+      if (traceEntries.length) {
+        return traceEntries.slice(-Math.max(1, limit)).reverse();
+      }
+
+      const command = trimText(this.voiceOperatorActiveCommand());
+      if (!command) return [];
+      const session = this.dashboardLiveTerminalSession?.()
+        || this.dashboardLiveTerminalDetail?.()
+        || this.currentTerminalSession?.()
+        || this.terminal?.sessionDetail
+        || null;
+      const cwd = trimText(session?.cwd || this.chatProject?.path || '');
+      const result = trimText(this.liveOperator?.phase).toLowerCase() === 'verify'
+        ? clipText(this.liveOperator?.detail || '', 180)
+        : '';
+      return [{
+        id: 'fallback-command',
+        title: trimText(this.liveOperator?.title || 'Live command'),
+        command,
+        cwd,
+        result,
+        status: trimText(this.liveOperator?.phase).toLowerCase() === 'verify' ? 'Checked' : 'Running',
+      }];
+    },
+
+    voiceOperatorCommandTraceHtml(limit = 4) {
+      const entries = this.voiceOperatorCommandEntries?.(limit) || [];
+      if (!entries.length) return '';
+      const cards = entries.map((entry) => (
+        `<div class="voice-operator-deck__command-card">`
+        + `<div class="voice-operator-deck__command-header">`
+        + `<span class="voice-operator-deck__command-status">${escapeHtml(entry.status || 'Running')}</span>`
+        + `<span class="voice-operator-deck__command-title">${escapeHtml(entry.title || 'Live command')}</span>`
+        + `</div>`
+        + `<div class="voice-operator-deck__command-main">${escapeHtml(entry.command || 'Waiting for the next command')}</div>`
+        + (entry.cwd ? `<div class="voice-operator-deck__command-path">${escapeHtml(entry.cwd)}</div>` : '')
+        + (entry.result ? `<div class="voice-operator-deck__command-result">${escapeHtml(entry.result)}</div>` : '')
+        + `</div>`
+      )).join('');
+      return '<section class="voice-operator-deck__section">'
+        + '<div class="voice-operator-deck__section-header">'
+        + '<div class="voice-operator-deck__section-label">Command trace</div>'
+        + '<div class="voice-operator-deck__section-meta">Live commands and tool checks</div>'
+        + '</div>'
+        + `<div class="voice-operator-deck__command-list">${cards}</div>`
+        + '</section>';
     },
 
     voiceTerminalSessionActive() {
@@ -520,6 +666,7 @@ function axonVoiceOperatorDeckMixin() {
       const surfacesHtml = this.voiceOperatorSurfaceCardsHtml?.() || '';
       const artifactRailHtml = this.voiceArtifactRailHtml?.() || '';
       const activityFeedHtml = this.voiceActivityFeedHtml?.(5) || '';
+      const commandTraceHtml = this.voiceOperatorCommandTraceHtml?.(4) || '';
       const activeCommand = escapeHtml(
         this.voiceOperatorActiveCommand()
         || (streamBlocksHtml ? 'Reasoning before tool execution' : 'No shell command running yet')
@@ -563,6 +710,7 @@ function axonVoiceOperatorDeckMixin() {
         + `<div class="voice-operator-deck__metric"><div class="voice-operator-deck__label">Command</div><div class="voice-operator-deck__value voice-operator-deck__value--mono">${activeCommand}</div></div>`
         + `<div class="voice-operator-deck__metric"><div class="voice-operator-deck__label">Next</div><div class="voice-operator-deck__value">${nextStep}</div></div>`
         + `</div>`
+        + commandTraceHtml
         + surfacesHtml
         + artifactRailHtml
         + streamBlocksHtml

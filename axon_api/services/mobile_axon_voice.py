@@ -18,6 +18,7 @@ from axon_api.services.local_voice_dependencies import (
 )
 from axon_api.services.local_voice_execution import speak_local_text
 from axon_api.services.local_voice_runtime import local_voice_paths, local_voice_status
+from axon_api.services.openai_audio import openai_audio_configured
 from axon_data import get_all_settings
 
 DEFAULT_AZURE_VOICE = "en-ZA-LukeNeural"
@@ -65,10 +66,13 @@ def resolve_axon_voice_profile(
     preferred_voice: str = "",
 ) -> dict[str, Any]:
     provider_preference = str(preferred_provider or "cloud").strip().lower() or "cloud"
-    cloud_ready = bool(settings.get("azure_speech_key") and settings.get("azure_speech_region"))
+    azure_ready = bool(settings.get("azure_speech_key") and settings.get("azure_speech_region"))
+    openai_ready = openai_audio_configured(settings)
+    cloud_ready = bool(azure_ready or openai_ready)
     local_ready = bool(voice_status.get("synthesis_available"))
     default_voice = str(settings.get("azure_voice") or DEFAULT_AZURE_VOICE).strip() or DEFAULT_AZURE_VOICE
     voice_identity = str(preferred_voice or default_voice).strip() or default_voice
+    cloud_provider = "azure" if azure_ready else ("openai" if openai_ready else "")
 
     if provider_preference == "device":
         provider = "device"
@@ -86,7 +90,8 @@ def resolve_axon_voice_profile(
         provider = "unavailable"
 
     if provider == "cloud":
-        detail = f"Azure speech ready · {voice_identity}"
+        provider_label = "Azure speech" if cloud_provider == "azure" else "OpenAI speech"
+        detail = f"{provider_label} ready · {voice_identity}"
     elif provider == "local":
         detail = f"Local synthesis ready · {voice_status.get('piper_engine') or 'piper'}"
     elif provider == "device":
@@ -102,6 +107,7 @@ def resolve_axon_voice_profile(
         "voice_identity_label": voice_identity if provider == "cloud" else ("Local synthesis" if provider == "local" else "Device speech"),
         "voice_provider_detail": detail,
         "cloud_ready": cloud_ready,
+        "cloud_provider": cloud_provider,
         "local_ready": local_ready,
     }
 

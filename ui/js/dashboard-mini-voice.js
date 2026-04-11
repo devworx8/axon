@@ -18,9 +18,18 @@ function axonDashboardMiniVoiceMixin() {
     }
     return setTimeout(callback, delay);
   };
+  const canonicalizeWakePhraseTranscript = (text = '', wakePhrase = 'Axon') => {
+    const raw = trimText(String(text || '').replace(/[“”]/g, '"').replace(/[’]/g, "'"));
+    const phrase = trimText(wakePhrase || 'Axon') || 'Axon';
+    if (!raw || phrase.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() !== 'axon') return raw;
+    return raw.replace(
+      /^((?:hey|ok(?:ay)?|yo|hello|hi|please|listen)\s+)?accent(?=$|[^a-z0-9])/i,
+      (_match, leadIn = '') => `${leadIn}${phrase}`,
+    );
+  };
 
   const detectWakePhrase = (text = '', wakePhrase = 'Axon') => {
-    const transcript = trimText(text).replace(/[“”]/g, '"').replace(/[’]/g, "'");
+    const transcript = canonicalizeWakePhraseTranscript(text, wakePhrase);
     const wake = trimText(wakePhrase || 'Axon') || 'Axon';
     if (!transcript) return { matched: false, command: '' };
     const wakePattern = escapeRegex(wake).replace(/\s+/g, '\\s+');
@@ -389,7 +398,7 @@ function axonDashboardMiniVoiceMixin() {
     },
 
     handleVoiceCaptureTranscript(text = '', options = {}) {
-      const transcript = trimText(text);
+      const transcript = canonicalizeWakePhraseTranscript(text, this.dashboardMiniVoiceWakePhrase());
       if (!transcript || this.showVoiceOrb) return false;
       if (!this.dashboardMiniVoiceCaptureActive()) return false;
       const state = this.ensureDashboardMiniVoiceState();

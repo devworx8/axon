@@ -9,6 +9,7 @@ import {
 
 import { fetchVoiceStatus, transcribeRecordedAudio } from '@/api/voice';
 import { CompanionConfig, LocalVoiceStatus } from '@/types/companion';
+import { canonicalizeWakePhraseTranscript } from '@/features/axon/voiceCommandUtils';
 import { isVoiceTranscriptionReady } from './voiceReadiness';
 import { useLiveSpeechRecognition } from './useLiveSpeechRecognition';
 
@@ -44,15 +45,29 @@ export function useLiveVoiceCapture(
   options: {
     enabled: boolean;
     language: string;
+    wakePhrase?: string;
+    contextualPhrases?: string[];
     autoSubmitOnSpeechEnd?: boolean;
     onTranscript: (text: string) => Promise<void> | void;
   },
 ) {
-  const { enabled, language, autoSubmitOnSpeechEnd = false, onTranscript } = options;
+  const {
+    enabled,
+    language,
+    wakePhrase = 'Axon',
+    contextualPhrases = [],
+    autoSubmitOnSpeechEnd = false,
+    onTranscript,
+  } = options;
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder, 250);
   const recorderStateRef = useRef(recorderState);
-  const liveSpeech = useLiveSpeechRecognition({ enabled, language });
+  const liveSpeech = useLiveSpeechRecognition({
+    enabled,
+    language,
+    wakePhrase,
+    contextualStrings: contextualPhrases,
+  });
   const [voiceStatus, setVoiceStatus] = useState<LocalVoiceStatus | null>(null);
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -188,7 +203,10 @@ export function useLiveVoiceCapture(
         filename: buildRecordingFilename(audioUri, mimeType),
         config,
       });
-      const transcript = String(transcriptResult.text || liveTranscript).trim();
+      const transcript = canonicalizeWakePhraseTranscript(
+        String(transcriptResult.text || liveTranscript).trim(),
+        wakePhrase,
+      );
       if (!transcript) {
         throw new Error('Axon could not detect speech in that recording.');
       }
@@ -211,7 +229,7 @@ export function useLiveVoiceCapture(
       };
     }
     throw new Error(snapshot.error || 'Axon could not detect speech in that recording.');
-  }, [config, language, liveSpeech]);
+  }, [config, language, liveSpeech, wakePhrase]);
 
   const stopRecordingToTranscript = useCallback(async () => {
     const hasSpeechRecognitionCapture = Boolean(
@@ -253,7 +271,10 @@ export function useLiveVoiceCapture(
       filename: buildRecordingFilename(uri, mimeType),
       config,
     });
-    const transcript = String(transcriptResult.text || '').trim();
+    const transcript = canonicalizeWakePhraseTranscript(
+      String(transcriptResult.text || '').trim(),
+      wakePhrase,
+    );
     if (!transcript) {
       throw new Error('Axon could not detect speech in that recording.');
     }
@@ -275,6 +296,7 @@ export function useLiveVoiceCapture(
     liveSpeech.transcript,
     recorder,
     stopSpeechRecognitionToTranscript,
+    wakePhrase,
   ]);
 
   const stopAndSubmit = useCallback(async () => {

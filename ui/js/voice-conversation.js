@@ -44,6 +44,13 @@ function axonVoiceConversationMixin() {
     }
     return escapeHtml(text).replace(/\n/g, '<br>');
   };
+  const liveOperatorFresh = (ctx) => {
+    const operator = ctx?.liveOperator || {};
+    if (operator?.active) return true;
+    const stamp = Date.parse(String(operator?.updatedAt || operator?.startedAt || ''));
+    if (!Number.isFinite(stamp)) return false;
+    return (Date.now() - stamp) < 8000;
+  };
 
   const sessionLabel = (session = null) => trimText(
     session?.title
@@ -483,12 +490,20 @@ function axonVoiceConversationMixin() {
 
     voiceLiveOperatorHistory(limit = 10) {
       const feed = Array.isArray(this.liveOperatorFeed) ? this.liveOperatorFeed : [];
+      if (!feed.length) return [];
+      if (!liveOperatorFresh(this)) return [];
       return feed.slice(-Math.max(1, limit));
     },
 
     voiceConversationFeedHtml() {
       const steps = this.voiceLiveOperatorHistory(10);
-      if (!steps.length) return '';
+      const lastCommand = trimText(this.voiceConversation?.lastCommand);
+      const lastReplyPreview = trimText(
+        this.voiceConversation?.lastReplyPreview
+        || (typeof this.voiceLatestResponseText === 'function' ? this.voiceLatestResponseText(260) : '')
+      );
+      const awaitingReply = !!this.voiceConversation?.awaitingReply;
+      if (!steps.length && !lastCommand && !lastReplyPreview && !awaitingReply) return '';
       const latestStep = steps[steps.length - 1] || {};
       const message = typeof this.latestAssistantMessage === 'function'
         ? this.latestAssistantMessage()
@@ -511,6 +526,26 @@ function axonVoiceConversationMixin() {
           + (detail ? `<div class="voice-step__detail">${escapeHtml(detail)}</div>` : '')
           + `</div>`;
       }).join('');
+      const conversationCards = [
+        lastCommand
+          ? `<div class="voice-agent-feed__draft">`
+            + `<div class="voice-agent-feed__draft-label">Latest command</div>`
+            + `<div class="voice-agent-feed__draft-body">${escapeHtml(lastCommand)}</div>`
+            + `</div>`
+          : '',
+        lastReplyPreview
+          ? `<div class="voice-agent-feed__draft">`
+            + `<div class="voice-agent-feed__draft-label">Latest reply</div>`
+            + `<div class="voice-agent-feed__draft-body">${renderResponsePreview(this, lastReplyPreview)}</div>`
+            + `</div>`
+          : '',
+        awaitingReply
+          ? `<div class="voice-agent-feed__draft">`
+            + `<div class="voice-agent-feed__draft-label">Conversation status</div>`
+            + `<div class="voice-agent-feed__draft-body">Awaiting your follow-up. Axon can listen again as soon as you speak.</div>`
+            + `</div>`
+          : '',
+      ].filter(Boolean).join('');
       const draftHtml = draft
         ? `<div class="voice-agent-feed__draft">`
           + `<div class="voice-agent-feed__draft-label">Draft reply</div>`
@@ -520,10 +555,11 @@ function axonVoiceConversationMixin() {
       return `<div class="voice-agent-feed">`
         + `<div class="voice-agent-feed__header">`
         + `<span class="voice-agent-feed__dot"></span>`
-        + `<span>Live execution</span>`
+        + `<span>${steps.length ? 'Live execution' : 'Conversation handoff'}</span>`
         + `<span class="voice-agent-feed__meta">${escapeHtml(`${steps.length} steps · ${phase}${updatedLabel ? ` · ${updatedLabel}` : ''}`)}</span>`
         + `</div>`
-        + `<div class="voice-agent-feed__stack">${lines}</div>`
+        + (steps.length ? `<div class="voice-agent-feed__stack">${lines}</div>` : '')
+        + conversationCards
         + draftHtml
         + `</div>`;
     },
@@ -647,6 +683,8 @@ function axonVoiceConversationMixin() {
     onVoiceCommandDispatched(text = '') {
       this.ensureVoiceConversationState();
       this.clearVoiceAwaitingReply();
+      clearTimeout(this._bootGreetingTimer);
+      this._bootGreetingTimer = null;
       this.voiceConversation.lastCommand = trimText(text);
     },
 

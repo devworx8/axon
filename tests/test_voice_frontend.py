@@ -13,10 +13,12 @@ SETTINGS_VOICE_DECK_PARTIAL = ROOT / "ui/partials/settings_voice_deck.html"
 VOICE_JS = ROOT / "ui/js/voice.js"
 VOICE_SPEECH_JS = ROOT / "ui/js/voice-speech.js"
 VOICE_PLAYBACK_JS = ROOT / "ui/js/voice-playback.js"
+VOICE_GREETING_JS = ROOT / "ui/js/voice-greeting.js"
 VOICE_COMMAND_CENTER_JS = ROOT / "ui/js/voice-command-center.js"
 VOICE_CONVERSATION_JS = ROOT / "ui/js/voice-conversation.js"
 VOICE_HUD_JS = ROOT / "ui/js/voice-hud.js"
 CHAT_APPROVALS_JS = ROOT / "ui/js/chat-approvals.js"
+VOICE_STREAM_BLOCKS_JS = ROOT / "ui/js/voice-stream-blocks.js"
 VOICE_APPROVAL_MODAL_PARTIAL = ROOT / "ui/partials/voice_approval_modal.html"
 
 
@@ -253,6 +255,40 @@ class VoiceFrontendTests(unittest.TestCase):
         self.assertTrue(payload["hasVoicePath"])
         self.assertTrue(payload["hasApiLink"])
 
+    def test_voice_command_center_keeps_streaming_reply_as_plain_text_until_complete(self):
+        payload = _run_voice_script(
+            [VOICE_COMMAND_CENTER_JS],
+            """
+            const voiceMixin = ctx.window.axonVoiceCommandCenterMixin();
+            const app = {
+              chatLoading: false,
+              liveOperator: { detail: '' },
+              voiceConversation: {},
+              chatMessages: [{
+                id: 10,
+                role: 'assistant',
+                content: 'Use `npm run build` in /home/edp/project.',
+                streaming: true,
+              }],
+              latestAssistantMessage() {
+                return this.chatMessages[this.chatMessages.length - 1];
+              },
+            };
+            Object.assign(app, voiceMixin);
+            const html = app.voiceDisplayResponseHtml();
+            console.log(JSON.stringify({
+              html,
+              hasRenderClass: html.includes('voice-response-render'),
+              keptBackticksLiteral: html.includes('`npm run build`'),
+              hasTypingCursor: html.includes('voice-typing-cursor'),
+            }));
+            """,
+        )
+
+        self.assertTrue(payload["hasRenderClass"])
+        self.assertTrue(payload["keptBackticksLiteral"])
+        self.assertTrue(payload["hasTypingCursor"])
+
     def test_voice_command_center_stop_and_send_uses_current_transcript(self):
         payload = _run_voice_script(
             [VOICE_COMMAND_CENTER_JS],
@@ -404,6 +440,62 @@ class VoiceFrontendTests(unittest.TestCase):
         self.assertTrue(payload["handled"][0]["final"])
         self.assertEqual(payload["handled"][0]["source"], "browser")
         self.assertFalse(payload["voiceActive"])
+
+    def test_voice_capture_normalizes_accent_to_axon_before_dispatch(self):
+        payload = _run_voice_script(
+            [VOICE_SPEECH_JS, VOICE_JS],
+            """
+            class FakeRecognition {
+              constructor() {
+                this.onresult = null;
+                this.onerror = null;
+                this.onend = null;
+              }
+              start() {}
+            }
+            ctx.window.SpeechRecognition = FakeRecognition;
+            ctx.navigator = {
+              mediaDevices: {
+                async getUserMedia() {
+                  return {
+                    getTracks() {
+                      return [{ stop() {} }];
+                    },
+                  };
+                },
+              },
+            };
+            ctx.location = { hostname: 'localhost' };
+            ctx.window.isSecureContext = true;
+            const mixin = ctx.window.axonVoiceMixin();
+            const app = {
+              settingsForm: { azure_speech_key: '', _azureSpeechKeyHint: '', azure_voice: 'en-GB-RyanNeural' },
+              handled: [],
+              speechLocale() { return 'en-US'; },
+              handleVoiceCaptureTranscript(text, options) {
+                this.handled.push({ text, final: !!options?.final, source: options?.source || '' });
+                return true;
+              },
+              syncVoiceTranscript() {},
+              showToast() {},
+            };
+            Object.assign(app, mixin);
+            await app.startVoice();
+            app._speechRecognizer.onresult({
+              resultIndex: 0,
+              results: [
+                { isFinal: true, 0: { transcript: 'Hey Accent, open the dashboard' } },
+              ],
+            });
+            console.log(JSON.stringify({
+              handled: app.handled,
+            }));
+            """,
+        )
+
+        self.assertEqual(payload["handled"][0]["text"], "Hey Axon, open the dashboard")
+        self.assertTrue(payload["handled"][0]["final"])
+        self.assertEqual(payload["handled"][0]["source"], "browser")
 
     def test_voice_command_center_prefers_text_dock_draft_for_transcript_display(self):
         payload = _run_voice_script(
@@ -706,6 +798,40 @@ class VoiceFrontendTests(unittest.TestCase):
         self.assertFalse(payload["busyAfterStop"])
         self.assertEqual(payload["toast"], "")
 
+    def test_voice_playback_uses_cloud_tts_when_openai_cloud_voice_is_ready(self):
+        payload = _run_voice_script(
+            [VOICE_SPEECH_JS, VOICE_PLAYBACK_JS],
+            """
+            let requestBody = null;
+            ctx.fetch = async (_url, init) => {
+              requestBody = JSON.parse(init.body);
+              throw new Error('network disabled in test');
+            };
+            const mixin = ctx.window.axonVoicePlaybackMixin();
+            const app = {
+              settingsForm: {
+                azure_speech_region: '',
+                azure_voice: 'en-ZA-LeahNeural',
+                voice_speech_rate: '0.95',
+                voice_speech_pitch: '1.02',
+              },
+              voiceStatus: {
+                cloud_synthesis_available: true,
+              },
+              authHeaders(headers) { return headers; },
+              azureSpeechConfigured() { return false; },
+              showToast(message) { this.toast = message; },
+            };
+            Object.assign(app, mixin);
+            await app.speakMessage('Status report');
+            console.log(JSON.stringify({ requestBody, toast: app.toast || '' }));
+            """,
+        )
+
+        self.assertEqual(payload["requestBody"]["voice"], "en-ZA-LeahNeural")
+        self.assertEqual(payload["requestBody"]["rate"], 0.95)
+        self.assertEqual(payload["toast"], "")
+
     def test_voice_command_center_sleep_reactor_hard_stops_without_speaking_goodbye(self):
         payload = _run_voice_script(
             [VOICE_COMMAND_CENTER_JS],
@@ -802,7 +928,7 @@ class VoiceFrontendTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["fetchCalls"], 1)
-        self.assertEqual(payload["queuedNarration"], "Planning the next step.")
+        self.assertEqual(payload["queuedNarration"], "")
 
     def test_close_voice_command_center_stops_speech_and_clears_narration(self):
         payload = _run_voice_script(
@@ -837,6 +963,49 @@ class VoiceFrontendTests(unittest.TestCase):
         self.assertTrue(payload["narrationCancelled"])
         self.assertTrue(payload["awaitingCleared"])
         self.assertTrue(payload["speechStopped"])
+
+    def test_voice_greeting_uses_status_playback_channel(self):
+        payload = _run_voice_script(
+            [VOICE_GREETING_JS],
+            """
+            const mixin = ctx.window.axonVoiceGreetingMixin();
+            const app = {
+              call: null,
+              speakMessage(text, options = {}) {
+                this.call = { text, kind: options.kind || '' };
+              },
+            };
+            Object.assign(app, mixin);
+            app._speakGreeting('Systems online');
+            console.log(JSON.stringify(app.call));
+            """,
+        )
+
+        self.assertEqual(payload["text"], "Systems online")
+        self.assertEqual(payload["kind"], "status")
+
+    def test_status_playback_does_not_interrupt_active_reply(self):
+        payload = _run_voice_script(
+            [VOICE_PLAYBACK_JS],
+            """
+            const mixin = ctx.window.axonVoicePlaybackMixin();
+            const app = {
+              _speechPlaybackKind: 'reply',
+              _speechPlaybackPending: true,
+              stopCount: 0,
+              stopSpeech() { this.stopCount += 1; },
+            };
+            Object.assign(app, mixin);
+            const result = await app.speakMessage('Status update', { kind: 'status' });
+            console.log(JSON.stringify({
+              result,
+              stopCount: app.stopCount,
+            }));
+            """,
+        )
+
+        self.assertFalse(payload["result"])
+        self.assertEqual(payload["stopCount"], 0)
 
     def test_voice_conversation_text_dock_submits_draft_command(self):
         payload = _run_voice_script(
@@ -899,6 +1068,63 @@ class VoiceFrontendTests(unittest.TestCase):
         self.assertTrue(payload["awaitingReply"])
         self.assertEqual(payload["stateCaption"], "Awaiting reply")
         self.assertIn("Status report complete", payload["preview"])
+
+    def test_voice_task_surface_clears_hold_once_awaiting_reply(self):
+        payload = _run_voice_script(
+            [VOICE_COMMAND_CENTER_JS],
+            """
+            const mixin = ctx.window.axonVoiceCommandCenterMixin();
+            const app = {
+              chatLoading: false,
+              liveOperator: {
+                active: true,
+                phase: 'verify',
+                title: 'Writing the result',
+                detail: 'Finishing the reply.',
+              },
+              voiceConversation: { awaitingReply: false },
+              voiceShouldRenderOperatorDeck() { return !!this.liveOperator.active; },
+              voiceLatestResponseText() { return 'Final reply ready.'; },
+            };
+            Object.assign(app, mixin);
+            const activeDuringRun = app.voiceTaskSurfaceActive();
+            app.liveOperator = { active: false, phase: '', title: '', detail: '' };
+            app.voiceConversation.awaitingReply = true;
+            const activeAwaitingReply = app.voiceTaskSurfaceActive();
+            console.log(JSON.stringify({ activeDuringRun, activeAwaitingReply }));
+            """,
+        )
+
+        self.assertTrue(payload["activeDuringRun"])
+        self.assertFalse(payload["activeAwaitingReply"])
+
+    def test_voice_conversation_feed_renders_handoff_state_without_operator_steps(self):
+        payload = _run_voice_script(
+            [VOICE_CONVERSATION_JS],
+            """
+            const mixin = ctx.window.axonVoiceConversationMixin();
+            const app = {
+              showVoiceOrb: true,
+              voiceConversation: {
+                awaitingReply: true,
+                lastCommand: 'Open the latest build log',
+                lastReplyPreview: 'The build passed and the preview is ready.',
+              },
+              liveOperator: { phase: 'verify', updatedAt: '2026-04-10T06:05:00Z' },
+              liveOperatorFeed: [],
+              timeAgo() { return 'just now'; },
+              renderMd(value) { return '<p>' + String(value || '') + '</p>'; },
+            };
+            Object.assign(app, mixin);
+            const html = app.voiceConversationFeedHtml();
+            console.log(JSON.stringify({ html }));
+            """,
+        )
+
+        self.assertIn("Conversation handoff", payload["html"])
+        self.assertIn("Latest command", payload["html"])
+        self.assertIn("Latest reply", payload["html"])
+        self.assertIn("Awaiting your follow-up", payload["html"])
 
     def test_voice_conversation_surfaces_external_file_approval_copy(self):
         payload = _run_voice_script(
@@ -1133,6 +1359,200 @@ class VoiceFrontendTests(unittest.TestCase):
         self.assertTrue(payload["responseAvailable"])
         self.assertEqual(payload["renderClass"], "")
         self.assertTrue(payload["htmlHasDeck"])
+
+    def test_voice_task_surface_prefers_streaming_blocks_while_agent_message_is_live(self):
+        payload = _run_voice_script(
+            [VOICE_COMMAND_CENTER_JS, VOICE_STREAM_BLOCKS_JS, ROOT / "ui/js/voice-operator-deck.js"],
+            """
+            const commandMixin = ctx.window.axonVoiceCommandCenterMixin();
+            const blocksMixin = ctx.window.axonVoiceStreamBlocksMixin();
+            const deckMixin = ctx.window.axonVoiceOperatorDeckMixin();
+            const app = {
+              chatLoading: true,
+              liveOperator: {
+                active: true,
+                phase: 'plan',
+                title: 'Thinking through the task',
+                detail: 'Axon is analysing the task.',
+              },
+              liveOperatorFeed: [],
+              chatMessages: [{
+                id: 10,
+                role: 'assistant',
+                content: '',
+                streaming: true,
+                mode: 'agent',
+                thinkingBlocks: [{ title: 'Thinking', content: 'Tracing the render path.', updatedAt: '2026-04-10T06:05:00Z' }],
+                workingBlocks: [],
+              }],
+              voiceConversation: {},
+              latestAssistantMessage() {
+                return this.chatMessages[this.chatMessages.length - 1];
+              },
+              timeAgo() { return 'just now'; },
+            };
+            Object.assign(app, commandMixin, blocksMixin, deckMixin);
+            const html = app.voiceTaskSurfaceHtml();
+            console.log(JSON.stringify({
+              hasStreamingBlocks: html.includes('Streaming blocks'),
+              hasOperatorDeck: html.includes('voice-operator-deck'),
+              hasDeckLabel: html.includes('Operator deck'),
+            }));
+            """,
+        )
+
+        self.assertTrue(payload["hasStreamingBlocks"])
+        self.assertTrue(payload["hasOperatorDeck"])
+        self.assertTrue(payload["hasDeckLabel"])
+
+    def test_voice_task_surface_synthesizes_streaming_blocks_from_live_operator_before_message_blocks_exist(self):
+        payload = _run_voice_script(
+            [VOICE_COMMAND_CENTER_JS, VOICE_STREAM_BLOCKS_JS, ROOT / "ui/js/voice-operator-deck.js"],
+            """
+            const commandMixin = ctx.window.axonVoiceCommandCenterMixin();
+            const blocksMixin = ctx.window.axonVoiceStreamBlocksMixin();
+            const deckMixin = ctx.window.axonVoiceOperatorDeckMixin();
+            const app = {
+              chatLoading: true,
+              liveOperator: {
+                active: true,
+                phase: 'plan',
+                title: 'Thinking through the task',
+                detail: 'Axon is tracing the live stream path before the first assistant block lands.',
+              },
+              liveOperatorFeed: [],
+              chatMessages: [{
+                id: 10,
+                role: 'assistant',
+                content: '',
+                streaming: true,
+                mode: 'agent',
+                thinkingBlocks: [],
+                workingBlocks: [],
+              }],
+              voiceConversation: {},
+              latestAssistantMessage() {
+                return this.chatMessages[this.chatMessages.length - 1];
+              },
+              timeAgo() { return 'just now'; },
+            };
+            Object.assign(app, commandMixin, blocksMixin, deckMixin);
+            const html = app.voiceTaskSurfaceHtml();
+            console.log(JSON.stringify({
+              hasStreamingBlocks: html.includes('Streaming blocks'),
+              hasThinkingCopy: html.includes('Axon is tracing the live stream path before the first assistant block lands.'),
+              hasOperatorDeck: html.includes('voice-operator-deck'),
+            }));
+            """,
+        )
+
+        self.assertTrue(payload["hasStreamingBlocks"])
+        self.assertTrue(payload["hasThinkingCopy"])
+        self.assertTrue(payload["hasOperatorDeck"])
+
+    def test_voice_task_surface_synthesizes_command_preview_from_live_operator_execute_state(self):
+        payload = _run_voice_script(
+            [VOICE_COMMAND_CENTER_JS, VOICE_STREAM_BLOCKS_JS, ROOT / "ui/js/voice-operator-deck.js"],
+            """
+            const commandMixin = ctx.window.axonVoiceCommandCenterMixin();
+            const blocksMixin = ctx.window.axonVoiceStreamBlocksMixin();
+            const deckMixin = ctx.window.axonVoiceOperatorDeckMixin();
+            const app = {
+              chatLoading: true,
+              liveOperator: {
+                active: true,
+                phase: 'execute',
+                title: 'Running Shell Cmd',
+                detail: '{"cmd":"npm run build","cwd":"/tmp/mobile"}',
+                tool: 'shell_cmd',
+              },
+              liveOperatorFeed: [],
+              chatMessages: [{
+                id: 10,
+                role: 'assistant',
+                content: '',
+                streaming: true,
+                mode: 'agent',
+                thinkingBlocks: [],
+                workingBlocks: [],
+              }],
+              terminal: { sessionDetail: null },
+              voiceConversation: {},
+              latestAssistantMessage() {
+                return this.chatMessages[this.chatMessages.length - 1];
+              },
+              timeAgo() { return 'just now'; },
+            };
+            Object.assign(app, commandMixin, blocksMixin, deckMixin);
+            const html = app.voiceTaskSurfaceHtml();
+            console.log(JSON.stringify({
+              hasStreamingBlocks: html.includes('Streaming blocks'),
+              hasCommandTrace: html.includes('Command trace'),
+              hasCommand: html.includes('npm run build'),
+              hasCwd: html.includes('/tmp/mobile'),
+            }));
+            """,
+        )
+
+        self.assertTrue(payload["hasStreamingBlocks"])
+        self.assertTrue(payload["hasCommandTrace"])
+        self.assertTrue(payload["hasCommand"])
+        self.assertTrue(payload["hasCwd"])
+
+    def test_voice_conversation_dispatch_cancels_pending_boot_greeting(self):
+        payload = _run_voice_script(
+            [VOICE_CONVERSATION_JS],
+            """
+            const mixin = ctx.window.axonVoiceConversationMixin();
+            const app = {
+              voiceConversation: { awaitingReply: true },
+              _bootGreetingTimer: 12345,
+            };
+            Object.assign(app, mixin);
+            app.onVoiceCommandDispatched('Open the latest build log');
+            console.log(JSON.stringify({
+              bootGreetingTimer: app._bootGreetingTimer,
+              awaitingReply: !!app.voiceConversation.awaitingReply,
+              lastCommand: app.voiceConversation.lastCommand,
+            }));
+            """,
+        )
+
+        self.assertIsNone(payload["bootGreetingTimer"])
+        self.assertFalse(payload["awaitingReply"])
+        self.assertEqual(payload["lastCommand"], "Open the latest build log")
+
+    def test_voice_mission_timeline_hides_stale_operator_history_once_idle(self):
+        payload = _run_voice_script(
+            [VOICE_CONVERSATION_JS],
+            """
+            const mixin = ctx.window.axonVoiceConversationMixin();
+            const app = {
+              liveOperator: {
+                active: false,
+                phase: 'observe',
+                updatedAt: '2026-04-01T00:00:00Z',
+              },
+              liveOperatorFeed: [
+                {
+                  id: 'old-1',
+                  phase: 'plan',
+                  title: 'Thinking through the task',
+                  detail: 'Old plan detail that should not linger in the mission rail.',
+                  at: '2026-04-01T00:00:00Z',
+                },
+              ],
+            };
+            Object.assign(app, mixin);
+            console.log(JSON.stringify({
+              historyLength: app.voiceLiveOperatorHistory(6).length,
+              timelineLength: app.voiceMissionTimeline().length,
+            }));
+            """,
+        )
+
+        self.assertEqual(payload["historyLength"], 0)
+        self.assertEqual(payload["timelineLength"], 0)
 
     def test_voice_task_surface_holds_last_operator_deck_during_brief_idle_gap(self):
         payload = _run_voice_script(

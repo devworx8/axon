@@ -59,7 +59,7 @@ function axonVoiceGreetingMixin() {
     /** Speak greeting using the configured voice profile */
     _speakGreeting(text) {
       if (typeof this.speakMessage === 'function') {
-        this.speakMessage(text);
+        this.speakMessage(text, { kind: 'status' });
       }
     },
 

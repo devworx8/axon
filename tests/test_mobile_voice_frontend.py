@@ -215,6 +215,30 @@ class MobileVoiceFrontendTests(unittest.TestCase):
       self.assertTrue(payload["agentMode"])
       self.assertEqual(payload["mode"], "agent")
 
+    def test_mobile_refresh_voice_capability_marks_output_available_for_cloud_synthesis(self):
+      payload = _run_mobile_voice_script(
+          [VOICE_JS, MOBILE_JS],
+          """
+          const voiceMixin = ctx.window.axonVoiceMixin();
+          const mobileMixin = ctx.window.axonMobileMixin();
+          const app = {
+            showVoiceOrb: false,
+            isMobile: true,
+            settingsForm: { azure_speech_key: '', _azureSpeechKeyHint: '' },
+          };
+          Object.assign(app, voiceMixin, mobileMixin);
+          app.voiceStatus = { cloud_synthesis_available: true, synthesis_ready: true };
+          app.refreshVoiceCapability();
+          console.log(JSON.stringify({
+            speechOutputSupported: !!app.speechOutputSupported,
+            speechSupported: !!app.speechSupported,
+          }));
+          """,
+      )
+
+      self.assertTrue(payload["speechOutputSupported"])
+      self.assertTrue(payload["speechSupported"])
+
     def test_mobile_open_voice_command_center_closes_lingering_file_viewer(self):
       payload = _run_mobile_voice_script(
           [MOBILE_JS],
@@ -458,6 +482,59 @@ class MobileVoiceFrontendTests(unittest.TestCase):
 
       self.assertEqual(payload["transcript"], "")
       self.assertEqual(payload["handled"][0]["value"], "deploy the mobile app")
+      self.assertTrue(payload["handled"][0]["final"])
+      self.assertEqual(payload["handled"][0]["source"], "recorded")
+      self.assertEqual(payload["toast"], "")
+
+    def test_mobile_recorder_fallback_normalizes_accent_to_axon(self):
+      payload = _run_mobile_voice_script(
+          [MOBILE_JS],
+          """
+          ctx.fetch = async () => ({
+            ok: true,
+            status: 200,
+            async json() {
+              return { text: 'Accent open the dashboard', engine: 'openai-stt' };
+            },
+          });
+          const mixin = ctx.window.axonMobileMixin();
+          const app = {
+            isMobile: true,
+            voiceStatus: { transcription_ready: true, detail: 'Cloud transcription ready.' },
+            settingsForm: { azure_speech_key: '', _azureSpeechKeyHint: '', azure_voice: 'en-GB-RyanNeural' },
+            voiceConversation: {},
+            voiceTranscript: '',
+            chatInput: '',
+            authHeaders(extra = {}) { return { ...extra, 'X-Axon-Token': 'token-1' }; },
+            async loadVoiceStatus() { return this.voiceStatus; },
+            speechLocale() { return 'en-US'; },
+            azureSpeechConfigured() { return false; },
+            voiceOutputAvailable() { return false; },
+            handled: [],
+            handleVoiceCaptureTranscript(value, options = {}) {
+              this.handled.push({ value, final: !!options.final, source: options.source || '' });
+              return true;
+            },
+            syncVoiceTranscript(value) {
+              this.voiceTranscript = value;
+              this.chatInput = value;
+            },
+            showToast(message) { this.toast = message; },
+          };
+          Object.assign(app, mixin);
+          app.refreshVoiceCapability();
+          await app.startVoice();
+          await app.startVoice();
+          console.log(JSON.stringify({
+            transcript: app.voiceTranscript,
+            handled: app.handled,
+            toast: app.toast || '',
+          }));
+          """,
+      )
+
+      self.assertEqual(payload["transcript"], "")
+      self.assertEqual(payload["handled"][0]["value"], "Axon open the dashboard")
       self.assertTrue(payload["handled"][0]["final"])
       self.assertEqual(payload["handled"][0]["source"], "recorded")
       self.assertEqual(payload["toast"], "")

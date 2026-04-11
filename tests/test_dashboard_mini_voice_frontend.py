@@ -193,6 +193,41 @@ class DashboardMiniVoiceFrontendTests(unittest.TestCase):
         self.assertIn("Offer concise, practical advice", payload["sent"][0])
         self.assertIn("Advice approved", payload["lastDisposition"])
 
+    def test_dashboard_mini_voice_accepts_accent_as_the_wake_phrase_alias(self):
+        payload = _run_dashboard_mini_voice_script(
+            """
+            const mixin = ctx.window.axonDashboardMiniVoiceMixin();
+            const app = {
+              activeTab: 'dashboard',
+              chatLoading: false,
+              voiceActive: false,
+              showVoiceOrb: false,
+              voiceStatus: { transcription_available: true, detail: 'Ready.' },
+              companionAxonWakePhrase() { return 'Axon'; },
+              refreshVoiceCapability() {},
+              async loadVoiceStatus() { return this.voiceStatus; },
+              async startVoice() { this.listenCount = (this.listenCount || 0) + 1; },
+              async sendVoiceCommand(text) {
+                this.sent = this.sent || [];
+                this.sent.push(text);
+              },
+            };
+            Object.assign(app, mixin);
+            await app.dashboardMiniVoicePrimaryAction();
+            app.handleVoiceCaptureTranscript('Hey Accent, open the dashboard', { final: true, source: 'browser' });
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            console.log(JSON.stringify({
+              sent: app.sent || [],
+              lastHeard: app.dashboardMiniVoiceLastHeard(),
+              lastDisposition: app.dashboardMiniVoiceLastDispositionLabel(),
+            }));
+            """
+        )
+
+        self.assertEqual(payload["sent"], ["open the dashboard"])
+        self.assertEqual(payload["lastHeard"], "Hey Axon, open the dashboard")
+        self.assertIn("Wake-word command routed", payload["lastDisposition"])
+
     def test_dashboard_mini_voice_resume_waits_until_speech_is_idle(self):
         payload = _run_dashboard_mini_voice_script(
             """

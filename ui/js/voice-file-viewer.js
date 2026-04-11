@@ -7,6 +7,7 @@ function axonVoiceFileViewerMixin() {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const trimText = (value = '') => String(value || '').trim();
+  const toPosix = (value = '') => String(value || '').replace(/\\/g, '/');
   const basename = (value = '') => {
     const raw = trimText(value).replace(/\/+$/, '');
     if (!raw) return '';
@@ -16,6 +17,48 @@ function axonVoiceFileViewerMixin() {
     const parts = raw.split('/');
     return parts[parts.length - 1] || raw;
   };
+  const collapsePath = (value = '') => {
+    const raw = toPosix(trimText(value));
+    if (!raw) return '';
+    const absolute = raw.startsWith('/');
+    const parts = [];
+    raw.split('/').forEach((segment) => {
+      if (!segment || segment === '.') return;
+      if (segment === '..') {
+        if (parts.length && parts[parts.length - 1] !== '..') {
+          parts.pop();
+        } else if (!absolute) {
+          parts.push('..');
+        }
+        return;
+      }
+      parts.push(segment);
+    });
+    const joined = parts.join('/');
+    if (!joined) return absolute ? '/' : '';
+    return absolute ? `/${joined}` : joined;
+  };
+  const joinPath = (base = '', relative = '') => {
+    const prefix = trimText(base).replace(/\/+$/, '');
+    const suffix = trimText(relative).replace(/^\/+/, '');
+    return collapsePath([prefix, suffix].filter(Boolean).join('/'));
+  };
+  const WORKSPACE_UI_HINT_PREFIXES = ['js/', 'css/', 'partials/'];
+  const WORKSPACE_PATH_HINTS = [
+    'ui/',
+    'tests/',
+    'apps/',
+    'axon_api/',
+    'axon_core/',
+    'design/',
+    'docs/',
+    'scripts/',
+    'server.py',
+    'brain.py',
+    'resource_bank.py',
+    'requirements.txt',
+  ];
+  const SAFE_LOCAL_PREFIXES = ['/home/', '/tmp/', '/var/tmp/', '~/'];
 
   return {
     voiceFileViewer: {
@@ -48,6 +91,7 @@ function axonVoiceFileViewerMixin() {
       state.timerId = state.timerId || null;
       state.pausedUntil = Number.isFinite(Number(state.pausedUntil)) ? Number(state.pausedUntil) : 0;
       state.lastOpenAt = Number.isFinite(Number(state.lastOpenAt)) ? Number(state.lastOpenAt) : 0;
+      state.lastOpenPath = trimText(state.lastOpenPath || '');
       state.active = !!state.active;
       return state;
     },
@@ -81,6 +125,7 @@ function axonVoiceFileViewerMixin() {
       state.queue = [];
       state.pausedUntil = 0;
       state.active = false;
+      state.lastOpenPath = '';
       if (options.closeViewer && this.voiceFileViewer?.open && this.voiceFileViewer?.autoOpened) {
         this._resetVoiceFileViewerState();
       }
@@ -89,10 +134,73 @@ function axonVoiceFileViewerMixin() {
     _normalizeRevealPath(path = '') {
       const value = trimText(path);
       if (!value) return '';
-      return value
+      const cleaned = value
         .replace(/[#?].*$/, '')
         .replace(/:\d+(?::\d+)?$/, '')
         .replace(/[),.;:!?]+$/g, '');
+      if (!cleaned) return '';
+      if (/^https?:\/\//i.test(cleaned)) return cleaned;
+
+      const roots = this._voiceWorkspaceRoots?.() || [];
+      const primaryRoot = trimText(roots[0] || '');
+      const normalized = this._resolveWorkspaceRelativePath?.(cleaned) || collapsePath(cleaned);
+      if (SAFE_LOCAL_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
+        return normalized;
+      }
+      if (primaryRoot && normalized === primaryRoot) {
+        return normalized;
+      }
+      return '';
+    },
+
+    _voiceWorkspaceRoots() {
+      const candidates = [
+        this.currentWorkspaceAutoSession?.()?.source_workspace_path,
+        this.currentWorkspaceAutoSession?.()?.workspace_path,
+        this.chatProject?.path,
+        this.browserSourcePath?.(),
+        this.dashboardLiveTerminalSession?.()?.cwd,
+        this.voiceTerminalSession?.()?.cwd,
+        this.currentTerminalSession?.()?.cwd,
+      ].map((item) => collapsePath(item)).filter(Boolean);
+      return [...new Set(candidates)];
+    },
+
+    _resolveWorkspaceRelativePath(path = '') {
+      const raw = trimText(path);
+      if (!raw) return '';
+      if (/^https?:\/\//i.test(raw)) return raw;
+      if (SAFE_LOCAL_PREFIXES.some((prefix) => raw.startsWith(prefix))) {
+        return collapsePath(raw);
+      }
+
+      const roots = this._voiceWorkspaceRoots?.() || [];
+      const workspaceRoot = trimText(roots[0] || '');
+      if (!workspaceRoot) return '';
+      const uiRoot = joinPath(workspaceRoot, 'ui');
+
+      if (raw.startsWith('./') || raw.startsWith('../')) {
+        return joinPath(workspaceRoot, raw);
+      }
+
+      const withoutLeadingSlash = raw.replace(/^\/+/, '');
+      if (raw.startsWith('/')) {
+        if (WORKSPACE_UI_HINT_PREFIXES.some((prefix) => withoutLeadingSlash.startsWith(prefix))) {
+          return joinPath(uiRoot, withoutLeadingSlash);
+        }
+        if (WORKSPACE_PATH_HINTS.some((prefix) => withoutLeadingSlash.startsWith(prefix))) {
+          return joinPath(workspaceRoot, withoutLeadingSlash);
+        }
+        return '';
+      }
+
+      if (WORKSPACE_PATH_HINTS.some((prefix) => raw.startsWith(prefix))) {
+        return joinPath(workspaceRoot, raw);
+      }
+      if (WORKSPACE_UI_HINT_PREFIXES.some((prefix) => raw.startsWith(prefix))) {
+        return joinPath(uiRoot, raw);
+      }
+      return '';
     },
 
     _normalizeViewerPath(path = '', explicitKind = '') {
@@ -125,6 +233,12 @@ function axonVoiceFileViewerMixin() {
       items.forEach((item) => {
         const normalized = this._normalizeRevealPath(item);
         if (!normalized || dedupe.has(normalized)) return;
+        if (
+          normalized === trimText(this.voiceFileViewer?.path)
+          || (normalized === trimText(state.lastOpenPath) && (Date.now() - Number(state.lastOpenAt || 0)) < 4000)
+        ) {
+          return;
+        }
         dedupe.add(normalized);
         incoming.push({
           path: normalized,
@@ -186,6 +300,7 @@ function axonVoiceFileViewerMixin() {
         this.openVoiceFileViewer?.(next.path, next.kind || '', { auto: true });
       }
       state.lastOpenAt = now;
+      state.lastOpenPath = trimText(next.path);
       state.timerId = setTimeout(() => {
         state.timerId = null;
         this._drainVoiceFileRevealQueue();
@@ -235,10 +350,10 @@ function axonVoiceFileViewerMixin() {
     },
 
     _voiceFolderRows(items = []) {
-      return items.map((item, index) => {
+      return items.map((item) => {
         const kind = item?.is_dir ? 'folder' : this._detectFileType(item?.path);
         const size = item?.is_dir ? 'Folder' : (typeof this.formatBytes === 'function' ? this.formatBytes(item.size || 0) : `${item.size || 0} B`);
-        return `<button type="button" class="voice-file-viewer__folder-entry" data-voice-path="${escapeHtml(item.path || '')}" data-voice-kind="${escapeHtml(kind)}" data-voice-reveal="1" style="--voice-stagger:${index * 70}ms">`
+        return `<button type="button" class="voice-file-viewer__folder-entry" data-voice-path="${escapeHtml(item.path || '')}" data-voice-kind="${escapeHtml(kind)}">`
           + `<div class="voice-file-viewer__folder-icon">${escapeHtml(this._voiceFolderIcon(item))}</div>`
           + `<div class="voice-file-viewer__folder-copy">`
           + `<div class="voice-file-viewer__folder-name">${escapeHtml(item.name || 'Untitled')}</div>`
@@ -278,7 +393,7 @@ function axonVoiceFileViewerMixin() {
         body = `<div class="voice-file-viewer__error">${escapeHtml(v.error)}</div>`;
       } else if (v.type === 'folder') {
         const upButton = v.parent
-          ? `<button type="button" class="voice-file-viewer__folder-up" data-voice-path="${escapeHtml(v.parent)}" data-voice-kind="folder" data-voice-reveal="1" style="--voice-stagger:0ms">⬑ Up one level</button>`
+          ? `<button type="button" class="voice-file-viewer__folder-up" data-voice-path="${escapeHtml(v.parent)}" data-voice-kind="folder">⬑ Up one level</button>`
           : '';
         const count = Array.isArray(v.items) ? v.items.length : 0;
         body = '<div class="voice-file-viewer__folder">'
@@ -379,9 +494,21 @@ function axonVoiceFileViewerMixin() {
       const normalizedPath = this._normalizeViewerPath(path, explicitKind);
       if (!normalizedPath) return;
       const viewer = this.voiceFileViewer;
+      const revealState = this._ensureVoiceFileRevealState();
+      const detectedType = this._detectFileType(normalizedPath, explicitKind);
+      const alreadyOpen = !!(
+        viewer?.open
+        && trimText(viewer.path) === normalizedPath
+        && trimText(viewer.type) === detectedType
+        && !viewer.loading
+      );
+      if (alreadyOpen) {
+        viewer.autoOpened = viewer.autoOpened && !!options.auto;
+        return;
+      }
       viewer.open = true;
       viewer.path = normalizedPath;
-      viewer.type = this._detectFileType(normalizedPath, explicitKind);
+      viewer.type = detectedType;
       viewer.content = '';
       viewer.items = [];
       viewer.parent = '';
@@ -389,6 +516,8 @@ function axonVoiceFileViewerMixin() {
       viewer.error = '';
       viewer.notice = '';
       viewer.autoOpened = !!options.auto;
+      revealState.lastOpenAt = Date.now();
+      revealState.lastOpenPath = normalizedPath;
       this._renderFileViewerDOM();
 
       try {

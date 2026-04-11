@@ -31,6 +31,43 @@ function axonVoiceStreamBlocksMixin() {
     }
   };
 
+  const parseArgsObject = (value = '') => {
+    const text = trimText(value);
+    if (!text.startsWith('{') || !text.endsWith('}')) return {};
+    try {
+      const parsed = JSON.parse(text);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (_) {
+      return {};
+    }
+  };
+
+  const fallbackWorkingArgs = (ctx, operator = {}) => {
+    const args = { ...parseArgsObject(operator?.detail || '') };
+    const command = trimText(typeof ctx.voiceOperatorActiveCommand === 'function' ? ctx.voiceOperatorActiveCommand() : '');
+    const cwd = trimText(
+      ctx.dashboardLiveTerminalSession?.()?.cwd
+      || ctx.dashboardLiveTerminalDetail?.()?.cwd
+      || ctx.currentTerminalSession?.()?.cwd
+      || ctx.terminal?.sessionDetail?.cwd
+      || operator?.filePath
+      || ctx.chatProject?.path
+      || ''
+    );
+    if (command && !args.cmd && !args.command && !args.path) args.cmd = command;
+    if (cwd && !args.cwd) args.cwd = cwd;
+    return args;
+  };
+
+  const statefulLiveReply = (ctx, message = null) => {
+    const direct = trimText(message?.content || '');
+    if (direct) return direct;
+    if (typeof ctx?.voiceLatestResponseText === 'function') {
+      return trimText(ctx.voiceLatestResponseText(1200));
+    }
+    return '';
+  };
+
   return {
     voiceLatestStreamMessage() {
       if (typeof this.latestAssistantMessage === 'function') {
@@ -41,10 +78,60 @@ function axonVoiceStreamBlocksMixin() {
 
     voiceStreamingBlocksState() {
       const message = this.voiceLatestStreamMessage?.();
+      const operator = this.liveOperator || {};
+      const active = !!(
+        message?.streaming
+        || this.chatLoading
+        || operator?.active
+        || this.currentWorkspaceRunActive?.()
+      );
+      const liveReply = trimText(
+        statefulLiveReply(this, message)
+      );
+      const thinkingBlocks = Array.isArray(message?.thinkingBlocks) ? message.thinkingBlocks : [];
+      const workingBlocks = Array.isArray(message?.workingBlocks) ? message.workingBlocks : [];
+      if ((thinkingBlocks.length || workingBlocks.length || liveReply) || !active) {
+        return {
+          message,
+          thinkingBlocks,
+          workingBlocks,
+          liveReply,
+        };
+      }
+
+      const phase = trimText(operator?.phase).toLowerCase() || 'observe';
+      const detail = trimText(operator?.detail || '');
+      const stamp = trimText(operator?.updatedAt || operator?.startedAt || '');
+      if (phase === 'plan' || phase === 'observe') {
+        return {
+          message,
+          thinkingBlocks: [{
+            id: 'operator-plan-fallback',
+            title: trimText(operator?.title || 'Thinking'),
+            content: detail || 'Axon is analysing the request and forming a plan.',
+            status: active ? 'active' : 'done',
+            updatedAt: stamp,
+            createdAt: stamp,
+          }],
+          workingBlocks: [],
+          liveReply,
+        };
+      }
+      const operatorArgs = fallbackWorkingArgs(this, operator);
+      const detailArgs = parseArgsObject(detail);
       return {
         message,
-        thinkingBlocks: Array.isArray(message?.thinkingBlocks) ? message.thinkingBlocks : [],
-        workingBlocks: Array.isArray(message?.workingBlocks) ? message.workingBlocks : [],
+        thinkingBlocks: [],
+        workingBlocks: [{
+          id: 'operator-work-fallback',
+          title: trimText(operator?.title || 'Working'),
+          args: operatorArgs,
+          result: detail && !Object.keys(detailArgs).length ? detail : 'Axon is executing the current step.',
+          status: phase === 'recover' ? 'done' : 'running',
+          updatedAt: stamp,
+          createdAt: stamp,
+        }],
+        liveReply,
       };
     },
 
@@ -57,7 +144,8 @@ function axonVoiceStreamBlocksMixin() {
       const state = this.voiceStreamingBlocksState?.();
       const thinkingBlocks = state?.thinkingBlocks || [];
       const workingBlocks = state?.workingBlocks || [];
-      if (!thinkingBlocks.length && !workingBlocks.length) return '';
+      const liveReply = trimText(state?.liveReply || state?.message?.content || '');
+      if (!thinkingBlocks.length && !workingBlocks.length && !liveReply) return '';
 
       const thinkingHtml = thinkingBlocks.map((block) => {
         const stamp = blockTimeLabel(this, block?.updatedAt || block?.createdAt);
@@ -86,6 +174,16 @@ function axonVoiceStreamBlocksMixin() {
           + `</div>`;
       }).join('');
 
+      const replyHtml = liveReply
+        ? `<div class="console-working-block console-working-block-running rounded-2xl px-3 py-2.5">`
+          + `<div class="flex items-center gap-2">`
+          + `<span class="console-working-chip console-working-chip-running rounded-full px-2 py-0.5 text-[9px] uppercase tracking-[0.16em]">Reply</span>`
+          + `<span class="text-[11px] font-medium text-slate-100">Streaming response</span>`
+          + `</div>`
+          + `<div class="console-working-result mt-2 whitespace-pre-wrap">${escapeHtml(liveReply)}</div>`
+          + `</div>`
+        : '';
+
       return `<div class="voice-stream-blocks">`
         + `<div class="voice-stream-blocks__header">`
         + `<span class="voice-stream-blocks__dot"></span>`
@@ -93,6 +191,7 @@ function axonVoiceStreamBlocksMixin() {
         + `</div>`
         + (thinkingHtml ? `<div class="console-thinking-stack space-y-2">${thinkingHtml}</div>` : '')
         + (workingHtml ? `<div class="console-working-stack space-y-2">${workingHtml}</div>` : '')
+        + replyHtml
         + `</div>`;
     },
   };

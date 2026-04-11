@@ -16,6 +16,11 @@ from axon_api.services.voice_tuning import (
     azure_voice_pitch_attr,
     azure_voice_rate_attr,
 )
+from axon_api.services.openai_audio import (
+    openai_audio_configured,
+    synthesize_openai_speech,
+    transcribe_openai_audio,
+)
 from axon_api.services.voice_status_payload import build_voice_status_payload
 
 
@@ -82,38 +87,50 @@ class IntegrationToolsRouteHandlers:
             settings = await self._db.get_all_settings(conn)
         key = settings.get("azure_speech_key", "")
         region = settings.get("azure_speech_region", "eastus")
-        if not key:
-            raise HTTPException(400, "Azure Speech key not set in Settings")
+        openai_key = str(settings.get("openai_api_key") or "").strip()
+        openai_base_url = str(settings.get("openai_base_url") or "").strip()
+        if not key and not openai_key:
+            raise HTTPException(400, "No cloud speech provider is configured in Settings")
 
         from axon_api.services.tts_sanitizer import clean_for_speech
-        safe_voice = escape(body.voice, {"'": "&apos;", '"': "&quot;"})
-        safe_text = escape(clean_for_speech(body.text)[:900])
-        rate_attr = azure_voice_rate_attr(body.rate)
-        pitch_attr = azure_voice_pitch_attr(body.pitch)
-        ssml = f"""<speak version='1.0' xml:lang='en-ZA'>
+        try:
+            if key:
+                safe_voice = escape(body.voice, {"'": "&apos;", '"': "&quot;"})
+                safe_text = escape(clean_for_speech(body.text)[:900])
+                rate_attr = azure_voice_rate_attr(body.rate)
+                pitch_attr = azure_voice_pitch_attr(body.pitch)
+                ssml = f"""<speak version='1.0' xml:lang='en-ZA'>
         <voice name='{safe_voice}'><prosody rate='{rate_attr}' pitch='{pitch_attr}'>{safe_text}</prosody></voice>
     </speak>"""
-        tts_url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
+                tts_url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
 
-        import aiohttp
+                import aiohttp
 
-        try:
-            token = await self._issue_azure_speech_token(region, key)
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    tts_url,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/ssml+xml",
-                        "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
-                    },
-                    data=ssml.encode("utf-8"),
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as response:
-                    if response.status != 200:
-                        raise HTTPException(502, "Azure TTS failed")
-                    audio = await response.read()
-            return self._fastapi_response_cls(content=audio, media_type="audio/mpeg")
+                token = await self._issue_azure_speech_token(region, key)
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        tts_url,
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "Content-Type": "application/ssml+xml",
+                            "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+                        },
+                        data=ssml.encode("utf-8"),
+                        timeout=aiohttp.ClientTimeout(total=15),
+                    ) as response:
+                        if response.status != 200:
+                            raise HTTPException(502, "Azure TTS failed")
+                        audio = await response.read()
+                return self._fastapi_response_cls(content=audio, media_type="audio/mpeg")
+
+            audio, media_type = await synthesize_openai_speech(
+                clean_for_speech(body.text),
+                api_key=openai_key,
+                base_url=openai_base_url,
+                voice=body.voice,
+                rate=body.rate,
+            )
+            return self._fastapi_response_cls(content=audio, media_type=media_type)
         except HTTPException:
             raise
         except Exception as exc:
@@ -160,7 +177,10 @@ class IntegrationToolsRouteHandlers:
         )
         azure_key = (settings or {}).get("azure_speech_key", "")
         azure_region = (settings or {}).get("azure_speech_region", "eastus")
-        cloud_stt = bool(status.get("cloud_transcription_available") and azure_key and azure_region)
+        openai_key = str((settings or {}).get("openai_api_key") or "").strip()
+        openai_base_url = str((settings or {}).get("openai_base_url") or "").strip()
+        openai_stt = bool(openai_audio_configured(settings))
+        azure_cloud_stt = bool(azure_key and azure_region and status.get("ffmpeg_available"))
         if not status.get("transcription_ready"):
             raise HTTPException(503, status.get("detail") or "No transcription backend available")
 
@@ -172,27 +192,47 @@ class IntegrationToolsRouteHandlers:
         input_path = ""
         wav_path = ""
         try:
-            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as input_file:
-                input_file.write(raw_bytes)
-                input_path = input_file.name
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
-                wav_path = wav_file.name
-            self._run_ffmpeg_to_wav(input_path, wav_path)
+            local_error: Exception | None = None
 
-            # Try local Whisper first, fall back to Azure STT
+            def ensure_wav_path() -> str:
+                nonlocal input_path, wav_path
+                if wav_path:
+                    return wav_path
+                with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as input_file:
+                    input_file.write(raw_bytes)
+                    input_path = input_file.name
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
+                    wav_path = wav_file.name
+                self._run_ffmpeg_to_wav(input_path, wav_path)
+                return wav_path
+
             if status["transcription_available"]:
-                text, engine = self._transcribe_local_audio(
-                    wav_path,
-                    model_name=status["stt_model"],
-                    language=language or status["language"],
+                try:
+                    text, engine = self._transcribe_local_audio(
+                        ensure_wav_path(),
+                        model_name=status["stt_model"],
+                        language=language or status["language"],
+                    )
+                except Exception as exc:
+                    local_error = exc
+                    text = ""
+                    engine = ""
+            elif openai_stt:
+                text = await transcribe_openai_audio(
+                    raw_bytes,
+                    filename=file.filename or f"voice{suffix}",
+                    api_key=openai_key,
+                    base_url=openai_base_url,
+                    language=language or status.get("language", "en"),
                 )
-            elif cloud_stt:
+                engine = "openai-stt"
+            elif azure_cloud_stt:
                 from axon_api.services.azure_speech import transcribe_azure_speech
                 import aiohttp as _aiohttp
                 # Azure STT needs a full locale code, not bare "en"
                 azure_lang = language if language and "-" in language else "en-US"
                 text = await transcribe_azure_speech(
-                    wav_path,
+                    ensure_wav_path(),
                     region=azure_region,
                     key=azure_key,
                     language=azure_lang,
@@ -201,7 +241,35 @@ class IntegrationToolsRouteHandlers:
                 )
                 engine = "azure-stt"
             else:
+                if local_error:
+                    raise local_error
                 raise HTTPException(503, "No transcription backend available")
+
+            if not engine and openai_stt:
+                text = await transcribe_openai_audio(
+                    raw_bytes,
+                    filename=file.filename or f"voice{suffix}",
+                    api_key=openai_key,
+                    base_url=openai_base_url,
+                    language=language or status.get("language", "en"),
+                )
+                engine = "openai-stt"
+            elif not engine and azure_cloud_stt:
+                from axon_api.services.azure_speech import transcribe_azure_speech
+                import aiohttp as _aiohttp
+
+                azure_lang = language if language and "-" in language else "en-US"
+                text = await transcribe_azure_speech(
+                    ensure_wav_path(),
+                    region=azure_region,
+                    key=azure_key,
+                    language=azure_lang,
+                    aiohttp_module=_aiohttp,
+                    http_exception_cls=HTTPException,
+                )
+                engine = "azure-stt"
+            elif not engine and local_error:
+                raise local_error
 
             self._local_voice_state.update({"last_engine": engine, "last_error": "", "updated_at": self._now_iso()})
             return {"text": text, "engine": engine, "language": language or status.get("language", "en")}

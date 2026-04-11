@@ -134,14 +134,16 @@
 }
 
 .voice-operator-deck__surface-grid,
-.voice-operator-deck__artifact-rail {
+.voice-operator-deck__artifact-rail,
+.voice-operator-deck__command-list {
   display: grid;
   gap: 0.65rem;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
 }
 
 .voice-operator-deck__surface-card,
-.voice-operator-deck__artifact {
+.voice-operator-deck__artifact,
+.voice-operator-deck__command-card {
   width: 100%;
   text-align: left;
   border: 1px solid rgba(34, 211, 238, 0.12);
@@ -155,7 +157,8 @@
 }
 
 .voice-operator-deck__surface-card::after,
-.voice-operator-deck__artifact::after {
+.voice-operator-deck__artifact::after,
+.voice-operator-deck__command-card::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -166,14 +169,16 @@
 }
 
 .voice-operator-deck__surface-card:hover,
-.voice-operator-deck__artifact:hover {
+.voice-operator-deck__artifact:hover,
+.voice-operator-deck__command-card:hover {
   transform: translateY(-1px);
   border-color: rgba(34, 211, 238, 0.3);
   box-shadow: 0 14px 34px rgba(8, 47, 73, 0.22);
 }
 
 .voice-operator-deck__surface-card:hover::after,
-.voice-operator-deck__artifact:hover::after {
+.voice-operator-deck__artifact:hover::after,
+.voice-operator-deck__command-card:hover::after {
   opacity: 1;
 }
 
@@ -212,6 +217,53 @@
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: rgba(125, 211, 252, 0.84);
+}
+
+.voice-operator-deck__command-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.voice-operator-deck__command-status {
+  border-radius: 999px;
+  border: 1px solid rgba(51, 65, 85, 0.88);
+  background: rgba(2, 6, 23, 0.7);
+  padding: 0.2rem 0.48rem;
+  font-size: 0.58rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(125, 211, 252, 0.9);
+}
+
+.voice-operator-deck__command-title {
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.88);
+}
+
+.voice-operator-deck__command-main {
+  margin-top: 0.55rem;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: rgba(226, 232, 240, 0.98);
+  word-break: break-word;
+}
+
+.voice-operator-deck__command-path,
+.voice-operator-deck__command-result {
+  margin-top: 0.45rem;
+  font-size: 0.72rem;
+  line-height: 1.55;
+  color: rgba(148, 163, 184, 0.9);
+  word-break: break-word;
+}
+
+.voice-operator-deck__command-path {
+  color: rgba(125, 211, 252, 0.82);
 }
 
 .voice-operator-deck__blocker {
